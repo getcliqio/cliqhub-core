@@ -24,12 +24,24 @@ function to_public(row: RealmDispatchKeyModel): PublicKeyResult {
 }
 
 export class RealmDispatchKeyService {
-    /** Ensure caller can admin the realm, then return realm_id. */
-    static async resolve_realm_id(user_id: string, realm_id: string): Promise<string> {
+    /**
+     * Validate realm_id and check caller access.
+     * `admin` (default) requires realm admin role — use for mutations.
+     * `member` requires only realm membership — use for read-only ops.
+     */
+    static async resolve_realm_id(
+        user_id: string,
+        realm_id: string,
+        access: 'admin' | 'member' = 'admin',
+    ): Promise<string> {
         if (!realm_id?.trim()) {
             throw ApiError.bad_request('realm_id is required');
         }
-        await RealmService.require_admin(realm_id.trim(), user_id);
+        if (access === 'admin') {
+            await RealmService.require_admin(realm_id.trim(), user_id);
+        } else {
+            await RealmService.assert_member(realm_id.trim(), user_id);
+        }
         return realm_id.trim();
     }
 

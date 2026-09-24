@@ -10,14 +10,15 @@
         "dev": "tsc --watch & node --env-file=.env --watch dist/server.js",
         "test": "vitest run",
         "test:watch": "vitest",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "dev:link": "npm link @getcliqio/cliq-store"
     },
     "engines": {
         "node": ">=20"
     },
     "dependencies": {
         "@faker-js/faker": "^9.9.0",
-        "@getcliqio/cliq-store": "1.9.3",
+        "@getcliqio/cliq-store": "1.9.6",
         "@google/adk": "^1.1.0",
         "@svantic/sdk": "^1.8.3",
         "bcrypt": "^6.0.0",

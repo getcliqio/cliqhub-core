@@ -18,7 +18,7 @@ export class RealmDispatchKeyController {
         try {
             const user = assert_user(req);
             const body = keys_body_schema.parse(req.body ?? {});
-            const realm_id = await RealmDispatchKeyService.resolve_realm_id(user.user_id, body.realm_id);
+            const realm_id = await RealmDispatchKeyService.resolve_realm_id(user.user_id, body.realm_id, 'member');
             const result = await RealmDispatchKeyService.get_or_create_public_key(realm_id);
             res.json({
                 ok: true,
