@@ -98,8 +98,7 @@ describe('AgentService.deregister team guard', () => {
         vi.mocked(find_teams_using_agent).mockResolvedValue([]);
 
         const result = await service.deregister(ORG_ID, 'curl');
-        expect(result.deregistered).toBe(true);
-        expect(result.removed_count).toBe(1);
+        expect(result).toBe(true);
         expect(update).toHaveBeenCalledWith(expect.objectContaining({
             deleted: true,
             deleted_at: expect.any(Number),

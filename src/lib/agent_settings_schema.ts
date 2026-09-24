@@ -5,13 +5,10 @@
  * settings.optional so account/realm UIs can store defaults.
  */
 
-export interface Setting_def {
-    key: string;
-    description?: string;
-    default?: unknown;
-    /** Only required/shown when sibling setting values match (e.g. provider=github). */
-    when?: Record<string, string>;
-}
+import type { SettingDef } from '../schemas/settings_schemas.js';
+
+/** @deprecated Use SettingDef from schemas/settings_schemas. */
+export type Setting_def = SettingDef;
 
 const SCALAR_INPUT_TYPES = new Set(['string', 'number', 'boolean']);
 
@@ -20,7 +17,7 @@ const SKIP_PROMOTE_INPUTS = new Set([
     'sources', 'target_entries', 'team_inputs',
 ]);
 
-function _as_setting(entry: string | Setting_def): Setting_def {
+function _as_setting(entry: string | SettingDef): SettingDef {
     if (typeof entry === 'string') return { key: entry };
     return {
         key: entry.key,
@@ -31,10 +28,7 @@ function _as_setting(entry: string | Setting_def): Setting_def {
 }
 
 /** Whether a setting applies given current values (missing provider → github). */
-export function setting_applies(
-    setting: Setting_def | string,
-    values: Record<string, string | undefined | null>,
-): boolean {
+export function setting_applies(setting: SettingDef | string, values: Record<string, string | undefined | null>): boolean {
     if (typeof setting === 'string') return true;
     const when = setting.when;
     if (!when || Object.keys(when).length === 0) return true;
@@ -48,10 +42,7 @@ export function setting_applies(
     return true;
 }
 
-export function applicable_settings(
-    settings: Setting_def[],
-    values: Record<string, string | undefined | null>,
-): Setting_def[] {
+export function applicable_settings(settings: SettingDef[], values: Record<string, string | undefined | null>): SettingDef[] {
     return settings.filter((s) => setting_applies(s, values));
 }
 
@@ -60,12 +51,12 @@ export function applicable_settings(
  * settings.optional (idempotent if already present).
  */
 export function resolve_agent_settings(manifest: Record<string, unknown>): {
-    required: Setting_def[];
-    optional: Setting_def[];
+    required: SettingDef[];
+    optional: SettingDef[];
 } {
     const raw_settings = (manifest.settings ?? {}) as {
-        required?: Array<string | Setting_def>;
-        optional?: Array<string | Setting_def>;
+        required?: Array<string | SettingDef>;
+        optional?: Array<string | SettingDef>;
     };
     const required = (raw_settings.required ?? []).map(_as_setting);
     const optional = (raw_settings.optional ?? []).map(_as_setting);

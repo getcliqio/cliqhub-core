@@ -79,7 +79,7 @@ describe.skipIf(!has_postgres)('Notification AuthZ', () => {
 			});
 		expect(res.status).toBe(200);
 		expect(res.body.ok).toBe(true);
-		expect(res.body.channel.realm_id).toBe(realm.id);
+		expect(res.body.data.realm_id).toBe(realm.id);
 	});
 
 	it('channel create allowed for hub admin as account channel', async () => {
@@ -93,7 +93,7 @@ describe.skipIf(!has_postgres)('Notification AuthZ', () => {
 			});
 		expect(res.status).toBe(200);
 		expect(res.body.ok).toBe(true);
-		expect(res.body.channel.realm_id).toBeNull();
+		expect(res.body.data.realm_id).toBeNull();
 	});
 
 });

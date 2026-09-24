@@ -1,7 +1,9 @@
-// Value Objects — internal DB row shapes.
-// Grows per slice as repositories are added.
+/**
+ * Value Objects — internal / persistence shapes.
+ * Prefer `type` (not interface). PascalCase names; snake_case fields.
+ */
 
-export interface UserVO {
+export type UserVo = {
     id: string;
     username: string;
     display_name: string;
@@ -11,17 +13,17 @@ export interface UserVO {
     suspended_reason: string;
     created_at: string;
     preferences: Record<string, unknown>;
-}
+};
 
-export interface UserLoginRowVO {
+export type UserLoginRowVo = {
     id: string;
     username: string;
     password_hash: string;
     role: 'user' | 'admin';
     suspended_at: string | null;
-}
+};
 
-export interface ScopeVO {
+export type ScopeVo = {
     id: string;
     slug: string;
     display_name: string | null;
@@ -29,24 +31,24 @@ export interface ScopeVO {
     scope_type: 'user' | 'org';
     owner_id: string;
     org_id: string | null;
-}
+};
 
-export interface OrgMembershipVO {
+export type OrgMembershipVo = {
     slug: string;
     role: string;
     org_id: string;
-}
+};
 
-export interface ApiTokenRowVO {
+export type ApiTokenRowVo = {
     id: string;
     type?: 'user' | 'realm';
     user_id: string;
     token_hash: string;
-    permissions: TokenPermissionsVO;
-}
+    permissions: TokenPermissionsVo;
+};
 
 /** Token grant — see `auth/grants.ts`. Legacy org_ids/access string still accepted on read. */
-export interface TokenPermissionsVO {
+export type TokenPermissionsVo = {
     domains?: {
         orgs?: Array<string | '*'> | '*';
         realms?: Array<string | '*'> | '*';
@@ -56,26 +58,23 @@ export interface TokenPermissionsVO {
     access?: Partial<Record<string, Array<'read' | 'write' | 'admin'>>> | string;
     /** @deprecated use domains.orgs */
     org_ids?: string[];
-}
+};
 
-export interface ImpersonationVO {
+export type ImpersonationVo = {
     actor_id: string;
     actor_username: string;
-}
+};
 
-export interface AuthContext {
-    user: UserVO | null;
+export type AuthContext = {
+    user: UserVo | null;
     org_slugs: string[];
     /** Hub org ids from live membership (not JWT claims alone). */
     org_ids: string[];
-    scopes: ScopeVO[];
-    token_permissions?: TokenPermissionsVO;
+    scopes: ScopeVo[];
+    token_permissions?: TokenPermissionsVo;
     /**
      * API capability scopes carried by the authenticating PAT
      * (JIRA plugin slice 1.6). Absent for JWT / daemon-token auth.
-     * Empty array for a scoped token that happens to have no scopes
-     * is coerced to `undefined` upstream so callers can gate on
-     * "did the operator opt into least-privilege" cleanly.
      */
     token_scopes?: string[];
     /** Set when authenticated with a daemon token (`cliq_dt_`) for a single primary realm. */
@@ -83,16 +82,15 @@ export interface AuthContext {
     /**
      * Active org context for this request. Resolved from `X-Org-Id` header
      * or defaults to the user's personal org (slug === username).
-     * Null for unauthenticated requests.
      */
     current_org_id?: string;
     /** How the Bearer credential was resolved (`pat` | `daemon_token`). */
     auth_via?: 'jwt' | 'pat' | 'daemon_token';
     /** @deprecated Act-as is a BFF session update; Core no longer embeds impersonation. */
-    impersonation?: ImpersonationVO;
-}
+    impersonation?: ImpersonationVo;
+};
 
-export interface TeamVO {
+export type TeamVo = {
     id: string;
     name: string;
     scope: string | null;
@@ -105,9 +103,9 @@ export interface TeamVO {
     created_at: string;
     updated_at: string;
     install_count: number;
-}
+};
 
-export interface TeamListItemVO {
+export type TeamListItemVo = {
     id: string;
     name: string;
     scope: string | null;
@@ -116,15 +114,15 @@ export interface TeamListItemVO {
     latest_version: string | null;
     install_count: number;
     listed?: number;
-}
+};
 
-export interface TeamVersionVO {
+export type TeamVersionVo = {
     version: string;
     changelog: string;
     published_at: string;
-}
+};
 
-export interface TeamVersionDetailVO {
+export type TeamVersionDetailVo = {
     id: string;
     team_id: string;
     version: string;
@@ -137,29 +135,60 @@ export interface TeamVersionDetailVO {
     capability_json: string;
     agents_json: string;
     published_at: string;
-}
+};
 
-export interface TeamTagVO {
+export type TeamTagVo = {
     team_id: string;
     tag: string;
-}
+};
 
-export interface TeamRoleVO {
+export type TeamRoleVo = {
     name: string;
     content_md: string;
-}
+};
 
-export interface DraftVO {
+export type DraftVo = {
     id: string;
     user_id: string;
     title: string;
     team_json: string;
     created_at: string;
     updated_at: string;
-}
+};
 
-export interface DraftListItemVO {
+export type DraftListItemVo = {
     id: string;
     title: string;
     updated_at: string;
-}
+};
+
+/** @deprecated Use PascalCase `*Vo` names. */
+export type UserVO = UserVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type UserLoginRowVO = UserLoginRowVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type ScopeVO = ScopeVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type OrgMembershipVO = OrgMembershipVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type ApiTokenRowVO = ApiTokenRowVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TokenPermissionsVO = TokenPermissionsVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type ImpersonationVO = ImpersonationVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamVO = TeamVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamListItemVO = TeamListItemVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamVersionVO = TeamVersionVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamVersionDetailVO = TeamVersionDetailVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamTagVO = TeamTagVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamRoleVO = TeamRoleVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type DraftVO = DraftVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type DraftListItemVO = DraftListItemVo;

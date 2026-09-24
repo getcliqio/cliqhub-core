@@ -1,10 +1,13 @@
-// VO → DTO mappers.
-// Grows per slice as types are added.
+/**
+ * VO → DTO mappers.
+ */
 
-import type { UserVO, DraftVO, DraftListItemVO } from './vo.js';
-import type { UserDTO, TeamListItemDTO, DraftDTO, DraftListItemDTO } from './dto.js';
+import type { UserVo, DraftVo, DraftListItemVo } from './vo.js';
+import type { UserDto, TeamListItemDto, DraftDto, DraftListItemDto } from './dto.js';
+import type { AgentData } from '../schemas/agents_schemas.js';
+import type { AgentCatalog } from '../models/agent_catalog.model.js';
 
-export function to_user_dto(user: UserVO): UserDTO {
+export function to_user_dto(user: UserVo): UserDto {
     return {
         id: user.id,
         username: user.username,
@@ -30,7 +33,7 @@ export function to_team_list_item_dto(
         visibility?: string;
     },
     tags: string[],
-): TeamListItemDTO {
+): TeamListItemDto {
     const visibility = row.visibility || 'public';
     return {
         id: row.id,
@@ -47,7 +50,7 @@ export function to_team_list_item_dto(
     };
 }
 
-export function to_draft_dto(row: DraftVO): DraftDTO {
+export function to_draft_dto(row: DraftVo): DraftDto {
     return {
         id: row.id,
         title: row.title,
@@ -57,10 +60,32 @@ export function to_draft_dto(row: DraftVO): DraftDTO {
     };
 }
 
-export function to_draft_list_item_dto(row: DraftListItemVO): DraftListItemDTO {
+export function to_draft_list_item_dto(row: DraftListItemVo): DraftListItemDto {
     return {
         id: row.id,
         title: row.title,
         updated_at: row.updated_at,
     };
+}
+
+function ts_ms(value: Date | string | number): number {
+    if (typeof value === 'number') return value;
+    if (value instanceof Date) return value.getTime();
+    return new Date(value).getTime();
+}
+
+/** Project an AgentCatalog row to AgentData. */
+export function to_agent_data(row: InstanceType<typeof AgentCatalog>, include_manifest: boolean): AgentData {
+    const base: AgentData = {
+        id: row.id,
+        name: row.name,
+        version: row.version ?? null,
+        description: row.description ?? null,
+        agent_type: row.agent_type,
+        is_system: row.is_system,
+        created_at: ts_ms(row.created_at),
+        updated_at: ts_ms(row.updated_at),
+    };
+    if (!include_manifest) return base;
+    return { ...base, manifest: row.manifest };
 }

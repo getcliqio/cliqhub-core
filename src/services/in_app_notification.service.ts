@@ -21,7 +21,7 @@ const KNOWN_TOP_LEVEL = new Set([
 	'daemon_id',
 ]);
 
-export interface InAppNotificationRecord {
+export type InAppNotificationRecord = {
 	id: string;
 	event: string;
 	title: string | null;
@@ -37,96 +37,98 @@ export interface InAppNotificationRecord {
 	severity: string | null;
 	payload: Record<string, unknown>;
 	created_at: number;
-}
-
-function extra_payload(payload: NotificationPayload): Record<string, unknown> {
-	const out: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(payload)) {
-		if (KNOWN_TOP_LEVEL.has(key)) continue;
-		out[key] = value;
-	}
-	if (payload.reason != null) out.reason = payload.reason;
-	if (payload.outcome != null) out.outcome = payload.outcome;
-	if (payload.run_name != null) out.run_name = payload.run_name;
-	if (payload.daemon_name != null) out.daemon_name = payload.daemon_name;
-	if (payload.daemon_id != null) out.daemon_id = payload.daemon_id;
-	return out;
-}
-
-function to_record(row: {
-	id: string;
-	event: string;
-	title: string | null;
-	message: string | null;
-	realm_id: string | null;
-	user_id: string | null;
-	team: string | null;
-	run_id: string | null;
-	phase: string | null;
-	severity: string | null;
-	payload_json: string;
-	created_at: number;
-}): InAppNotificationRecord {
-	let payload: Record<string, unknown> = {};
-	try {
-		payload = JSON.parse(row.payload_json) as Record<string, unknown>;
-	} catch {
-		payload = {};
-	}
-	return {
-		id: row.id,
-		event: row.event,
-		title: row.title,
-		message: row.message,
-		realm_id: row.realm_id,
-		realm_slug: null,
-		user_id: row.user_id ?? null,
-		team: row.team,
-		run_id: row.run_id,
-		phase: row.phase,
-		severity: row.severity,
-		payload,
-		created_at: Number(row.created_at),
-	};
-}
-
-/**
- * Bulk-resolve realm_id → slug for a page of notifications.
- * Single query, no N+1. Deleted realms stay null.
- */
-async function _enrich_realm_slugs(records: InAppNotificationRecord[]): Promise<void> {
-	const ids = [...new Set(
-		records.map((r) => r.realm_id).filter(Boolean) as string[],
-	)];
-	if (ids.length === 0) return;
-
-	try {
-		const { Realm } = await import('../models/index.js');
-		const realms = await Realm.findAll({
-			where: { id: { [Op.in]: ids } },
-			attributes: ['id', 'slug'],
-		});
-		const slug_map = new Map<string, string>();
-		for (const r of realms) {
-			slug_map.set(r.id, r.slug);
-		}
-		for (const rec of records) {
-			if (rec.realm_id) {
-				rec.realm_slug = slug_map.get(rec.realm_id) ?? null;
-			}
-		}
-	} catch { /* best-effort — slugs stay null */ }
-}
+};
 
 /**
  * Persist / list in-app notifications (cliqhub channel deliverer).
  * Not an events inbox over cliq.events.
  */
 export class InAppNotificationService {
-	static async create_from_payload(
-		payload: NotificationPayload,
-		user_id?: string | null,
-	): Promise<InAppNotificationRecord> {
+
+	private static extra_payload(payload: NotificationPayload): Record<string, unknown> {
+		// Column-backed fields stay off payload_json; everything else is preserved for the UI.
+		const out: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(payload)) {
+			if (KNOWN_TOP_LEVEL.has(key)) continue;
+			out[key] = value;
+		}
+		// These are also useful in the expandable payload even when top-level columns exist.
+		if (payload.reason != null) out.reason = payload.reason;
+		if (payload.outcome != null) out.outcome = payload.outcome;
+		if (payload.run_name != null) out.run_name = payload.run_name;
+		if (payload.daemon_name != null) out.daemon_name = payload.daemon_name;
+		if (payload.daemon_id != null) out.daemon_id = payload.daemon_id;
+		return out;
+	}
+
+	private static to_record(row: {
+		id: string;
+		event: string;
+		title: string | null;
+		message: string | null;
+		realm_id: string | null;
+		user_id: string | null;
+		team: string | null;
+		run_id: string | null;
+		phase: string | null;
+		severity: string | null;
+		payload_json: string;
+		created_at: number;
+	}): InAppNotificationRecord {
+		// Corrupt JSON must not break the list — fall back to empty object.
+		let payload: Record<string, unknown> = {};
+		try {
+			payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+		} catch {
+			payload = {};
+		}
+		return {
+			id: row.id,
+			event: row.event,
+			title: row.title,
+			message: row.message,
+			realm_id: row.realm_id,
+			// Slug filled later by enrich_realm_slugs (batch).
+			realm_slug: null,
+			user_id: row.user_id ?? null,
+			team: row.team,
+			run_id: row.run_id,
+			phase: row.phase,
+			severity: row.severity,
+			payload,
+			created_at: Number(row.created_at),
+		};
+	}
+
+	/** Bulk-resolve realm_id → slug for a page of notifications. Single query, no N+1. */
+	private static async enrich_realm_slugs(records: InAppNotificationRecord[]): Promise<void> {
+		// Collect distinct realm ids so we issue one query for the whole page.
+		const ids = [...new Set(
+			records.map((r) => r.realm_id).filter(Boolean) as string[],
+		)];
+		if (ids.length === 0) return;
+
+		try {
+			const { Realm } = await import('../models/index.js');
+			const realms = await Realm.findAll({
+				where: { id: { [Op.in]: ids } },
+				attributes: ['id', 'slug'],
+			});
+			const slug_map = new Map<string, string>();
+			for (const r of realms) {
+				slug_map.set(r.id, r.slug);
+			}
+			// Deleted realms leave slug null — UI can still show the raw id if needed.
+			for (const rec of records) {
+				if (rec.realm_id) {
+					rec.realm_slug = slug_map.get(rec.realm_id) ?? null;
+				}
+			}
+		} catch { /* best-effort — slugs stay null */ }
+	}
+
+	static async create_from_payload(payload: NotificationPayload, user_id?: string | null): Promise<InAppNotificationRecord> {
+		// event is the routing key for rules and the inbox type filter.
 		const event = String(payload.event ?? '').trim();
 		if (!event) throw new Error('notification payload.event is required');
 
@@ -137,7 +139,7 @@ export class InAppNotificationService {
 			? payload.review_id.trim() || null
 			: null;
 
-		// Resolve org_id from realm for org-scoped inbox queries.
+		// Denormalize org_id from realm so org-scoped inbox queries stay cheap.
 		let org_id: string | null = null;
 		const realm_id_val = payload.realm_id?.trim() || null;
 		if (realm_id_val) {
@@ -161,10 +163,10 @@ export class InAppNotificationService {
 			phase: payload.phase_name?.trim() || null,
 			severity: payload.severity?.trim() || null,
 			review_id,
-			payload_json: JSON.stringify(extra_payload(payload)),
+			payload_json: JSON.stringify(InAppNotificationService.extra_payload(payload)),
 			created_at,
 		});
-		return to_record(row);
+		return InAppNotificationService.to_record(row);
 	}
 
 	/**
@@ -302,8 +304,8 @@ export class InAppNotificationService {
 			limit,
 			offset,
 		});
-		const notifications = rows.map(to_record);
-		await _enrich_realm_slugs(notifications);
+		const notifications = rows.map(InAppNotificationService.to_record);
+		await InAppNotificationService.enrich_realm_slugs(notifications);
 		return { notifications, total };
 	}
 }

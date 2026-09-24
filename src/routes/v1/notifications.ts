@@ -1,7 +1,9 @@
 import type { Router, RequestHandler } from 'express';
-import { NotificationController } from '../../controllers/notifications_controller.js';
+import { NotificationsController } from '../../controllers/notifications_controller.js';
 
-/** Delivered in-app inbox only (not channels/rules). */
+/** In-app inbox only — paths locked by notifications flat-cut slice. */
 export function register_notifications_routes(router: Router, auth: RequestHandler): void {
-    router.post('/notifications/get', auth, NotificationController.inbox_get);
+    const controller = new NotificationsController();
+
+    router.post('/notifications/get', auth, controller.wrap(controller.inbox_get));
 }

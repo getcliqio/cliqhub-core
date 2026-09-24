@@ -77,8 +77,8 @@ describe.skipIf(!has_postgres)('POST /v1/notifications/get', () => {
 			.send({});
 		expect(member_res.status).toBe(200);
 		expect(member_res.body.ok).toBe(true);
-		expect(member_res.body.notifications).toHaveLength(1);
-		expect(member_res.body.notifications[0].message).toBe('member-visible');
+		expect(member_res.body.data.items).toHaveLength(1);
+		expect(member_res.body.data.items[0].message).toBe('member-visible');
 
 		const outsider = await InAppNotificationService.list_for_user({
 			user_id: hub_legacy_uuid(99),
@@ -140,6 +140,7 @@ describe.skipIf(!has_postgres)('POST /v1/notifications/get', () => {
 			.set('Authorization', make_hub_bearer())
 			.send({});
 		expect(res.status).toBe(200);
-		expect(res.body.notifications).toEqual([]);
+		expect(res.body.data.items).toEqual([]);
+		expect(res.body.data.total).toBe(0);
 	});
 });

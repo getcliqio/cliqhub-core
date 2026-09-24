@@ -22,11 +22,15 @@ export abstract class BaseController {
         res.status(status).json({ ok: true, data });
     }
 
-    protected wrap(
-        handler: (req: Request, res: Response) => Promise<void>,
+    /**
+     * Express adapter: async controller method → handler with `.catch(next)`.
+     * Generic so typed `ApiRequest` / `ApiOkResponse` methods still wire cleanly.
+     */
+    wrap<Req extends Request, Res extends Response>(
+        handler: (req: Req, res: Res) => Promise<void>,
     ): (req: Request, res: Response, next: NextFunction) => Promise<void> {
         return (req, res, next) => {
-            return handler.call(this, req, res).catch(next);
+            return handler.call(this, req as Req, res as Res).catch(next);
         };
     }
 }

@@ -3,9 +3,10 @@ import { RealmController } from '../../controllers/realms_controller.js';
 import { RealmA2aController } from '../../controllers/realm_a2a_controller.js';
 import { AccountMeshController } from '../../controllers/account_mesh_controller.js';
 import { OrgMeshController } from '../../controllers/org_mesh_controller.js';
-import { NotificationController } from '../../controllers/notifications_controller.js';
+import { NotificationsController } from '../../controllers/notifications_controller.js';
 
 export function register_realms_routes(router: Router, auth: RequestHandler): void {
+    const notifications = new NotificationsController();
     // Realm hard-cut: no get_by_slug / grant / revoke / search_users / team-list / members/* twins.
     router.post('/realms/create', auth, RealmController.create);
     router.post('/realms/get', auth, RealmController.get);
@@ -17,9 +18,9 @@ export function register_realms_routes(router: Router, auth: RequestHandler): vo
     router.post('/realms/remove_member', auth, RealmController.remove_member);
     router.post('/realms/add_team', auth, RealmController.add_team);
     router.post('/realms/remove_team', auth, RealmController.remove_team);
-    router.post('/realms/get_notification_rules', auth, NotificationController.rules_list);
-    router.post('/realms/set_notification_rule', auth, NotificationController.rules_set);
-    router.post('/realms/remove_notification_rule', auth, NotificationController.rules_remove);
+    router.post('/realms/get_notification_rules', auth, notifications.wrap(notifications.rules_list));
+    router.post('/realms/set_notification_rule', auth, notifications.wrap(notifications.rules_set));
+    router.post('/realms/remove_notification_rule', auth, notifications.wrap(notifications.rules_remove));
     router.post('/realms/a2a', auth, RealmA2aController.handle);
     router.post('/mesh/adapters/list', auth, RealmA2aController.list_adapters);
     router.post('/account/mesh/get', auth, AccountMeshController.get);

@@ -23,11 +23,7 @@ export class RealmAgentSettingRepository {
     }
 
     /** Settings for a single agent in a user+realm scope. */
-    async list_for_user_realm_and_agent(
-        user_id: string,
-        realm_id: string,
-        agent_name: string,
-    ): Promise<Realm_agent_setting_row[]> {
+    async list_for_user_realm_and_agent(user_id: string, realm_id: string, agent_name: string): Promise<Realm_agent_setting_row[]> {
         return RealmAgentSetting.findAll({
             where: { user_id, realm_id, agent_name },
             attributes: ['agent_name', 'setting_key', 'value', 'updated_at'],
@@ -36,13 +32,7 @@ export class RealmAgentSettingRepository {
     }
 
     /** Insert or update a single setting. */
-    async upsert(
-        user_id: string,
-        realm_id: string,
-        agent_name: string,
-        setting_key: string,
-        value: string,
-    ): Promise<void> {
+    async upsert(user_id: string, realm_id: string, agent_name: string, setting_key: string, value: string): Promise<void> {
         const [row, created] = await RealmAgentSetting.findOrCreate({
             where: { user_id, realm_id, agent_name, setting_key },
             defaults: { user_id, realm_id, agent_name, setting_key, value, updated_at: new Date() },
@@ -52,12 +42,7 @@ export class RealmAgentSettingRepository {
     }
 
     /** Remove a single setting. Returns true if a row was deleted. */
-    async remove(
-        user_id: string,
-        realm_id: string,
-        agent_name: string,
-        setting_key: string,
-    ): Promise<boolean> {
+    async remove(user_id: string, realm_id: string, agent_name: string, setting_key: string): Promise<boolean> {
         const removed = await RealmAgentSetting.destroy({
             where: { user_id, realm_id, agent_name, setting_key },
         });

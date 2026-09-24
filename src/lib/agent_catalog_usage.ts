@@ -40,10 +40,7 @@ export function extract_agents_from_workflow(workflow_json: string | null | unde
 /**
  * Find published Hub registry teams (any version) whose workflow references `agent_name`.
  */
-export async function find_teams_using_agent(
-    agent_name: string,
-    sequelize?: Sequelize,
-): Promise<Team_agent_ref[]> {
+export async function find_teams_using_agent(agent_name: string, sequelize?: Sequelize): Promise<Team_agent_ref[]> {
     const sq = sequelize ?? get_sequelize();
     let rows: Array<{
         scope: string;
