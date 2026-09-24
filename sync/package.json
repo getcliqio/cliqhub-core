@@ -1,0 +1,32 @@
+{
+    "name": "@getcliqio/sync",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "tsc",
+        "start": "node dist/server.js",
+        "dev": "tsc --watch & node --env-file=.env --watch dist/server.js",
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "engines": {
+        "node": ">=20"
+    },
+    "dependencies": {
+        "express": "^5.1.0",
+        "helmet": "^8.1.0",
+        "jose": "^5.10.0",
+        "pg": "^8.16.0",
+        "zod": "^3.24.4",
+        "uuid": "^11.1.0"
+    },
+    "devDependencies": {
+        "@types/express": "^5.0.2",
+        "@types/node": "^22.0.0",
+        "@types/pg": "^8.11.0",
+        "@types/uuid": "^10.0.0",
+        "typescript": "^5.8.3",
+        "vitest": "^3.1.3"
+    }
+}
