@@ -10,17 +10,15 @@
 import { randomUUID } from 'node:crypto';
 import { Op, type WhereOptions } from 'sequelize';
 
-import { AgentCatalog, Realm, RealmAgentSetting } from '../models/index.js';
-import { OrgAgentSetting, Team, TeamVersion } from '../db/models/index.js';
+import { AgentCatalog, RealmAgentSetting } from '../models/index.js';
+import { OrgAgentSetting } from '../db/models/index.js';
 import { ApiError } from '../lib/api_error.js';
-import { find_teams_using_agent, extract_agents_from_workflow, parse_agent_ref } from '../lib/agent_catalog_usage.js';
+import { find_teams_using_agent } from '../lib/agent_catalog_usage.js';
 import { resolve_agent_settings } from '../lib/agent_settings_schema.js';
 import type { BooleanData } from '../types/api_response.js';
 import type { AgentData, SettingsData, SettingDef } from '../schemas/agents_schemas.js';
 import type { AgentsRegisterInput } from '../schemas/agents/inputs.js';
 import { to_agent_data } from '../types/mappers.js';
-import type { TeamListEntry } from '../models/realm.model.js';
-import { max_semver } from '../lib/semver.js';
 
 export type AgentListFilters = {
     query?: string;
@@ -314,18 +312,14 @@ export class AgentService {
     }
 
     /**
-     * Settings summary rows for agents visible to the org (or realm team_list).
+     * Settings summary rows for org (+ system) agents.
+     * When `realm_id` is set, values/source reflect realm overlays — the catalog
+     * itself is not filtered to team_list (empty team_list used to blank the SPA).
      * → SettingsData[].
      */
     async list_settings_summary(org_id: string, realm_id?: string): Promise<SettingsData[]> {
-        // Realm context → only agents referenced by that realm's team_list.
-        const name_filter = realm_id ? await this._resolve_realm_agent_names(realm_id) : null;
-
-        if (name_filter && name_filter.size === 0) return [];
-
         const where_clause = this.active_where({
             [Op.or]: [{ org_id }, { is_system: true }],
-            ...(name_filter ? { name: { [Op.in]: [...name_filter] } } : {}),
         });
 
         const agents = await AgentCatalog.findAll({
@@ -488,47 +482,4 @@ export class AgentService {
         }
     }
 
-    /**
-     * Resolve agent names used by a realm's team_list (latest workflows).
-     */
-    private async _resolve_realm_agent_names(realm_id: string): Promise<Set<string>> {
-        // team_list is the realm's installed teams; empty → no agent filter.
-        const realm = await Realm.findByPk(realm_id, { attributes: ['team_list'] });
-        if (!realm) return new Set();
-
-        const team_list: TeamListEntry[] = (realm as { team_list?: TeamListEntry[] }).team_list ?? [];
-        if (team_list.length === 0) return new Set();
-
-        const agent_names = new Set<string>();
-
-        for (const entry of team_list) {
-            const team = await Team.findOne({
-                where: { scope: entry.scope, name: entry.slug },
-                attributes: ['id'],
-                raw: true,
-            });
-            if (!team) continue;
-
-            // Prefer the highest semver workflow; older versions can lag on agent refs.
-            const versions = await TeamVersion.findAll({
-                where: { team_id: team.id },
-                attributes: ['version', 'workflow_json'],
-                raw: true,
-            });
-            if (versions.length === 0) continue;
-
-            const latest_ver = max_semver(versions.map((v) => v.version));
-            const target = latest_ver
-                ? versions.find((v) => v.version === latest_ver)
-                : versions[0];
-            if (!target) continue;
-
-            const refs = extract_agents_from_workflow(target.workflow_json);
-            for (const ref of refs) {
-                agent_names.add(parse_agent_ref(ref).name);
-            }
-        }
-
-        return agent_names;
-    }
 }

@@ -50,7 +50,7 @@ export type AgentsDeregisterInput = z.infer<typeof AgentsDeregisterInput>;
 /** POST /v1/agents/get_settings */
 export const AgentsGetSettingsInput = z.object({
     name: z.string().min(1).optional().describe('When set, return SettingsData for one agent; omit for a summary list'),
-    realm_id: z.string().min(1).optional().describe('When set, resolve realm overrides / filter summary to realm team_list agents'),
+    realm_id: z.string().min(1).optional().describe('When set, resolve realm overrides on the full org+system catalog'),
 });
 export type AgentsGetSettingsInput = z.infer<typeof AgentsGetSettingsInput>;
 
