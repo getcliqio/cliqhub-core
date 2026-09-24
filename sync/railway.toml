@@ -1,6 +1,6 @@
 [build]
 builder = "dockerfile"
-dockerfilePath = "services/sync/Dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 restartPolicyType = "on_failure"
