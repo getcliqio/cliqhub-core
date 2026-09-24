@@ -5,7 +5,7 @@
     "type": "module",
     "scripts": {
         "build": "tsc && npm run copy-data",
-        "copy-data": "mkdir -p dist/data && find src/data -maxdepth 1 -name \"*.json\" -exec cp {} dist/data/ \\;",
+        "copy-data": "mkdir -p dist/data src/data && find src/data -maxdepth 1 -name \"*.json\" -exec cp {} dist/data/ \\; || true",
         "start": "node dist/server.js",
         "dev": "tsc --watch & node --env-file=.env --watch dist/server.js",
         "test": "vitest run",
