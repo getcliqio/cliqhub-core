@@ -1,12 +1,12 @@
-# Build context is the repo root (Railway "Root Directory" = /).
+# Build context: sync/ directory (Railway Root Directory = sync).
 
 FROM node:20-alpine AS build
 
 WORKDIR /app
-COPY services/sync/package.json services/sync/package-lock.json* ./
+COPY package.json package-lock.json* ./
 RUN npm install
-COPY services/sync/tsconfig.json ./
-COPY services/sync/src ./src
+COPY tsconfig.json ./
+COPY src ./src
 RUN npm run build
 
 FROM node:20-alpine
