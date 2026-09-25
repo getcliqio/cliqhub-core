@@ -1,10 +1,20 @@
+/**
+ * Runs Hub resource — RUN-ORG hard-cut on org-scoped list.
+ *
+ * POST /v1/runs/get org-scoped recent list: body `org_id` required.
+ * Never invent org from X-Org-Id / current_org_id.
+ * Keyed scopes (realm_id | daemon_id | workspace_id | parent_run_id) need no org_id.
+ */
+
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { RunService } from '../services/run.service.js';
 import { DispatchService } from '../services/dispatch.service.js';
 import { QueueService } from '../services/queue.service.js';
 import { RealmService } from '../services/realm.service.js';
+import { Realm } from '../models/index.js';
 import { ApiError } from '../lib/api_error.js';
+import type { AuthContext } from '../types/vo.js';
 
 
 // --- Core run schemas ---
@@ -17,6 +27,14 @@ const get_schema = z.object({
     daemon_id: z.string().optional(),
     /** Restrict to runs whose daemon is a member of this realm. */
     realm_id: z.string().optional(),
+    /**
+     * Organization UUID. Required for org-scoped recent list when
+     * realm_id / daemon_id / workspace_id / parent_run_id are omitted.
+     * Never invent from X-Org-Id.
+     */
+    org_id: z.string().uuid().optional().describe(
+        'Organization UUID. Required when listing recent runs without realm_id, daemon_id, workspace_id, or parent_run_id.',
+    ),
     /** Substring match on run_id / run_name / team label (POST body only). */
     query: z.string().optional(),
     // Accept a single canonical state OR a list, so the dashboard's
@@ -31,7 +49,21 @@ const get_schema = z.object({
     /** Column to sort by. Default: last_updated_at DESC. */
     sort_by: z.enum(['run_name', 'state', 'team', 'started_at', 'last_updated_at']).optional(),
     sort_dir: z.enum(['asc', 'desc']).optional(),
-}).optional();
+}).superRefine((v, ctx) => {
+    // Keyed scopes bound tenancy without body org_id.
+    if (v.parent_run_id?.trim()) return;
+    if (v.workspace_id?.trim()) return;
+    if (v.realm_id?.trim()) return;
+    if (v.daemon_id?.trim()) return;
+    // Org-scoped recent list — body org_id is invent SoT.
+    if (!v.org_id) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'org_id is required when listing recent runs without realm_id, daemon_id, workspace_id, or parent_run_id',
+            path: ['org_id'],
+        });
+    }
+});
 
 const get_by_id_schema = z.object({ run_id: z.string() });
 const get_by_name_schema = z.object({ run_name: z.string() });
@@ -204,22 +236,64 @@ const artifacts_get_schema = z.object({
 const artifacts_delete_schema = z.object({ run_id: z.string() });
 
 export class RunController {
+    /**
+     * Bearer must be allowed to act on `org_id`.
+     * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
+     * Site hub admin may act on any org_id.
+     */
+    private static async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
+        // No credential context — refuse rather than invent tenancy.
+        if (!auth) {
+            throw ApiError.unauthorized('authentication required');
+        }
+
+        // Site admin may target any org.
+        if (auth.user?.role === 'admin') return;
+
+        // Daemon tokens are realm-bound; tenancy is the realm's org.
+        if (auth.auth_via === 'daemon_token') {
+            if (!auth.realm_id) {
+                throw ApiError.forbidden('daemon token has no realm binding');
+            }
+            const realm = await Realm.findByPk(auth.realm_id);
+            if (!realm || realm.org_id !== org_id) {
+                throw ApiError.forbidden('org_id does not match daemon realm organization');
+            }
+            return;
+        }
+
+        // PAT / session: live membership list from auth middleware.
+        if (!auth.org_ids.includes(org_id)) {
+            throw ApiError.forbidden('not a member of the requested organization');
+        }
+    }
+
+    private static auth_from(req: Request): AuthContext | undefined {
+        return (req as Request & { auth?: AuthContext }).auth;
+    }
+
     // --- Core run methods ---
 
+    /**
+     * Org-scoped recent list requires body `org_id` (RUN-ORG hard-cut).
+     * Never invent from X-Org-Id / current_org_id.
+     * Keyed scopes (realm_id | daemon_id | workspace_id | parent_run_id) omit org_id.
+     */
     static async get(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
-            const filters = get_schema.parse(req.body);
-            if (filters?.parent_run_id) {
+            // Zod SoT — org-scoped list requires org_id; never invent from X-Org-Id.
+            const filters = get_schema.parse(req.body ?? {});
+            if (filters.parent_run_id) {
                 const runs = await RunService.list_children(filters.parent_run_id);
                 res.json({ ok: true, runs });
                 return;
             }
-            if (filters?.active_only && filters.workspace_id) {
+            if (filters.active_only && filters.workspace_id) {
                 const runs = await RunService.list_active(filters.workspace_id);
                 res.json({ ok: true, runs });
                 return;
             }
-            if (filters?.workspace_id) {
+            if (filters.workspace_id) {
                 const result = await RunService.list_by_workspace(
                     filters.workspace_id,
                     filters.limit,
@@ -234,24 +308,27 @@ export class RunController {
                 });
                 return;
             }
+            // Org-scoped recent list: body.org_id is invent SoT (Zod already required it).
+            // realm_id / daemon_id paths may omit org_id — do not invent from header.
+            let org_id: string | undefined;
+            if (filters.org_id) {
+                await RunController.assert_org_authorized(RunController.auth_from(req), filters.org_id);
+                org_id = filters.org_id;
+            }
             const result = await RunService.list_recent(
-                filters?.limit,
-                filters?.daemon_id,
+                filters.limit,
+                filters.daemon_id,
                 {
-                    query: filters?.query,
-                    state: filters?.state,
-                    realm_id: filters?.realm_id,
-                    offset: filters?.offset,
-                    since_ms: filters?.since_ms,
-                    until_ms: filters?.until_ms,
+                    query: filters.query,
+                    state: filters.state,
+                    realm_id: filters.realm_id,
+                    offset: filters.offset,
+                    since_ms: filters.since_ms,
+                    until_ms: filters.until_ms,
                     user_id: req.user?.user_id,
-                    // Org gate: the X-Org-Id header is the primary filter
-                    // in the UI (org switcher). Without this the home
-                    // dashboard shows runs from every org the user has
-                    // touched, which contradicts what the top-bar says.
-                    org_id: req.user?.current_org_id,
-                    sort_by: filters?.sort_by,
-                    sort_dir: filters?.sort_dir,
+                    org_id,
+                    sort_by: filters.sort_by,
+                    sort_dir: filters.sort_dir,
                 },
             );
             res.json({
