@@ -15,6 +15,8 @@ import { generate_slug } from '../lib/slug.js';
 import { QueryTypes } from 'sequelize';
 import { EventSubmitService } from '../events/submit.service.js';
 import type { EventType } from '../events/types.js';
+import type { ReportTelemetryInput } from '../schemas/telemetry/inputs.js';
+import type { TelemetryUsageData } from '../schemas/telemetry/data.js';
 
 /**
  * Control commands that target a single run (cancel, supply inputs).
@@ -2114,13 +2116,17 @@ export class RunService {
      * Enriches token-only data with cost_usd from the pricing service,
      * then writes the enriched snapshot to the appropriate JSONB column.
      */
+    /**
+     * Ingest a usage snapshot from the daemon (via outbox).
+     * Accepts the Zod `ReportTelemetryInput` usage arm (minus `kind`).
+     */
     static async ingest_usage_snapshot(
         snapshot: UsageSnapshotPayload,
         pricing_service: import('./model_pricing.service.js').ModelPricingService,
     ): Promise<void> {
         const sq = get_sequelize();
 
-        // Enrich by_model entries with cost_usd.
+        // Enrich by_model entries with cost_usd from the pricing catalog.
         let total_cost_usd = 0;
         const enriched_by_model: Record<string, unknown> = {};
 
@@ -2138,6 +2144,8 @@ export class RunService {
 
         const enriched = {
             ...snapshot,
+            by_phase: snapshot.by_phase ?? {},
+            by_agent: snapshot.by_agent ?? {},
             by_model: enriched_by_model,
             total_cost_usd,
         };
@@ -2152,7 +2160,7 @@ export class RunService {
             return;
         }
 
-        // Phase-level snapshot.
+        // Phase-level snapshot — no phase name means nothing to write.
         if (!snapshot.phase) return;
         await sq.query(
             `UPDATE cliq.team_run_phases SET usage_snapshot = :snapshot
@@ -2163,11 +2171,9 @@ export class RunService {
 
     /**
      * Retrieve usage snapshots for a run — run-level plus all phases.
+     * Returns wire DTO {@link TelemetryUsageData}.
      */
-    static async get_usage(run_id: string): Promise<{
-        run: unknown;
-        phases: Array<{ phase: string; usage_snapshot: unknown }>;
-    }> {
+    static async get_usage(run_id: string): Promise<TelemetryUsageData> {
         const sq = get_sequelize();
 
         const [run_rows] = await sq.query(
@@ -2181,13 +2187,14 @@ export class RunService {
             { replacements: { run_id } },
         ) as [Array<{ phase: string; usage_snapshot: unknown }>, unknown];
 
-        return {
+        const data: TelemetryUsageData = {
             run: run_rows[0]?.usage_snapshot ?? null,
             phases: phase_rows.map((p) => ({
                 phase: p.phase,
                 usage_snapshot: p.usage_snapshot ?? null,
             })),
         };
+        return data;
     }
 
     // ── Event ingestion (Observability Phase 2c) ───────────────────────
@@ -2347,23 +2354,5 @@ export class RunService {
     }
 }
 
-/** Shape of the daemon's usage snapshot payload. */
-interface UsageSnapshotPayload {
-    snapshot_type: 'phase' | 'run';
-    run_id: string;
-    phase?: string;
-    total_tokens_in: number;
-    total_tokens_out: number;
-    total_duration_ms: number;
-    total_llm_calls: number;
-    total_invocations: number;
-    by_phase: Record<string, unknown>;
-    by_agent: Record<string, unknown>;
-    by_model: Record<string, {
-        provider: string;
-        model: string;
-        tokens_in: number;
-        tokens_out: number;
-        llm_calls: number;
-    }>;
-}
+/** Zod usage arm of ReportTelemetryInput, without the `kind` discriminant. */
+type UsageSnapshotPayload = Omit<Extract<ReportTelemetryInput, { kind: 'usage' }>, 'kind'>;

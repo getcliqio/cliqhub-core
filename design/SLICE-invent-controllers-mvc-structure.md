@@ -2,7 +2,9 @@
 
 **Status:** Done (all five S0 structure slices pushed)  
 **Depends on:** TEL/DASH/DAE/REV/RUN invent org_id hard-cuts (done on `slice/*-explicit-org-id`)  
-**Out of scope:** Envelope `{ ok, data }` cut (separate `*-ENV` later, like Realms RM-ENV); HDR-1; Logs / RunEventStream (not in invent set)
+**Next:** Envelope `{ ok, data }` — [`SLICE-invent-controllers-envelope.md`](./SLICE-invent-controllers-envelope.md) (TEL→DASH→DAE→REV→RUN ENV). Realms **RM-ENV** remains a sibling.  
+**Out of scope (S0):** Envelope cut; HDR-1; Logs / RunEventStream (not in invent set)  
+**S0 debt closed by ENV:** JSDoc gaps, response Zod `data.ts`, full `.describe`, OpenAPI regen (see ENV umbrella)
 
 ## Goal
 
@@ -12,8 +14,8 @@ Bring the five invent-touched controllers to the **same structural pattern** as 
 |-------|---------|
 | Controller | `extends BaseController`, instance methods, `this.ok` / `this.fail` / `assert_org_authorized` |
 | Routes | `const c = new XController();` + `c.wrap(c.method)` (and `with_dedup(c.wrap(...))` where dedup already exists) |
-| Schemas | `src/schemas/<resource>.ts` — Zod `*Input` with `.describe`, typed `*Data` / flat result types |
-| Envelope | **Keep flat** `{ ok: true, …fields }` via `FlatApiRequest` / `FlatApiOkResponse` — **no** `{ ok, data }` in these slices |
+| Schemas | Request Zod `*Input` under `schemas/<resource>/` (response `*Data` + full `.describe` deferred to **ENV**) |
+| Envelope | **Kept flat** in S0 — `{ ok, data }` is **ENV**, not S0 |
 
 Parity reference: `NotificationsController` + `realms_controller` (structure only; Realms still flat until RM-ENV).
 

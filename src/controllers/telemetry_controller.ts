@@ -7,7 +7,7 @@
  *   POST /v1/runs/report_telemetry — daemon write (`kind: usage | traces`)
  *   POST /v1/runs/get_telemetry    — SPA read (`kind: usage | spans | summary`)
  *
- * Structure: BaseController + schemas/telemetry (TEL-S0). Envelope stays flat.
+ * Envelope: `{ ok: true, data: T }` via BaseController.ok (TEL-ENV).
  */
 
 import type { Request } from 'express';
@@ -21,20 +21,19 @@ import {
 import { ApiError } from '../lib/api_error.js';
 import { Realm } from '../models/index.js';
 import type { AuthContext } from '../types/vo.js';
-import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
+import type { ApiOkResponse, ApiRequest, BooleanData } from '../types/api_response.js';
 import {
     GetTelemetryInput,
     ReportTelemetryInput,
 } from '../schemas/telemetry/inputs.js';
-
-/** Flat success fields for report_telemetry (usage = ok only; traces adds counts). */
-type ReportTelemetryFields = {
-    inserted?: number;
-    received?: number;
-};
-
-/** Flat success fields for get_telemetry variants. */
-type GetTelemetryFields = Record<string, unknown>;
+import type {
+    GetTelemetryData,
+    ReportTelemetryData,
+    TelemetryReportData,
+    TelemetrySpanData,
+    TelemetrySummaryData,
+    TelemetryUsageData,
+} from '../schemas/telemetry/data.js';
 
 export class TelemetryController extends BaseController {
     /**
@@ -80,50 +79,36 @@ export class TelemetryController extends BaseController {
      * This endpoint stores durable metrics (`kind: usage`) or traces (`kind: traces`).
      *
      * @param req - Body: {@link ReportTelemetryInput}
-     * @param res - Flat `{ ok: true }` or `{ ok: true, inserted, received }`
+     * @param res - `{ ok: true, data: BooleanData | TelemetryReportData }`
      */
     async report_telemetry(
-        req: FlatApiRequest<ReportTelemetryInput, ReportTelemetryFields>,
-        res: FlatApiOkResponse<ReportTelemetryFields>,
+        req: ApiRequest<ReportTelemetryInput, ReportTelemetryData>,
+        res: ApiOkResponse<ReportTelemetryData>,
     ): Promise<void> {
+        // Zod SoT — reject unknown / invalid daemon payloads before services.
         const body = this.parse_body(ReportTelemetryInput, req);
 
-        switch (body.kind) {
-            case 'usage': {
-                const { get_model_pricing_service } = await import('../services/model_pricing.service.js');
-                const pricing = get_model_pricing_service();
-                const { kind: _kind, ...usage_payload } = body;
-                await RunService.ingest_usage_snapshot(
-                    usage_payload as unknown as Parameters<typeof RunService.ingest_usage_snapshot>[0],
-                    pricing,
-                );
-                res.json({ ok: true });
-                return;
-            }
-            case 'traces': {
-                const spans = body.spans.map((s) => ({
-                    span_id: s.span_id,
-                    trace_id: s.trace_id,
-                    parent_span_id: s.parent_span_id ?? null,
-                    name: s.name,
-                    kind: s.kind,
-                    status_code: s.status_code,
-                    status_message: s.status_message ?? null,
-                    start_unix_nano: s.start_unix_nano,
-                    end_unix_nano: s.end_unix_nano,
-                    attributes: s.attributes ?? {},
-                    events: s.events ?? [],
-                }));
-                const inserted = await RunSpanService.ingest({
-                    run_id: body.run_id,
-                    daemon_id: body.daemon_id ?? null,
-                    realm_id: body.realm_id ?? null,
-                    spans,
-                });
-                res.json({ ok: true, inserted, received: spans.length });
-                return;
-            }
+        if (body.kind === 'usage') {
+            // Pricing enrich happens in the service; pass the parsed usage arm through.
+            const { get_model_pricing_service } = await import('../services/model_pricing.service.js');
+            const pricing = get_model_pricing_service();
+            const { kind: _kind, ...usage_payload } = body;
+            await RunService.ingest_usage_snapshot(usage_payload, pricing);
+            // Usage ingest is fire-and-forget ack — BooleanData.
+            const ack: BooleanData = true;
+            this.ok(res, ack);
+            return;
         }
+
+        // kind: traces — pass the parsed traces arm (minus discriminator) to ingest.
+        const { kind: _kind, ...traces_payload } = body;
+        const inserted = await RunSpanService.ingest(traces_payload);
+        // Wire DTO: how many rows were new vs how many arrived in this batch.
+        const data: TelemetryReportData = {
+            inserted,
+            received: traces_payload.spans.length,
+        };
+        this.ok(res, data);
     }
 
     /**
@@ -133,39 +118,39 @@ export class TelemetryController extends BaseController {
      * `summary` → home-dashboard fleet rollup (not live activity).
      *
      * @param req - Body: {@link GetTelemetryInput}
-     * @param res - Flat fields per kind (usage returns `{ run, phases }` without wrapping ok)
+     * @param res - `{ ok: true, data: TelemetryUsageData | TelemetrySpanData[] | TelemetrySummaryData }`
      */
     async get_telemetry(
-        req: FlatApiRequest<GetTelemetryInput, GetTelemetryFields>,
-        res: FlatApiOkResponse<GetTelemetryFields>,
+        req: ApiRequest<GetTelemetryInput, GetTelemetryData>,
+        res: ApiOkResponse<GetTelemetryData>,
     ): Promise<void> {
+        // Zod SoT — discriminant drives which DTO the service must return.
         const body = this.parse_body(GetTelemetryInput, req);
 
-        switch (body.kind) {
-            case 'usage': {
-                // Wire-compatible: historical shape is `{ run, phases }` without `{ ok: true }`.
-                const result = await RunService.get_usage(body.run_id);
-                res.json(result as unknown as { ok: true } & GetTelemetryFields);
-                return;
-            }
-            case 'spans': {
-                const spans = await RunSpanService.list(body.run_id);
-                res.json({ ok: true, spans });
-                return;
-            }
-            case 'summary': {
-                const user_id = req.user?.user_id;
-                if (!user_id) throw ApiError.unauthorized('login required');
-                // Body org_id is invent SoT (TEL-ORG) — never X-Org-Id.
-                await this.assert_org_authorized(this.auth_from(req), body.org_id);
-                const { realms } = await RealmService.list_for_user(user_id, { org_id: body.org_id });
-                const summary = await RunTelemetryService.summary({
-                    visible_realm_ids: realms.map((r) => r.id),
-                    window_days: body.window_days,
-                });
-                res.json({ ok: true, ...summary });
-                return;
-            }
+        if (body.kind === 'usage') {
+            // Service returns TelemetryUsageData — no cast at the boundary.
+            const data: TelemetryUsageData = await RunService.get_usage(body.run_id);
+            this.ok(res, data);
+            return;
         }
+
+        if (body.kind === 'spans') {
+            // Mapper inside the service projects rows → TelemetrySpanData[].
+            const data: TelemetrySpanData[] = await RunSpanService.list(body.run_id);
+            this.ok(res, data);
+            return;
+        }
+
+        // kind: summary — invent SoT is body.org_id (TEL-ORG); never X-Org-Id.
+        const user_id = req.user?.user_id;
+        if (!user_id) throw ApiError.unauthorized('login required');
+        await this.assert_org_authorized(this.auth_from(req), body.org_id);
+        // Visible realms for this org only — service does not re-authorize.
+        const { realms } = await RealmService.list_for_user(user_id, { org_id: body.org_id });
+        const data: TelemetrySummaryData = await RunTelemetryService.summary({
+            visible_realm_ids: realms.map((r) => r.id),
+            window_days: body.window_days,
+        });
+        this.ok(res, data);
     }
 }

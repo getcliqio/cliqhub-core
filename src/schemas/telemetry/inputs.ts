@@ -2,7 +2,7 @@
  * Telemetry API — Zod request schemas (SoT for inbound bodies).
  *
  * Paths: POST /v1/runs/report_telemetry, POST /v1/runs/get_telemetry
- * Envelope: flat (TEL-S0 — no `{ ok, data }` yet).
+ * Envelope: `{ ok: true, data: T }` (TEL-ENV) — see `data.ts`.
  *
  * Tenancy: `kind: summary` requires body `org_id` — never invent from X-Org-Id.
  */
