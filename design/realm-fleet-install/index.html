@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CliqHub — Realm fleet install (UX mock)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body { -webkit-font-smoothing: antialiased; background: #f8fafc; }
+    .app-shell {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      grid-template-rows: 48px 1fr;
+      height: 100vh;
+    }
+    .app-top { grid-column: 1 / -1; }
+    .app-side { grid-column: 1; grid-row: 2; overflow-y: auto; }
+    .app-main { grid-column: 2; grid-row: 2; overflow-y: auto; min-width: 0; }
+    .screen { display: none; }
+    .screen.active { display: block; }
+    @media (max-width: 900px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .app-side { display: none; }
+    }
+    .pulse-dot {
+      width: 8px; height: 8px; border-radius: 9999px;
+      background: #2dd4bf;
+      box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.5);
+      animation: pulse 1.6s infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.45); }
+      70% { box-shadow: 0 0 0 8px rgba(45, 212, 191, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0); }
+    }
+    .bar { height: 4px; border-radius: 9999px; background: #e2e8f0; overflow: hidden; }
+    .bar > i { display: block; height: 100%; width: 0; background: #0d9488; transition: width 0.35s ease; }
+  </style>
+</head>
+<body class="text-slate-800">
+
+<div class="app-shell">
+  <!-- Top bar -->
+  <header class="app-top flex items-center justify-between border-b border-slate-200 bg-white px-4">
+    <div class="flex items-center gap-3">
+      <span class="text-sm font-bold tracking-tight text-slate-900">CliqHub</span>
+      <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-800">UX mock</span>
+    </div>
+    <div class="flex items-center gap-2 text-xs text-slate-500">
+      <span>Scenario:</span>
+      <select id="scenario" class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700">
+        <option value="mixed">3 online · 1 offline</option>
+        <option value="all_online">All online</option>
+        <option value="none_online">None online</option>
+        <option value="partial_fail">Install with partial failure</option>
+      </select>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <aside class="app-side border-r border-slate-200 bg-slate-950 text-slate-300">
+    <div class="px-4 py-5">
+      <p class="text-[10px] font-bold uppercase tracking-[0.16em] text-teal-400/80">Product</p>
+      <nav class="mt-3 space-y-0.5 text-sm">
+        <a class="block rounded-lg px-3 py-2 text-slate-400 hover:bg-white/5" href="#">Home</a>
+        <a class="block rounded-lg bg-white/10 px-3 py-2 font-semibold text-white" href="#">Realms</a>
+        <a class="block rounded-lg px-3 py-2 text-slate-400 hover:bg-white/5" href="#">Teams</a>
+        <a class="block rounded-lg px-3 py-2 text-slate-400 hover:bg-white/5" href="#">HUG</a>
+      </nav>
+      <p class="mt-8 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">This mock</p>
+      <nav class="mt-3 space-y-0.5 text-sm">
+        <button type="button" data-goto="overview" class="nav-btn block w-full rounded-lg bg-teal-500/20 px-3 py-2 text-left font-semibold text-teal-200">Realm overview</button>
+        <button type="button" data-goto="install" class="nav-btn block w-full rounded-lg px-3 py-2 text-left text-slate-400 hover:bg-white/5">Install to fleet</button>
+        <button type="button" data-goto="progress" class="nav-btn block w-full rounded-lg px-3 py-2 text-left text-slate-400 hover:bg-white/5">Installing…</button>
+        <button type="button" data-goto="result" class="nav-btn block w-full rounded-lg px-3 py-2 text-left text-slate-400 hover:bg-white/5">Result</button>
+        <button type="button" data-goto="daemon" class="nav-btn block w-full rounded-lg px-3 py-2 text-left text-slate-400 hover:bg-white/5">Daemon (unchanged)</button>
+      </nav>
+    </div>
+  </aside>
+
+  <main class="app-main bg-slate-50">
+    <div class="px-9 py-7">
+
+      <!-- ========== SCREEN: Overview ========== -->
+      <section id="screen-overview" class="screen active">
+        <div class="mb-1 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p class="text-xs font-semibold text-teal-700">
+              <a href="#" class="hover:underline">Realms</a>
+              <span class="text-slate-300"> / </span>
+              acme-prod
+            </p>
+            <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-900">acme-prod</h1>
+            <p class="mt-1 text-sm text-slate-500">Production fleet · slug <code class="rounded bg-slate-200/80 px-1 text-xs">acme-prod</code></p>
+          </div>
+          <div class="flex gap-2">
+            <button type="button" data-goto="install" class="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-teal-500">
+              Install team to fleet
+            </button>
+            <button type="button" class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+              Invite
+            </button>
+          </div>
+        </div>
+
+        <!-- Fleet hero (matches live realm overview) -->
+        <section class="relative mt-5 overflow-hidden rounded-2xl bg-slate-950 px-5 py-6 text-white">
+          <div class="pointer-events-none absolute inset-0 opacity-90"
+            style="background: radial-gradient(ellipse 70% 60% at 15% 20%, rgba(20,184,166,0.25), transparent 55%), radial-gradient(ellipse 50% 40% at 90% 80%, rgba(56,189,248,0.12), transparent 50%);"></div>
+          <div class="relative flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-teal-300/90">Realm fleet</p>
+              <p id="hero-subtitle" class="mt-2 text-sm text-slate-300">3/4 daemons online — install hits online only</p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <button type="button" data-goto="install" class="rounded-xl bg-teal-400 px-4 py-2.5 text-sm font-bold text-slate-950 hover:bg-teal-300">
+                Install to online
+              </button>
+              <a href="#" class="rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white hover:bg-white/10">Open daemons</a>
+            </div>
+          </div>
+          <div class="relative mt-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div class="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
+              <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Online</p>
+              <p class="mt-0.5 text-xl font-bold"><span id="kpi-online">3</span><span class="text-sm font-medium text-slate-400">/<span id="kpi-total">4</span></span></p>
+            </div>
+            <div class="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
+              <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Stale / off</p>
+              <p id="kpi-off" class="mt-0.5 text-xl font-bold">1</p>
+            </div>
+            <div class="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
+              <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Fleet teams</p>
+              <p class="mt-0.5 text-xl font-bold">2</p>
+            </div>
+            <div class="rounded-xl border border-white/10 bg-white/5 px-3 py-2.5">
+              <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Coverage</p>
+              <p class="mt-0.5 text-xl font-bold">75<span class="text-sm font-medium text-slate-400">%</span></p>
+            </div>
+          </div>
+        </section>
+
+        <div class="mt-5 grid gap-4 lg:grid-cols-2">
+          <!-- NEW: Teams on this fleet -->
+          <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
+            <div class="mb-1 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 class="text-sm font-bold text-slate-900">Teams on this fleet</h2>
+                <p class="mt-0.5 text-xs text-slate-500">
+                  Installed per daemon. “Install to online” pushes the same team to every <em>online</em> machine — offline ones are skipped.
+                </p>
+              </div>
+              <button type="button" data-goto="install" class="rounded-lg bg-teal-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-teal-800">
+                Install to online daemons
+              </button>
+            </div>
+
+            <div class="mt-4 overflow-hidden rounded-xl border border-slate-100">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-slate-100 bg-slate-50/80 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    <th class="px-4 py-2.5">Team</th>
+                    <th class="px-4 py-2.5">Version</th>
+                    <th class="px-4 py-2.5">On online</th>
+                    <th class="px-4 py-2.5">Missing / skipped</th>
+                    <th class="px-4 py-2.5 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-50">
+                  <tr>
+                    <td class="px-4 py-3">
+                      <span class="font-mono text-xs font-semibold text-slate-800">@acme/claims-intake</span>
+                    </td>
+                    <td class="px-4 py-3 font-mono text-xs text-slate-500">1.4.2</td>
+                    <td class="px-4 py-3">
+                      <div class="flex flex-wrap gap-1">
+                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">mac-lab</span>
+                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">gpu-01</span>
+                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">edge-west</span>
+                      </div>
+                    </td>
+                    <td class="px-4 py-3">
+                      <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">build-box · offline</span>
+                    </td>
+                    <td class="px-4 py-3 text-right">
+                      <button type="button" data-goto="install" class="text-xs font-semibold text-teal-700 hover:underline">Re-push →</button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td class="px-4 py-3">
+                      <span class="font-mono text-xs font-semibold text-slate-800">@cliq/smoke</span>
+                    </td>
+                    <td class="px-4 py-3 font-mono text-xs text-slate-500">0.9.0</td>
+                    <td class="px-4 py-3">
+                      <div class="flex flex-wrap gap-1">
+                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">mac-lab</span>
+                        <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">gpu-01 · old</span>
+                        <span class="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-800">edge-west · missing</span>
+                      </div>
+                    </td>
+                    <td class="px-4 py-3">
+                      <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">build-box · offline</span>
+                    </td>
+                    <td class="px-4 py-3 text-right">
+                      <button type="button" data-goto="install" class="text-xs font-semibold text-teal-700 hover:underline">Align online →</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <p class="mt-3 text-[11px] text-slate-400">
+              Hierarchy unchanged: teams still live on each daemon. This view aggregates coverage across the realm.
+            </p>
+          </section>
+
+          <!-- Daemons strip -->
+          <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="mb-3 flex items-center justify-between">
+              <h2 class="text-sm font-bold text-slate-900">Daemons</h2>
+              <button type="button" data-goto="daemon" class="text-xs font-semibold text-teal-700 hover:underline">Per-daemon install still exists →</button>
+            </div>
+            <ul id="daemon-list" class="divide-y divide-slate-100"></ul>
+          </section>
+
+          <section class="rounded-2xl border border-dashed border-slate-200 bg-white/60 p-5">
+            <h2 class="text-sm font-bold text-slate-900">Later (not this slice)</h2>
+            <ul class="mt-3 space-y-2 text-xs text-slate-500">
+              <li>• Auto-install when a daemon comes online</li>
+              <li>• Desired-state / pin table</li>
+              <li>• Realm-level workspaces (paths differ per host)</li>
+            </ul>
+            <p class="mt-4 text-xs text-slate-400">This mock is: operator picks a team → Hub POSTs to each online daemon’s public URL → show results.</p>
+          </section>
+        </div>
+      </section>
+
+      <!-- ========== SCREEN: Install picker ========== -->
+      <section id="screen-install" class="screen">
+        <button type="button" data-goto="overview" class="mb-4 text-xs font-semibold text-slate-500 hover:text-slate-800">← Back to realm</button>
+        <h1 class="text-2xl font-bold tracking-tight text-slate-900">Install team to fleet</h1>
+        <p class="mt-1 max-w-xl text-sm text-slate-500">
+          Pushes to <strong class="font-semibold text-slate-700">online daemons only</strong> in <span class="font-mono text-xs">acme-prod</span>.
+          Offline machines are skipped — re-run when they’re back.
+        </p>
+
+        <div class="mt-6 grid gap-5 lg:grid-cols-5">
+          <div class="lg:col-span-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-teal-700">1 · Choose team</p>
+            <input id="team-filter" type="text" placeholder="Filter teams…"
+              class="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100" />
+            <ul id="team-pick" class="mt-3 max-h-64 space-y-1 overflow-y-auto">
+              <li>
+                <label class="flex cursor-pointer items-center gap-3 rounded-xl border border-teal-300 bg-teal-50/50 px-3 py-2.5">
+                  <input type="radio" name="team" value="claims" checked class="accent-teal-600" />
+                  <span>
+                    <span class="block font-mono text-xs font-semibold text-slate-800">@acme/claims-intake</span>
+                    <span class="text-[11px] text-slate-500">v1.4.2 · latest published</span>
+                  </span>
+                </label>
+              </li>
+              <li>
+                <label class="flex cursor-pointer items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 hover:bg-slate-50">
+                  <input type="radio" name="team" value="smoke" class="accent-teal-600" />
+                  <span>
+                    <span class="block font-mono text-xs font-semibold text-slate-800">@cliq/smoke</span>
+                    <span class="text-[11px] text-slate-500">v0.9.0 · latest published</span>
+                  </span>
+                </label>
+              </li>
+              <li>
+                <label class="flex cursor-pointer items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 hover:bg-slate-50">
+                  <input type="radio" name="team" value="review" class="accent-teal-600" />
+                  <span>
+                    <span class="block font-mono text-xs font-semibold text-slate-800">@acme/doc-review</span>
+                    <span class="text-[11px] text-slate-500">v2.1.0 · latest published</span>
+                  </span>
+                </label>
+              </li>
+            </ul>
+
+            <div class="mt-5 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-4">
+              <button type="button" id="btn-start-install" class="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-teal-500 disabled:opacity-40">
+                Install to <span id="target-count">3</span> online daemon(s)
+              </button>
+              <button type="button" data-goto="overview" class="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+                Cancel
+              </button>
+            </div>
+            <p id="install-blocked" class="mt-3 hidden text-xs font-semibold text-amber-700">
+              No online daemons in this realm. Start cliqd, then try again.
+            </p>
+          </div>
+
+          <div class="lg:col-span-2 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">2 · Targets</p>
+            <p class="mt-1 text-xs text-slate-500">Resolved from realm membership · online only get the POST.</p>
+            <ul id="target-list" class="mt-4 space-y-2"></ul>
+            <div class="mt-4 rounded-xl bg-slate-50 px-3 py-2.5 text-[11px] leading-relaxed text-slate-500">
+              <strong class="text-slate-700">What happens:</strong> Hub loops each online daemon’s public URL →
+              <code class="rounded bg-white px-1">POST /v1/install</code> with the team manifest.
+              Same actuator as daemon detail — different targeting.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== SCREEN: Progress ========== -->
+      <section id="screen-progress" class="screen">
+        <h1 class="text-2xl font-bold tracking-tight text-slate-900">Installing…</h1>
+        <p class="mt-1 text-sm text-slate-500">
+          Pushing <span class="font-mono text-xs font-semibold text-slate-700">@acme/claims-intake@1.4.2</span> to online daemons
+        </p>
+
+        <div class="mt-6 max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div class="mb-4 flex items-center gap-2">
+            <div class="pulse-dot"></div>
+            <span class="text-sm font-semibold text-slate-800">Talking to daemons over public URL</span>
+          </div>
+          <div class="bar mb-6"><i id="progress-bar"></i></div>
+          <ul id="progress-rows" class="space-y-3"></ul>
+        </div>
+      </section>
+
+      <!-- ========== SCREEN: Result ========== -->
+      <section id="screen-result" class="screen">
+        <button type="button" data-goto="overview" class="mb-4 text-xs font-semibold text-slate-500 hover:text-slate-800">← Back to realm</button>
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Install finished</h1>
+            <p id="result-summary" class="mt-1 text-sm text-slate-500">2 installed · 1 already present · 1 skipped (offline)</p>
+          </div>
+          <div class="flex gap-2">
+            <button type="button" data-goto="install" class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+              Install another
+            </button>
+            <button type="button" data-goto="overview" class="rounded-xl bg-teal-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-teal-500">
+              Done
+            </button>
+          </div>
+        </div>
+
+        <div class="mt-6 max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-100 bg-slate-50/80 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <th class="px-4 py-2.5">Daemon</th>
+                <th class="px-4 py-2.5">Status</th>
+                <th class="px-4 py-2.5">Detail</th>
+              </tr>
+            </thead>
+            <tbody id="result-rows" class="divide-y divide-slate-50"></tbody>
+          </table>
+        </div>
+
+        <div id="result-callout" class="mt-4 max-w-2xl rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-950">
+          <p class="font-semibold">Offline / failed daemons were not updated</p>
+          <p class="mt-1 text-xs text-amber-900/80">When they’re online again, use <em>Re-push</em> on the fleet teams table — nothing is remembered as “pending” in this slice.</p>
+        </div>
+      </section>
+
+      <!-- ========== SCREEN: Daemon detail (contrast) ========== -->
+      <section id="screen-daemon" class="screen">
+        <button type="button" data-goto="overview" class="mb-4 text-xs font-semibold text-slate-500 hover:text-slate-800">← Back to realm</button>
+        <p class="text-xs font-semibold text-teal-700">acme-prod / daemons / mac-lab</p>
+        <h1 class="mt-1 text-2xl font-bold tracking-tight text-slate-900">mac-lab</h1>
+        <p class="mt-1 text-sm text-slate-500">Per-daemon install stays as-is — single machine escape hatch.</p>
+
+        <div class="mt-5 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4">
+          <p class="mb-3 text-xs font-bold uppercase tracking-wider text-indigo-600">Install Team <span class="ml-2 rounded bg-indigo-100 px-1.5 py-0.5 text-[9px] font-bold text-indigo-500">existing UX</span></p>
+          <div class="flex flex-wrap items-end gap-2">
+            <div class="min-w-[200px] flex-1">
+              <span class="text-[10px] font-semibold uppercase text-slate-400">Team</span>
+              <select class="mt-0.5 block w-full rounded-lg border border-slate-200 px-2 py-1.5 font-mono text-xs">
+                <option>@acme/claims-intake</option>
+                <option>@cliq/smoke</option>
+              </select>
+            </div>
+            <button type="button" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white">Install</button>
+            <button type="button" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500">Cancel</button>
+          </div>
+          <p class="mt-3 text-[11px] text-slate-500">Targets <strong>this daemon only</strong>. Fleet install (teal) is the multi-machine path from the realm page.</p>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<script>
+  const DAEMONS = {
+    mixed: [
+      { id: 'd1', name: 'mac-lab', status: 'online' },
+      { id: 'd2', name: 'gpu-01', status: 'online' },
+      { id: 'd3', name: 'edge-west', status: 'online' },
+      { id: 'd4', name: 'build-box', status: 'offline' },
+    ],
+    all_online: [
+      { id: 'd1', name: 'mac-lab', status: 'online' },
+      { id: 'd2', name: 'gpu-01', status: 'online' },
+      { id: 'd3', name: 'edge-west', status: 'online' },
+    ],
+    none_online: [
+      { id: 'd1', name: 'mac-lab', status: 'offline' },
+      { id: 'd4', name: 'build-box', status: 'offline' },
+    ],
+    partial_fail: [
+      { id: 'd1', name: 'mac-lab', status: 'online' },
+      { id: 'd2', name: 'gpu-01', status: 'online', will_fail: true },
+      { id: 'd3', name: 'edge-west', status: 'online' },
+      { id: 'd4', name: 'build-box', status: 'offline' },
+    ],
+  };
+
+  let current_scenario = 'mixed';
+  let progress_timer = null;
+
+  function daemons() {
+    return DAEMONS[current_scenario] || DAEMONS.mixed;
+  }
+
+  function online() {
+    return daemons().filter((d) => d.status === 'online');
+  }
+
+  function status_pill(status) {
+    if (status === 'online') return 'bg-emerald-100 text-emerald-800';
+    if (status === 'stale') return 'bg-amber-100 text-amber-800';
+    return 'bg-slate-100 text-slate-600';
+  }
+
+  function render_overview_daemons() {
+    const list = document.getElementById('daemon-list');
+    list.innerHTML = daemons().map((d) => `
+      <li class="flex items-center justify-between gap-2 py-2.5">
+        <span class="text-sm font-semibold text-slate-800">${d.name}</span>
+        <span class="rounded-full px-2 py-0.5 text-[10px] font-bold ${status_pill(d.status)}">${d.status}</span>
+      </li>
+    `).join('');
+
+    const on = online().length;
+    const tot = daemons().length;
+    document.getElementById('kpi-online').textContent = String(on);
+    document.getElementById('kpi-total').textContent = String(tot);
+    document.getElementById('kpi-off').textContent = String(tot - on);
+    document.getElementById('hero-subtitle').textContent =
+      on === 0
+        ? 'No online daemons — fleet install is blocked until cliqd is up'
+        : on === tot
+          ? 'All clear — fleet online · install hits every machine'
+          : `${on}/${tot} daemons online — install hits online only`;
+  }
+
+  function render_targets() {
+    const on = online();
+    const off = daemons().filter((d) => d.status !== 'online');
+    document.getElementById('target-count').textContent = String(on.length);
+    document.getElementById('btn-start-install').disabled = on.length === 0;
+    document.getElementById('install-blocked').classList.toggle('hidden', on.length > 0);
+
+    const rows = [
+      ...on.map((d) => `
+        <li class="flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50/40 px-3 py-2">
+          <span class="text-sm font-semibold text-slate-800">${d.name}</span>
+          <span class="flex items-center gap-1.5 text-[10px] font-bold uppercase text-emerald-700">
+            <span class="pulse-dot" style="width:6px;height:6px"></span> Will install
+          </span>
+        </li>`),
+      ...off.map((d) => `
+        <li class="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 opacity-70">
+          <span class="text-sm font-semibold text-slate-500">${d.name}</span>
+          <span class="text-[10px] font-bold uppercase text-slate-400">Skipped · offline</span>
+        </li>`),
+    ];
+    document.getElementById('target-list').innerHTML = rows.join('') || '<li class="text-xs text-slate-400">No daemons in realm.</li>';
+  }
+
+  function goto(id) {
+    document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
+    document.getElementById('screen-' + id).classList.add('active');
+    document.querySelectorAll('.nav-btn').forEach((btn) => {
+      const on = btn.getAttribute('data-goto') === id;
+      btn.className = on
+        ? 'nav-btn block w-full rounded-lg bg-teal-500/20 px-3 py-2 text-left font-semibold text-teal-200'
+        : 'nav-btn block w-full rounded-lg px-3 py-2 text-left text-slate-400 hover:bg-white/5';
+    });
+    if (id === 'install') render_targets();
+    if (id === 'overview') render_overview_daemons();
+  }
+
+  async function run_install_demo() {
+    const targets = daemons();
+    const on = targets.filter((d) => d.status === 'online');
+    if (on.length === 0) return;
+
+    goto('progress');
+    const rows_el = document.getElementById('progress-rows');
+    const bar = document.getElementById('progress-bar');
+    rows_el.innerHTML = '';
+    bar.style.width = '0%';
+
+    const outcomes = [];
+    let i = 0;
+    for (const d of targets) {
+      const row = document.createElement('li');
+      row.className = 'flex items-center justify-between rounded-xl border border-slate-100 px-3 py-2.5';
+      if (d.status !== 'online') {
+        row.innerHTML = `
+          <span class="text-sm font-semibold text-slate-500">${d.name}</span>
+          <span class="text-[11px] font-bold text-slate-400">Skipped · offline</span>`;
+        rows_el.appendChild(row);
+        outcomes.push({ d, kind: 'skipped' });
+        continue;
+      }
+      row.innerHTML = `
+        <span class="text-sm font-semibold text-slate-800">${d.name}</span>
+        <span class="text-[11px] font-semibold text-teal-700">POST /v1/install…</span>`;
+      rows_el.appendChild(row);
+      await new Promise((r) => setTimeout(r, 550));
+      i += 1;
+      bar.style.width = `${Math.round((i / on.length) * 100)}%`;
+
+      if (d.will_fail) {
+        row.innerHTML = `
+          <span class="text-sm font-semibold text-slate-800">${d.name}</span>
+          <span class="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-800">Failed · connection refused</span>`;
+        outcomes.push({ d, kind: 'failed', detail: 'connection refused' });
+      } else if (d.name === 'gpu-01' && current_scenario === 'mixed') {
+        row.innerHTML = `
+          <span class="text-sm font-semibold text-slate-800">${d.name}</span>
+          <span class="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-800">Already installed</span>`;
+        outcomes.push({ d, kind: 'already', detail: 'already installed' });
+      } else {
+        row.innerHTML = `
+          <span class="text-sm font-semibold text-slate-800">${d.name}</span>
+          <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">Installed</span>`;
+        outcomes.push({ d, kind: 'ok', detail: 'installed' });
+      }
+    }
+
+    await new Promise((r) => setTimeout(r, 400));
+    show_result(outcomes);
+  }
+
+  function show_result(outcomes) {
+    const counts = { ok: 0, already: 0, skipped: 0, failed: 0 };
+    outcomes.forEach((o) => { counts[o.kind] += 1; });
+    const parts = [];
+    if (counts.ok) parts.push(`${counts.ok} installed`);
+    if (counts.already) parts.push(`${counts.already} already present`);
+    if (counts.failed) parts.push(`${counts.failed} failed`);
+    if (counts.skipped) parts.push(`${counts.skipped} skipped (offline)`);
+    document.getElementById('result-summary').textContent = parts.join(' · ') || 'Nothing to do';
+
+    const label = {
+      ok: ['bg-emerald-100 text-emerald-800', 'Installed'],
+      already: ['bg-sky-100 text-sky-800', 'Already present'],
+      failed: ['bg-rose-100 text-rose-800', 'Failed'],
+      skipped: ['bg-slate-100 text-slate-500', 'Skipped'],
+    };
+
+    document.getElementById('result-rows').innerHTML = outcomes.map((o) => {
+      const [cls, text] = label[o.kind];
+      return `<tr>
+        <td class="px-4 py-3 font-semibold text-slate-800">${o.d.name}</td>
+        <td class="px-4 py-3"><span class="rounded-full px-2 py-0.5 text-[10px] font-bold ${cls}">${text}</span></td>
+        <td class="px-4 py-3 text-xs text-slate-500">${o.detail || (o.kind === 'skipped' ? 'was offline' : '—')}</td>
+      </tr>`;
+    }).join('');
+
+    document.getElementById('result-callout').classList.toggle(
+      'hidden',
+      counts.skipped === 0 && counts.failed === 0,
+    );
+    goto('result');
+  }
+
+  document.querySelectorAll('[data-goto]').forEach((el) => {
+    el.addEventListener('click', () => goto(el.getAttribute('data-goto')));
+  });
+
+  document.getElementById('btn-start-install').addEventListener('click', () => {
+    if (progress_timer) clearTimeout(progress_timer);
+    run_install_demo();
+  });
+
+  document.getElementById('scenario').addEventListener('change', (e) => {
+    current_scenario = e.target.value;
+    render_overview_daemons();
+    render_targets();
+    if (document.getElementById('screen-install').classList.contains('active')) goto('install');
+    if (document.getElementById('screen-overview').classList.contains('active')) goto('overview');
+  });
+
+  document.getElementById('team-pick').addEventListener('change', (e) => {
+    if (e.target.name !== 'team') return;
+    document.querySelectorAll('#team-pick label').forEach((lab) => {
+      lab.classList.remove('border-teal-300', 'bg-teal-50/50');
+      lab.classList.add('border-transparent');
+    });
+    e.target.closest('label').classList.add('border-teal-300', 'bg-teal-50/50');
+    e.target.closest('label').classList.remove('border-transparent');
+  });
+
+  render_overview_daemons();
+  render_targets();
+</script>
+</body>
+</html>

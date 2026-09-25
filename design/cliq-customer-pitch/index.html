@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Cliq + Svantic — Customer briefing</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css" />
+	<style>
+		:root {
+			--bg: #0c1222;
+			--bg-deep: #0a0e1a;
+			--ink: #ffffff;
+			--ink-2: rgba(255, 255, 255, 0.72);
+			--ink-3: rgba(255, 255, 255, 0.42);
+			--accent: #f07167;
+			--node: #2a3f6e;
+			--node-edge: rgba(255, 255, 255, 0.12);
+			--sv: #5b8def;
+		}
+
+		html, body { background: var(--bg-deep); }
+
+		.reveal {
+			font-family: "Inter", system-ui, sans-serif;
+			color: var(--ink);
+			background:
+				radial-gradient(ellipse 80% 55% at 50% 40%, #1a1540 0%, transparent 70%),
+				radial-gradient(ellipse 60% 40% at 80% 90%, rgba(42, 63, 110, 0.35), transparent 55%),
+				linear-gradient(165deg, #0c1222 0%, #12102a 45%, #0a0e1a 100%);
+		}
+
+		.reveal .slides { text-align: left; }
+
+		.reveal .slides section {
+			padding: 0 6% 3.2em;
+			box-sizing: border-box;
+		}
+
+		.reveal h1, .reveal h2 {
+			font-weight: 800;
+			letter-spacing: -0.035em;
+			text-transform: none;
+			color: var(--ink);
+			margin: 0;
+			line-height: 1.08;
+		}
+
+		.reveal h1 { font-size: 2.55em; }
+		.reveal h2 { font-size: 2.05em; max-width: 15em; }
+
+		.reveal .accent { color: var(--accent); }
+		.reveal .sv { color: #8eb6ff; }
+
+		.reveal .sub {
+			margin: 0.75em 0 0;
+			font-size: 1.05em;
+			font-weight: 500;
+			line-height: 1.4;
+			color: var(--ink-2);
+			max-width: 24em;
+		}
+
+		.reveal .sub .accent,
+		.reveal .sub .sv { font-weight: 600; }
+
+		.reveal .progress { color: var(--accent); height: 2px; }
+		.reveal .controls { color: rgba(255,255,255,0.35); }
+
+		.mark {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 1em;
+			height: 1em;
+			border-radius: 0.28em;
+			background: linear-gradient(145deg, #8b7cf7, #6d5cf0);
+			box-shadow: 0 6px 24px rgba(109, 92, 240, 0.45);
+			vertical-align: middle;
+		}
+
+		.mark svg { width: 58%; height: 58%; }
+
+		.slide-title {
+			display: flex !important;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			text-align: center !important;
+			min-height: 100%;
+			padding-bottom: 2em !important;
+		}
+
+		.slide-title .word {
+			font-size: 5.8em;
+			font-weight: 800;
+			letter-spacing: -0.055em;
+			line-height: 0.95;
+			margin: 0;
+			color: #fff;
+		}
+
+		.slide-title .word .i-wrap {
+			position: relative;
+			display: inline-block;
+		}
+
+		.slide-title .word .i-wrap .dot {
+			position: absolute;
+			left: 50%;
+			top: 0.02em;
+			transform: translateX(-50%);
+			width: 0.38em;
+			height: 0.38em;
+		}
+
+		.slide-title .tag {
+			margin-top: 1.1em;
+			font-size: 1.15em;
+			font-weight: 400;
+			color: rgba(255, 255, 255, 0.78);
+			letter-spacing: -0.01em;
+		}
+
+		.slide-title .duo {
+			margin-top: 1.6em;
+			font-size: 0.72em;
+			font-weight: 600;
+			letter-spacing: 0.04em;
+			color: var(--ink-3);
+		}
+
+		.slide-title .duo span { color: rgba(255,255,255,0.7); }
+
+		.chain {
+			display: flex;
+			align-items: center;
+			justify-content: flex-start;
+			flex-wrap: nowrap;
+			gap: 0;
+			margin-top: 2.2em;
+			overflow-x: auto;
+			padding-bottom: 0.25em;
+		}
+
+		.chain .box {
+			flex: 0 0 auto;
+			width: 6.4em;
+			min-height: 4.6em;
+			border-radius: 0.85em;
+			background: var(--node);
+			border: 1px solid var(--node-edge);
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			gap: 0.45em;
+			padding: 0.7em 0.4em;
+			box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+		}
+
+		.chain .box.outcome {
+			background: #243a68;
+			border-color: rgba(240, 113, 103, 0.35);
+		}
+
+		.chain .box .ico {
+			width: 1.35em;
+			height: 1.35em;
+			opacity: 0.95;
+		}
+
+		.chain .box .lbl {
+			font-size: 0.55em;
+			font-weight: 600;
+			color: rgba(255, 255, 255, 0.9);
+		}
+
+		.chain .arr {
+			flex: 0 0 auto;
+			width: 1.6em;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			color: var(--accent);
+		}
+
+		.chain .arr svg { width: 1.25em; height: 1.25em; }
+
+		.chain .dots {
+			flex: 0 0 auto;
+			width: 1.8em;
+			text-align: center;
+			color: var(--accent);
+			font-size: 1.1em;
+			letter-spacing: 0.12em;
+			font-weight: 700;
+		}
+
+		.ai-row {
+			display: flex;
+			align-items: flex-start;
+			gap: 0;
+			margin-top: 0.15em;
+		}
+
+		.ai-col {
+			flex: 0 0 auto;
+			width: 6.4em;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+		}
+
+		.ai-col .stem {
+			width: 0;
+			height: 1.15em;
+			border-left: 1.5px dashed rgba(240, 113, 103, 0.55);
+		}
+
+		.ai-col .pill {
+			width: 2em;
+			height: 2em;
+			border-radius: 999px;
+			background: var(--node);
+			border: 1px solid var(--node-edge);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			font-size: 0.55em;
+			font-weight: 700;
+			color: #fff;
+		}
+
+		.ai-spacer { flex: 0 0 auto; width: 1.6em; }
+		.ai-spacer.wide { width: calc(1.8em + 1.6em); }
+
+		/* Dual layer diagram */
+		.layers {
+			margin-top: 1.8em;
+			display: grid;
+			gap: 0.85rem;
+		}
+
+		.layer {
+			border-radius: 1em;
+			border: 1px solid var(--node-edge);
+			padding: 1.1em 1.2em 1.15em;
+			background: rgba(42, 63, 110, 0.28);
+		}
+
+		.layer.decide {
+			background: rgba(91, 141, 239, 0.1);
+			border-color: rgba(91, 141, 239, 0.4);
+		}
+
+		.layer.chain-layer {
+			background: rgba(240, 113, 103, 0.07);
+			border-color: rgba(240, 113, 103, 0.35);
+		}
+
+		.layer .k {
+			font-size: 0.52em;
+			font-weight: 700;
+			letter-spacing: 0.14em;
+			text-transform: uppercase;
+			margin-bottom: 0.55em;
+		}
+
+		.layer.decide .k { color: #8eb6ff; }
+		.layer.chain-layer .k { color: var(--accent); }
+
+		.layer h3 {
+			font-size: 1.05em;
+			font-weight: 700;
+			margin: 0 0 0.35em;
+			letter-spacing: -0.02em;
+			color: #fff;
+		}
+
+		.layer p {
+			margin: 0;
+			font-size: 0.82em;
+			line-height: 1.4;
+			color: var(--ink-2);
+			max-width: 34em;
+		}
+
+		.layer-rail {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: 0.45em;
+			margin-top: 0.9em;
+		}
+
+		.layer-rail .n {
+			border-radius: 0.65em;
+			padding: 0.55em 0.85em;
+			background: rgba(12, 18, 34, 0.55);
+			border: 1px solid var(--node-edge);
+			font-size: 0.68em;
+			font-weight: 600;
+			color: #fff;
+		}
+
+		.layer-rail .n.hi {
+			border-color: rgba(91, 141, 239, 0.55);
+			background: rgba(91, 141, 239, 0.15);
+		}
+
+		.layer-rail .n.gate {
+			border-color: rgba(111, 159, 122, 0.5);
+			background: rgba(111, 159, 122, 0.12);
+		}
+
+		.layer-rail .a {
+			color: var(--ink-3);
+			font-weight: 700;
+			font-size: 0.85em;
+		}
+
+		.path-cap {
+			margin-top: 1.25em;
+			font-size: 0.92em;
+			color: var(--ink-2);
+			max-width: 30em;
+			line-height: 1.45;
+		}
+
+		.vs {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 1.25rem;
+			margin-top: 1.8em;
+		}
+
+		.vs .col {
+			border-radius: 1em;
+			padding: 1.25em 1.2em 1.35em;
+			background: rgba(42, 63, 110, 0.28);
+			border: 1px solid var(--node-edge);
+			min-height: 9em;
+		}
+
+		.vs .col.hi {
+			background: rgba(240, 113, 103, 0.08);
+			border-color: rgba(240, 113, 103, 0.35);
+		}
+
+		.vs .k {
+			font-size: 0.55em;
+			font-weight: 700;
+			letter-spacing: 0.14em;
+			text-transform: uppercase;
+			color: var(--ink-3);
+			margin-bottom: 0.85em;
+		}
+
+		.vs .col.hi .k { color: var(--accent); }
+
+		.vs h3 {
+			font-size: 1.05em;
+			font-weight: 700;
+			margin: 0 0 0.55em;
+			letter-spacing: -0.02em;
+			color: #fff;
+		}
+
+		.vs p {
+			margin: 0;
+			font-size: 0.82em;
+			line-height: 1.45;
+			color: var(--ink-2);
+		}
+
+		.corner-brand {
+			position: absolute;
+			right: 5.5%;
+			bottom: 7%;
+			display: inline-flex;
+			align-items: center;
+			gap: 0.45rem;
+			padding: 0.4rem 0.7rem 0.4rem 0.45rem;
+			border-radius: 0.55rem;
+			border: 1px solid rgba(124, 108, 240, 0.45);
+			background: rgba(12, 18, 34, 0.65);
+			font-weight: 700;
+			font-size: 0.72rem;
+			letter-spacing: -0.02em;
+			color: #fff;
+			pointer-events: none;
+		}
+
+		.corner-brand .mark {
+			width: 1.15rem;
+			height: 1.15rem;
+			border-radius: 0.28rem;
+		}
+
+		.corner-brand .mark svg { width: 60%; height: 60%; }
+
+		.slide-title .corner-brand { display: none; }
+
+		@media (max-width: 900px) {
+			.slide-title .word { font-size: 4em; }
+			.reveal h2 { font-size: 1.55em; }
+			.vs { grid-template-columns: 1fr; }
+			.chain .box { width: 5.2em; min-height: 4em; }
+			.ai-col { width: 5.2em; }
+		}
+	</style>
+</head>
+<body>
+	<div class="reveal">
+		<div class="slides">
+
+			<!-- 1 -->
+			<section class="slide-title">
+				<h1 class="word" aria-label="Cliq">
+					Cl<span class="i-wrap"><span class="dot mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2"/><circle cx="17" cy="7" r="2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/><path d="M9 7h6M7 9v6M17 9v6M9 17h6"/></svg></span><span class="stem">ı</span></span>q
+				</h1>
+				<p class="tag">That's all it takes to get work done</p>
+				<p class="duo">with <span>Svantic</span> — known chains · decisions that move them forward</p>
+			</section>
+
+			<!-- 2 -->
+			<section>
+				<h2>AI is probabilistic. <span class="accent">Reliability can't be.</span></h2>
+				<p class="sub">AI can perform each step. But the <span class="accent">outcome</span> depends on the <span class="accent">entire chain.</span></p>
+
+				<div class="chain" aria-hidden="true">
+					<div class="box">
+						<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8"><path d="M4 15l8-10 3 5 5-2-4 12H4z"/></svg>
+						<span class="lbl">Step 1</span>
+					</div>
+					<span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h12M13 6l6 6-6 6"/></svg></span>
+					<div class="box">
+						<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8"><circle cx="12" cy="12" r="7"/></svg>
+						<span class="lbl">Step 2</span>
+					</div>
+					<span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h12M13 6l6 6-6 6"/></svg></span>
+					<div class="box">
+						<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8"><path d="M12 3l2.2 5.4L20 11l-5.2 2.2L12 19l-2.8-5.8L4 11l5.8-2.6L12 3z"/></svg>
+						<span class="lbl">Step 3</span>
+					</div>
+					<span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h12M13 6l6 6-6 6"/></svg></span>
+					<div class="box">
+						<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8"><path d="M4 20l5-1 10-10a2.1 2.1 0 0 0-3-3L6 16l-2 4z"/></svg>
+						<span class="lbl">Step 4</span>
+					</div>
+					<span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h12M13 6l6 6-6 6"/></svg></span>
+					<div class="box">
+						<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8"><path d="M4 20l5-1 10-10a2.1 2.1 0 0 0-3-3L6 16l-2 4z"/></svg>
+						<span class="lbl">Step 5</span>
+					</div>
+					<span class="dots">···</span>
+					<span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-dasharray="3 3"><path d="M5 12h12M13 6l6 6-6 6"/></svg></span>
+					<div class="box outcome">
+						<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+						<span class="lbl">Outcome</span>
+					</div>
+				</div>
+
+				<div class="ai-row" aria-hidden="true">
+					<div class="ai-col"><span class="stem"></span><span class="pill">AI</span></div>
+					<span class="ai-spacer"></span>
+					<div class="ai-col"><span class="stem"></span><span class="pill">AI</span></div>
+					<span class="ai-spacer"></span>
+					<div class="ai-col"><span class="stem"></span><span class="pill">AI</span></div>
+					<span class="ai-spacer"></span>
+					<div class="ai-col"><span class="stem"></span><span class="pill">AI</span></div>
+					<span class="ai-spacer"></span>
+					<div class="ai-col"><span class="stem"></span><span class="pill">AI</span></div>
+					<span class="ai-spacer wide"></span>
+					<div class="ai-col"><span class="stem"></span><span class="pill">AI</span></div>
+				</div>
+
+				<div class="corner-brand"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2"/><circle cx="17" cy="7" r="2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/><path d="M9 7h6M7 9v6M17 9v6M9 17h6"/></svg></span>Cliq</div>
+			</section>
+
+			<!-- 3 The larger idea -->
+			<section>
+				<h2>Known <span class="accent">chains</span>.<br />Decisions that move them <span class="sv">forward</span>.</h2>
+				<p class="sub">Reliability needs a path you trust. Progress needs judgment at the seams — what to do next, which capability, when to ask a human.</p>
+
+				<div class="layers">
+					<div class="layer chain-layer">
+						<div class="k">Cliq — the known chain</div>
+						<h3>The path owns the work</h3>
+						<p>Versioned playbooks. Install on your fleet. Runs, logs, human gates, audit. Same chain every time.</p>
+						<div class="layer-rail" aria-hidden="true">
+							<span class="n">brief</span>
+							<span class="a">→</span>
+							<span class="n">act</span>
+							<span class="a">→</span>
+							<span class="n gate">human gate</span>
+							<span class="a">→</span>
+							<span class="n">done</span>
+						</div>
+					</div>
+					<div class="layer decide">
+						<div class="k">Svantic — decisions that advance the chain</div>
+						<h3>Agency where the chain would stall</h3>
+						<p>Discover capabilities. Choose the next move. Ask in natural language. Invoke the right team so the path continues.</p>
+						<div class="layer-rail" aria-hidden="true">
+							<span class="n hi">intent</span>
+							<span class="a">→</span>
+							<span class="n hi">decide / route</span>
+							<span class="a">→</span>
+							<span class="n hi">call Cliq team</span>
+						</div>
+					</div>
+				</div>
+
+				<div class="corner-brand"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2"/><circle cx="17" cy="7" r="2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/><path d="M9 7h6M7 9v6M17 9v6M9 17h6"/></svg></span>Cliq</div>
+			</section>
+
+			<!-- 4 vs frameworks + compose -->
+			<section>
+				<h2>Frameworks build <span class="accent">steps</span>.<br />This runs the <span class="accent">chain</span> — and keeps it moving.</h2>
+
+				<div class="vs">
+					<div class="col">
+						<div class="k">LangGraph / Crew / similar</div>
+						<h3>Author agent logic</h3>
+						<p>How you write an autonomous step. Useful inside the chain — not the chain, not the fleet, not Hub review.</p>
+					</div>
+					<div class="col hi">
+						<div class="k">Cliq + Svantic</div>
+						<h3>Path + forward motion</h3>
+						<p>Cliq: install, run, gate, audit on your machines. Svantic: decide and invoke so work doesn’t die in a chat.</p>
+					</div>
+				</div>
+
+				<div class="layer-rail" style="margin-top:1.6em" aria-hidden="true">
+					<span class="n">ingest</span>
+					<span class="a">→</span>
+					<span class="n" style="border-color:rgba(240,113,103,0.55);background:rgba(240,113,103,0.12)">LangGraph / Crew</span>
+					<span class="a">→</span>
+					<span class="n gate">human gate</span>
+					<span class="a">→</span>
+					<span class="n">ship</span>
+				</div>
+				<p class="path-cap"><span class="accent">A framework can be a node.</span> The known chain and the decisions that advance it are the product.</p>
+
+				<div class="corner-brand"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2"/><circle cx="17" cy="7" r="2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/><path d="M9 7h6M7 9v6M17 9v6M9 17h6"/></svg></span>Cliq</div>
+			</section>
+
+			<!-- 5 Live arc -->
+			<section>
+				<h2>See it end to end</h2>
+				<p class="sub">Build a chain. Install it on your fleet. Run it. Then move it forward from Svantic.</p>
+
+				<div class="layers">
+					<div class="layer chain-layer">
+						<div class="k">1 — Cliq</div>
+						<h3>Build → install → run</h3>
+						<p>Create the playbook live. Put it on your daemons. Start a run. Approve the gate in Hub when judgment is required.</p>
+					</div>
+					<div class="layer decide">
+						<div class="k">2 — Svantic</div>
+						<h3>Decide → invoke the same chain</h3>
+						<p>Ask in language. Svantic routes to the realm team. Same run, same path, same human gate — work continues.</p>
+					</div>
+				</div>
+				<p class="path-cap">You keep the infra. We give you the known chain — and the decisions that keep it moving.</p>
+
+				<div class="corner-brand"><span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="2"/><circle cx="17" cy="7" r="2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/><path d="M9 7h6M7 9v6M17 9v6M9 17h6"/></svg></span>Cliq</div>
+			</section>
+
+		</div>
+	</div>
+
+	<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+	<script>
+		Reveal.initialize({
+			hash: true,
+			slideNumber: false,
+			controls: true,
+			progress: true,
+			center: false,
+			transition: "fade",
+			backgroundTransition: "fade",
+			width: 1280,
+			height: 720,
+			margin: 0.04,
+		});
+	</script>
+</body>
+</html>

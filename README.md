@@ -4,6 +4,8 @@ CliqHub **Core API** (`@getcliqio/backend`) — Express + Sequelize + `@getcliqi
 
 Also contains **`sync/`** (Railway `cliqhub-sync`) until it gets its own repo.
 
+Hub **design / SLICE docs** live under [`design/`](./design/) (moved here from the retired `cliqhub` monorepo).
+
 ## Develop
 
 ```bash
