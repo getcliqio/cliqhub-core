@@ -1,0 +1,2688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CliqHub — UX prototype</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body { -webkit-font-smoothing: antialiased; }
+    .screen { display: none; }
+    .screen.active { display: block; }
+    .screen.active.fill {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      flex: 1;
+      height: 100%;
+    }
+    body.persona-first .only-returning { display: none !important; }
+    body.persona-returning .only-first { display: none !important; }
+    body.role-member .only-admin { display: none !important; }
+    body.role-admin .only-member { display: none !important; }
+    .app-shell {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      grid-template-rows: 48px 1fr;
+      height: 100vh;
+    }
+    .app-top { grid-column: 1 / -1; }
+    .app-side {
+      grid-column: 1;
+      grid-row: 2;
+      overflow-y: auto;
+    }
+    .app-main {
+      grid-column: 2;
+      grid-row: 2;
+      overflow-y: auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .app-main-inner {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 28px 36px 48px;
+      width: 100%;
+    }
+    @media (max-width: 900px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .app-side { display: none; }
+    }
+
+    /* ——— Logs explorer (light, CliqHub chrome) ——— */
+    .logs-page {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      flex: 1;
+      height: 100%;
+      background: transparent;
+      color: #0f172a;
+    }
+    .logs-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      margin-bottom: 12px;
+    }
+    .logs-toolbar h1 {
+      margin: 0 8px 0 0;
+      font-size: 1.5rem;
+      font-weight: 600;
+      letter-spacing: -0.025em;
+      color: #0f172a;
+    }
+    .logs-q {
+      flex: 1;
+      min-width: 200px;
+      height: 36px;
+      border: 1px solid #e2e8f0;
+      border-radius: 0.5rem;
+      background: #fff;
+      color: #0f172a;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      padding: 0 12px;
+      outline: none;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .logs-q:focus { border-color: #818cf8; box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15); }
+    .logs-q::placeholder { color: #94a3b8; }
+    .logs-btn {
+      height: 36px;
+      padding: 0 12px;
+      border-radius: 0.5rem;
+      border: 1px solid #e2e8f0;
+      background: #fff;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .logs-btn:hover { background: #f8fafc; }
+    .logs-btn.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+    .logs-btn.primary:hover { background: #4338ca; }
+    .logs-btn.live {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .logs-btn.live .pulse {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+      animation: logs-pulse 1.6s infinite;
+    }
+    @keyframes logs-pulse {
+      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.45); }
+      70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+    .logs-select {
+      height: 36px;
+      border: 1px solid #e2e8f0;
+      border-radius: 0.5rem;
+      background: #fff;
+      color: #475569;
+      font-size: 12px;
+      padding: 0 8px;
+    }
+    .logs-panel {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #e2e8f0;
+      border-radius: 0.75rem;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      overflow: hidden;
+    }
+    .logs-hist {
+      height: 56px;
+      padding: 10px 14px 6px;
+      border-bottom: 1px solid #f1f5f9;
+      background: #fafafa;
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .logs-hist .bar {
+      flex: 1;
+      border-radius: 2px 2px 0 0;
+      background: #c7d2fe;
+      min-height: 3px;
+    }
+    .logs-hist .bar.err { background: #fca5a5; }
+    .logs-hist .bar.warn { background: #fcd34d; }
+    .logs-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 14px;
+      border-bottom: 1px solid #f1f5f9;
+      font-size: 11px;
+      color: #94a3b8;
+      background: #fff;
+      flex-shrink: 0;
+    }
+    .logs-meta strong { color: #475569; font-weight: 600; }
+    .logs-body {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      min-height: 0;
+      flex: 1;
+    }
+    .logs-facets {
+      border-right: 1px solid #e2e8f0;
+      background: #fafafa;
+      overflow-y: auto;
+      padding: 8px 0 16px;
+    }
+    .logs-facets h4 {
+      margin: 12px 12px 6px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #94a3b8;
+    }
+    .facet-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 12px;
+      font-size: 12px;
+      color: #334155;
+      cursor: pointer;
+    }
+    .facet-row:hover { background: #f1f5f9; }
+    .facet-row input { accent-color: #4f46e5; }
+    .facet-row .count {
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+      color: #94a3b8;
+      font-size: 11px;
+    }
+    .facet-dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    }
+    .facet-dot.error { background: #ef4444; }
+    .facet-dot.warn { background: #f59e0b; }
+    .facet-dot.info { background: #3b82f6; }
+    .facet-dot.debug { background: #94a3b8; }
+    .logs-stream-wrap {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      background: #fff;
+    }
+    .logs-cols {
+      display: grid;
+      grid-template-columns: 96px 72px 88px 1fr;
+      gap: 10px;
+      padding: 8px 14px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #94a3b8;
+      border-bottom: 1px solid #e2e8f0;
+      background: #fafafa;
+      flex-shrink: 0;
+    }
+    .logs-stream {
+      flex: 1;
+      overflow-y: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .log-row {
+      display: grid;
+      grid-template-columns: 96px 72px 88px 1fr;
+      gap: 10px;
+      padding: 8px 14px;
+      border-bottom: 1px solid #f1f5f9;
+      cursor: pointer;
+      align-items: baseline;
+    }
+    .log-row:hover { background: #f8fafc; }
+    .log-row.active {
+      background: #eef2ff;
+      box-shadow: inset 3px 0 0 #4f46e5;
+    }
+    .log-ts { color: #94a3b8; font-variant-numeric: tabular-nums; }
+    .log-lvl {
+      display: inline-flex;
+      align-items: center;
+      height: 18px;
+      padding: 0 6px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      width: fit-content;
+    }
+    .log-lvl.error { background: #fef2f2; color: #b91c1c; }
+    .log-lvl.warn { background: #fffbeb; color: #b45309; }
+    .log-lvl.info { background: #eff6ff; color: #1d4ed8; }
+    .log-lvl.debug { background: #f1f5f9; color: #64748b; }
+    .log-svc { color: #4f46e5; font-weight: 500; }
+    .log-msg { color: #334155; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .log-msg .k { color: #94a3b8; }
+    .log-msg .v { color: #0f766e; }
+    .log-msg .hl {
+      color: #b91c1c;
+      background: #fef2f2;
+      border-radius: 2px;
+      padding: 0 3px;
+      font-weight: 600;
+    }
+    .logs-detail {
+      display: none;
+      border-top: 1px solid #e2e8f0;
+      background: #fafafa;
+      max-height: 42%;
+      overflow: auto;
+      flex-shrink: 0;
+    }
+    .logs-detail.open { display: block; }
+    .logs-detail-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-bottom: 1px solid #e2e8f0;
+      position: sticky;
+      top: 0;
+      background: #fafafa;
+    }
+    .logs-detail-head strong { font-size: 12px; color: #0f172a; }
+    .logs-detail-grid {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 0;
+      padding: 8px 14px 16px;
+      font-size: 12px;
+      background: #fff;
+    }
+    .logs-detail-grid dt {
+      color: #94a3b8;
+      padding: 5px 0;
+      font-family: ui-monospace, Menlo, monospace;
+    }
+    .logs-detail-grid dd {
+      margin: 0;
+      padding: 5px 0;
+      color: #0f172a;
+      font-family: ui-monospace, Menlo, monospace;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body class="persona-first role-member bg-slate-50 text-slate-900">
+  <div class="app-shell">
+    <header class="app-top flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-5">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="flex h-7 w-7 items-center justify-center rounded-md bg-indigo-600 text-[11px] font-bold text-white">cq</div>
+        <span class="text-sm font-semibold tracking-tight">cliqhub</span>
+        <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">UX proto</span>
+        <span class="only-admin rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700">Site admin</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="hidden lg:flex h-8 w-56 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs text-slate-400">
+          Search…
+          <kbd class="ml-auto rounded border border-slate-200 bg-white px-1 text-[10px]">⌘K</kbd>
+        </div>
+        <div class="relative" id="notif-bell-wrap">
+          <button type="button" id="notif-bell-btn" class="relative flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50" title="Notifications" aria-expanded="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span id="notif-badge" class="absolute -right-0.5 -top-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-indigo-600 px-1 text-[9px] font-bold text-white">3</span>
+          </button>
+          <div id="notif-dropdown" class="hidden absolute right-0 top-10 z-50 w-96 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+            <div class="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
+              <span class="text-sm font-semibold">Notifications</span>
+              <button type="button" id="notif-mark-read" class="text-[11px] font-semibold text-indigo-600 hover:underline">Mark all read</button>
+            </div>
+            <div id="notif-dropdown-list" class="max-h-80 overflow-y-auto divide-y divide-slate-50"></div>
+            <a href="#/notifications" class="block border-t border-slate-100 px-4 py-2.5 text-center text-xs font-semibold text-indigo-600 hover:bg-slate-50">View all notifications</a>
+          </div>
+        </div>
+        <div class="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+          <button type="button" id="persona-first" class="rounded-md px-2.5 py-1 font-medium bg-indigo-50 text-indigo-700">First login</button>
+          <button type="button" id="persona-returning" class="rounded-md px-2.5 py-1 font-medium text-slate-600 hover:bg-white">Returning</button>
+        </div>
+        <div class="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+          <button type="button" id="role-member" class="rounded-md px-2.5 py-1 font-medium bg-indigo-50 text-indigo-700">Member</button>
+          <button type="button" id="role-admin" class="rounded-md px-2.5 py-1 font-medium text-slate-600 hover:bg-white">Admin</button>
+        </div>
+        <a href="#/account" id="avatar" class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700" title="Account">S</a>
+      </div>
+    </header>
+
+    <aside class="app-side border-r border-slate-200 bg-white px-3 py-4">
+      <div class="mb-5 flex items-center gap-3 px-2">
+        <div id="side-avatar" class="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 text-sm font-bold text-indigo-700">S</div>
+        <div class="min-w-0">
+          <p class="truncate text-sm font-semibold">Sapan Shah</p>
+          <p class="text-xs text-slate-400">@sapan</p>
+          <p class="only-admin text-[10px] font-semibold uppercase tracking-wider text-amber-600">Site Admin</p>
+        </div>
+      </div>
+
+      <nav class="space-y-0.5 mb-5">
+        <a href="#/home" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
+          <span class="dot text-[10px] opacity-40">○</span>
+          <span class="only-first">Getting started</span>
+          <span class="only-returning">Dashboard</span>
+        </a>
+      </nav>
+
+      <p class="mb-2 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">Catalog</p>
+      <nav class="space-y-0.5 mb-5">
+        <a href="#/builder" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Builder</a>
+        <a href="#/teams" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Teams</a>
+        <a href="#/bundles" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Bundles</a>
+        <a href="#/browse" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Browse</a>
+      </nav>
+
+      <p class="mb-2 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">Access</p>
+      <nav class="space-y-0.5 mb-5">
+        <a href="#/scopes" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Scopes</a>
+        <a href="#/realms" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Realms</a>
+        <a href="#/tokens" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> User tokens</a>
+      </nav>
+
+      <p class="mb-2 px-3 text-[10px] font-bold uppercase tracking-wider text-slate-400">Runs</p>
+      <nav class="space-y-0.5 mb-5">
+        <a href="#/daemons" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Daemons</a>
+        <a href="#/runs" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Runs</a>
+        <a href="#/logs" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Logs</a>
+        <a href="#/notifications" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Notifications</a>
+        <a href="#/hug" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Reviews</a>
+      </nav>
+
+      <nav class="space-y-0.5 mb-5">
+        <a href="#/account" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Account</a>
+      </nav>
+
+      <!-- Existing /admin surface — only when role=admin -->
+      <div class="only-admin border-t border-slate-200 pt-4">
+        <p class="mb-2 px-3 text-[10px] font-bold uppercase tracking-wider text-amber-600">Admin</p>
+        <nav class="space-y-0.5">
+          <a href="#/admin" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Dashboard</a>
+          <a href="#/admin/users" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Users</a>
+          <a href="#/admin/orgs" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Organizations</a>
+          <a href="#/admin/scopes" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Scopes</a>
+          <a href="#/admin/teams" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Teams</a>
+          <a href="#/admin/tokens" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Tokens</a>
+          <a href="#/admin/audit" data-nav class="nav-link flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"><span class="dot text-[10px] opacity-40">○</span> Audit Log</a>
+        </nav>
+      </div>
+    </aside>
+
+    <main class="app-main bg-slate-50">
+    <div class="app-main-inner">
+
+      <!-- GETTING STARTED (first login) -->
+      <section class="screen only-first" id="screen-welcome">
+        <div class="flex flex-col gap-6 xl:flex-row xl:items-start">
+          <div class="min-w-0 flex-1 max-w-3xl">
+            <h1 class="text-3xl font-semibold tracking-tight">Getting started</h1>
+            <p class="mt-2 text-sm text-slate-500 leading-relaxed">
+              Follow these instructions on your machine. Your default
+              <strong class="text-slate-700">realm</strong> is already set up — you don’t need to create one.
+              When you’re done, everything shows up here in Hub: daemons, runs, and logs.
+            </p>
+
+            <div class="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-700">Ready</span>
+              <span>Default realm <strong>personal</strong> is yours.</span>
+              <a href="#/realms/personal" class="font-semibold text-indigo-600 hover:underline">Open realm →</a>
+            </div>
+
+            <ol class="mt-8 space-y-4">
+              <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="flex gap-3">
+                  <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">1</span>
+                  <div class="min-w-0 flex-1">
+                    <h3 class="text-sm font-semibold text-slate-900">Install the CLI</h3>
+                    <p class="mt-1 text-xs text-slate-500">One-time on this computer.</p>
+                    <pre class="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] leading-relaxed text-slate-100">curl -fsSL https://getcliq.io/cliq/install | bash
+cliq --version</pre>
+                  </div>
+                </div>
+              </li>
+
+              <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="flex gap-3">
+                  <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">2</span>
+                  <div class="min-w-0 flex-1">
+                    <h3 class="text-sm font-semibold text-slate-900">Get a key and sign in</h3>
+                    <p class="mt-1 text-xs text-slate-500">
+                      Create a <strong class="text-slate-700">user token</strong> in Hub, then log the CLI into CliqHub.
+                    </p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                      <a href="#/tokens?create=1" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700">Create token</a>
+                      <span class="self-center text-[11px] text-slate-400">then on your machine:</span>
+                    </div>
+                    <pre class="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] leading-relaxed text-slate-100">cliq login
+cliq whoami</pre>
+                  </div>
+                </div>
+              </li>
+
+              <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="flex gap-3">
+                  <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">3</span>
+                  <div class="min-w-0 flex-1">
+                    <h3 class="text-sm font-semibold text-slate-900">Start the daemon</h3>
+                    <p class="mt-1 text-xs text-slate-500">
+                      The <strong class="text-slate-700">daemon</strong> is what actually runs teams.
+                      For Hub enrollment, mint a <strong class="text-slate-700">realm enroll token</strong> on your realm (already created), set
+                      <code class="rounded bg-slate-100 px-1">CLIQ_DAEMON_TOKEN</code>, then start.
+                    </p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                      <a href="#/realms/personal?tab=tokens&form=1" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Mint realm token</a>
+                      <a href="#/daemons" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Daemons list</a>
+                    </div>
+                    <pre class="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] leading-relaxed text-slate-100">export CLIQ_API_URL=https://cliqhub.io
+export CLIQ_DAEMON_TOKEN=cliq_dt_••••••••   # from realm → Realm tokens
+cliq-daemon &amp;
+cliq daemon status</pre>
+                  </div>
+                </div>
+              </li>
+
+              <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="flex gap-3">
+                  <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">4</span>
+                  <div class="min-w-0 flex-1">
+                    <h3 class="text-sm font-semibold text-slate-900">Install a team and run it</h3>
+                    <p class="mt-1 text-xs text-slate-500">
+                      Pick something from <strong class="text-slate-700">Browse</strong> (e.g. <code class="rounded bg-slate-100 px-1">@cliq/hello-world</code>), install/assemble, then run.
+                    </p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                      <a href="#/browse" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700">Browse teams</a>
+                      <a href="#/teams" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">My teams</a>
+                    </div>
+                    <pre class="mt-3 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-[11px] leading-relaxed text-slate-100">mkdir ~/cliq-hello &amp;&amp; cd ~/cliq-hello
+cliq init
+cliq assemble @cliq/hello-world
+cliq run</pre>
+                  </div>
+                </div>
+              </li>
+
+              <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="flex gap-3">
+                  <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-xs font-bold text-white">5</span>
+                  <div class="min-w-0 flex-1">
+                    <h3 class="text-sm font-semibold text-slate-900">See it in Hub</h3>
+                    <p class="mt-1 text-xs text-slate-500">
+                      After the first run, come back here — no extra setup.
+                    </p>
+                    <ul class="mt-3 space-y-2 text-sm">
+                      <li class="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
+                        <span class="text-slate-600">Daemon online under your realm</span>
+                        <a href="#/daemons" class="text-xs font-semibold text-indigo-600 hover:underline">Daemons →</a>
+                      </li>
+                      <li class="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
+                        <span class="text-slate-600">Run status and history</span>
+                        <a href="#/runs" class="text-xs font-semibold text-indigo-600 hover:underline">Runs →</a>
+                      </li>
+                      <li class="flex items-center justify-between rounded-lg border border-slate-100 px-3 py-2">
+                        <span class="text-slate-600">Raw output / errors</span>
+                        <a href="#/logs" class="text-xs font-semibold text-indigo-600 hover:underline">Logs →</a>
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </li>
+            </ol>
+          </div>
+
+          <aside class="w-full shrink-0 xl:w-80">
+            <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm xl:sticky xl:top-6">
+              <h3 class="text-sm font-semibold text-slate-900">What you’ll use</h3>
+              <dl class="mt-4 space-y-3 text-xs leading-relaxed">
+                <div>
+                  <dt class="font-semibold text-slate-800">Realm</dt>
+                  <dd class="mt-0.5 text-slate-500">Already created for you. Access group for your daemons.</dd>
+                </div>
+                <div>
+                  <dt class="font-semibold text-slate-800">User token</dt>
+                  <dd class="mt-0.5 text-slate-500">Your key for CLI ↔ Hub (<a href="#/tokens" class="font-medium text-indigo-600 hover:underline">Tokens</a>).</dd>
+                </div>
+                <div>
+                  <dt class="font-semibold text-slate-800">Realm token</dt>
+                  <dd class="mt-0.5 text-slate-500">Lets a daemon join a realm — mint under <strong class="text-slate-700">Realm → Realm tokens</strong> (<code class="rounded bg-slate-100 px-1">CLIQ_DAEMON_TOKEN</code>).</dd>
+                </div>
+                <div>
+                  <dt class="font-semibold text-slate-800">Team</dt>
+                  <dd class="mt-0.5 text-slate-500">What you install and run — start from Browse.</dd>
+                </div>
+              </dl>
+              <div class="mt-5 border-t border-slate-100 pt-4">
+                <p class="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Later (optional)</p>
+                <a href="#/account?tab=channels" class="mt-2 block text-xs font-semibold text-indigo-600 hover:underline">Notification channels</a>
+                <p class="mt-1 text-[11px] text-slate-400">Slack/email when a run fails — after your first run works.</p>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- DASHBOARD -->
+      <section class="screen only-returning" id="screen-dashboard">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight">Dashboard</h1>
+            <p class="mt-1 text-sm text-slate-500">Overview across realms, daemons, and runs.</p>
+          </div>
+          <div class="flex gap-2">
+            <button type="button" data-go="#/realms?create=1" class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">Create realm</button>
+            <button type="button" data-go="#/daemons?enroll=1" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Enroll daemon</button>
+          </div>
+        </div>
+
+        <div class="mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <a href="#/realms" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:border-indigo-300">
+            <p class="text-xs font-medium text-slate-500">Realms</p>
+            <p class="mt-2 text-3xl font-semibold tabular-nums tracking-tight">3</p>
+          </a>
+          <a href="#/daemons" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:border-indigo-300">
+            <p class="text-xs font-medium text-slate-500">Daemons</p>
+            <p class="mt-2 text-3xl font-semibold tabular-nums tracking-tight">7</p>
+          </a>
+          <a href="#/account?tab=users" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:border-indigo-300">
+            <p class="text-xs font-medium text-slate-500">Users</p>
+            <p class="mt-2 text-3xl font-semibold tabular-nums tracking-tight">12</p>
+          </a>
+          <a href="#/runs" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:border-indigo-300">
+            <p class="text-xs font-medium text-slate-500">Runs · 24h</p>
+            <p class="mt-2 text-3xl font-semibold tabular-nums tracking-tight">38</p>
+            <p class="mt-1 text-xs text-red-600">3 failed</p>
+          </a>
+        </div>
+
+        <section class="mt-6 flex-1 rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div class="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+            <h2 class="text-sm font-semibold">Recent runs</h2>
+            <a href="#/runs" class="text-xs font-medium text-indigo-600 hover:underline">View all</a>
+          </div>
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <th class="px-5 py-2">Run</th><th class="px-5 py-2">Realm</th><th class="px-5 py-2">Status</th><th class="px-5 py-2">When</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-50">
+              <tr class="cursor-pointer hover:bg-slate-50" data-go="#/runs/run_8f2a">
+                <td class="px-5 py-3 font-mono text-xs">run_8f2a</td>
+                <td class="px-5 py-3 text-slate-500">prod-east</td>
+                <td class="px-5 py-3"><span class="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700">failed</span></td>
+                <td class="px-5 py-3 text-slate-400">12m</td>
+              </tr>
+              <tr class="cursor-pointer hover:bg-slate-50" data-go="#/runs/run_71bc">
+                <td class="px-5 py-3 font-mono text-xs">run_71bc</td>
+                <td class="px-5 py-3 text-slate-500">prod-east</td>
+                <td class="px-5 py-3"><span class="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">running</span></td>
+                <td class="px-5 py-3 text-slate-400">28m</td>
+              </tr>
+              <tr class="cursor-pointer hover:bg-slate-50" data-go="#/runs/run_55aa">
+                <td class="px-5 py-3 font-mono text-xs">run_55aa</td>
+                <td class="px-5 py-3 text-slate-500">staging</td>
+                <td class="px-5 py-3"><span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">succeeded</span></td>
+                <td class="px-5 py-3 text-slate-400">1h</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </section>
+
+      <!-- REALMS -->
+      <section class="screen" id="screen-realms">
+        <div id="realms-list-view">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h1 class="text-2xl font-semibold tracking-tight">Realms</h1>
+              <p class="mt-1 text-sm text-slate-500">Boundary for daemons, realm tokens, dispatch keys, and notification bindings.</p>
+            </div>
+            <button type="button" id="btn-show-create-realm" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Create realm</button>
+          </div>
+
+          <div class="mt-6 rounded-xl border border-slate-200 bg-white overflow-hidden">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  <th class="px-5 py-2">Realm</th><th class="px-5 py-2">Daemons</th><th class="px-5 py-2">Users</th><th class="px-5 py-2">Bindings</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-50">
+                <tr class="cursor-pointer hover:bg-slate-50" data-go="#/realms/prod-east">
+                  <td class="px-5 py-3"><span class="font-semibold">prod-east</span><div class="text-[11px] text-slate-400">@prod-east</div></td>
+                  <td class="px-5 py-3 text-slate-600">4</td>
+                  <td class="px-5 py-3 text-slate-600">5</td>
+                  <td class="px-5 py-3 text-slate-600">2</td>
+                </tr>
+                <tr class="cursor-pointer hover:bg-slate-50" data-go="#/realms/staging">
+                  <td class="px-5 py-3"><span class="font-semibold">staging</span><div class="text-[11px] text-slate-400">@staging</div></td>
+                  <td class="px-5 py-3 text-slate-600">2</td>
+                  <td class="px-5 py-3 text-slate-600">3</td>
+                  <td class="px-5 py-3 text-slate-600">1</td>
+                </tr>
+              <tr class="cursor-pointer hover:bg-slate-50" data-go="#/realms/dev-sandbox">
+                <td class="px-5 py-3"><span class="font-semibold">dev-sandbox</span><div class="text-[11px] text-slate-400">@dev-sandbox</div></td>
+                <td class="px-5 py-3 text-slate-600">1</td>
+                <td class="px-5 py-3 text-slate-600">2</td>
+                <td class="px-5 py-3 text-slate-600">0</td>
+              </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Full-width create flow (not a bolted-on card) -->
+        <div id="panel-create-realm" class="hidden">
+          <button type="button" data-hide-panel="create-realm" class="text-xs font-medium text-indigo-600 hover:underline">← Back to realms</button>
+          <div class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h1 class="text-2xl font-semibold tracking-tight">Create realm</h1>
+              <p class="mt-1 text-sm text-slate-500 max-w-2xl">
+                A realm is the boundary for daemons, realm tokens, dispatch keys, settings, and notification bindings.
+                Your default <span class="font-medium text-slate-700">personal</span> realm already exists — create another when you need isolation (e.g. prod vs staging).
+              </p>
+            </div>
+          </div>
+
+          <div class="mt-8 grid gap-8 xl:grid-cols-12">
+            <div class="xl:col-span-7 space-y-6">
+              <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 class="text-sm font-semibold">Identity</h2>
+                <p class="mt-1 text-xs text-slate-500">Slug is permanent and used in URLs and CLI refs.</p>
+                <div class="mt-5 grid gap-4 sm:grid-cols-2">
+                  <label class="block text-xs font-semibold text-slate-600 sm:col-span-1">Slug
+                    <div class="mt-1 flex rounded-lg border border-slate-200 overflow-hidden focus-within:ring-2 focus-within:ring-indigo-500/30">
+                      <span class="flex items-center bg-slate-50 px-3 text-xs text-slate-400 border-r border-slate-200">@</span>
+                      <input id="create-realm-slug" class="w-full border-0 px-3 py-2.5 font-mono text-sm outline-none" placeholder="prod-west" />
+                    </div>
+                  </label>
+                  <label class="block text-xs font-semibold text-slate-600">Display name
+                    <input id="create-realm-name" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="Prod West" />
+                  </label>
+                </div>
+                <label class="mt-4 block text-xs font-semibold text-slate-600">Description <span class="font-normal text-slate-400">(optional)</span>
+                  <textarea class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm min-h-[88px]" placeholder="Production workloads in us-east"></textarea>
+                </label>
+              </div>
+
+              <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h2 class="text-sm font-semibold">Defaults</h2>
+                <p class="mt-1 text-xs text-slate-500">You can change these later on the realm page.</p>
+                <div class="mt-5 grid gap-4 sm:grid-cols-2">
+                  <label class="block text-xs font-semibold text-slate-600">Organization
+                    <select class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm">
+                      <option>measureone</option>
+                      <option>cliq-community</option>
+                    </select>
+                  </label>
+                  <label class="block text-xs font-semibold text-slate-600">Inherit org agent settings
+                    <select class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm">
+                      <option>Yes — use org defaults</option>
+                      <option>No — start empty</option>
+                    </select>
+                  </label>
+                </div>
+                <label class="mt-4 flex items-start gap-3 rounded-lg border border-slate-100 bg-slate-50 px-4 py-3 cursor-pointer">
+                  <input type="checkbox" checked class="mt-0.5 rounded border-slate-300" />
+                  <span class="text-sm text-slate-700">Add me as realm owner</span>
+                </label>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-3 pt-1">
+                <button type="button" data-hide-panel="create-realm" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">Create realm</button>
+                <button type="button" data-hide-panel="create-realm" class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
+              </div>
+            </div>
+
+            <aside class="xl:col-span-5">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 xl:sticky xl:top-4">
+                <h2 class="text-sm font-semibold text-slate-800">What you’ll get</h2>
+                <ul class="mt-4 space-y-4 text-sm text-slate-600">
+                  <li class="flex gap-3">
+                    <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white border border-slate-200 text-[10px] font-bold text-indigo-600">1</span>
+                    <span><span class="font-medium text-slate-800">Empty daemon roster</span> — mint a <strong class="font-medium">realm token</strong> to enroll hosts.</span>
+                  </li>
+                  <li class="flex gap-3">
+                    <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white border border-slate-200 text-[10px] font-bold text-indigo-600">2</span>
+                    <span><span class="font-medium text-slate-800">Settings</span> — agent/env vars inherited from org until you override.</span>
+                  </li>
+                  <li class="flex gap-3">
+                    <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-white border border-slate-200 text-[10px] font-bold text-indigo-600">3</span>
+                    <span><span class="font-medium text-slate-800">Dispatch keys &amp; bindings</span> — add when you’re ready to run and alert.</span>
+                  </li>
+                </ul>
+                <div class="mt-6 rounded-lg border border-slate-200 bg-white px-4 py-3">
+                  <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Preview</p>
+                  <p class="mt-1 font-mono text-sm font-semibold text-slate-800">@<span id="create-realm-slug-preview">prod-west</span></p>
+                  <p class="mt-0.5 text-xs text-slate-500" id="create-realm-name-preview">Prod West</p>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <!-- REALM DETAIL -->
+      <section class="screen" id="screen-realm">
+        <a href="#/realms" class="text-xs font-medium text-indigo-600 hover:underline">← Realms</a>
+        <div class="mt-2 flex items-start justify-between gap-4">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight" id="realm-title">prod-east</h1>
+            <p class="mt-1 text-sm text-slate-500">Users, settings, enroll tokens, notification bindings, dispatch keys.</p>
+          </div>
+          <div class="flex gap-2">
+            <a href="#" id="realm-btn-add-user" class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">Add user</a>
+            <a href="#" id="realm-btn-mint-token" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Mint realm token</a>
+          </div>
+        </div>
+
+        <div class="mt-6 flex flex-wrap gap-1 border-b border-slate-200" id="realm-tabs">
+          <a href="#" data-tab="overview" class="realm-tab -mb-px border-b-2 border-indigo-600 px-3 py-2 text-sm font-semibold text-indigo-700">Overview</a>
+          <a href="#" data-tab="settings" class="realm-tab -mb-px border-b-2 border-transparent px-3 py-2 text-sm font-medium text-slate-500">Settings</a>
+          <a href="#" data-tab="members" class="realm-tab -mb-px border-b-2 border-transparent px-3 py-2 text-sm font-medium text-slate-500">Users</a>
+          <a href="#" data-tab="tokens" class="realm-tab -mb-px border-b-2 border-transparent px-3 py-2 text-sm font-medium text-slate-500">Realm tokens</a>
+          <a href="#" data-tab="bindings" class="realm-tab -mb-px border-b-2 border-transparent px-3 py-2 text-sm font-medium text-slate-500">Notification bindings</a>
+          <a href="#" data-tab="keys" class="realm-tab -mb-px border-b-2 border-transparent px-3 py-2 text-sm font-medium text-slate-500">Dispatch keys</a>
+        </div>
+
+        <div class="realm-panel mt-5" data-panel="overview">
+          <div class="grid grid-cols-3 gap-3">
+            <div class="rounded-xl border border-slate-200 p-4"><p class="text-xs text-slate-500">Daemons</p><p class="mt-1 text-2xl font-semibold">4</p></div>
+            <div class="rounded-xl border border-slate-200 p-4"><p class="text-xs text-slate-500">Users</p><p class="mt-1 text-2xl font-semibold">5</p></div>
+            <div class="rounded-xl border border-slate-200 p-4"><p class="text-xs text-slate-500">Runs today</p><p class="mt-1 text-2xl font-semibold">11</p></div>
+          </div>
+          <div class="mt-6">
+            <h2 class="text-sm font-semibold">What lives on this realm</h2>
+            <div class="mt-3 grid gap-3 sm:grid-cols-2">
+              <a href="#" data-realm-tab-link="tokens" class="rounded-xl border border-slate-200 bg-white p-4 hover:border-indigo-300">
+                <p class="text-sm font-semibold">Realm tokens</p>
+                <p class="mt-1 text-xs text-slate-500"><code class="rounded bg-slate-100 px-1">cliq_dt_…</code> → <code class="rounded bg-slate-100 px-1">CLIQ_DAEMON_TOKEN</code> — enroll daemons here.</p>
+              </a>
+              <a href="#" data-realm-tab-link="keys" class="rounded-xl border border-slate-200 bg-white p-4 hover:border-indigo-300">
+                <p class="text-sm font-semibold">Dispatch keys</p>
+                <p class="mt-1 text-xs text-slate-500">Start runs against daemons in this realm from CLI/CI.</p>
+              </a>
+              <a href="#" data-realm-tab-link="settings" class="rounded-xl border border-slate-200 bg-white p-4 hover:border-indigo-300">
+                <p class="text-sm font-semibold">Settings</p>
+                <p class="mt-1 text-xs text-slate-500">Agent / env variables (inherit org or override).</p>
+              </a>
+              <a href="#" data-realm-tab-link="bindings" class="rounded-xl border border-slate-200 bg-white p-4 hover:border-indigo-300">
+                <p class="text-sm font-semibold">Notification bindings</p>
+                <p class="mt-1 text-xs text-slate-500">Wire account channels to realm events.</p>
+              </a>
+            </div>
+            <p class="mt-3 text-xs text-slate-400">User PATs (<code class="rounded bg-slate-100 px-1">cliq login</code>) are not realm-scoped — see <a href="#/tokens" class="font-medium text-indigo-600 hover:underline">User tokens</a>.</p>
+          </div>
+        </div>
+
+        <div class="realm-panel mt-5 hidden" data-panel="settings">
+          <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 class="text-sm font-semibold">Realm settings</h2>
+              <p class="mt-1 text-xs text-slate-500 max-w-xl">
+                Agent / env variables for this realm. Values marked <span class="rounded bg-slate-100 px-1">org</span> inherit from
+                <a href="#/orgs/measureone?tab=settings" class="font-medium text-indigo-600 hover:underline">org settings</a>; override locally when needed.
+              </p>
+            </div>
+            <button type="button" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Save realm settings</button>
+          </div>
+          <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  <th class="px-5 py-2">Variable</th><th class="px-5 py-2">Agent</th><th class="px-5 py-2">Value</th><th class="px-5 py-2">Source</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-50">
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs">CURSOR_API_KEY</td>
+                  <td class="px-5 py-3 text-slate-500">cursor</td>
+                  <td class="px-5 py-3"><input type="password" value="••••••••••••" class="w-full max-w-xs rounded border border-slate-200 px-2 py-1 font-mono text-xs"></td>
+                  <td class="px-5 py-3"><span class="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700">realm</span></td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs">MODEL</td>
+                  <td class="px-5 py-3 text-slate-500">claude</td>
+                  <td class="px-5 py-3"><input type="text" value="claude-sonnet-4" class="w-full max-w-xs rounded border border-dashed border-slate-200 bg-slate-50 px-2 py-1 font-mono text-xs text-slate-500"></td>
+                  <td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">org</span> <button type="button" class="ml-1 text-[10px] font-semibold text-indigo-600">Override</button></td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs">TIMEOUT_MS</td>
+                  <td class="px-5 py-3 text-slate-500">*</td>
+                  <td class="px-5 py-3"><input type="text" value="600000" class="w-full max-w-xs rounded border border-slate-200 px-2 py-1 font-mono text-xs"></td>
+                  <td class="px-5 py-3"><span class="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700">realm</span></td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs">OPENAI_API_KEY</td>
+                  <td class="px-5 py-3 text-slate-500">openai</td>
+                  <td class="px-5 py-3"><input type="password" value="••••••••" class="w-full max-w-xs rounded border border-dashed border-slate-200 bg-slate-50 px-2 py-1 font-mono text-xs"></td>
+                  <td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">org</span> <button type="button" class="ml-1 text-[10px] font-semibold text-indigo-600">Override</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <button type="button" class="mt-3 text-xs font-semibold text-indigo-600 hover:underline">+ Add variable</button>
+        </div>
+
+        <div class="realm-panel mt-5 hidden" data-panel="members">
+          <div id="realm-members-list-view">
+            <div class="rounded-xl border border-slate-200 bg-white">
+              <div class="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+                <h2 class="text-sm font-semibold">Users</h2>
+                <button type="button" data-show-panel="add-member" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white">Add user</button>
+              </div>
+              <div class="divide-y divide-slate-50 text-sm">
+                <div class="flex items-center justify-between px-5 py-3"><div><span class="font-semibold">Sapan Shah</span> <span class="text-slate-400">@sapan</span></div><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">owner</span></div>
+                <div class="flex items-center justify-between px-5 py-3"><div><span class="font-semibold">Alex Kim</span> <span class="text-slate-400">@alex</span></div><button class="text-xs font-semibold text-slate-500">Remove</button></div>
+              </div>
+            </div>
+          </div>
+          <div id="panel-add-member" class="hidden">
+            <button type="button" data-hide-panel="add-member" class="text-xs font-medium text-indigo-600 hover:underline">← Back to users</button>
+            <h2 class="mt-3 text-xl font-semibold tracking-tight">Add user to realm</h2>
+            <p class="mt-1 text-sm text-slate-500 max-w-2xl">Grant access to this realm. Org membership is under Account → Users.</p>
+            <div class="mt-6 grid gap-8 xl:grid-cols-12">
+              <div class="xl:col-span-7">
+                <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+                  <label class="block text-xs font-semibold text-slate-600">User
+                    <select class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option>Alex Kim (@alex)</option><option>Invite by email…</option></select>
+                  </label>
+                  <label class="block text-xs font-semibold text-slate-600">Realm role
+                    <select class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option>member</option><option>owner</option></select>
+                  </label>
+                  <div class="flex gap-3 pt-2">
+                    <button type="button" data-hide-panel="add-member" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white">Add user</button>
+                    <button type="button" data-hide-panel="add-member" class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-semibold">Cancel</button>
+                  </div>
+                </div>
+              </div>
+              <aside class="xl:col-span-5">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                  <p class="font-semibold text-slate-800">Realm users vs org users</p>
+                  <p class="mt-2">Here you only decide who can use this realm’s daemons and runs.</p>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+
+        <div class="realm-panel mt-5 hidden" data-panel="tokens">
+          <div id="realm-tokens-list-view">
+            <div class="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h2 class="text-sm font-semibold">Realm tokens</h2>
+                <p class="mt-1 text-xs text-slate-500 max-w-2xl">
+                  <code class="rounded bg-slate-100 px-1">cliq_dt_…</code> → <code class="rounded bg-slate-100 px-1">CLIQ_DAEMON_TOKEN</code>.
+                  User PATs: <a href="#/tokens" class="font-medium text-indigo-600 hover:underline">User tokens</a>.
+                </p>
+              </div>
+              <button type="button" data-show-panel="enroll-daemon" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Mint realm token</button>
+            </div>
+            <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    <th class="px-5 py-2">Name</th><th class="px-5 py-2">Prefix</th><th class="px-5 py-2">Created</th><th class="px-5 py-2">Last used</th><th class="px-5 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-50">
+                  <tr>
+                    <td class="px-5 py-3 font-semibold">laptop-enroll</td>
+                    <td class="px-5 py-3 font-mono text-xs text-slate-500">cliq_dt_8f2a…</td>
+                    <td class="px-5 py-3 text-xs text-slate-500">Today</td>
+                    <td class="px-5 py-3 text-xs text-slate-500">20s ago</td>
+                    <td class="px-5 py-3 text-right"><button type="button" class="text-xs font-semibold text-red-600">Revoke</button></td>
+                  </tr>
+                  <tr>
+                    <td class="px-5 py-3 font-semibold">ci-box-enroll</td>
+                    <td class="px-5 py-3 font-mono text-xs text-slate-500">cliq_dt_71bc…</td>
+                    <td class="px-5 py-3 text-xs text-slate-500">Mar 12</td>
+                    <td class="px-5 py-3 text-xs text-slate-500">12m ago</td>
+                    <td class="px-5 py-3 text-right"><button type="button" class="text-xs font-semibold text-red-600">Revoke</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div id="panel-enroll-daemon" class="hidden">
+            <button type="button" data-hide-panel="enroll-daemon" class="text-xs font-medium text-indigo-600 hover:underline">← Back to realm tokens</button>
+            <h2 class="mt-3 text-xl font-semibold tracking-tight">Mint realm token</h2>
+            <p class="mt-1 text-sm text-slate-500 max-w-2xl">Creates <code class="rounded bg-slate-100 px-1">cliq_dt_…</code> for this realm. Shown once.</p>
+            <div class="mt-6 grid gap-8 xl:grid-cols-12">
+              <div class="xl:col-span-7">
+                <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+                  <label class="block text-xs font-semibold text-slate-600">Token name
+                    <input class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="laptop-enroll" />
+                  </label>
+                  <div>
+                    <p class="text-xs font-semibold text-slate-600 mb-2">Host commands</p>
+                    <pre class="overflow-x-auto rounded-lg bg-slate-900 p-4 font-mono text-[11px] text-slate-100 leading-relaxed">export CLIQ_API_URL=https://cliqhub.io
+export CLIQ_DAEMON_TOKEN=cliq_dt_••••••••
+cliq-daemon start</pre>
+                  </div>
+                  <div class="flex gap-3 pt-2">
+                    <button type="button" data-hide-panel="enroll-daemon" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white">Mint</button>
+                    <button type="button" data-hide-panel="enroll-daemon" class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-semibold">Cancel</button>
+                  </div>
+                </div>
+              </div>
+              <aside class="xl:col-span-5">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                  <p class="font-semibold text-slate-800">Realm vs user token</p>
+                  <p class="mt-2"><code class="rounded bg-white px-1 text-xs">cliq_dt_…</code> enrolls a daemon. <code class="rounded bg-white px-1 text-xs">cliq_pat_…</code> logs a person into Hub.</p>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+
+        <div class="realm-panel mt-5 hidden" data-panel="bindings">
+          <div id="realm-bindings-list-view">
+            <p class="mb-3 text-xs text-slate-500">
+              Channels at <a href="#/account?tab=channels" class="font-medium text-indigo-600 hover:underline">Account → Channels</a>.
+              Deliveries under <a href="#/notifications" class="font-medium text-indigo-600 hover:underline">Notifications</a>.
+            </p>
+            <div class="rounded-xl border border-slate-200 bg-white">
+              <div class="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+                <h2 class="text-sm font-semibold">Bindings</h2>
+                <button type="button" data-show-panel="add-binding" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white">Add binding</button>
+              </div>
+              <div class="divide-y divide-slate-50 text-sm">
+                <div class="flex items-center justify-between px-5 py-3">
+                  <div><code class="text-xs">run.failed</code> → <a href="#/account?tab=channels" class="font-medium text-indigo-600">eng-alerts</a> <span class="text-slate-400">slack</span></div>
+                  <button class="text-xs font-semibold text-slate-500">Test</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="panel-add-binding" class="hidden">
+            <button type="button" data-hide-panel="add-binding" class="text-xs font-medium text-indigo-600 hover:underline">← Back to bindings</button>
+            <h2 class="mt-3 text-xl font-semibold tracking-tight">Add notification binding</h2>
+            <p class="mt-1 text-sm text-slate-500 max-w-2xl">Connect a realm event to an account channel.</p>
+            <div class="mt-6 grid gap-8 xl:grid-cols-12">
+              <div class="xl:col-span-7">
+                <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+                  <label class="block text-xs font-semibold text-slate-600">Event
+                    <select class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option>run.failed</option><option>daemon.offline</option><option>group:run</option></select>
+                  </label>
+                  <label class="block text-xs font-semibold text-slate-600">Channel
+                    <select class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option>eng-alerts (slack)</option><option>ops-digest (email)</option></select>
+                  </label>
+                  <div class="flex gap-3 pt-2">
+                    <button type="button" data-hide-panel="add-binding" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white">Bind</button>
+                    <button type="button" data-hide-panel="add-binding" class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-semibold">Cancel</button>
+                  </div>
+                </div>
+              </div>
+              <aside class="xl:col-span-5">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                  <p class="font-semibold text-slate-800">Deliveries</p>
+                  <p class="mt-2">Status shows under Notifications and on the run detail.</p>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+
+        <div class="realm-panel mt-5 hidden" data-panel="keys">
+          <div id="realm-keys-list-view">
+            <div class="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h2 class="text-sm font-semibold">Dispatch keys</h2>
+                <p class="mt-1 text-xs text-slate-500">CLI/CI start runs in this realm. Separate from realm tokens and user PATs.</p>
+              </div>
+              <button type="button" data-show-panel="create-dispatch-key" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Create key</button>
+            </div>
+            <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    <th class="px-5 py-2">Name</th><th class="px-5 py-2">Prefix</th><th class="px-5 py-2">Created</th><th class="px-5 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-50">
+                  <tr>
+                    <td class="px-5 py-3 font-semibold">ci-dispatch</td>
+                    <td class="px-5 py-3 font-mono text-xs text-slate-500">dsk_••••8f2a</td>
+                    <td class="px-5 py-3 text-xs text-slate-500">Mar 10</td>
+                    <td class="px-5 py-3 text-right"><button type="button" class="text-xs font-semibold text-red-600">Revoke</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div id="panel-create-dispatch-key" class="hidden">
+            <button type="button" data-hide-panel="create-dispatch-key" class="text-xs font-medium text-indigo-600 hover:underline">← Back to dispatch keys</button>
+            <h2 class="mt-3 text-xl font-semibold tracking-tight">Create dispatch key</h2>
+            <p class="mt-1 text-sm text-slate-500 max-w-2xl">Lets CLI/CI start runs against daemons in this realm.</p>
+            <div class="mt-6 grid gap-8 xl:grid-cols-12">
+              <div class="xl:col-span-7">
+                <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+                  <label class="block text-xs font-semibold text-slate-600">Name
+                    <input class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="ci-dispatch" />
+                  </label>
+                  <div class="flex gap-3 pt-2">
+                    <button type="button" data-hide-panel="create-dispatch-key" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white">Create key</button>
+                    <button type="button" data-hide-panel="create-dispatch-key" class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-semibold">Cancel</button>
+                  </div>
+                </div>
+              </div>
+              <aside class="xl:col-span-5">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                  <p class="font-semibold text-slate-800">Prefix <code class="rounded bg-white px-1 text-xs">dsk_…</code></p>
+                  <p class="mt-2">Does not enroll a daemon — only authorizes dispatch.</p>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- DAEMONS -->
+      <section class="screen" id="screen-daemons">
+        <div id="daemons-list-view">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h1 class="text-2xl font-semibold tracking-tight">Daemons</h1>
+              <p class="mt-1 text-sm text-slate-500">
+                Agents enrolled in your realms. Mint a realm token, set
+                <code class="rounded bg-slate-100 px-1">CLIQ_DAEMON_TOKEN</code>, then start.
+              </p>
+            </div>
+            <button type="button" data-show-panel="enroll-daemon-page" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Enroll daemon</button>
+          </div>
+          <div class="mt-6 rounded-xl border border-slate-200 bg-white overflow-hidden">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <th class="px-5 py-2">Daemon</th><th class="px-5 py-2">Realm</th><th class="px-5 py-2">Status</th><th class="px-5 py-2">Last heartbeat</th><th class="px-5 py-2"></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-50">
+              <tr>
+                <td class="px-5 py-3 font-mono text-xs">mac-builder-02</td>
+                <td class="px-5 py-3"><a href="#/realms/prod-east" class="font-medium text-indigo-600">prod-east</a></td>
+                <td class="px-5 py-3"><span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">online</span></td>
+                <td class="px-5 py-3 text-slate-400">20s ago</td>
+                <td class="px-5 py-3 text-right"><a href="#/logs?q=daemon:mac-builder-02" class="text-xs font-medium text-indigo-600">Logs</a></td>
+              </tr>
+              <tr>
+                <td class="px-5 py-3 font-mono text-xs">ci-box-1</td>
+                <td class="px-5 py-3"><a href="#/realms/staging" class="font-medium text-indigo-600">staging</a></td>
+                <td class="px-5 py-3"><span class="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">stale</span></td>
+                <td class="px-5 py-3 text-slate-400">12m ago</td>
+                <td class="px-5 py-3 text-right"><a href="#/logs?q=daemon:ci-box-1" class="text-xs font-medium text-indigo-600">Logs</a></td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+        </div>
+        <div id="panel-enroll-daemon-page" class="hidden">
+          <button type="button" data-hide-panel="enroll-daemon-page" class="text-xs font-medium text-indigo-600 hover:underline">← Back to daemons</button>
+          <h1 class="mt-3 text-2xl font-semibold tracking-tight">Enroll daemon</h1>
+          <p class="mt-1 text-sm text-slate-500 max-w-2xl">Mint a realm token and start the daemon on a host. The token is scoped to one realm.</p>
+          <div class="mt-8 grid gap-8 xl:grid-cols-12">
+            <div class="xl:col-span-7">
+              <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+                <div class="grid gap-4 sm:grid-cols-2">
+                  <label class="block text-xs font-semibold text-slate-600">Realm
+                    <select class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option>personal</option><option>prod-east</option><option>staging</option></select>
+                  </label>
+                  <label class="block text-xs font-semibold text-slate-600">Token name
+                    <input class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="laptop-enroll" />
+                  </label>
+                </div>
+                <div>
+                  <p class="text-xs font-semibold text-slate-600 mb-2">Host commands</p>
+                  <pre class="overflow-x-auto rounded-lg bg-slate-900 p-4 font-mono text-[11px] text-slate-100 leading-relaxed">export CLIQ_API_URL=https://cliqhub.io
+export CLIQ_DAEMON_TOKEN=cliq_dt_••••••••
+cliq-daemon start</pre>
+                </div>
+                <div class="flex gap-3 pt-2">
+                  <button type="button" data-hide-panel="enroll-daemon-page" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white">Mint realm token</button>
+                  <button type="button" data-hide-panel="enroll-daemon-page" class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-semibold">Cancel</button>
+                </div>
+              </div>
+            </div>
+            <aside class="xl:col-span-5">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                <p class="font-semibold text-slate-800">What happens</p>
+                <ol class="mt-3 list-decimal pl-4 space-y-2">
+                  <li>Mint <code class="rounded bg-white px-1 text-xs">cliq_dt_…</code> for the realm.</li>
+                  <li>Set <code class="rounded bg-white px-1 text-xs">CLIQ_DAEMON_TOKEN</code> and start.</li>
+                  <li>Daemon appears online after heartbeats.</li>
+                </ol>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <!-- RUNS -->
+      <section class="screen" id="screen-runs">
+        <h1 class="text-2xl font-semibold tracking-tight">Runs</h1>
+        <p class="mt-1 text-sm text-slate-500">Team executions on enrolled daemons.</p>
+        <div class="mt-6 rounded-xl border border-slate-200 bg-white overflow-hidden">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <th class="px-5 py-2">Run</th><th class="px-5 py-2">Realm</th><th class="px-5 py-2">Team</th><th class="px-5 py-2">Status</th><th class="px-5 py-2"></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-50">
+              <tr class="cursor-pointer hover:bg-slate-50" data-go="#/runs/run_8f2a">
+                <td class="px-5 py-3 font-mono text-xs">run_8f2a</td>
+                <td class="px-5 py-3 text-slate-500">prod-east</td>
+                <td class="px-5 py-3 text-slate-500">qa/smoke</td>
+                <td class="px-5 py-3"><span class="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700">failed</span></td>
+                <td class="px-5 py-3 text-right"><a href="#/logs?q=run_id:run_8f2a" class="text-xs font-medium text-indigo-600">Logs</a></td>
+              </tr>
+              <tr class="cursor-pointer hover:bg-slate-50" data-go="#/runs/run_71bc">
+                <td class="px-5 py-3 font-mono text-xs">run_71bc</td>
+                <td class="px-5 py-3 text-slate-500">prod-east</td>
+                <td class="px-5 py-3 text-slate-500">release/cut</td>
+                <td class="px-5 py-3"><span class="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">running</span></td>
+                <td class="px-5 py-3 text-right"><a href="#/logs?q=run_id:run_71bc" class="text-xs font-medium text-indigo-600">Logs</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-run-detail">
+        <a href="#/runs" class="text-xs font-medium text-indigo-600 hover:underline">← Runs</a>
+        <div class="mt-2 flex items-center justify-between gap-4">
+          <div>
+            <h1 class="font-mono text-xl font-semibold" id="run-title">run_8f2a</h1>
+            <p class="mt-1 text-sm text-slate-500">realm prod-east · team qa/smoke · daemon mac-builder-02</p>
+          </div>
+          <a href="#/logs?q=run_id:run_8f2a" class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">Open logs</a>
+        </div>
+        <div class="mt-6 grid gap-4 lg:grid-cols-3">
+          <div class="lg:col-span-2 rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="border-b border-slate-100 px-5 py-3 text-sm font-semibold">Phases</div>
+            <div class="divide-y divide-slate-50 text-sm">
+              <div class="flex justify-between px-5 py-3"><span>install</span><span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">ok</span></div>
+              <div class="flex justify-between px-5 py-3"><span>run</span><span class="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700">failed</span></div>
+            </div>
+          </div>
+          <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+              <h2 class="text-sm font-semibold">Notifications</h2>
+              <a href="#/notifications" class="text-[10px] font-semibold text-indigo-600 hover:underline">All →</a>
+            </div>
+            <div class="divide-y divide-slate-50 text-sm">
+              <div class="px-5 py-3">
+                <p class="font-medium"><code class="rounded bg-slate-100 px-1 text-xs">run.failed</code></p>
+                <p class="mt-1 text-xs text-slate-500">→ eng-alerts · <span class="text-emerald-700 font-semibold">sent</span> · 2m ago</p>
+              </div>
+              <div class="px-5 py-3">
+                <p class="font-medium"><code class="rounded bg-slate-100 px-1 text-xs">phase.failed</code></p>
+                <p class="mt-1 text-xs text-slate-500">→ eng-alerts · <span class="text-emerald-700 font-semibold">sent</span> · 2m ago</p>
+              </div>
+              <div class="px-5 py-3">
+                <p class="font-medium"><code class="rounded bg-slate-100 px-1 text-xs">hug.review_requested</code></p>
+                <p class="mt-1 text-xs text-slate-500">→ ops-digest · <span class="text-emerald-700 font-semibold">sent</span> · <a href="#/hug" class="text-indigo-600 font-semibold">Reviews</a></p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- LOGS — Datadog-style explorer -->
+      <section class="screen fill" id="screen-logs">
+        <div class="logs-page">
+          <div class="logs-toolbar">
+            <h1>Logs</h1>
+            <input id="logs-q" class="logs-q" type="text" placeholder='status:(error OR warn) realm:prod-east "npm ERR"' />
+            <select class="logs-select">
+              <option>Past 15 minutes</option>
+              <option selected>Past 4 hours</option>
+              <option>Past 1 day</option>
+              <option>Past 1 week</option>
+            </select>
+            <button type="button" class="logs-btn primary">Run</button>
+            <button type="button" class="logs-btn live"><span class="pulse"></span> Live</button>
+          </div>
+
+          <div class="logs-panel">
+          <div class="logs-hist" id="logs-hist" title="Log volume over time" aria-hidden="true"></div>
+
+          <div class="logs-meta">
+            <span><strong>1,284</strong> events</span>
+            <span>Query took 42ms</span>
+            <span>Indexed · retained 15d</span>
+          </div>
+
+          <div class="logs-body">
+            <aside class="logs-facets">
+              <h4>Status</h4>
+              <label class="facet-row"><input type="checkbox" checked /><span class="facet-dot error"></span> error <span class="count">86</span></label>
+              <label class="facet-row"><input type="checkbox" checked /><span class="facet-dot warn"></span> warn <span class="count">214</span></label>
+              <label class="facet-row"><input type="checkbox" checked /><span class="facet-dot info"></span> info <span class="count">902</span></label>
+              <label class="facet-row"><input type="checkbox" /><span class="facet-dot debug"></span> debug <span class="count">4.1k</span></label>
+
+              <h4>Service</h4>
+              <label class="facet-row"><input type="checkbox" checked /> runner <span class="count">410</span></label>
+              <label class="facet-row"><input type="checkbox" checked /> daemon <span class="count">720</span></label>
+              <label class="facet-row"><input type="checkbox" checked /> hub <span class="count">154</span></label>
+
+              <h4>Realm</h4>
+              <label class="facet-row"><input type="checkbox" checked /> prod-east <span class="count">890</span></label>
+              <label class="facet-row"><input type="checkbox" /> staging <span class="count">310</span></label>
+              <label class="facet-row"><input type="checkbox" /> dev-sandbox <span class="count">84</span></label>
+
+              <h4>Daemon</h4>
+              <label class="facet-row"><input type="checkbox" /> mac-builder-02 <span class="count">402</span></label>
+              <label class="facet-row"><input type="checkbox" /> mac-builder-01 <span class="count">288</span></label>
+              <label class="facet-row"><input type="checkbox" /> ci-box-1 <span class="count">176</span></label>
+
+              <h4>Team</h4>
+              <label class="facet-row"><input type="checkbox" /> qa/smoke <span class="count">120</span></label>
+              <label class="facet-row"><input type="checkbox" /> release/cut <span class="count">64</span></label>
+            </aside>
+
+            <div class="logs-stream-wrap">
+              <div class="logs-cols">
+                <span>Date</span><span>Status</span><span>Service</span><span>Content</span>
+              </div>
+              <div class="logs-stream" id="logs-stream">
+                <div class="log-row" data-log="0">
+                  <span class="log-ts">10:18:02.441</span>
+                  <span class="log-lvl error">error</span>
+                  <span class="log-svc">runner</span>
+                  <span class="log-msg"><span class="k">run_id=</span><span class="v">run_8f2a</span> <span class="k">phase=</span><span class="v">install</span> <span class="hl">npm ERR!</span> code ERESOLVE unable to resolve dependency tree</span>
+                </div>
+                <div class="log-row" data-log="1">
+                  <span class="log-ts">10:18:01.102</span>
+                  <span class="log-lvl error">error</span>
+                  <span class="log-svc">runner</span>
+                  <span class="log-msg"><span class="k">run_id=</span><span class="v">run_8f2a</span> peer dependency conflict <span class="v">@cliq/sdk@0.4.2</span> vs <span class="v">0.3.9</span></span>
+                </div>
+                <div class="log-row" data-log="2">
+                  <span class="log-ts">10:17:58.011</span>
+                  <span class="log-lvl warn">warn</span>
+                  <span class="log-svc">daemon</span>
+                  <span class="log-msg"><span class="k">daemon=</span><span class="v">mac-builder-02</span> <span class="k">realm=</span><span class="v">prod-east</span> heartbeat delayed <span class="v">4.2s</span></span>
+                </div>
+                <div class="log-row" data-log="3">
+                  <span class="log-ts">10:17:44.880</span>
+                  <span class="log-lvl info">info</span>
+                  <span class="log-svc">runner</span>
+                  <span class="log-msg"><span class="k">run_id=</span><span class="v">run_8f2a</span> <span class="k">phase=</span><span class="v">install</span> started team=<span class="v">qa/smoke</span></span>
+                </div>
+                <div class="log-row" data-log="4">
+                  <span class="log-ts">10:17:40.210</span>
+                  <span class="log-lvl info">info</span>
+                  <span class="log-svc">daemon</span>
+                  <span class="log-msg"><span class="k">run_id=</span><span class="v">run_8f2a</span> claimed by <span class="v">mac-builder-02</span> <span class="k">realm=</span><span class="v">prod-east</span></span>
+                </div>
+                <div class="log-row" data-log="5">
+                  <span class="log-ts">10:17:12.004</span>
+                  <span class="log-lvl info">info</span>
+                  <span class="log-svc">hub</span>
+                  <span class="log-msg">dispatch accepted <span class="k">run_id=</span><span class="v">run_71bc</span> <span class="k">team=</span><span class="v">release/cut</span></span>
+                </div>
+                <div class="log-row" data-log="6">
+                  <span class="log-ts">10:16:55.440</span>
+                  <span class="log-lvl warn">warn</span>
+                  <span class="log-svc">daemon</span>
+                  <span class="log-msg"><span class="k">daemon=</span><span class="v">ci-box-1</span> <span class="k">realm=</span><span class="v">staging</span> stale <span class="k">last_seen=</span><span class="v">12m</span></span>
+                </div>
+                <div class="log-row" data-log="7">
+                  <span class="log-ts">10:16:40.991</span>
+                  <span class="log-lvl info">info</span>
+                  <span class="log-svc">hub</span>
+                  <span class="log-msg">notify <span class="k">channel=</span><span class="v">eng-alerts</span> <span class="k">event=</span><span class="v">run.failed</span> <span class="k">delivery=</span><span class="v">ok</span></span>
+                </div>
+                <div class="log-row" data-log="8">
+                  <span class="log-ts">10:15:02.118</span>
+                  <span class="log-lvl debug">debug</span>
+                  <span class="log-svc">daemon</span>
+                  <span class="log-msg"><span class="k">daemon=</span><span class="v">mac-builder-01</span> poll ok backlog=<span class="v">0</span></span>
+                </div>
+                <div class="log-row" data-log="9">
+                  <span class="log-ts">10:14:33.552</span>
+                  <span class="log-lvl info">info</span>
+                  <span class="log-svc">runner</span>
+                  <span class="log-msg"><span class="k">run_id=</span><span class="v">run_55aa</span> <span class="k">phase=</span><span class="v">complete</span> status=<span class="v">succeeded</span></span>
+                </div>
+                <div class="log-row" data-log="10">
+                  <span class="log-ts">10:13:01.009</span>
+                  <span class="log-lvl error">error</span>
+                  <span class="log-svc">runner</span>
+                  <span class="log-msg"><span class="k">run_id=</span><span class="v">run_41cc</span> timeout waiting for agent response after <span class="v">300s</span></span>
+                </div>
+                <div class="log-row" data-log="11">
+                  <span class="log-ts">10:12:18.330</span>
+                  <span class="log-lvl info">info</span>
+                  <span class="log-svc">daemon</span>
+                  <span class="log-msg"><span class="k">daemon=</span><span class="v">laptop-dev</span> enrolled <span class="k">realm=</span><span class="v">dev-sandbox</span></span>
+                </div>
+              </div>
+
+              <div class="logs-detail" id="logs-detail">
+                <div class="logs-detail-head">
+                  <strong>Event attributes</strong>
+                  <button type="button" class="logs-btn" id="logs-detail-close" style="height:28px">Close</button>
+                </div>
+                <dl class="logs-detail-grid" id="logs-detail-body"></dl>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TOKENS = user PATs (+ map to other credential types) -->
+      <section class="screen" id="screen-tokens">
+        <div id="tokens-list-view">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h1 class="text-2xl font-semibold tracking-tight">User tokens</h1>
+              <p class="mt-1 text-sm text-slate-500">Your Hub PATs for <code class="rounded bg-slate-100 px-1 text-xs">cliq login</code> / CI — not realm enroll tokens.</p>
+            </div>
+            <button type="button" id="btn-show-create-token" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Create token</button>
+          </div>
+          <div class="mt-4 grid gap-3 sm:grid-cols-3">
+            <div class="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4">
+              <p class="text-xs font-bold uppercase tracking-wider text-indigo-600">This page</p>
+              <p class="mt-1 text-sm font-semibold">User token (PAT)</p>
+              <p class="mt-1 text-xs text-slate-500"><code class="rounded bg-white px-1">cliq_pat_…</code> · you ↔ Hub CLI/CI</p>
+            </div>
+            <a href="#/realms/personal?tab=tokens" class="rounded-xl border border-slate-200 bg-white p-4 hover:border-indigo-300">
+              <p class="text-xs font-bold uppercase tracking-wider text-slate-400">On each realm</p>
+              <p class="mt-1 text-sm font-semibold">Realm token</p>
+              <p class="mt-1 text-xs text-slate-500"><code class="rounded bg-slate-100 px-1">cliq_dt_…</code> · enroll daemon →</p>
+            </a>
+            <a href="#/realms/personal?tab=keys" class="rounded-xl border border-slate-200 bg-white p-4 hover:border-indigo-300">
+              <p class="text-xs font-bold uppercase tracking-wider text-slate-400">On each realm</p>
+              <p class="mt-1 text-sm font-semibold">Dispatch key</p>
+              <p class="mt-1 text-xs text-slate-500"><code class="rounded bg-slate-100 px-1">dsk_…</code> · start runs →</p>
+            </a>
+          </div>
+          <div id="token-created-banner" class="mt-4 hidden rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+            <p class="text-sm font-semibold text-emerald-900">Token created — copy it now. It won’t be shown again.</p>
+            <div class="mt-2 flex items-center gap-2">
+              <code id="token-created-value" class="flex-1 truncate rounded-lg border border-emerald-200 bg-white px-3 py-2 font-mono text-xs text-slate-800"></code>
+              <button type="button" id="token-copy-btn" class="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-semibold text-white">Copy</button>
+            </div>
+          </div>
+          <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  <th class="px-5 py-2">Name</th><th class="px-5 py-2">Created</th><th class="px-5 py-2">Last used</th><th class="px-5 py-2"></th>
+                </tr>
+              </thead>
+              <tbody id="tokens-tbody" class="divide-y divide-slate-50"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="panel-create-token" class="hidden">
+          <button type="button" data-hide-panel="create-token" class="text-xs font-medium text-indigo-600 hover:underline">← Back to user tokens</button>
+          <h1 class="mt-3 text-2xl font-semibold tracking-tight">Create user token</h1>
+          <p class="mt-1 text-sm text-slate-500 max-w-2xl">Authenticates the CLI or CI to Hub. The secret is shown once after you create it.</p>
+          <div class="mt-8 grid gap-8 xl:grid-cols-12">
+            <div class="xl:col-span-7">
+              <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+                <label class="block text-xs font-semibold text-slate-600">Name
+                  <input id="create-token-name" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="laptop-cli" />
+                </label>
+                <label class="block text-xs font-semibold text-slate-600">Expires
+                  <select id="create-token-expires" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm">
+                    <option value="90d">90 days</option>
+                    <option value="365d">1 year</option>
+                    <option value="never">Never</option>
+                  </select>
+                </label>
+                <div class="flex gap-3 pt-2">
+                  <button type="button" id="create-token-submit" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white">Create token</button>
+                  <button type="button" data-hide-panel="create-token" class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-semibold">Cancel</button>
+                </div>
+              </div>
+            </div>
+            <aside class="xl:col-span-5">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                <p class="font-semibold text-slate-800">About user tokens</p>
+                <ul class="mt-3 space-y-2">
+                  <li><code class="rounded bg-white px-1 text-xs">cliq_pat_…</code> authenticates you to Hub.</li>
+                  <li>Realm tokens enroll daemons — mint under Realm → Realm tokens.</li>
+                </ul>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-account">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight">Account</h1>
+            <p class="mt-1 text-sm text-slate-500">Profile, security, organizations you’re in, users, and channels.</p>
+          </div>
+          <button type="button" class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50">Sign out</button>
+        </div>
+
+        <div class="mt-6 flex flex-col gap-6 lg:flex-row lg:items-start">
+          <nav class="flex shrink-0 gap-1 overflow-x-auto lg:w-44 lg:flex-col lg:overflow-visible" id="account-tabs">
+            <a href="#/account?tab=profile" data-account-tab="profile" class="account-tab whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100">Profile</a>
+            <a href="#/account?tab=security" data-account-tab="security" class="account-tab whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100">Security</a>
+            <a href="#/account?tab=organizations" data-account-tab="organizations" class="account-tab whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100">Organizations</a>
+            <a href="#/account?tab=users" data-account-tab="users" class="account-tab whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100">Users</a>
+            <a href="#/account?tab=channels" data-account-tab="channels" class="account-tab whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100">Channels</a>
+          </nav>
+
+          <div class="min-w-0 flex-1">
+            <div class="account-panel" data-account-panel="profile">
+              <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm max-w-xl">
+                <h2 class="text-sm font-semibold">Profile</h2>
+                <div class="mt-4 space-y-3">
+                  <label class="block text-xs font-medium text-slate-500">Display name<input type="text" value="Sapan Shah" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"></label>
+                  <label class="block text-xs font-medium text-slate-500">Username<input type="text" value="sapan" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-sm"></label>
+                  <label class="block text-xs font-medium text-slate-500">Email<input type="email" value="sapan@measureone.com" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"></label>
+                  <div class="flex justify-between text-sm pt-1">
+                    <span class="text-slate-500">Site role</span>
+                    <span class="only-admin rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-700">admin</span>
+                    <span class="only-member rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-600">member</span>
+                  </div>
+                </div>
+                <button type="button" class="mt-5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Save profile</button>
+              </div>
+            </div>
+
+            <div class="account-panel hidden" data-account-panel="security">
+              <div class="space-y-4 max-w-xl">
+                <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <h2 class="text-sm font-semibold">Change password</h2>
+                  <p class="mt-1 text-xs text-slate-500">You’ll stay signed in on this device; other sessions can be revoked below.</p>
+                  <div class="mt-4 space-y-3">
+                    <label class="block text-xs font-medium text-slate-500">Current password<input type="password" autocomplete="current-password" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="••••••••"></label>
+                    <label class="block text-xs font-medium text-slate-500">New password<input type="password" autocomplete="new-password" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="••••••••"></label>
+                    <label class="block text-xs font-medium text-slate-500">Confirm new password<input type="password" autocomplete="new-password" class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="••••••••"></label>
+                  </div>
+                  <button type="button" class="mt-5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Update password</button>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <h2 class="text-sm font-semibold">Sign-in methods</h2>
+                  <ul class="mt-4 space-y-3 text-sm">
+                    <li class="flex items-center justify-between"><span>Password</span><span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">enabled</span></li>
+                    <li class="flex items-center justify-between"><span>Google SSO</span><div class="flex items-center gap-2"><span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">connected</span><button type="button" class="text-xs font-semibold text-slate-500">Disconnect</button></div></li>
+                  </ul>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div class="flex items-center justify-between">
+                    <h2 class="text-sm font-semibold">Active sessions</h2>
+                    <button type="button" class="text-xs font-semibold text-red-600">Revoke others</button>
+                  </div>
+                  <ul class="mt-4 divide-y divide-slate-50 text-sm">
+                    <li class="flex justify-between py-2.5"><span><span class="font-medium">Mac · Chrome</span><span class="ml-2 text-xs text-emerald-600">this device</span></span><span class="text-xs text-slate-400">Now</span></li>
+                    <li class="flex justify-between py-2.5"><span class="font-medium">iPhone · Safari</span><span class="text-xs text-slate-400">2d ago</span></li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="account-panel hidden" data-account-panel="organizations">
+              <div class="mb-4">
+                <h2 class="text-sm font-semibold">Organizations</h2>
+                <p class="mt-1 text-xs text-slate-500">Orgs you belong to — not a catalog. Open one for shared agent settings realms can inherit.</p>
+              </div>
+              <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm divide-y divide-slate-50 text-sm">
+                <div class="flex items-center justify-between gap-4 px-5 py-3">
+                  <div>
+                    <p class="font-semibold">measureone</p>
+                    <p class="mt-0.5 text-xs text-slate-400">3 realms · your role: owner</p>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold">owner</span>
+                    <a href="#/orgs/measureone?tab=settings" class="text-xs font-semibold text-indigo-600 hover:underline">Settings →</a>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between gap-4 px-5 py-3">
+                  <div>
+                    <p class="font-semibold">cliq-community</p>
+                    <p class="mt-0.5 text-xs text-slate-400">1 realm · your role: member</p>
+                  </div>
+                  <div class="flex items-center gap-3">
+                    <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold">member</span>
+                    <a href="#/orgs/cliq-community?tab=overview" class="text-xs font-semibold text-indigo-600 hover:underline">Open →</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="account-panel hidden" data-account-panel="users">
+              <div id="account-users-list-view">
+              <div class="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <h2 class="text-sm font-semibold">Users</h2>
+                  <p class="mt-1 text-xs text-slate-500">People in your org. Grant realm access from each realm → Users tab.</p>
+                </div>
+                <button type="button" data-show-panel="add-user" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Invite user</button>
+              </div>
+              <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <th class="px-5 py-2">User</th><th class="px-5 py-2">Email</th><th class="px-5 py-2">Org role</th><th class="px-5 py-2">Status</th><th class="px-5 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-50">
+                    <tr>
+                      <td class="px-5 py-3"><span class="font-semibold">Sapan Shah</span> <span class="text-slate-400">@sapan</span></td>
+                      <td class="px-5 py-3 text-slate-500">sapan@measureone.com</td>
+                      <td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">owner</span></td>
+                      <td class="px-5 py-3"><span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">active</span></td>
+                      <td></td>
+                    </tr>
+                    <tr>
+                      <td class="px-5 py-3"><span class="font-semibold">Alex Kim</span> <span class="text-slate-400">@alex</span></td>
+                      <td class="px-5 py-3 text-slate-500">alex@measureone.com</td>
+                      <td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">member</span></td>
+                      <td class="px-5 py-3"><span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">active</span></td>
+                      <td class="px-5 py-3 text-right space-x-2"><button type="button" class="text-xs font-semibold text-slate-500">Change role</button><button type="button" class="text-xs font-semibold text-red-600">Remove</button></td>
+                    </tr>
+                    <tr>
+                      <td class="px-5 py-3"><span class="font-semibold">Priya N.</span> <span class="text-slate-400">@priya</span></td>
+                      <td class="px-5 py-3 text-slate-500">priya@measureone.com</td>
+                      <td class="px-5 py-3"><span class="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">invited</span></td>
+                      <td class="px-5 py-3"><span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">pending</span></td>
+                      <td class="px-5 py-3 text-right"><button type="button" class="text-xs font-semibold text-indigo-600">Resend</button></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              </div>
+              <div id="panel-add-user" class="hidden">
+                <button type="button" data-hide-panel="add-user" class="text-xs font-medium text-indigo-600 hover:underline">← Back to users</button>
+                <h2 class="mt-3 text-xl font-semibold tracking-tight">Invite user</h2>
+                <p class="mt-1 text-sm text-slate-500 max-w-2xl">Add someone to your organization. Realm access is granted per realm afterward.</p>
+                <div class="mt-6 grid gap-8 xl:grid-cols-12">
+                  <div class="xl:col-span-7">
+                    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+                      <label class="block text-xs font-semibold text-slate-600">Email
+                        <input class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="alex@measureone.com" />
+                      </label>
+                      <label class="block text-xs font-semibold text-slate-600">Org role
+                        <select class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option>member</option><option>admin</option></select>
+                      </label>
+                      <div class="flex gap-3 pt-2">
+                        <button type="button" data-hide-panel="add-user" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white">Send invite</button>
+                        <button type="button" data-hide-panel="add-user" class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-semibold">Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                  <aside class="xl:col-span-5">
+                    <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                      <p class="font-semibold text-slate-800">Next step</p>
+                      <p class="mt-2">After they join, add them under Realm → Users.</p>
+                    </div>
+                  </aside>
+                </div>
+              </div>
+            </div>
+
+            <div class="account-panel hidden" data-account-panel="channels">
+              <div id="account-channels-list-view">
+              <div class="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <h2 class="text-sm font-semibold">Notification channels</h2>
+                  <p class="mt-1 text-xs text-slate-500 max-w-2xl">
+                    Account-level destinations. Bind on each realm.
+                    Deliveries under <a href="#/notifications" class="font-medium text-indigo-600 hover:underline">Notifications</a>.
+                  </p>
+                </div>
+                <button type="button" data-show-panel="add-channel" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Add channel</button>
+              </div>
+              <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <th class="px-5 py-2">Channel</th><th class="px-5 py-2">Provider</th><th class="px-5 py-2">Bindings</th><th class="px-5 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-50">
+                    <tr>
+                      <td class="px-5 py-3 font-semibold">eng-alerts</td>
+                      <td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">slack</span></td>
+                      <td class="px-5 py-3 text-slate-500">2 realms</td>
+                      <td class="px-5 py-3 text-right space-x-2"><button class="text-xs font-semibold text-slate-500">Edit</button><button class="text-xs font-semibold text-slate-500">Test</button></td>
+                    </tr>
+                    <tr>
+                      <td class="px-5 py-3 font-semibold">ops-digest</td>
+                      <td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">email</span></td>
+                      <td class="px-5 py-3 text-slate-500">1 realm</td>
+                      <td class="px-5 py-3 text-right space-x-2"><button class="text-xs font-semibold text-slate-500">Edit</button><button class="text-xs font-semibold text-slate-500">Test</button></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              </div>
+              <div id="panel-add-channel" class="hidden">
+                <button type="button" data-hide-panel="add-channel" class="text-xs font-medium text-indigo-600 hover:underline">← Back to channels</button>
+                <h2 class="mt-3 text-xl font-semibold tracking-tight">Add notification channel</h2>
+                <p class="mt-1 text-sm text-slate-500 max-w-2xl">Account-level destination. Bind to realm events under Notification bindings.</p>
+                <div class="mt-6 grid gap-8 xl:grid-cols-12">
+                  <div class="xl:col-span-7">
+                    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+                      <label class="block text-xs font-semibold text-slate-600">Name
+                        <input class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="eng-alerts" />
+                      </label>
+                      <div class="grid gap-4 sm:grid-cols-2">
+                        <label class="block text-xs font-semibold text-slate-600">Provider
+                          <select class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option>slack</option><option>email</option><option>webhook</option><option>cliqhub</option></select>
+                        </label>
+                        <label class="block text-xs font-semibold text-slate-600">Config
+                          <input class="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="Webhook URL / channel id" />
+                        </label>
+                      </div>
+                      <div class="flex gap-3 pt-2">
+                        <button type="button" data-hide-panel="add-channel" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white">Add channel</button>
+                        <button type="button" data-hide-panel="add-channel" class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-semibold">Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                  <aside class="xl:col-span-5">
+                    <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                      <p class="font-semibold text-slate-800">Next</p>
+                      <p class="mt-2">Realm → Notification bindings to attach events like <code class="rounded bg-white px-1 text-xs">run.failed</code>.</p>
+                    </div>
+                  </aside>
+                </div>
+              </div>
+            </div>
+
+
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-notifications">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight">Notifications</h1>
+            <p class="mt-1 text-sm text-slate-500">
+              Events from runs and realms. Channels are configured under
+              <a href="#/account?tab=channels" class="font-medium text-indigo-600 hover:underline">Account → Channels</a>.
+            </p>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <select id="notif-filter-realm" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+              <option value="">All realms</option>
+              <option value="personal">personal</option>
+              <option value="prod-east">prod-east</option>
+              <option value="staging">staging</option>
+            </select>
+            <select id="notif-filter-status" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+              <option value="">All statuses</option>
+              <option value="sent">sent</option>
+              <option value="failed">failed</option>
+              <option value="skipped">skipped</option>
+            </select>
+            <button type="button" id="notif-page-mark-read" class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">Mark all read</button>
+          </div>
+        </div>
+        <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <th class="px-5 py-2 w-8"></th>
+                <th class="px-5 py-2">When</th><th class="px-5 py-2">Event</th><th class="px-5 py-2">Realm</th><th class="px-5 py-2">Channel</th><th class="px-5 py-2">Status</th><th class="px-5 py-2"></th>
+              </tr>
+            </thead>
+            <tbody id="notif-tbody" class="divide-y divide-slate-50"></tbody>
+          </table>
+          <p id="notif-empty" class="hidden px-5 py-10 text-center text-sm text-slate-400">No notifications match these filters.</p>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-hug">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight">Reviews</h1>
+            <p class="mt-1 text-sm text-slate-500">
+              Human gates waiting on you. Review UI lives in Hug (separate app) — Hub links you there with SSO.
+            </p>
+          </div>
+          <a href="#" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-700" title="Opens Hug (separate app)">Open Hug →</a>
+        </div>
+        <div class="mt-6 grid gap-3">
+          <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p class="text-sm font-semibold">approve-deploy · release/cut</p>
+              <p class="mt-1 text-xs text-slate-500">Realm <code class="rounded bg-slate-100 px-1">personal</code> · run <code class="rounded bg-slate-100 px-1">run_a91c</code> · requested 18m ago</p>
+            </div>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 self-center">waiting</span>
+              <a href="#" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Open in Hug</a>
+            </div>
+          </div>
+          <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p class="text-sm font-semibold">security-check · qa/smoke</p>
+              <p class="mt-1 text-xs text-slate-500">Realm <code class="rounded bg-slate-100 px-1">prod-east</code> · run <code class="rounded bg-slate-100 px-1">run_8f2a</code> · requested 2h ago</p>
+            </div>
+            <div class="flex gap-2">
+              <span class="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 self-center">waiting</span>
+              <a href="#" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">Open in Hug</a>
+            </div>
+          </div>
+        </div>
+        <p class="mt-4 text-xs text-slate-400">Pending gates also appear on the related <a href="#/runs" class="font-medium text-indigo-600 hover:underline">run</a> and in <a href="#/notifications" class="font-medium text-indigo-600 hover:underline">Notifications</a>.</p>
+      </section>
+
+      <section class="screen" id="screen-bundles">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight">Bundles</h1>
+            <p class="mt-1 text-sm text-slate-500">
+              Docker images built from teams (<code class="rounded bg-slate-100 px-1 text-xs">cliq docker</code>).
+              Syncs from your daemons — not the public Browse catalog.
+            </p>
+          </div>
+          <button type="button" class="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">CLI: create bundle</button>
+        </div>
+        <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <th class="px-5 py-2">Bundle</th><th class="px-5 py-2">Teams</th><th class="px-5 py-2">Image</th><th class="px-5 py-2">Status</th><th class="px-5 py-2">Updated</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-50">
+              <tr>
+                <td class="px-5 py-3 font-semibold">smoke-runtime</td>
+                <td class="px-5 py-3 text-slate-600">qa/smoke</td>
+                <td class="px-5 py-3 font-mono text-xs text-slate-500">ghcr.io/measureone/smoke-runtime:1.2.0</td>
+                <td class="px-5 py-3"><span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">built</span></td>
+                <td class="px-5 py-3 text-xs text-slate-500">Yesterday</td>
+              </tr>
+              <tr>
+                <td class="px-5 py-3 font-semibold">release-cut</td>
+                <td class="px-5 py-3 text-slate-600">release/cut, qa/smoke</td>
+                <td class="px-5 py-3 font-mono text-xs text-slate-500">—</td>
+                <td class="px-5 py-3"><span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">draft</span></td>
+                <td class="px-5 py-3 text-xs text-slate-500">3d ago</td>
+              </tr>
+              <tr>
+                <td class="px-5 py-3 font-semibold">hello-docker</td>
+                <td class="px-5 py-3 text-slate-600">@cliq/hello-world</td>
+                <td class="px-5 py-3 font-mono text-xs text-slate-500">localhost/hello-docker:dev</td>
+                <td class="px-5 py-3"><span class="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700">failed</span></td>
+                <td class="px-5 py-3 text-xs text-slate-500">1w ago</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-builder">
+        <h1 class="text-2xl font-semibold tracking-tight">Builder</h1>
+        <p class="mt-1 text-sm text-slate-500">Author teams — demoted from post-login default.</p>
+        <div class="mt-6 rounded-xl border border-dashed border-slate-200 p-12 text-center text-sm text-slate-400">Existing builder</div>
+      </section>
+      <section class="screen" id="screen-teams">
+        <h1 class="text-2xl font-semibold tracking-tight">Teams</h1>
+        <div class="mt-6 rounded-xl border border-slate-200 divide-y text-sm">
+          <div class="flex justify-between px-5 py-3"><span class="font-semibold">qa/smoke</span><span class="text-xs text-emerald-700">published</span></div>
+          <div class="flex justify-between px-5 py-3"><span class="font-semibold">release/cut</span><span class="text-xs text-slate-400">draft</span></div>
+        </div>
+        <p class="mt-3 text-xs text-slate-400">Docker images for teams live under <a href="#/bundles" class="font-medium text-indigo-600 hover:underline">Bundles</a>.</p>
+      </section>
+      <section class="screen" id="screen-browse"><h1 class="text-2xl font-semibold tracking-tight">Browse</h1><p class="mt-1 text-sm text-slate-500">Catalog.</p></section>
+      <section class="screen" id="screen-org-detail">
+        <a href="#/account?tab=organizations" class="text-xs font-medium text-indigo-600 hover:underline">← Account · Organizations</a>
+        <div class="mt-2 flex items-start justify-between gap-4">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight" id="org-title">measureone</h1>
+            <p class="mt-1 text-sm text-slate-500">Org defaults for agent variables. Realms inherit unless they override.</p>
+          </div>
+        </div>
+        <div class="mt-6 flex gap-1 border-b border-slate-200" id="org-tabs">
+          <a href="#" data-org-tab="overview" class="org-tab -mb-px border-b-2 border-transparent px-3 py-2 text-sm font-medium text-slate-500">Overview</a>
+          <a href="#" data-org-tab="settings" class="org-tab -mb-px border-b-2 border-indigo-600 px-3 py-2 text-sm font-semibold text-indigo-700">Settings</a>
+        </div>
+        <div class="org-panel mt-5 hidden" data-org-panel="overview">
+          <div class="grid grid-cols-3 gap-3">
+            <div class="rounded-xl border border-slate-200 p-4"><p class="text-xs text-slate-500">Realms</p><p class="mt-1 text-2xl font-semibold">3</p></div>
+            <div class="rounded-xl border border-slate-200 p-4"><p class="text-xs text-slate-500">Users</p><p class="mt-1 text-2xl font-semibold">12</p></div>
+            <div class="rounded-xl border border-slate-200 p-4"><p class="text-xs text-slate-500">Scopes</p><p class="mt-1 text-2xl font-semibold">2</p></div>
+          </div>
+        </div>
+        <div class="org-panel mt-5" data-org-panel="settings">
+          <div id="org-settings-main-view">
+          <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 class="text-sm font-semibold">Org agent settings</h2>
+              <p class="mt-1 text-xs text-slate-500 max-w-2xl">
+                Defaults for every realm in this org. On save, choose whether to push into realms that have not overridden them.
+              </p>
+            </div>
+            <button type="button" data-show-panel="save-org-settings" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Save org settings</button>
+          </div>
+          <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  <th class="px-5 py-2">Variable</th><th class="px-5 py-2">Agent</th><th class="px-5 py-2">Value</th><th class="px-5 py-2">Used by</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-50">
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs">MODEL</td>
+                  <td class="px-5 py-3 text-slate-500">claude</td>
+                  <td class="px-5 py-3"><input type="text" value="claude-sonnet-4" class="w-full max-w-xs rounded border border-slate-200 px-2 py-1 font-mono text-xs"></td>
+                  <td class="px-5 py-3 text-xs text-slate-500">2 realms inherit</td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs">OPENAI_API_KEY</td>
+                  <td class="px-5 py-3 text-slate-500">openai</td>
+                  <td class="px-5 py-3"><input type="password" value="••••••••••••" class="w-full max-w-xs rounded border border-slate-200 px-2 py-1 font-mono text-xs"></td>
+                  <td class="px-5 py-3 text-xs text-slate-500">3 realms inherit</td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs">CURSOR_API_KEY</td>
+                  <td class="px-5 py-3 text-slate-500">cursor</td>
+                  <td class="px-5 py-3"><input type="password" value="••••••••••••" class="w-full max-w-xs rounded border border-slate-200 px-2 py-1 font-mono text-xs"></td>
+                  <td class="px-5 py-3 text-xs text-amber-700">1 realm overrides</td>
+                </tr>
+                <tr>
+                  <td class="px-5 py-3 font-mono text-xs">TIMEOUT_MS</td>
+                  <td class="px-5 py-3 text-slate-500">*</td>
+                  <td class="px-5 py-3"><input type="text" value="300000" class="w-full max-w-xs rounded border border-slate-200 px-2 py-1 font-mono text-xs"></td>
+                  <td class="px-5 py-3 text-xs text-amber-700">1 realm overrides</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <button type="button" class="mt-3 text-xs font-semibold text-indigo-600 hover:underline">+ Add variable</button>
+          <p class="mt-4 text-xs text-slate-400">Example realm with overrides: <a href="#/realms/prod-east?tab=settings" class="font-medium text-indigo-600 hover:underline">prod-east → Settings</a>.</p>
+          </div>
+          <div id="panel-save-org-settings" class="hidden">
+            <button type="button" data-hide-panel="save-org-settings" class="text-xs font-medium text-indigo-600 hover:underline">← Back to settings</button>
+            <h2 class="mt-3 text-xl font-semibold tracking-tight">Save org settings</h2>
+            <p class="mt-1 text-sm text-slate-500 max-w-2xl">Choose how these agent variables apply across realms.</p>
+            <div class="mt-6 grid gap-8 xl:grid-cols-12">
+              <div class="xl:col-span-7 space-y-3 text-sm">
+                <label class="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-5 cursor-pointer hover:border-indigo-300 shadow-sm">
+                  <input type="radio" name="org_apply" class="mt-1" checked />
+                  <span><span class="font-semibold">Org defaults only</span><br><span class="text-xs text-slate-500">Realms with overrides keep theirs.</span></span>
+                </label>
+                <label class="flex items-start gap-3 rounded-xl border border-indigo-200 bg-indigo-50/40 p-5 cursor-pointer shadow-sm">
+                  <input type="radio" name="org_apply" class="mt-1" />
+                  <span><span class="font-semibold">Update all realms that inherit</span><br><span class="text-xs text-slate-500">Push where there is no local override.</span></span>
+                </label>
+                <label class="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-5 cursor-pointer hover:border-indigo-300 shadow-sm">
+                  <input type="radio" name="org_apply" class="mt-1" />
+                  <span><span class="font-semibold">Force update all realms</span><br><span class="text-xs text-slate-500">Overwrite local overrides too.</span></span>
+                </label>
+                <div class="flex gap-3 pt-2">
+                  <button type="button" data-hide-panel="save-org-settings" class="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white">Confirm save</button>
+                  <button type="button" data-hide-panel="save-org-settings" class="rounded-lg border border-slate-200 px-5 py-2.5 text-sm font-semibold">Cancel</button>
+                </div>
+              </div>
+              <aside class="xl:col-span-5">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                  <p class="font-semibold text-slate-800">Inheritance</p>
+                  <p class="mt-2">Realms show org vs realm source on each variable.</p>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="screen" id="screen-scopes">
+        <h1 class="text-2xl font-semibold tracking-tight">Scopes</h1>
+        <p class="mt-1 text-sm text-slate-500">Package namespaces for teams. Scopes do not enroll daemons — realms do.</p>
+        <div class="mt-6 rounded-xl border border-slate-200 divide-y font-mono text-sm">
+          <div class="px-5 py-3">@sapan</div>
+          <div class="px-5 py-3">@measureone</div>
+        </div>
+      </section>
+
+      <!-- ========== ADMIN (site role=admin only) — mirrors /admin today ========== -->
+      <section class="screen only-admin" id="screen-admin">
+        <div class="mb-1 flex items-center gap-2">
+          <h1 class="text-2xl font-semibold tracking-tight">Admin</h1>
+          <span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700">Site</span>
+        </div>
+        <p class="text-sm text-slate-500">Platform overview — same surface as today’s <code class="rounded bg-slate-100 px-1 text-xs">/admin</code>.</p>
+
+        <div class="mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <div class="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Users</p>
+            <p class="mt-1 text-2xl font-bold">148</p>
+            <p class="mt-0.5 text-xs text-slate-500">4 admin · 2 suspended</p>
+          </div>
+          <div class="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Scopes</p>
+            <p class="mt-1 text-2xl font-bold">36</p>
+            <p class="mt-0.5 text-xs text-slate-500">12 public · 24 private</p>
+          </div>
+          <div class="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Teams</p>
+            <p class="mt-1 text-2xl font-bold">92</p>
+            <p class="mt-0.5 text-xs text-slate-500">70 listed · 22 unlisted</p>
+          </div>
+          <div class="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Installs</p>
+            <p class="mt-1 text-2xl font-bold">12,480</p>
+          </div>
+        </div>
+        <div class="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <div class="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm"><p class="text-xs font-medium uppercase tracking-wider text-slate-400">Versions</p><p class="mt-1 text-2xl font-bold">310</p></div>
+          <div class="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm"><p class="text-xs font-medium uppercase tracking-wider text-slate-400">API Tokens</p><p class="mt-1 text-2xl font-bold">64</p></div>
+          <div class="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm"><p class="text-xs font-medium uppercase tracking-wider text-slate-400">Drafts</p><p class="mt-1 text-2xl font-bold">18</p></div>
+          <a href="#/admin/audit" class="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm hover:border-amber-300">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Audit</p>
+            <p class="mt-1 text-sm font-semibold text-amber-700">Open audit log →</p>
+          </a>
+        </div>
+
+        <div class="mt-8 grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="border-b border-slate-100 px-5 py-3 text-sm font-semibold">Recent users</div>
+            <div class="divide-y divide-slate-50 text-sm">
+              <div class="flex justify-between px-5 py-2.5"><span class="font-medium">@alex</span><span class="text-xs text-slate-400">Mar 28</span></div>
+              <div class="flex justify-between px-5 py-2.5"><span class="font-medium">@priya</span><span class="text-xs text-slate-400">Mar 27</span></div>
+              <div class="flex justify-between px-5 py-2.5"><span class="font-medium">@jordan</span><span class="text-xs text-slate-400">Mar 25</span></div>
+            </div>
+          </div>
+          <div class="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div class="border-b border-slate-100 px-5 py-3 text-sm font-semibold">Recent teams</div>
+            <div class="divide-y divide-slate-50 text-sm">
+              <div class="flex justify-between px-5 py-2.5"><span class="font-medium">@measureone/qa-smoke</span><span class="text-xs text-slate-400">Mar 28</span></div>
+              <div class="flex justify-between px-5 py-2.5"><span class="font-medium">@sapan/hello</span><span class="text-xs text-slate-400">Mar 26</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen only-admin" id="screen-admin-users">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight">Admin · Users</h1>
+            <p class="mt-1 text-sm text-slate-500">Site-wide user management (suspend, promote admin) — <code class="rounded bg-slate-100 px-1 text-xs">/admin/users</code>.</p>
+          </div>
+          <button class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Invite user</button>
+        </div>
+        <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400"><th class="px-5 py-2">User</th><th class="px-5 py-2">Role</th><th class="px-5 py-2">Status</th><th class="px-5 py-2"></th></tr></thead>
+            <tbody class="divide-y divide-slate-50">
+              <tr><td class="px-5 py-3"><span class="font-semibold">Sapan Shah</span> <span class="text-slate-400">@sapan</span></td><td class="px-5 py-3"><span class="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">admin</span></td><td class="px-5 py-3"><span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">active</span></td><td></td></tr>
+              <tr><td class="px-5 py-3"><span class="font-semibold">Alex Kim</span> <span class="text-slate-400">@alex</span></td><td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">member</span></td><td class="px-5 py-3"><span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">active</span></td><td class="px-5 py-3 text-right space-x-2"><button class="text-xs font-semibold text-slate-500">Promote</button><button class="text-xs font-semibold text-red-600">Suspend</button></td></tr>
+              <tr><td class="px-5 py-3"><span class="font-semibold">Old User</span> <span class="text-slate-400">@old</span></td><td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">member</span></td><td class="px-5 py-3"><span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">suspended</span></td><td class="px-5 py-3 text-right"><button class="text-xs font-semibold text-indigo-600">Restore</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="screen only-admin" id="screen-admin-orgs">
+        <div class="flex items-start justify-between">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight">Admin · Organizations</h1>
+            <p class="mt-1 text-sm text-slate-500">All orgs on the site — <code class="rounded bg-slate-100 px-1 text-xs">/admin/orgs</code>.</p>
+          </div>
+        </div>
+        <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400"><th class="px-5 py-2">Org</th><th class="px-5 py-2">Members</th><th class="px-5 py-2">Scopes</th></tr></thead>
+            <tbody class="divide-y divide-slate-50">
+              <tr class="cursor-pointer hover:bg-slate-50"><td class="px-5 py-3 font-semibold">measureone</td><td class="px-5 py-3 text-slate-500">24</td><td class="px-5 py-3 text-slate-500">8</td></tr>
+              <tr class="cursor-pointer hover:bg-slate-50"><td class="px-5 py-3 font-semibold">acme</td><td class="px-5 py-3 text-slate-500">6</td><td class="px-5 py-3 text-slate-500">2</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="screen only-admin" id="screen-admin-scopes">
+        <h1 class="text-2xl font-semibold tracking-tight">Admin · Scopes</h1>
+        <p class="mt-1 text-sm text-slate-500">All package scopes — <code class="rounded bg-slate-100 px-1 text-xs">/admin/scopes</code>.</p>
+        <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white divide-y text-sm">
+          <div class="flex justify-between px-5 py-3"><span class="font-mono">@measureone</span><span class="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">public</span></div>
+          <div class="flex justify-between px-5 py-3"><span class="font-mono">@acme</span><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">private</span></div>
+          <div class="flex justify-between px-5 py-3"><span class="font-mono">@sapan</span><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">personal</span></div>
+        </div>
+      </section>
+
+      <section class="screen only-admin" id="screen-admin-teams">
+        <h1 class="text-2xl font-semibold tracking-tight">Admin · Teams</h1>
+        <p class="mt-1 text-sm text-slate-500">All published / unlisted teams — <code class="rounded bg-slate-100 px-1 text-xs">/admin/teams</code>.</p>
+        <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400"><th class="px-5 py-2">Team</th><th class="px-5 py-2">Visibility</th><th class="px-5 py-2">Installs</th></tr></thead>
+            <tbody class="divide-y divide-slate-50">
+              <tr><td class="px-5 py-3 font-semibold">@measureone/qa-smoke</td><td class="px-5 py-3"><span class="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">listed</span></td><td class="px-5 py-3 text-slate-500">1,204</td></tr>
+              <tr><td class="px-5 py-3 font-semibold">@acme/internal</td><td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">unlisted</span></td><td class="px-5 py-3 text-slate-500">12</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="screen only-admin" id="screen-admin-tokens">
+        <h1 class="text-2xl font-semibold tracking-tight">Admin · Tokens</h1>
+        <p class="mt-1 text-sm text-slate-500">Site-wide token inventory — <code class="rounded bg-slate-100 px-1 text-xs">/admin/tokens</code>.</p>
+        <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400"><th class="px-5 py-2">Owner</th><th class="px-5 py-2">Name</th><th class="px-5 py-2">Type</th><th class="px-5 py-2"></th></tr></thead>
+            <tbody class="divide-y divide-slate-50">
+              <tr><td class="px-5 py-3 text-slate-500">@sapan</td><td class="px-5 py-3 font-semibold">laptop-cli</td><td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">user</span></td><td class="px-5 py-3 text-right"><button class="text-xs font-semibold text-red-600">Revoke</button></td></tr>
+              <tr><td class="px-5 py-3 text-slate-500">@alex</td><td class="px-5 py-3 font-semibold">ci</td><td class="px-5 py-3"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">user</span></td><td class="px-5 py-3 text-right"><button class="text-xs font-semibold text-red-600">Revoke</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="screen only-admin" id="screen-admin-audit">
+        <h1 class="text-2xl font-semibold tracking-tight">Admin · Audit Log</h1>
+        <p class="mt-1 text-sm text-slate-500">Security / admin actions — <code class="rounded bg-slate-100 px-1 text-xs">/admin/audit</code>.</p>
+        <div class="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <table class="w-full text-sm">
+            <thead><tr class="border-b border-slate-100 text-left text-[10px] font-bold uppercase tracking-wider text-slate-400"><th class="px-5 py-2">When</th><th class="px-5 py-2">Actor</th><th class="px-5 py-2">Action</th><th class="px-5 py-2">Target</th></tr></thead>
+            <tbody class="divide-y divide-slate-50">
+              <tr><td class="px-5 py-3 text-slate-400">12m</td><td class="px-5 py-3">@sapan</td><td class="px-5 py-3 font-medium">user.suspend</td><td class="px-5 py-3 text-slate-500">@old</td></tr>
+              <tr><td class="px-5 py-3 text-slate-400">1h</td><td class="px-5 py-3">@sapan</td><td class="px-5 py-3 font-medium">token.revoke</td><td class="px-5 py-3 text-slate-500">@alex / ci</td></tr>
+              <tr><td class="px-5 py-3 text-slate-400">yesterday</td><td class="px-5 py-3">@sapan</td><td class="px-5 py-3 font-medium">user.promote_admin</td><td class="px-5 py-3 text-slate-500">@sapan</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+    </main>
+  </div>
+
+  <script>
+    const SCREENS = {
+      '/realms': 'screen-realms',
+      '/daemons': 'screen-daemons',
+      '/runs': 'screen-runs',
+      '/logs': 'screen-logs',
+      '/notifications': 'screen-notifications',
+      '/hug': 'screen-hug',
+      '/tokens': 'screen-tokens',
+      '/account': 'screen-account',
+      '/builder': 'screen-builder',
+      '/teams': 'screen-teams',
+      '/bundles': 'screen-bundles',
+      '/browse': 'screen-browse',
+      '/scopes': 'screen-scopes',
+      '/admin': 'screen-admin',
+      '/admin/users': 'screen-admin-users',
+      '/admin/orgs': 'screen-admin-orgs',
+      '/admin/scopes': 'screen-admin-scopes',
+      '/admin/teams': 'screen-admin-teams',
+      '/admin/tokens': 'screen-admin-tokens',
+      '/admin/audit': 'screen-admin-audit',
+    };
+
+    function is_first() { return document.body.classList.contains('persona-first'); }
+    function is_admin() { return document.body.classList.contains('role-admin'); }
+
+    function set_toggle_btn(id, on) {
+      document.getElementById(id).className =
+        'rounded-md px-2.5 py-1 font-medium ' + (on ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-white');
+    }
+
+    function set_persona(mode) {
+      document.body.classList.toggle('persona-first', mode === 'first');
+      document.body.classList.toggle('persona-returning', mode === 'returning');
+      set_toggle_btn('persona-first', mode === 'first');
+      set_toggle_btn('persona-returning', mode === 'returning');
+      localStorage.setItem('cliqhub_proto_persona', mode);
+      location.hash = '#/home';
+      route();
+    }
+
+    function set_role(role) {
+      const admin = role === 'admin';
+      document.body.classList.toggle('role-admin', admin);
+      document.body.classList.toggle('role-member', !admin);
+      set_toggle_btn('role-admin', admin);
+      set_toggle_btn('role-member', !admin);
+      const av = admin ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700';
+      document.getElementById('avatar').className = 'flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold ' + av; // account link
+      document.getElementById('side-avatar').className = 'flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold ' + av;
+      localStorage.setItem('cliqhub_proto_role', role);
+      if (!admin && location.hash.startsWith('#/admin')) location.hash = '#/home';
+      route();
+    }
+
+    function parse_hash() {
+      const raw = location.hash.replace(/^#/, '') || '/home';
+      const [path, query = ''] = raw.split('?');
+      return { path, params: new URLSearchParams(query) };
+    }
+
+    const LOG_EVENTS = [
+      { timestamp: '2026-03-30T10:18:02.441Z', status: 'error', service: 'runner', realm: 'prod-east', daemon: 'mac-builder-02', run_id: 'run_8f2a', team: 'qa/smoke', phase: 'install', message: 'npm ERR! code ERESOLVE unable to resolve dependency tree' },
+      { timestamp: '2026-03-30T10:18:01.102Z', status: 'error', service: 'runner', realm: 'prod-east', daemon: 'mac-builder-02', run_id: 'run_8f2a', team: 'qa/smoke', message: 'peer dependency conflict @cliq/sdk@0.4.2 vs 0.3.9' },
+      { timestamp: '2026-03-30T10:17:58.011Z', status: 'warn', service: 'daemon', realm: 'prod-east', daemon: 'mac-builder-02', message: 'heartbeat delayed 4.2s' },
+      { timestamp: '2026-03-30T10:17:44.880Z', status: 'info', service: 'runner', realm: 'prod-east', run_id: 'run_8f2a', phase: 'install', message: 'phase started' },
+      { timestamp: '2026-03-30T10:17:40.210Z', status: 'info', service: 'daemon', realm: 'prod-east', daemon: 'mac-builder-02', run_id: 'run_8f2a', message: 'run claimed' },
+      { timestamp: '2026-03-30T10:17:12.004Z', status: 'info', service: 'hub', realm: 'prod-east', run_id: 'run_71bc', team: 'release/cut', message: 'dispatch accepted' },
+      { timestamp: '2026-03-30T10:16:55.440Z', status: 'warn', service: 'daemon', realm: 'staging', daemon: 'ci-box-1', message: 'stale last_seen=12m' },
+      { timestamp: '2026-03-30T10:16:40.991Z', status: 'info', service: 'hub', realm: 'prod-east', channel: 'eng-alerts', event: 'run.failed', message: 'notify delivery=ok' },
+      { timestamp: '2026-03-30T10:15:02.118Z', status: 'debug', service: 'daemon', realm: 'prod-east', daemon: 'mac-builder-01', message: 'poll ok backlog=0' },
+      { timestamp: '2026-03-30T10:14:33.552Z', status: 'info', service: 'runner', realm: 'staging', run_id: 'run_55aa', message: 'phase=complete status=succeeded' },
+      { timestamp: '2026-03-30T10:13:01.009Z', status: 'error', service: 'runner', realm: 'prod-east', run_id: 'run_41cc', message: 'timeout waiting for agent response after 300s' },
+      { timestamp: '2026-03-30T10:12:18.330Z', status: 'info', service: 'daemon', realm: 'dev-sandbox', daemon: 'laptop-dev', message: 'enrolled' },
+    ];
+
+    function build_logs_hist() {
+      const host = document.getElementById('logs-hist');
+      if (!host || host.dataset.ready) return;
+      const heights = [22, 28, 18, 35, 40, 55, 48, 30, 70, 62, 45, 80, 58, 42, 36, 50, 66, 72, 44, 38, 52, 60, 33, 25, 48, 55, 41, 29, 63, 70, 46, 34, 28, 51, 59, 47, 39, 68, 74, 42];
+      host.innerHTML = heights.map((h, i) => {
+        const cls = i % 11 === 0 ? 'bar err' : i % 7 === 0 ? 'bar warn' : 'bar';
+        return `<div class="${cls}" style="height:${h}%"></div>`;
+      }).join('');
+      host.dataset.ready = '1';
+    }
+
+    function open_log_detail(idx) {
+      const ev = LOG_EVENTS[idx] || LOG_EVENTS[0];
+      document.querySelectorAll('.log-row').forEach((el) => el.classList.remove('active'));
+      document.querySelector(`.log-row[data-log="${idx}"]`)?.classList.add('active');
+      const body = document.getElementById('logs-detail-body');
+      body.innerHTML = Object.entries(ev).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+      document.getElementById('logs-detail').classList.add('open');
+    }
+
+
+    const PANEL_LIST_VIEWS = {
+      'create-realm': 'realms-list-view',
+      'create-token': 'tokens-list-view',
+      'enroll-daemon-page': 'daemons-list-view',
+      'add-user': 'account-users-list-view',
+      'add-channel': 'account-channels-list-view',
+      'enroll-daemon': 'realm-tokens-list-view',
+      'add-member': 'realm-members-list-view',
+      'add-binding': 'realm-bindings-list-view',
+      'create-dispatch-key': 'realm-keys-list-view',
+      'save-org-settings': 'org-settings-main-view',
+    };
+
+    function set_panel(name, open) {
+      const el = document.getElementById('panel-' + name);
+      if (!el) return;
+      el.classList.toggle('hidden', !open);
+      const list_id = PANEL_LIST_VIEWS[name];
+      if (!list_id) return;
+      const list = document.getElementById(list_id);
+      if (list) list.classList.toggle('hidden', open);
+    }
+
+    function show(id) {
+      document.querySelectorAll('.screen').forEach((el) => el.classList.remove('active'));
+      const el = document.getElementById(id);
+      if (el) el.classList.add('active');
+      if (id === 'screen-logs') build_logs_hist();
+      if (id === 'screen-notifications') render_notifications_page();
+      if (id === 'screen-tokens') render_tokens();
+    }
+
+    function mark_nav(path) {
+      document.querySelectorAll('[data-nav]').forEach((a) => {
+        const href = (a.getAttribute('href') || '').replace('#', '');
+        const active =
+          href === path ||
+          (href === '/home' && (path === '/home' || path === '/')) ||
+          (href === '/realms' && path.startsWith('/realms/')) ||
+          (href === '/runs' && path.startsWith('/runs/')) ||
+          (href === '/admin' && path === '/admin') ||
+          (href !== '/admin' && href.startsWith('/admin') && path.startsWith(href));
+        a.classList.toggle('bg-indigo-50', active);
+        a.classList.toggle('text-indigo-700', active);
+        const dot = a.querySelector('.dot');
+        if (dot) {
+          dot.textContent = active ? '●' : '○';
+          dot.classList.toggle('opacity-40', !active);
+        }
+      });
+    }
+
+    function render_account(params) {
+      let tab = params.get('tab') || 'profile';
+      if (tab === 'members') tab = 'users';
+      if (tab === 'billing' || tab === 'linked' || tab === 'preferences' || tab === 'credentials') tab = 'profile';
+      document.querySelectorAll('.account-tab').forEach((el) => {
+        const on = el.dataset.accountTab === tab;
+        el.classList.toggle('bg-indigo-50', on);
+        el.classList.toggle('text-indigo-700', on);
+        el.classList.toggle('font-semibold', on);
+        el.classList.toggle('text-slate-600', !on);
+      });
+      document.querySelectorAll('.account-panel').forEach((el) => {
+        el.classList.toggle('hidden', el.dataset.accountPanel !== tab);
+      });
+      show('screen-account');
+      mark_nav('/account');
+    }
+
+    function render_org(path, params) {
+      const slug = path.split('/')[2] || 'measureone';
+      const title = document.getElementById('org-title');
+      if (title) title.textContent = slug;
+      const tab = params.get('tab') || 'settings';
+      document.querySelectorAll('.org-tab').forEach((el) => {
+        const on = el.dataset.orgTab === tab;
+        el.classList.toggle('border-indigo-600', on);
+        el.classList.toggle('text-indigo-700', on);
+        el.classList.toggle('font-semibold', on);
+        el.classList.toggle('border-transparent', !on);
+        el.classList.toggle('text-slate-500', !on);
+        el.setAttribute('href', `#/orgs/${slug}?tab=${el.dataset.orgTab}`);
+      });
+      document.querySelectorAll('.org-panel').forEach((el) => {
+        el.classList.toggle('hidden', el.dataset.orgPanel !== tab);
+      });
+      show('screen-org-detail');
+      mark_nav('/account');
+    }
+
+    function render_realm(path, params) {
+      const slug = path.split('/')[2] || 'prod-east';
+      document.getElementById('realm-title').textContent = slug;
+      const tab = params.get('tab') || 'overview';
+      const add_user = document.getElementById('realm-btn-add-user');
+      const mint = document.getElementById('realm-btn-mint-token');
+      if (add_user) add_user.setAttribute('href', `#/realms/${slug}?tab=members&form=1`);
+      if (mint) mint.setAttribute('href', `#/realms/${slug}?tab=tokens&form=1`);
+      document.querySelectorAll('[data-realm-tab-link]').forEach((el) => {
+        el.setAttribute('href', `#/realms/${slug}?tab=${el.getAttribute('data-realm-tab-link')}`);
+      });
+      document.querySelectorAll('.realm-tab').forEach((el) => {
+        const on = el.dataset.tab === tab;
+        el.classList.toggle('border-indigo-600', on);
+        el.classList.toggle('text-indigo-700', on);
+        el.classList.toggle('font-semibold', on);
+        el.classList.toggle('border-transparent', !on);
+        el.classList.toggle('text-slate-500', !on);
+        el.setAttribute('href', `#/realms/${slug}?tab=${el.dataset.tab}`);
+      });
+      document.querySelectorAll('.realm-panel').forEach((el) => {
+        el.classList.toggle('hidden', el.dataset.panel !== tab);
+      });
+      show('screen-realm');
+      if (params.get('form') === '1') {
+        if (tab === 'members') set_panel('add-member', true);
+        if (tab === 'tokens') set_panel('enroll-daemon', true);
+        if (tab === 'bindings') set_panel('add-binding', true);
+        if (tab === 'keys') set_panel('create-dispatch-key', true);
+      }
+    }
+
+    function route() {
+      const { path, params } = parse_hash();
+
+      if (path.startsWith('/admin') && !is_admin()) {
+        location.hash = '#/home';
+        return;
+      }
+
+      mark_nav(
+        path.startsWith('/realms/') ? '/realms'
+          : path.startsWith('/runs/') ? '/runs'
+          : path.startsWith('/orgs/') ? '/account'
+          : path.startsWith('/admin/') ? path
+          : path === '/account' ? '/account'
+          : path
+      );
+
+      if (path === '/home' || path === '/' || path === '/dashboard' || path === '/welcome') {
+        show(is_first() ? 'screen-welcome' : 'screen-dashboard');
+        mark_nav('/home');
+        return;
+      }
+      if (path === '/orgs') {
+        location.hash = '#/account?tab=organizations';
+        return;
+      }
+      if (path === '/users' || path === '/account' && params.get('tab') === 'members') {
+        location.hash = '#/account?tab=users';
+        return;
+      }
+      if (path === '/activity') {
+        location.hash = '#/notifications';
+        return;
+      }
+      if (path === '/channels') {
+        location.hash = '#/account?tab=channels';
+        return;
+      }
+      if (path === '/account') {
+        render_account(params);
+        return;
+      }
+      if (path.startsWith('/orgs/') && path !== '/orgs') {
+        render_org(path, params);
+        return;
+      }
+      if (path.startsWith('/realms/') && path !== '/realms') {
+        render_realm(path, params);
+        return;
+      }
+      if (path.startsWith('/runs/') && path !== '/runs') {
+        document.getElementById('run-title').textContent = path.split('/')[2] || 'run_8f2a';
+        show('screen-run-detail');
+        return;
+      }
+      if (path === '/logs') {
+        const q = params.get('q');
+        if (q) document.getElementById('logs-q').value = q;
+        show('screen-logs');
+        return;
+      }
+      if (path === '/tokens') {
+        show('screen-tokens');
+        set_panel('create-token', params.get('create') === '1');
+        return;
+      }
+      if (path === '/realms') {
+        show('screen-realms');
+        set_panel('create-realm', params.get('create') === '1');
+        return;
+      }
+      if (path === '/daemons') {
+        show('screen-daemons');
+        set_panel('enroll-daemon-page', params.get('enroll') === '1');
+        return;
+      }
+      if (path === '/notifications') {
+        show('screen-notifications');
+        return;
+      }
+      show(SCREENS[path] || (is_first() ? 'screen-welcome' : 'screen-dashboard'));
+    }
+
+
+    document.body.addEventListener('click', (e) => {
+      const go = e.target.closest('[data-go]');
+      if (go) { e.preventDefault(); const h = go.getAttribute('data-go') || '#/home'; location.hash = h.startsWith('#') ? h : '#' + h; return; }
+      const log_row = e.target.closest('.log-row[data-log]');
+      if (log_row) {
+        open_log_detail(Number(log_row.dataset.log));
+      }
+    });
+
+    document.getElementById('logs-detail-close')?.addEventListener('click', () => {
+      document.getElementById('logs-detail').classList.remove('open');
+      document.querySelectorAll('.log-row').forEach((el) => el.classList.remove('active'));
+    });
+
+
+    // ——— Tokens ———
+    let USER_TOKENS = [
+      { id: 'tok_1', name: 'laptop-cli', created: 'Mar 12', last_used: '2h ago' },
+      { id: 'tok_2', name: 'github-actions', created: 'Feb 3', last_used: '1d ago' },
+    ];
+
+    function render_tokens() {
+      const tbody = document.getElementById('tokens-tbody');
+      if (!tbody) return;
+      tbody.innerHTML = USER_TOKENS.map((t) => `
+        <tr data-token-id="${t.id}">
+          <td class="px-5 py-3 font-semibold">${t.name}</td>
+          <td class="px-5 py-3 text-xs text-slate-500">${t.created}</td>
+          <td class="px-5 py-3 text-xs text-slate-500">${t.last_used}</td>
+          <td class="px-5 py-3 text-right"><button type="button" data-revoke-token="${t.id}" class="text-xs font-semibold text-red-600">Revoke</button></td>
+        </tr>`).join('');
+    }
+
+    function mint_token_secret() {
+      const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+      let s = 'cliq_pat_';
+      for (let i = 0; i < 32; i++) s += chars[Math.floor(Math.random() * chars.length)];
+      return s;
+    }
+
+    function create_user_token() {
+      const name_el = document.getElementById('create-token-name');
+      const name = (name_el && name_el.value.trim()) || 'unnamed-token';
+      const secret = mint_token_secret();
+      USER_TOKENS = [{ id: 'tok_' + Date.now(), name, created: 'Just now', last_used: '—' }, ...USER_TOKENS];
+      set_panel('create-token', false);
+      if (location.hash.replace(/^#/, '').split('?')[0] !== '/tokens') {
+        location.hash = '#/tokens';
+      }
+      render_tokens();
+      const banner = document.getElementById('token-created-banner');
+      const value = document.getElementById('token-created-value');
+      if (banner && value) {
+        value.textContent = secret;
+        banner.classList.remove('hidden');
+      }
+    }
+
+    // ——— Notifications ———
+    let NOTIFICATIONS = [
+      { id: 'n1', when: '2m ago', event: 'run.failed', detail: 'qa/smoke', realm: 'prod-east', channel: 'eng-alerts', provider: 'slack', status: 'sent', href: '#/runs/run_8f2a', unread: true },
+      { id: 'n2', when: '18m ago', event: 'hug.review_requested', detail: 'gate:approve-deploy', realm: 'personal', channel: 'ops-digest', provider: 'email', status: 'sent', href: '#/hug', unread: true },
+      { id: 'n3', when: '1h ago', event: 'daemon.offline', detail: 'mac-builder-02', realm: 'prod-east', channel: 'eng-alerts', provider: 'slack', status: 'failed', href: '#/daemons', unread: true },
+      { id: 'n4', when: '3h ago', event: 'run.completed', detail: '@cliq/hello-world', realm: 'personal', channel: '—', provider: '', status: 'skipped', href: '#/runs/run_71bc', unread: false },
+      { id: 'n5', when: '5h ago', event: 'phase.failed', detail: 'install', realm: 'staging', channel: 'eng-alerts', provider: 'slack', status: 'sent', href: '#/runs/run_55aa', unread: false },
+    ];
+
+    function notif_status_pill(status) {
+      if (status === 'sent') return '<span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">sent</span>';
+      if (status === 'failed') return '<span class="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">failed</span>';
+      return '<span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">skipped</span>';
+    }
+
+    function unread_count() {
+      return NOTIFICATIONS.filter((n) => n.unread).length;
+    }
+
+    function update_notif_badge() {
+      const badge = document.getElementById('notif-badge');
+      if (!badge) return;
+      const n = unread_count();
+      if (n <= 0) {
+        badge.classList.add('hidden');
+        return;
+      }
+      badge.classList.remove('hidden');
+      badge.textContent = String(n);
+    }
+
+    function filtered_notifications() {
+      const realm = document.getElementById('notif-filter-realm')?.value || '';
+      const status = document.getElementById('notif-filter-status')?.value || '';
+      return NOTIFICATIONS.filter((n) => {
+        if (realm && n.realm !== realm) return false;
+        if (status && n.status !== status) return false;
+        return true;
+      });
+    }
+
+    function render_notifications_page() {
+      const tbody = document.getElementById('notif-tbody');
+      const empty = document.getElementById('notif-empty');
+      if (!tbody) return;
+      const rows = filtered_notifications();
+      if (empty) empty.classList.toggle('hidden', rows.length > 0);
+      tbody.innerHTML = rows.map((n) => `
+        <tr class="hover:bg-slate-50 cursor-pointer ${n.unread ? 'bg-indigo-50/40' : ''}" data-notif-go="${n.href}" data-notif-id="${n.id}">
+          <td class="px-5 py-3">${n.unread ? '<span class="inline-block h-2 w-2 rounded-full bg-indigo-600"></span>' : ''}</td>
+          <td class="px-5 py-3 text-xs text-slate-500 whitespace-nowrap">${n.when}</td>
+          <td class="px-5 py-3"><code class="rounded bg-slate-100 px-1 text-xs">${n.event}</code> <span class="text-slate-500">${n.detail}</span></td>
+          <td class="px-5 py-3 font-mono text-xs">${n.realm}</td>
+          <td class="px-5 py-3">${n.channel === '—' ? '<span class="text-slate-400">—</span>' : `${n.channel} <span class="text-[10px] text-slate-400">${n.provider}</span>`}</td>
+          <td class="px-5 py-3">${notif_status_pill(n.status)}</td>
+          <td class="px-5 py-3 text-right"><span class="text-xs font-semibold text-indigo-600">Open →</span></td>
+        </tr>`).join('');
+      update_notif_badge();
+    }
+
+    function render_notifications_dropdown() {
+      const list = document.getElementById('notif-dropdown-list');
+      if (!list) return;
+      const top = NOTIFICATIONS.slice(0, 5);
+      list.innerHTML = top.map((n) => `
+        <a href="${n.href}" data-notif-id="${n.id}" class="block px-4 py-3 hover:bg-slate-50 ${n.unread ? 'bg-indigo-50/50' : ''}">
+          <div class="flex items-start justify-between gap-2">
+            <p class="text-sm font-medium"><code class="rounded bg-slate-100 px-1 text-[11px]">${n.event}</code> <span class="text-slate-600 font-normal">${n.detail}</span></p>
+            ${n.unread ? '<span class="mt-1 h-2 w-2 shrink-0 rounded-full bg-indigo-600"></span>' : ''}
+          </div>
+          <p class="mt-1 text-[11px] text-slate-400">${n.realm} · ${n.when} · ${n.status}</p>
+        </a>`).join('');
+      update_notif_badge();
+    }
+
+    function mark_all_notifications_read() {
+      NOTIFICATIONS = NOTIFICATIONS.map((n) => ({ ...n, unread: false }));
+      render_notifications_page();
+      render_notifications_dropdown();
+    }
+
+    function mark_notification_read(id) {
+      NOTIFICATIONS = NOTIFICATIONS.map((n) => n.id === id ? { ...n, unread: false } : n);
+      update_notif_badge();
+      render_notifications_dropdown();
+      render_notifications_page();
+    }
+
+    function set_notif_dropdown(open) {
+      const dd = document.getElementById('notif-dropdown');
+      const btn = document.getElementById('notif-bell-btn');
+      if (!dd || !btn) return;
+      dd.classList.toggle('hidden', !open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) render_notifications_dropdown();
+    }
+
+
+    
+
+    document.getElementById('btn-show-create-token')?.addEventListener('click', () => set_panel('create-token', true));
+    document.getElementById('btn-hide-create-token')?.addEventListener('click', () => set_panel('create-token', false));
+    document.getElementById('btn-show-create-realm')?.addEventListener('click', () => set_panel('create-realm', true));
+
+    (function wire_create_realm_preview() {
+      const slug = document.getElementById('create-realm-slug');
+      const name = document.getElementById('create-realm-name');
+      const slug_prev = document.getElementById('create-realm-slug-preview');
+      const name_prev = document.getElementById('create-realm-name-preview');
+      if (!slug || !slug_prev) return;
+      const sync = () => {
+        slug_prev.textContent = (slug.value.trim() || 'prod-west');
+        if (name_prev) name_prev.textContent = (name && name.value.trim()) || 'Prod West';
+      };
+      slug.addEventListener('input', sync);
+      name?.addEventListener('input', sync);
+    })();
+
+    document.getElementById('notif-bell-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const dd = document.getElementById('notif-dropdown');
+      set_notif_dropdown(dd.classList.contains('hidden'));
+    });
+    document.getElementById('notif-mark-read')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      mark_all_notifications_read();
+    });
+    document.getElementById('notif-page-mark-read')?.addEventListener('click', () => mark_all_notifications_read());
+    document.getElementById('notif-filter-realm')?.addEventListener('change', () => render_notifications_page());
+    document.getElementById('notif-filter-status')?.addEventListener('change', () => render_notifications_page());
+    document.getElementById('token-copy-btn')?.addEventListener('click', async () => {
+      const v = document.getElementById('token-created-value')?.textContent || '';
+      try { await navigator.clipboard.writeText(v); } catch (_) {}
+      const btn = document.getElementById('token-copy-btn');
+      if (btn) { btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1200); }
+    });
+
+    document.addEventListener('click', (e) => {
+      const wrap = document.getElementById('notif-bell-wrap');
+      if (wrap && !wrap.contains(e.target)) set_notif_dropdown(false);
+
+      const show_p = e.target.closest('[data-show-panel]');
+      if (show_p) {
+        e.preventDefault();
+        set_panel(show_p.getAttribute('data-show-panel'), true);
+        return;
+      }
+      const hide_p = e.target.closest('[data-hide-panel]');
+      if (hide_p) {
+        e.preventDefault();
+        set_panel(hide_p.getAttribute('data-hide-panel'), false);
+        return;
+      }
+
+      const create_submit = e.target.closest('#create-token-submit');
+      if (create_submit) {
+        e.preventDefault();
+        create_user_token();
+        return;
+      }
+      const revoke = e.target.closest('[data-revoke-token]');
+      if (revoke) {
+        e.preventDefault();
+        const id = revoke.getAttribute('data-revoke-token');
+        USER_TOKENS = USER_TOKENS.filter((t) => t.id !== id);
+        render_tokens();
+        return;
+      }
+      const notif_go = e.target.closest('[data-notif-go]');
+      if (notif_go) {
+        const id = notif_go.getAttribute('data-notif-id');
+        if (id) mark_notification_read(id);
+        const href = notif_go.getAttribute('data-notif-go') || '#/notifications';
+        location.hash = href.startsWith('#') ? href : '#' + href;
+        return;
+      }
+      const notif_drop = e.target.closest('#notif-dropdown-list [data-notif-id]');
+      if (notif_drop) {
+        mark_notification_read(notif_drop.getAttribute('data-notif-id'));
+        set_notif_dropdown(false);
+      }
+    });
+
+    render_notifications_dropdown();
+    update_notif_badge();
+
+    document.getElementById('persona-first').onclick = () => set_persona('first');
+    document.getElementById('persona-returning').onclick = () => set_persona('returning');
+    document.getElementById('role-member').onclick = () => set_role('member');
+    document.getElementById('role-admin').onclick = () => set_role('admin');
+    window.addEventListener('hashchange', route);
+
+    if (localStorage.getItem('cliqhub_proto_persona') === 'returning') {
+      document.body.classList.remove('persona-first');
+      document.body.classList.add('persona-returning');
+      set_toggle_btn('persona-first', false);
+      set_toggle_btn('persona-returning', true);
+    }
+    if (localStorage.getItem('cliqhub_proto_role') === 'admin') {
+      set_role('admin');
+    } else {
+      if (!location.hash) location.hash = '#/home';
+      route();
+    }
+  </script>
+</body>
+</html>
