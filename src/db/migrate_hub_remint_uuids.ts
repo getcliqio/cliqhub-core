@@ -181,11 +181,20 @@ async function remint_root(sequelize: Sequelize, table: (typeof ROOT_TABLES)[num
     if (legacy_n === 0) return 0;
 
     // Persistent staging table (not TEMP) — Sequelize pool uses multiple connections.
+    // CREATE TABLE IF NOT EXISTS still races under concurrent boots (orphan pg_type /
+    // unique_violation on typname). Swallow those; table will exist for TRUNCATE.
     await sequelize.query(`
-        CREATE TABLE IF NOT EXISTS public._hub_uuid_remint_map (
-            old_id UUID PRIMARY KEY,
-            new_id UUID NOT NULL UNIQUE
-        )
+        DO $mig$
+        BEGIN
+            CREATE TABLE IF NOT EXISTS public._hub_uuid_remint_map (
+                old_id UUID PRIMARY KEY,
+                new_id UUID NOT NULL UNIQUE
+            );
+        EXCEPTION
+            WHEN duplicate_table THEN NULL;
+            WHEN unique_violation THEN NULL;
+        END
+        $mig$
     `);
     await sequelize.query(`TRUNCATE public._hub_uuid_remint_map`);
 
@@ -290,32 +299,38 @@ export async function migrate_hub_remint_legacy_uuids(sequelize: Sequelize): Pro
     }
     if (total === 0) return;
 
-    await normalize_numeric_text_org_ids(sequelize);
-    await normalize_numeric_text_user_ids(sequelize);
-    await drop_all_fks_on_public(sequelize);
+    // Serialize concurrent boots (Playwright + manual, or double webServer).
+    await sequelize.query(`SELECT pg_advisory_lock(872014401)`);
+    try {
+        await normalize_numeric_text_org_ids(sequelize);
+        await normalize_numeric_text_user_ids(sequelize);
+        await drop_all_fks_on_public(sequelize);
 
-    // Parents before children that also have reminted PKs (orgs before org_roles, etc.).
-    // FK updates use temp maps, so order among roots only matters for self-FKs
-    // (orgs.default_scope_id ↔ scopes): remint scopes before updating orgs.default_scope_id
-    // via scopes refs — scopes list includes orgs.default_scope_id.
-    // Remint users → orgs → scopes → rest.
-    const order: Array<(typeof ROOT_TABLES)[number]> = [
-        'users',
-        'orgs',
-        'scopes',
-        'org_roles',
-        'teams',
-        'team_versions',
-        'drafts',
-        'audit_log',
-        'account_invites',
-        'realm_invites',
-    ];
+        // Parents before children that also have reminted PKs (orgs before org_roles, etc.).
+        // FK updates use temp maps, so order among roots only matters for self-FKs
+        // (orgs.default_scope_id ↔ scopes): remint scopes before updating orgs.default_scope_id
+        // via scopes refs — scopes list includes orgs.default_scope_id.
+        // Remint users → orgs → scopes → rest.
+        const order: Array<(typeof ROOT_TABLES)[number]> = [
+            'users',
+            'orgs',
+            'scopes',
+            'org_roles',
+            'teams',
+            'team_versions',
+            'drafts',
+            'audit_log',
+            'account_invites',
+            'realm_invites',
+        ];
 
-    for (const table of order) {
-        await remint_root(sequelize, table);
+        for (const table of order) {
+            await remint_root(sequelize, table);
+        }
+
+        await recreate_public_fks(sequelize);
+        await sequelize.query(`DROP TABLE IF EXISTS public._hub_uuid_remint_map`);
+    } finally {
+        await sequelize.query(`SELECT pg_advisory_unlock(872014401)`);
     }
-
-    await recreate_public_fks(sequelize);
-    await sequelize.query(`DROP TABLE IF EXISTS public._hub_uuid_remint_map`);
 }
