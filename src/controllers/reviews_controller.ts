@@ -1,3 +1,11 @@
+/**
+ * Reviews Hub resource — REV-ORG hard-cut on org-scoped list.
+ *
+ * POST /v1/reviews/get: body `org_id` required unless `realm_id`.
+ * Never invent org from X-Org-Id / current_org_id.
+ * get_by_id permission fallback also requires body `org_id` (no header invent).
+ */
+
 import { Request, Response, NextFunction } from 'express';
 
 import { ApiError } from '../lib/api_error.js';
@@ -5,6 +13,8 @@ import { HugReviewsService } from '../services/hug_reviews.service.js';
 import { ReviewMessageService } from '../services/review_message.service.js';
 import { ReviewPendingService } from '../services/review_pending.service.js';
 import { require_permission } from '../auth/permissions.js';
+import { Realm } from '../models/index.js';
+import type { AuthContext } from '../types/vo.js';
 import {
 	reviews_get_schema,
 	reviews_get_by_id_schema,
@@ -17,27 +27,72 @@ import {
 } from '../schemas/reviews_schemas.js';
 
 export class ReviewsController {
-	/** POST /v1/reviews/get — list open HUG reviews for caller's notifications. */
+	/**
+	 * Bearer must be allowed to act on `org_id`.
+	 * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
+	 * Site hub admin may act on any org_id.
+	 */
+	private static async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
+		// No credential context — refuse rather than invent tenancy.
+		if (!auth) {
+			throw ApiError.unauthorized('authentication required');
+		}
+
+		// Site admin may target any org.
+		if (auth.user?.role === 'admin') return;
+
+		// Daemon tokens are realm-bound; tenancy is the realm's org.
+		if (auth.auth_via === 'daemon_token') {
+			if (!auth.realm_id) {
+				throw ApiError.forbidden('daemon token has no realm binding');
+			}
+			const realm = await Realm.findByPk(auth.realm_id);
+			if (!realm || realm.org_id !== org_id) {
+				throw ApiError.forbidden('org_id does not match daemon realm organization');
+			}
+			return;
+		}
+
+		// PAT / session: live membership list from auth middleware.
+		if (!auth.org_ids.includes(org_id)) {
+			throw ApiError.forbidden('not a member of the requested organization');
+		}
+	}
+
+	private static auth_from(req: Request): AuthContext | undefined {
+		return (req as Request & { auth?: AuthContext }).auth;
+	}
+
+	/**
+	 * POST /v1/reviews/get — list open HUG reviews for caller's notifications.
+	 * Org-scoped list requires body `org_id` (REV-ORG hard-cut).
+	 */
 	static async get(req: Request, res: Response, next: NextFunction): Promise<void> {
 		try {
 			const user_id = req.user?.user_id?.trim();
 			if (!user_id) throw ApiError.unauthorized('Authentication required');
 
+			// Zod SoT — org-scoped list requires org_id; never invent from X-Org-Id.
 			const body = reviews_get_schema.parse(req.body ?? {});
+			let org_id: string | undefined;
+			if (body.org_id) {
+				await ReviewsController.assert_org_authorized(ReviewsController.auth_from(req), body.org_id);
+				org_id = body.org_id;
+			}
 			const result = await ReviewPendingService.list_for_user({
 				user_id,
-				realm_id: body?.realm_id,
-				org_id: req.user?.current_org_id,
-				statuses: body?.statuses,
-				limit: body?.limit,
-				offset: body?.offset,
+				realm_id: body.realm_id,
+				org_id,
+				statuses: body.statuses,
+				limit: body.limit,
+				offset: body.offset,
 			});
 			res.json({
 				ok: true,
 				reviews: result.reviews,
 				total: result.total,
-				offset: body?.offset ?? 0,
-				limit: body?.limit ?? 50,
+				offset: body.offset ?? 0,
+				limit: body.limit ?? 50,
 			});
 		} catch (err) { next(err); }
 	}
@@ -50,7 +105,6 @@ export class ReviewsController {
 
 			const body = reviews_create_schema.parse(req.body ?? {});
 
-			const { Realm } = await import('../models/index.js');
 			const realm = await Realm.findByPk(body.realm_id, { attributes: ['org_id'] });
 			const org_id = realm?.org_id ?? null;
 
@@ -72,7 +126,10 @@ export class ReviewsController {
 		} catch (err) { next(err); }
 	}
 
-	/** POST /v1/reviews/get_by_id — review detail (agent poll + Hub UI). */
+	/**
+	 * POST /v1/reviews/get_by_id — review detail (agent poll + Hub UI).
+	 * When caller has no notification row, body `org_id` is required for reviews.view.
+	 */
 	static async get_by_id(req: Request, res: Response, next: NextFunction): Promise<void> {
 		try {
 			const body = reviews_get_by_id_schema.parse(req.body ?? {});
@@ -91,14 +148,16 @@ export class ReviewsController {
 			);
 
 			if (!has_notification) {
-				const org_id = req.auth?.current_org_id ?? req.user?.current_org_id;
-				if (org_id) {
-					const hub_user = req.auth?.user;
-					await require_permission(
-						org_id, user_id, 'reviews.view',
-						{ site_role: hub_user?.role },
-					);
+				// No invent from X-Org-Id — body org_id is SoT for permission path.
+				if (!body.org_id) {
+					throw ApiError.forbidden('org_id is required to view a review without a notification');
 				}
+				await ReviewsController.assert_org_authorized(ReviewsController.auth_from(req), body.org_id);
+				const hub_user = req.auth?.user;
+				await require_permission(
+					body.org_id, user_id, 'reviews.view',
+					{ site_role: hub_user?.role },
+				);
 			}
 
 			const data = await HugReviewsService.get(body.review_id);

@@ -97,7 +97,7 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		const res = await request(app)
 			.post('/v1/reviews/get')
 			.set('Authorization', make_hub_bearer())
-			.send({});
+			.send({ realm_id: realm.id });
 		expect(res.status).toBe(200);
 		expect(res.body.reviews).toHaveLength(1);
 

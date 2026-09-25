@@ -3,15 +3,39 @@ import { z } from 'zod';
 /** POST /v1/reviews/get — list reviews for the caller's inbox. */
 export const reviews_get_schema = z.object({
     realm_id: z.string().optional(),
+    /**
+     * Organization UUID. Required when listing without realm_id.
+     * Never invent from X-Org-Id.
+     */
+    org_id: z.string().uuid().optional().describe(
+        'Organization UUID. Required when listing reviews without realm_id.',
+    ),
     /** Status values to include. Defaults to ['pending']. */
     statuses: z.array(z.string()).optional(),
     limit: z.number().int().positive().optional(),
     offset: z.number().int().nonnegative().optional(),
-}).optional();
+}).superRefine((v, ctx) => {
+    // Realm-scoped list — realm_id is SoT.
+    if (v.realm_id?.trim()) return;
+    if (!v.org_id) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'org_id is required when listing reviews without realm_id',
+            path: ['org_id'],
+        });
+    }
+});
 
 /** POST /v1/reviews/get_by_id — single review detail. */
 export const reviews_get_by_id_schema = z.object({
     review_id: z.string().min(1),
+    /**
+     * Required when the caller has no review_notifications row and needs
+     * org-scoped `reviews.view` — never invent from X-Org-Id.
+     */
+    org_id: z.string().uuid().optional().describe(
+        'Organization UUID for reviews.view when caller has no notification row.',
+    ),
 });
 
 /** A reviewer group: a policy (any/all) and a list of channel/username targets. */
