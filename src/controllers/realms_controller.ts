@@ -1,310 +1,303 @@
 /**
  * Realm Hub resource — hard-cut surface (no aliases).
  *
- * Keep: get, get_by_id, create, update, delete,
- *       get_members, add_member, remove_member,
- *       add_team, remove_team.
+ * Routes (1:1 with this controller):
+ *   POST /v1/realms/create | get | get_by_id | update | delete
+ *   POST /v1/realms/get_members | add_member | remove_member
+ *   POST /v1/realms/add_team | remove_team
  *
- * Lookup: get_by_id accepts realm_id OR { org_slug, slug }.
+ * Tenancy: body `org_id` on create / get filter / slug get_by_id.
+ * Never invent org from X-Org-Id / current_org_id.
+ * Mutations keyed by realm_id use RealmService membership (no header org gate).
+ *
+ * Lookup: get_by_id accepts realm_id XOR { slug, org_id } XOR { slug, org_slug }.
  * Teams roster reads live under POST /v1/teams/get { realm_id }.
  * Invite search lives under POST /v1/users/get { realm_id }.
  */
 
-import { Request, Response, NextFunction } from 'express';
-import { z } from 'zod';
+import type { Request, Response } from 'express';
 
+import { BaseController } from './base_controller.js';
 import { ApiError } from '../lib/api_error.js';
 import { RealmService } from '../services/realm.service.js';
 import { RealmTeamListService } from '../services/realm_team_list.service.js';
 import { DispatchService } from '../services/dispatch.service.js';
+import { Realm } from '../models/index.js';
+import { Org } from '../db/models/index.js';
+import type { AuthContext } from '../types/vo.js';
+import {
+    RealmCreateInput,
+    RealmGetInput,
+    RealmGetByIdInput,
+    RealmUpdateInput,
+    RealmDeleteInput,
+    RealmGetMembersInput,
+    RealmAddMemberInput,
+    RealmRemoveMemberInput,
+    RealmTeamRefInput,
+} from '../schemas/realms/inputs.js';
 
-function assert_user(req: Request): { user_id: string; email: string; current_org_id?: string; scope_ids?: string[]; org_ids?: string[] } {
-    if (!req.user) throw ApiError.forbidden('Not authenticated');
-    return {
-        user_id: req.user.user_id,
-        email: req.user.email ?? '',
-        current_org_id: req.user.current_org_id,
-        scope_ids: req.user.scope_ids,
-        org_ids: req.user.org_ids,
-    };
-}
+type Realm_user = {
+    user_id: string;
+    email: string;
+    scope_ids?: string[];
+    org_ids?: string[];
+};
 
-/** Verify that a realm belongs to the caller's active org when one is set. */
-async function assert_realm_in_org(realm_id: string, current_org_id: string | undefined): Promise<void> {
-    if (!current_org_id) return;
-    const { Realm } = await import('../models/index.js');
-    const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'] });
-    if (!realm) return;
-    if (realm.org_id === current_org_id) return;
-    throw ApiError.forbidden('Realm does not belong to the active org');
-}
+/**
+ * Flat response helpers (envelope { ok, data } deferred to RM-ENV).
+ */
+export class RealmController extends BaseController {
+    constructor(
+        private readonly _realm: typeof RealmService = RealmService,
+        private readonly _team_list: typeof RealmTeamListService = RealmTeamListService,
+        private readonly _dispatch: typeof DispatchService = DispatchService,
+    ) {
+        super();
+    }
 
-const create_schema = z.object({
-    slug: z.string().min(1),
-    name: z.string().min(1),
-});
+    private auth_from(req: Request): AuthContext | undefined {
+        return (req as Request & { auth?: AuthContext }).auth;
+    }
 
-const get_schema = z.object({
-    slug: z.string().min(1).optional(),
-    query: z.string().min(1).optional(),
-    owned: z.enum(['me', 'default']).optional(),
-    org_id: z.string().optional(),
-    limit: z.number().int().min(1).max(100).optional(),
-    offset: z.number().int().min(0).optional(),
-    sort_by: z.enum(['slug', 'name', 'created_at', 'updated_at', 'created_by']).optional(),
-    sort_dir: z.enum(['asc', 'desc']).optional(),
-}).optional();
+    private assert_user(req: Request): Realm_user {
+        if (!req.user) {
+            throw ApiError.forbidden('Not authenticated');
+        }
+        return {
+            user_id: req.user.user_id,
+            email: req.user.email ?? '',
+            scope_ids: req.user.scope_ids,
+            org_ids: req.user.org_ids,
+        };
+    }
 
-/** Single-realm load: uuid id, or org-scoped slug. */
-const get_by_id_schema = z.object({
-    realm_id: z.string().min(1).optional(),
-    slug: z.string().min(1).optional(),
-    org_slug: z.string().min(1).optional(),
-}).superRefine((val, ctx) => {
-    if (val.realm_id) return;
-    if (val.slug) return;
-    ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'realm_id or slug is required',
-        path: ['realm_id'],
-    });
-});
+    /**
+     * Bearer must be allowed to act on `org_id`.
+     * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
+     */
+    private async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
+        // No credential context — refuse rather than invent tenancy.
+        if (!auth) {
+            throw ApiError.unauthorized('authentication required');
+        }
 
-const update_schema = z.object({
-    realm_id: z.string().min(1),
-    name: z.string().min(1).optional(),
-});
+        // Daemon tokens are realm-bound; tenancy is the realm's org, not a membership list.
+        if (auth.auth_via === 'daemon_token') {
+            if (!auth.realm_id) {
+                throw ApiError.forbidden('daemon token has no realm binding');
+            }
+            const realm = await Realm.findByPk(auth.realm_id);
+            if (!realm || realm.org_id !== org_id) {
+                throw ApiError.forbidden('org_id does not match daemon realm organization');
+            }
+            return;
+        }
 
-const delete_schema = z.object({
-    realm_id: z.string().min(1),
-});
+        // PAT / session: live membership list from auth middleware.
+        if (!auth.org_ids.includes(org_id)) {
+            throw ApiError.forbidden('not a member of the requested organization');
+        }
+    }
 
-const get_members_schema = z.object({
-    realm_id: z.string().min(1),
-    member_type: z.enum(['user', 'daemon', 'group']).optional(),
-});
+    /**
+     * Create a realm in the org named by body.org_id.
+     */
+    async create(req: Request, res: Response): Promise<void> {
+        const user = this.assert_user(req);
+        // Zod SoT — org_id required; never invent from X-Org-Id.
+        const body = this.parse_body(RealmCreateInput, req);
+        // Bearer membership (or daemon realm org) must include body.org_id.
+        await this.assert_org_authorized(this.auth_from(req), body.org_id);
 
-const add_member_schema = z.object({
-    realm_id: z.string().min(1),
-    member_type: z.enum(['user', 'daemon', 'group']).default('user'),
-    /** Hub user id when member_type=user; daemon/group id otherwise. */
-    member_id: z.string().min(1),
-    role: z.enum(['admin', 'operator', 'member']).optional(),
-});
+        const realm = await this._realm.create(user.user_id, body.slug, body.name, {
+            org_id: body.org_id,
+        });
+        res.json({ ok: true, realm });
+    }
 
-const remove_member_schema = z.object({
-    realm_id: z.string().min(1),
-    member_type: z.enum(['user', 'daemon', 'group']).default('user'),
-    member_id: z.string().min(1),
-});
+    /**
+     * List realms visible to the user (optional org_id filter).
+     */
+    async get(req: Request, res: Response): Promise<void> {
+        const user = this.assert_user(req);
+        // Empty / omitted body is valid — all fields optional.
+        if (req.body == null || typeof req.body !== 'object') {
+            (req as Request & { body: Record<string, unknown> }).body = {};
+        }
+        const body = this.parse_body(RealmGetInput, req);
 
-const team_ref_schema = z.object({
-    realm_id: z.string().min(1),
-    scope: z.string().min(1),
-    slug: z.string().min(1),
-});
+        // Optional filter: when set, caller must be authorized for that org.
+        if (body.org_id) {
+            await this.assert_org_authorized(this.auth_from(req), body.org_id);
+        }
 
-export class RealmController {
-    static async create(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const user = assert_user(req);
-            const body = create_schema.parse(req.body ?? {});
-            const realm = await RealmService.create(user.user_id, body.slug, body.name, {
-                org_id: user.current_org_id,
-            });
+        // Omitted org_id = list across every org the user belongs to.
+        const { realms, total } = await this._realm.list_for_user(user.user_id, {
+            slug: body.slug,
+            query: body.query,
+            owned: body.owned,
+            org_id: body.org_id,
+            limit: body.limit,
+            offset: body.offset,
+            sort_by: body.sort_by,
+            sort_dir: body.sort_dir,
+        });
+        res.json({ ok: true, realms, total });
+    }
+
+    /**
+     * Load one realm by id or org-scoped slug.
+     */
+    async get_by_id(req: Request, res: Response): Promise<void> {
+        const user = this.assert_user(req);
+        const body = this.parse_body(RealmGetByIdInput, req);
+
+        // UUID path — membership checked inside RealmService.get.
+        if (body.realm_id) {
+            const realm = await this._realm.get(body.realm_id, user.user_id);
             res.json({ ok: true, realm });
-        } catch (err) {
-            next(err);
+            return;
         }
+
+        // Slug path — resolve org explicitly (org_id XOR org_slug already refined).
+        let org_id = body.org_id;
+        if (body.org_slug) {
+            const org = await Org.findOne({ where: { slug: body.org_slug } });
+            if (!org) {
+                throw ApiError.not_found('Org not found');
+            }
+            org_id = org.id;
+        }
+        if (!org_id) {
+            throw ApiError.bad_request('slug requires org_id or org_slug');
+        }
+
+        await this.assert_org_authorized(this.auth_from(req), org_id);
+
+        const realm = await this._realm.get_by_slug(body.slug!, user.user_id, { org_id });
+        res.json({ ok: true, realm });
     }
 
-    static async get(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const user = assert_user(req);
-            const body = get_schema.parse(req.body ?? {});
-            /** Omitted org_id = list across every org the user belongs to. */
-            const org_id = body?.org_id != null ? String(body.org_id) : undefined;
-            const { realms, total } = await RealmService.list_for_user(user.user_id, {
-                slug: body?.slug,
-                query: body?.query,
-                owned: body?.owned,
-                org_id,
-                limit: body?.limit,
-                offset: body?.offset,
-                sort_by: body?.sort_by,
-                sort_dir: body?.sort_dir,
-            });
-            res.json({ ok: true, realms, total });
-        } catch (err) {
-            next(err);
-        }
+    /**
+     * Rename a realm (membership / role via service).
+     */
+    async update(req: Request, res: Response): Promise<void> {
+        const user = this.assert_user(req);
+        const body = this.parse_body(RealmUpdateInput, req);
+        // No header org gate — RealmService enforces caller may mutate this realm.
+        const realm = await this._realm.update(body.realm_id, user.user_id, { name: body.name });
+        res.json({ ok: true, realm });
     }
 
-    static async get_by_id(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const user = assert_user(req);
-            const body = get_by_id_schema.parse(req.body ?? {});
+    /**
+     * Soft-delete a realm.
+     */
+    async delete(req: Request, res: Response): Promise<void> {
+        const user = this.assert_user(req);
+        const body = this.parse_body(RealmDeleteInput, req);
+        await this._realm.remove(body.realm_id, user.user_id);
+        res.json({ ok: true });
+    }
 
-            if (body.realm_id) {
-                await assert_realm_in_org(body.realm_id, user.current_org_id);
-                const realm = await RealmService.get(body.realm_id, user.user_id);
-                res.json({ ok: true, realm });
-                return;
-            }
+    /**
+     * List realm members.
+     */
+    async get_members(req: Request, res: Response): Promise<void> {
+        const user = this.assert_user(req);
+        const body = this.parse_body(RealmGetMembersInput, req);
+        const members = await this._realm.list_members(
+            body.realm_id,
+            user.user_id,
+            body.member_type,
+        );
+        res.json({ ok: true, members });
+    }
 
-            /** Slug path: resolve org then load by (org_id, slug). */
-            let org_id = user.current_org_id;
-            if (body.org_slug) {
-                const { Org } = await import('../db/models/index.js');
-                const org = await Org.findOne({ where: { slug: body.org_slug } });
-                if (!org) throw ApiError.not_found('Org not found');
-                org_id = org.id;
-            }
+    /**
+     * Add a user/group member (daemon enroll is via realm token).
+     */
+    async add_member(req: Request, res: Response): Promise<void> {
+        const user = this.assert_user(req);
+        const body = this.parse_body(RealmAddMemberInput, req);
 
-            const realm = await RealmService.get_by_slug(
-                body.slug!,
-                user.user_id,
-                { org_id },
+        if (body.member_type === 'daemon') {
+            throw ApiError.bad_request(
+                'Daemon membership is via realm token enroll (auth generate_token type=realm)',
             );
-            res.json({ ok: true, realm });
-        } catch (err) {
-            next(err);
         }
+
+        let member_id = body.member_id;
+        if (body.member_type === 'user') {
+            member_id = await this._realm.resolve_user_member_id(body.member_id);
+        }
+
+        const member = await this._realm.add_member(body.realm_id, user.user_id, {
+            member_type: body.member_type,
+            member_id,
+            role: body.role,
+        });
+        res.json({ ok: true, member });
     }
 
-    static async update(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const user = assert_user(req);
-            const body = update_schema.parse(req.body ?? {});
-            await assert_realm_in_org(body.realm_id, user.current_org_id);
-            const realm = await RealmService.update(body.realm_id, user.user_id, { name: body.name });
-            res.json({ ok: true, realm });
-        } catch (err) {
-            next(err);
+    /**
+     * Remove a realm member.
+     */
+    async remove_member(req: Request, res: Response): Promise<void> {
+        const user = this.assert_user(req);
+        const body = this.parse_body(RealmRemoveMemberInput, req);
+
+        let member_id = body.member_id;
+        if (body.member_type === 'user') {
+            member_id = await this._realm.resolve_user_member_id(body.member_id);
         }
-    }
 
-    static async delete(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const user = assert_user(req);
-            const body = delete_schema.parse(req.body ?? {});
-            await assert_realm_in_org(body.realm_id, user.current_org_id);
-            await RealmService.remove(body.realm_id, user.user_id);
-            res.json({ ok: true });
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    static async get_members(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const user = assert_user(req);
-            const body = get_members_schema.parse(req.body ?? {});
-            const members = await RealmService.list_members(
-                body.realm_id,
-                user.user_id,
-                body.member_type,
-            );
-            res.json({ ok: true, members });
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    static async add_member(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const user = assert_user(req);
-            const body = add_member_schema.parse(req.body ?? {});
-
-            if (body.member_type === 'daemon') {
-                throw ApiError.bad_request(
-                    'Daemon membership is via realm token enroll (auth generate_token type=realm)',
-                );
-            }
-
-            let member_id = body.member_id;
-            if (body.member_type === 'user') {
-                member_id = await RealmService.resolve_user_member_id(body.member_id);
-            }
-
-            const member = await RealmService.add_member(body.realm_id, user.user_id, {
-                member_type: body.member_type,
-                member_id,
-                role: body.role,
-            });
-            res.json({ ok: true, member });
-        } catch (err) {
-            next(err);
-        }
-    }
-
-    static async remove_member(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const user = assert_user(req);
-            const body = remove_member_schema.parse(req.body ?? {});
-
-            let member_id = body.member_id;
-            if (body.member_type === 'user') {
-                member_id = await RealmService.resolve_user_member_id(body.member_id);
-            }
-
-            await RealmService.remove_member(
-                body.realm_id,
-                user.user_id,
-                body.member_type,
-                member_id,
-            );
-            res.json({ ok: true });
-        } catch (err) {
-            next(err);
-        }
+        await this._realm.remove_member(
+            body.realm_id,
+            user.user_id,
+            body.member_type,
+            member_id,
+        );
+        res.json({ ok: true });
     }
 
     /**
      * Add team to the realm set and enqueue install to online daemons (outbox).
      */
-    static async add_team(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const user = assert_user(req);
-            const body = team_ref_schema.parse(req.body ?? {});
-            const entry = { scope: body.scope, slug: body.slug };
+    async add_team(req: Request, res: Response): Promise<void> {
+        const user = this.assert_user(req);
+        const body = this.parse_body(RealmTeamRefInput, req);
+        const entry = { scope: body.scope, slug: body.slug };
 
-            const team_list = await RealmTeamListService.add(body.realm_id, user.user_id, entry);
-            const fanout = await RealmTeamListService.sync_team(
-                body.realm_id,
-                user.user_id,
-                entry,
-                user.scope_ids,
-                user.org_ids,
-            );
+        const team_list = await this._team_list.add(body.realm_id, user.user_id, entry);
+        const fanout = await this._team_list.sync_team(
+            body.realm_id,
+            user.user_id,
+            entry,
+            user.scope_ids,
+            user.org_ids,
+        );
 
-            res.json({ ok: true, team_list, install: fanout });
-        } catch (err) {
-            next(err);
-        }
+        res.json({ ok: true, team_list, install: fanout });
     }
 
     /**
      * Remove team from the realm set and enqueue uninstall to online daemons (outbox).
      */
-    static async remove_team(req: Request, res: Response, next: NextFunction): Promise<void> {
-        try {
-            const user = assert_user(req);
-            const body = team_ref_schema.parse(req.body ?? {});
-            const entry = { scope: body.scope, slug: body.slug };
+    async remove_team(req: Request, res: Response): Promise<void> {
+        const user = this.assert_user(req);
+        const body = this.parse_body(RealmTeamRefInput, req);
+        const entry = { scope: body.scope, slug: body.slug };
 
-            const team_list = await RealmTeamListService.remove(body.realm_id, user.user_id, entry);
-            const uninstall = await DispatchService.uninstall_team({
-                scope: entry.scope,
-                slug: entry.slug,
-                realm_id: body.realm_id,
-                user_id: user.user_id,
-                org_ids: user.org_ids,
-            });
+        const team_list = await this._team_list.remove(body.realm_id, user.user_id, entry);
+        const uninstall = await this._dispatch.uninstall_team({
+            scope: entry.scope,
+            slug: entry.slug,
+            realm_id: body.realm_id,
+            user_id: user.user_id,
+            org_ids: user.org_ids,
+        });
 
-            res.json({ ok: true, team_list, uninstall });
-        } catch (err) {
-            next(err);
-        }
+        res.json({ ok: true, team_list, uninstall });
     }
 }

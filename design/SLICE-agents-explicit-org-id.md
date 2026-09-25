@@ -237,7 +237,7 @@ Agents are the first hard-dep cleaned end-to-end: Core ignores header → caller
 ## Out of scope
 
 - Global drop of `X-Org-Id` middleware / `useOrgFetch` (**HDR-1**).
-- `realms/create` body `org_id` (**RM-ORG-1**).
+- Realms org-id hard-cut (**RM-ORG-1** → `SLICE-realms-explicit-org-id.md`).
 - Settings table FK (**AG-SET-FK**).
 - Renaming daemon-local `get_by_id`.
 - Auth envelope DTO slice.
@@ -426,7 +426,7 @@ Record which proofs ran and `EXIT:$?` / success lines in the PR / session claim.
 
 | ID | Item |
 |----|------|
-| **RM-ORG-1** | `POST /v1/realms/create` required body `org_id` |
+| **RM-ORG-1** | Realms body `org_id` + drop header tenancy — see `SLICE-realms-explicit-org-id.md` |
 | **HDR-1** | Drop `X-Org-Id` from Core / SPA `useOrgFetch` once all hard deps migrated |
 | **SESS-1** | BFF session `active_org_id` for list filters only |
 | **AG-SET-FK** | Settings tables key by `agent_id` UUID |

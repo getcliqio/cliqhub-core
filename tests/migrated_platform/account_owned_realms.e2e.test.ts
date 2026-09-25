@@ -36,6 +36,7 @@ type Session = {
     email: string;
     user_id: string;
     token: string;
+    org_id: string;
     default_realm_id: string;
     default_realm_slug: string;
 };
@@ -148,11 +149,17 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
         expect(data.default_realm_qualified).toBe(`${account_slug}.default`);
         expect(data.enroll_token).toMatch(/^cliq_dt_/);
         expect(data.user.username).toBe(username);
+        const membership = await OrgMember.findOne({
+            where: { user_id: data.user.id },
+            attributes: ['org_id'],
+        });
+        expect(membership?.org_id).toBeTruthy();
         return {
             username,
             email,
             user_id: data.user.id as number,
             token: data.token as string,
+            org_id: String(membership!.org_id),
             default_realm_id: data.default_realm_id as string,
             default_realm_slug: data.default_realm_slug as string,
         };
@@ -214,7 +221,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
         const create_a = await request(app)
             .post('/v1/realms/create')
             .set('Authorization', bearer(alice.token))
-            .send({ slug: shared_a, name: 'Shared A' });
+            .send({ org_id: alice.org_id, slug: shared_a, name: 'Shared A' });
         expect(create_a.status).toBe(200);
         const realm_a = create_a.body.realm.id as string;
         expect(create_a.body.realm.owner_user_id).toBe(String(alice.user_id));
@@ -222,7 +229,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
         const create_b = await request(app)
             .post('/v1/realms/create')
             .set('Authorization', bearer(alice.token))
-            .send({ slug: shared_b, name: 'Shared B' });
+            .send({ org_id: alice.org_id, slug: shared_b, name: 'Shared B' });
         expect(create_b.status).toBe(200);
         const realm_b = create_b.body.realm.id as string;
 

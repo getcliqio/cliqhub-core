@@ -17,6 +17,7 @@ import { register_public_v1_routes } from './v1/health_integrations.js';
 import { register_system_routes } from './v1/system.js';
 import { register_daemons_routes } from './v1/daemons.js';
 import { register_realms_routes } from './v1/realms.js';
+import { register_mesh_routes } from './v1/mesh.js';
 import { register_teams_routes, register_teams_install_routes } from './v1/teams.js';
 import { register_users_routes } from './v1/users.js';
 import { register_auth_routes, register_dispatch_key_routes } from './v1/auth.js';
@@ -47,6 +48,7 @@ function register_control_resources(router: Router, auth: RequestHandler): void 
     register_system_routes(router, auth);
     register_daemons_routes(router, auth);
     register_realms_routes(router, auth);
+    register_mesh_routes(router, auth);
     register_teams_install_routes(router, auth);
     register_dispatch_key_routes(router, auth);
     register_control_scopes_routes(router, auth);
@@ -99,6 +101,7 @@ export function register_routes(app: Application, container: Container): void {
     register_system_routes(router, auth);
     register_daemons_routes(router, auth);
     register_realms_routes(router, auth);
+    register_mesh_routes(router, auth);
     register_teams_routes(router, auth, container);
     register_users_routes(router, container);
     register_auth_routes(router, auth, container);

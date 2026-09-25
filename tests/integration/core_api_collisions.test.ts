@@ -19,6 +19,8 @@ vi.mock('../../src/auth/password.js', () => ({
 const { app, repos } = create_test_app();
 const SECRET = 'test-secret';
 
+let alice_org_id = hub_legacy_uuid(100);
+
 const ALICE = {
     id: hub_legacy_uuid(1),
     username: 'alice',
@@ -57,7 +59,9 @@ function mock_hub_user(): void {
     repos.scope_repo.find_owned_by_user.mockResolvedValue([
         { id: hub_legacy_uuid(1), slug: 'cliq', display_name: 'Cliq', visibility: 'public', scope_type: 'user', owner_id: hub_legacy_uuid(1), org_id: null },
     ]);
-    repos.org_member_repo.find_orgs_by_user.mockResolvedValue([]);
+    repos.org_member_repo.find_orgs_by_user.mockResolvedValue([
+        { org_id: alice_org_id, slug: 'alice', role: 'owner' },
+    ]);
     repos.scope_repo.find_member_scopes.mockResolvedValue([]);
     repos.scope_repo.find_by_org_ids.mockResolvedValue([]);
 }
@@ -130,6 +134,9 @@ describe.skipIf(!ready)('core_api control + dispatch paths (postgres)', () => {
             VALUES ('00000000-0000-4000-8000-000000000001', 'alice', 'Alice', 'alice@test.com', 'x', 'user', NOW())
             ON CONFLICT (id) DO NOTHING
         `);
+        const { ensure_personal_org_for_user } = await import('../../src/db/migrate_ensure_user_orgs.js');
+        const alice_org = await ensure_personal_org_for_user(ALICE.id, ALICE.username);
+        alice_org_id = alice_org.id;
     });
 
     afterAll(async () => {
@@ -186,7 +193,7 @@ describe.skipIf(!ready)('core_api control + dispatch paths (postgres)', () => {
         const created = await request(app)
             .post('/v1/realms/create')
             .set('Authorization', hub_bearer())
-            .send({ slug: `disp-key-${Date.now()}`.slice(0, 40), name: 'Dispatch key realm' });
+            .send({ org_id: alice_org_id, slug: `disp-key-${Date.now()}`.slice(0, 40), name: 'Dispatch key realm' });
         if (created.status !== 200) {
             throw new Error(`/v1/realms/create failed: ${created.status} ${JSON.stringify(created.body)}`);
         }
@@ -210,7 +217,7 @@ describe.skipIf(!ready)('core_api control + dispatch paths (postgres)', () => {
         const created = await request(app)
             .post('/v1/realms/create')
             .set('Authorization', hub_bearer())
-            .send({ slug: `disp-rot-${Date.now()}`.slice(0, 40), name: 'Dispatch rotate realm' });
+            .send({ org_id: alice_org_id, slug: `disp-rot-${Date.now()}`.slice(0, 40), name: 'Dispatch rotate realm' });
         expect(created.status).toBe(200);
         const realm_id = created.body.realm?.id as string;
 

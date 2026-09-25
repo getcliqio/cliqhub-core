@@ -28,6 +28,8 @@ vi.mock('../../src/auth/password.js', async (importOriginal) => {
 const { app, repos } = create_test_app();
 const SECRET = 'test-secret';
 
+let alice_org_id = hub_legacy_uuid(100);
+
 const ALICE = {
     id: hub_legacy_uuid(1),
     username: 'alice',
@@ -109,7 +111,9 @@ function mock_users(): void {
             org_id: null,
         },
     ]);
-    repos.org_member_repo.find_orgs_by_user.mockResolvedValue([]);
+    repos.org_member_repo.find_orgs_by_user.mockResolvedValue([
+        { org_id: alice_org_id, slug: 'alice', role: 'owner' },
+    ]);
     repos.scope_repo.find_member_scopes.mockResolvedValue([]);
     repos.scope_repo.find_by_org_ids.mockResolvedValue([]);
 }
@@ -119,7 +123,7 @@ async function create_realm(slug_suffix: string): Promise<string> {
     const created = await request(app)
         .post('/v1/realms/create')
         .set('Authorization', bearer_for(ALICE))
-        .send({ slug, name: `Grant realm ${slug_suffix}` });
+        .send({ org_id: alice_org_id, slug, name: `Grant realm ${slug_suffix}` });
     expect(created.status).toBe(200);
     return created.body.realm.id as string;
 }
@@ -148,6 +152,9 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
                 ('00000000-0000-4000-8000-000000000003', 'carol', 'carol', 'carol@test.com', 'x', 'user', NOW())
             ON CONFLICT (id) DO NOTHING
         `);
+        const { ensure_personal_org_for_user } = await import('../../src/db/migrate_ensure_user_orgs.js');
+        const alice_org = await ensure_personal_org_for_user(ALICE.id, ALICE.username);
+        alice_org_id = alice_org.id;
         await init_control_plane_store(DATABASE_URL);
     });
 
@@ -738,7 +745,7 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
             .post('/v1/realms/add_member')
             .set('Authorization', bearer_for(ALICE))
             .send({ realm_id });
-        expect(neither.status).toBe(400);
+        expect(neither.status).toBe(422);
 
         const daemon_via_add = await request(app)
             .post('/v1/realms/add_member')

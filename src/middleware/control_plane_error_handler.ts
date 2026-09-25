@@ -7,6 +7,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 
 import { ApiError } from '../lib/api_error.js';
+import { ApiError as BaseApiError } from '../errors/api_error.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('errors');
@@ -19,6 +20,12 @@ export function core_api_error_handler(
 ): void {
     if (err instanceof ZodError) {
         res.status(400).json({ ok: false, error: err.errors.map(e => e.message).join(', ') });
+        return;
+    }
+
+    // BaseController.parse_body throws errors/ApiError ({ code, status }).
+    if (err instanceof BaseApiError) {
+        res.status(err.status).json({ ok: false, error: err.message, code: err.code });
         return;
     }
 

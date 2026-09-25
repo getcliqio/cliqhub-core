@@ -13,7 +13,7 @@ import {
     close_live_hub_app,
     open_live_hub_app,
 } from './helpers/live_hub_app.js';
-import { User } from '../../src/db/models/index.js';
+import { User, OrgMember } from '../../src/db/models/index.js';
 import {
     Realm,
     RealmMember,
@@ -81,6 +81,7 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
     let user_id: string;
     let token: string;
     let username: string;
+    let org_id: string;
 
     beforeAll(async () => {
         register_mesh_adapter(test_mesh_adapter);
@@ -99,6 +100,12 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
         expect(res.status).toBe(200);
         user_id = res.body.data.user.id as number;
         token = res.body.data.token as string;
+        const membership = await OrgMember.findOne({
+            where: { user_id },
+            attributes: ['org_id'],
+        });
+        expect(membership?.org_id).toBeTruthy();
+        org_id = String(membership!.org_id);
     }, 60_000);
 
     afterAll(async () => {
@@ -168,7 +175,7 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
         const create_off = await request(app)
             .post('/v1/realms/create')
             .set('Authorization', bearer(token))
-            .send({ slug: off_slug, name: 'A2A Off' });
+            .send({ org_id, slug: off_slug, name: 'A2A Off' });
         expect(create_off.status).toBe(200);
         const off_id = create_off.body.realm.id as string;
 
@@ -195,7 +202,7 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
         const create_on = await request(app)
             .post('/v1/realms/create')
             .set('Authorization', bearer(token))
-            .send({ slug: on_slug, name: 'A2A On' });
+            .send({ org_id, slug: on_slug, name: 'A2A On' });
         expect(create_on.status).toBe(200);
         const on_id = create_on.body.realm.id as string;
         expect(mesh_calls.connect).toBeGreaterThanOrEqual(1);
@@ -217,7 +224,7 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
         const created = await request(app)
             .post('/v1/realms/create')
             .set('Authorization', bearer(token))
-            .send({ slug, name: 'Skills Realm' });
+            .send({ org_id, slug, name: 'Skills Realm' });
         expect(created.status).toBe(200);
         const realm_id = created.body.realm.id as string;
 
@@ -272,7 +279,7 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
         const created = await request(app)
             .post('/v1/realms/create')
             .set('Authorization', bearer(token))
-            .send({ slug, name: 'Send Realm' });
+            .send({ org_id, slug, name: 'Send Realm' });
         expect(created.status).toBe(200);
         const realm_id = created.body.realm.id as string;
 
@@ -343,7 +350,7 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
         const created = await request(app)
             .post('/v1/realms/create')
             .set('Authorization', bearer(token))
-            .send({ slug, name: 'Delete Me' });
+            .send({ org_id, slug, name: 'Delete Me' });
         expect(created.status).toBe(200);
         const realm_id = created.body.realm.id as string;
 
