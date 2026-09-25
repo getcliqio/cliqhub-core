@@ -1,17 +1,17 @@
 # REV-S0 — ReviewsController MVC structure
 
-**Status:** Ready after DAE-S0  
+**Status:** Implemented (branch `slice/reviews-mvc-structure`)  
 **Umbrella:** [`SLICE-invent-controllers-mvc-structure.md`](./SLICE-invent-controllers-mvc-structure.md)  
 **Depends on:** REV-ORG invent — done  
-**Envelope:** Flat
+**Envelope:** Keep existing flat / `{ ok, data }` response shapes (no ENV cut)
 
 ## Goal
 
-`ReviewsController` → `BaseController` + `src/schemas/reviews.ts` + wraps (including `with_dedup` on create).
+`ReviewsController` → `BaseController` + PascalCase aliases on `reviews_schemas.ts` + wraps (including `with_dedup` on create).
 
 ## Endpoints
 
-As in `routes/v1/reviews.ts` (create/list/get/pending/approve/reject/… — exact set unchanged).
+As in `routes/v1/reviews.ts` (create/list/get/verdict/ack/messages/stream — unchanged).
 
 ## GitNexus
 
@@ -22,9 +22,9 @@ As in `routes/v1/reviews.ts` (create/list/get/pending/approve/reject/… — exa
 
 ## Deliverables
 
-1. `src/schemas/reviews.ts`
+1. PascalCase `Reviews*Input` aliases on existing schemas
 2. Instance controller + route wraps
-3. SPA reviews_page mocks stay compatible with flat responses
+3. SPA reviews_page mocks stay compatible
 
 ## Done when
 

@@ -100,3 +100,21 @@ export const reviews_stream_messages_query_schema = z.object({
     review_id: z.string().min(1),
     after_id: z.string().optional(),
 });
+
+/** PascalCase aliases (REV-S0 / Agents schema naming). */
+export const ReviewsGetInput = reviews_get_schema;
+export type ReviewsGetInput = z.infer<typeof reviews_get_schema>;
+export const ReviewsGetByIdInput = reviews_get_by_id_schema;
+export type ReviewsGetByIdInput = z.infer<typeof reviews_get_by_id_schema>;
+export const ReviewsCreateInput = reviews_create_schema;
+export type ReviewsCreateInput = z.infer<typeof reviews_create_schema>;
+export const ReviewsVerdictInput = reviews_verdict_schema;
+export type ReviewsVerdictInput = z.infer<typeof reviews_verdict_schema>;
+export const ReviewsAckInput = reviews_ack_schema;
+export type ReviewsAckInput = z.infer<typeof reviews_ack_schema>;
+export const ReviewsGetMessagesInput = reviews_get_messages_schema;
+export type ReviewsGetMessagesInput = z.infer<typeof reviews_get_messages_schema>;
+export const ReviewsSendMessageInput = reviews_send_message_schema;
+export type ReviewsSendMessageInput = z.infer<typeof reviews_send_message_schema>;
+export const ReviewsStreamMessagesQuery = reviews_stream_messages_query_schema;
+export type ReviewsStreamMessagesQuery = z.infer<typeof reviews_stream_messages_query_schema>;
