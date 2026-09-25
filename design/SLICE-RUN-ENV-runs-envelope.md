@@ -56,6 +56,7 @@ All RunController success paths use `OkResponse`; daemon outbox green; docs matc
 | Core `npm test` | BACKEND_EXIT:0 (159 files / 1603 tests) |
 | SPA `npm test` | SPA_EXIT:0 (58 / 401) |
 | BFF `npm test` | BFF_UNIT_EXIT:0 (44 / 760) |
-| BFF Playwright `test:e2e` (`cliqhub_e2e`) | BFF_E2E_EXIT:0 (139) — includes `runs_envelope.spec.ts` |
+| BFF Playwright `test:e2e` (`cliqhub_e2e`) | BFF_E2E_EXIT:0 — includes `runs_envelope.spec.ts` + `runs_lifecycle.spec.ts` (enqueue→claim→execute→complete→SPA detail) |
 | Platform outbox / mirror / envelope fixtures | PLATFORM_CONTRACT_EXIT:0 (36) |
+| Core multi-daemon claim→execute | MULTI_DAEMON_EXIT:0 |
 | OpenAPI regen + hub-by-tag sync | OPENAPI_EXIT:0 — `RunData` / `RunPagedData` / claim `QueueItemData` refs |
