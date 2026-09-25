@@ -84,6 +84,23 @@ describe.skipIf(!has_postgres)('Notification AuthZ', () => {
 
 	it('channel create allowed for hub admin as account channel', async () => {
 		mock_user(1, 'admin');
+		const org_id = hub_legacy_uuid(1);
+		const res = await request(app)
+			.post('/v1/notification_channels/create')
+			.set('Authorization', make_hub_bearer({ user_id: hub_legacy_uuid(1), role: 'admin' }))
+			.send({
+				org_id,
+				name: uid(),
+				destinations: [{ type: 'slack', webhook_url: 'https://hooks.slack.com/services/T/B/X' }],
+			});
+		expect(res.status).toBe(200);
+		expect(res.body.ok).toBe(true);
+		expect(res.body.data.realm_id).toBeNull();
+		expect(res.body.data.org_id).toBe(org_id);
+	});
+
+	it('account channel create without org_id → 422', async () => {
+		mock_user(1, 'admin');
 		const res = await request(app)
 			.post('/v1/notification_channels/create')
 			.set('Authorization', make_hub_bearer({ user_id: hub_legacy_uuid(1), role: 'admin' }))
@@ -91,9 +108,7 @@ describe.skipIf(!has_postgres)('Notification AuthZ', () => {
 				name: uid(),
 				destinations: [{ type: 'slack', webhook_url: 'https://hooks.slack.com/services/T/B/X' }],
 			});
-		expect(res.status).toBe(200);
-		expect(res.body.ok).toBe(true);
-		expect(res.body.data.realm_id).toBeNull();
+		expect(res.status).toBe(422);
 	});
 
 });

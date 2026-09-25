@@ -1,14 +1,23 @@
 /**
  * Notifications API — Zod request schemas (SoT for inbound bodies).
  * Every field must have `.describe(…)` (feeds Hub OpenAPI / Mintlify).
+ *
+ * Tenancy (NTF-ORG): account invent / org rules / inbox require body `org_id`.
+ * Never invent from X-Org-Id / current_org_id. Realm-scoped ops use `realm_id`.
  */
 
 import { z } from 'zod';
 
 import { destination_schema } from '../../notifications/channel_config.js';
 
+const org_id_field = z.string().uuid().describe(
+    'Organization this call targets. Required for account-scoped channel/rule ops and inbox. '
+    + 'Caller must be authorized for this org via the Bearer credential.',
+);
+
 /** POST /v1/notification_channels/get */
 export const NotificationChannelsGetInput = z.object({
+    org_id: org_id_field.optional(),
     realm_id: z.string().min(1).optional().describe('Realm to list channels for; omit (or set account) for org/account channels'),
     account: z.boolean().optional().describe('When true, list account-owned channels (realm_id must be null/omitted)'),
     enabled: z.boolean().optional().describe('When true, only return enabled channels'),
@@ -24,15 +33,34 @@ export const NotificationChannelsGetInput = z.object({
             message: 'Do not set realm_id when listing account channels',
         });
     }
+    // Account list: body.org_id is invent SoT (never X-Org-Id).
+    if (want_account && !data.org_id) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['org_id'],
+            message: 'org_id is required when listing account channels',
+        });
+    }
 });
 export type NotificationChannelsGetInput = z.infer<typeof NotificationChannelsGetInput>;
 
 /** POST /v1/notification_channels/create */
 export const NotificationChannelsCreateInput = z.object({
+    org_id: org_id_field.optional(),
     realm_id: z.string().min(1).optional().describe('When set, create a realm channel; omit for an org/account channel'),
     name: z.string().describe('Unique channel name within the realm or org scope'),
     destinations: z.array(destination_schema).min(1).describe('One or more delivery destinations (slack, email, webhook, cliqhub, channel_ref, …)'),
     enabled: z.boolean().optional().describe('When false, channel is created disabled (default enabled)'),
+}).superRefine((data, ctx) => {
+    const has_realm = Boolean(data.realm_id?.trim());
+    // Account create: body.org_id required; never invent from header.
+    if (!has_realm && !data.org_id) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['org_id'],
+            message: 'org_id is required when creating an account channel',
+        });
+    }
 });
 export type NotificationChannelsCreateInput = z.infer<typeof NotificationChannelsCreateInput>;
 
@@ -60,19 +88,40 @@ export type NotificationChannelsTestInput = z.infer<typeof NotificationChannelsT
 
 /** POST /v1/orgs|realms/get_notification_rules */
 export const NotificationRulesListInput = z.object({
+    org_id: org_id_field.optional(),
     realm_id: z.string().min(1).optional().describe('When set, list realm (and optional team) rules; omit for org-global rules'),
     team_slug: z.string().min(1).optional().describe('When set with realm_id, filter to team-scoped rules'),
     effective: z.boolean().optional().describe('When true with realm_id, merge org + realm tiers for what actually fires'),
+}).superRefine((data, ctx) => {
+    const has_realm = Boolean(data.realm_id?.trim());
+    // Org-global list (no realm): body.org_id required.
+    if (!has_realm && !data.org_id) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['org_id'],
+            message: 'org_id is required when listing org-global notification rules',
+        });
+    }
 });
 export type NotificationRulesListInput = z.infer<typeof NotificationRulesListInput>;
 
 /** POST /v1/orgs|realms/set_notification_rule */
 export const NotificationRulesSetInput = z.object({
+    org_id: org_id_field.optional(),
     realm_id: z.string().min(1).optional().describe('When set, upsert a realm/team rule; omit for org-global'),
     team_slug: z.string().min(1).optional().describe('Optional team scope under the realm'),
     event: z.string().min(1).describe('Event selector (exact type, family wildcard like run.*, or *)'),
     channel_id: z.string().min(1).describe('Target notification channel id'),
     priority: z.number().int().optional().describe('Rule priority (higher wins within a tier when supported)'),
+}).superRefine((data, ctx) => {
+    const has_realm = Boolean(data.realm_id?.trim());
+    if (!has_realm && !data.org_id) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['org_id'],
+            message: 'org_id is required when setting an org-global notification rule',
+        });
+    }
 });
 export type NotificationRulesSetInput = z.infer<typeof NotificationRulesSetInput>;
 
@@ -84,6 +133,9 @@ export type NotificationRulesRemoveInput = z.infer<typeof NotificationRulesRemov
 
 /** POST /v1/notifications/get */
 export const NotificationsGetInput = z.object({
+    org_id: org_id_field.describe(
+        'Organization that bounds the inbox. Required — never invent from X-Org-Id.',
+    ),
     realm_id: z.string().optional().describe('Legacy single-realm filter (intersected with membership)'),
     realms: z.array(z.string()).optional().describe('Multi-select realm filter (ids); intersected with membership'),
     types: z.array(z.string()).optional().describe('Filter by event type strings'),
@@ -97,5 +149,5 @@ export const NotificationsGetInput = z.object({
     initiated_by_me: z.boolean().optional().describe('When true, only events for runs the caller started'),
     limit: z.number().int().positive().optional().describe('Page size (default 50, max 100)'),
     offset: z.number().int().nonnegative().optional().describe('Page offset (default 0)'),
-}).optional();
+});
 export type NotificationsGetInput = z.infer<typeof NotificationsGetInput>;

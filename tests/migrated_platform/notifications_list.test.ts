@@ -62,8 +62,20 @@ describe.skipIf(!has_postgres)('POST /v1/notifications/get', () => {
 		expect(res.status).toBe(401);
 	});
 
+	it('inbox without org_id → 422', async () => {
+		const res = await request(app)
+			.post('/v1/notifications/get')
+			.set('Authorization', make_hub_bearer())
+			.send({});
+		expect(res.status).toBe(422);
+	});
+
 	it('member sees realm-scoped row; non-member does not', async () => {
 		const realm = await RealmService.create(hub_legacy_uuid(1), `nl-${uid()}`.slice(0, 40), 'List Realm');
+		const realm_row = await Realm.findByPk(realm.id, { attributes: ['id', 'org_id'] });
+		expect(realm_row?.org_id).toBeTruthy();
+		const org_id = String(realm_row!.org_id);
+
 		await InAppNotificationService.create_from_payload({
 			event: 'run.failed',
 			message: 'member-visible',
@@ -71,10 +83,21 @@ describe.skipIf(!has_postgres)('POST /v1/notifications/get', () => {
 			run_id: 'run-1',
 		});
 
+		// Site admin bypasses membership check for body.org_id; still bounds inbox by org.
+		repos.user_repo.find_by_id.mockResolvedValue({
+			id: hub_legacy_uuid(1),
+			username: 'migrated-platform-user',
+			display_name: 'Migrated Platform User',
+			email: 'platform@test.local',
+			role: 'admin',
+			suspended_at: null,
+			suspended_reason: '',
+			created_at: new Date().toISOString(),
+		});
 		const member_res = await request(app)
 			.post('/v1/notifications/get')
-			.set('Authorization', make_hub_bearer({ user_id: hub_legacy_uuid(1) }))
-			.send({});
+			.set('Authorization', make_hub_bearer({ user_id: hub_legacy_uuid(1), role: 'admin' }))
+			.send({ org_id });
 		expect(member_res.status).toBe(200);
 		expect(member_res.body.ok).toBe(true);
 		expect(member_res.body.data.items).toHaveLength(1);
@@ -135,10 +158,20 @@ describe.skipIf(!has_postgres)('POST /v1/notifications/get', () => {
 	});
 
 	it('returns empty list when none', async () => {
+		repos.user_repo.find_by_id.mockResolvedValue({
+			id: hub_legacy_uuid(1),
+			username: 'migrated-platform-user',
+			display_name: 'Migrated Platform User',
+			email: 'platform@test.local',
+			role: 'admin',
+			suspended_at: null,
+			suspended_reason: '',
+			created_at: new Date().toISOString(),
+		});
 		const res = await request(app)
 			.post('/v1/notifications/get')
-			.set('Authorization', make_hub_bearer())
-			.send({});
+			.set('Authorization', make_hub_bearer({ role: 'admin' }))
+			.send({ org_id: hub_legacy_uuid(1) });
 		expect(res.status).toBe(200);
 		expect(res.body.data.items).toEqual([]);
 		expect(res.body.data.total).toBe(0);

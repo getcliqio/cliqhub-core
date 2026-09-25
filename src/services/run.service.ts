@@ -1564,30 +1564,19 @@ export class RunService {
     }
 
     static async get_log_chunks(run_id: string, after_id?: string | null, limit = 100) {
-        if (!after_id) {
-            return RunLog.findAll({
-                where: { run_id },
-                order: [['created_at', 'ASC'], ['id', 'ASC']],
-                limit,
-            });
-        }
-        const cursor = await RunLog.findByPk(after_id);
-        if (!cursor || String(cursor.get('run_id')) !== run_id) {
-            return RunLog.findAll({
-                where: { run_id },
-                order: [['created_at', 'ASC'], ['id', 'ASC']],
-                limit,
-            });
-        }
-        const created_at = Number(cursor.get('created_at'));
-        return RunLog.findAll({
-            where: {
-                run_id,
-                created_at: { [Op.gt]: created_at },
-            },
+        const rows = await RunLog.findAll({
+            where: { run_id },
             order: [['created_at', 'ASC'], ['id', 'ASC']],
-            limit,
         });
+        if (!after_id) {
+            return rows.slice(0, limit);
+        }
+        const cursor_idx = rows.findIndex((r) => String(r.get('id')) === String(after_id));
+        // Unknown cursor → return from the start (same as missing after_id callers expect).
+        if (cursor_idx < 0) {
+            return rows.slice(0, limit);
+        }
+        return rows.slice(cursor_idx + 1, cursor_idx + 1 + limit);
     }
 
     static async log_size(run_id: string): Promise<number> {
