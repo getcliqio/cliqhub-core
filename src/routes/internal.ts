@@ -3,7 +3,7 @@
  * Mounted at `/internal`.
  */
 
-import { Router, type RequestHandler } from 'express';
+import { Router } from 'express';
 import type { Container } from '../container.js';
 import { require_internal, require_internal_network } from '../middleware/internal_only.js';
 import { require_auth as require_core_auth } from '../middleware/core_auth.js';
@@ -49,8 +49,9 @@ export function create_internal_router(container: Container): Router {
     internal.post('/orgs/assign_scope_member', require_internal_network, orgs_controller.assign_scope_member);
     internal.post('/orgs/unassign_scope_member', require_internal_network, orgs_controller.unassign_scope_member);
     // Console rollups — Core only on /internal (not public Hub).
-    internal.post('/dashboard/summary', require_internal_network, require_core_auth, DashboardController.summary as RequestHandler);
-    internal.post('/dashboard/realms', require_internal_network, require_core_auth, DashboardController.realms_summary as RequestHandler);
+    const dashboard = new DashboardController();
+    internal.post('/dashboard/summary', require_internal_network, require_core_auth, dashboard.wrap(dashboard.summary));
+    internal.post('/dashboard/realms', require_internal_network, require_core_auth, dashboard.wrap(dashboard.realms_summary));
     internal.post('/reports/audit', require_internal_network, reports_controller.audit);
     // Legacy internal aliases (BFF may still call these during rollout).
     internal.post('/scopes/new', require_internal, scopes_controller.new_scope);
