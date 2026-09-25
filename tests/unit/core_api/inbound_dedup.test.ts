@@ -112,7 +112,7 @@ describe('with_dedup', () => {
 
     it('executes handler on first call and caches response', async () => {
         const handler = vi.fn((_req: Request, res: Response) => {
-            res.status(200).json({ ok: true, run_id: 'r-1' });
+            res.status(200).json({ ok: true, data: { run_id: 'r-1' } });
         });
         const wrapped = with_dedup(handler);
         const req = mock_req({ tx_id: 'tx-abc', run_id: 'r-1' });
@@ -132,7 +132,7 @@ describe('with_dedup', () => {
 
     it('returns cached response on second call without re-executing handler', async () => {
         const handler = vi.fn((_req: Request, res: Response) => {
-            res.status(200).json({ ok: true, run_id: 'r-1' });
+            res.status(200).json({ ok: true, data: { run_id: 'r-1' } });
         });
         const wrapped = with_dedup(handler);
 

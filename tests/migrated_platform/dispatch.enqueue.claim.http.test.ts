@@ -148,11 +148,11 @@ describe.skipIf(!has_postgres)('dispatch enqueue + claim HTTP (Slice 2)', () => 
 
         const winner = a.status === 200 ? a : b;
         expect(winner.body.ok).toBe(true);
-        expect(winner.body.item.status).toBe('claimed');
-        expect(['daemon-http-a', 'daemon-http-b']).toContain(winner.body.item.claimed_by);
+        expect(winner.body.data.status).toBe('claimed');
+        expect(['daemon-http-a', 'daemon-http-b']).toContain(winner.body.data.claimed_by);
 
         const got = await QueueService.get(queue_item_id);
-        expect(got?.claimed_by).toBe(winner.body.item.claimed_by);
+        expect(got?.claimed_by).toBe(winner.body.data.claimed_by);
     });
 
     it('2e install without team_id fails via /teams/install', async () => {

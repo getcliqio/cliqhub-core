@@ -6,8 +6,10 @@ import type { UserVo, DraftVo, DraftListItemVo } from './vo.js';
 import type { UserDto, TeamListItemDto, DraftDto, DraftListItemDto } from './dto.js';
 import type { AgentData } from '../schemas/agents_schemas.js';
 import type { TelemetrySpanData } from '../schemas/telemetry/data.js';
+import type { RunData } from '../schemas/runs/data.js';
 import type { AgentCatalog } from '../models/agent_catalog.model.js';
 import type { RunSpan } from '../models/run_span.model.js';
+import type { Run } from '../models/index.js';
 
 export function to_user_dto(user: UserVo): UserDto {
     return {
@@ -134,6 +136,69 @@ function span_duration_ms(start_nano: string, end_nano: string): number {
     } catch {
         return 0;
     }
+}
+
+function coerce_ms(v: unknown): number | null {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string' && /^\d+$/.test(v)) return Number(v);
+    return null;
+}
+
+/**
+ * Project an enriched run plain object (or Sequelize Run) to wire RunData.
+ * Accepts `_enrich_run` output or `run.toJSON()` (+ optional detail fields).
+ */
+export function to_run_data(
+    row: InstanceType<typeof Run> | Record<string, unknown>,
+    detail?: Partial<Pick<RunData, 'pending_control' | 'force_terminate' | 'state_lost_at' | 'team_version_id'>>,
+): RunData {
+    const plain_raw = typeof (row as InstanceType<typeof Run>).toJSON === 'function'
+        ? (row as InstanceType<typeof Run>).toJSON()
+        : row;
+    const plain = plain_raw as unknown as Record<string, unknown>;
+
+    const started = coerce_ms(plain.started_at) ?? 0;
+    const completed = coerce_ms(plain.completed_at);
+    const lease = coerce_ms(plain.lease_expires_at);
+    const last_updated = coerce_ms(plain.last_updated_at) ?? completed ?? started;
+
+    const data: RunData = {
+        run_id: String(plain.run_id ?? ''),
+        workspace_id: String(plain.workspace_id ?? ''),
+        team_id: String(plain.team_id ?? ''),
+        daemon_id: plain.daemon_id == null ? null : String(plain.daemon_id),
+        realm_id: plain.realm_id == null ? null : String(plain.realm_id),
+        parent_run_id: plain.parent_run_id == null ? null : String(plain.parent_run_id),
+        parent_phase: plain.parent_phase == null ? null : String(plain.parent_phase),
+        root_run_id: plain.root_run_id == null ? null : String(plain.root_run_id),
+        call_path: plain.call_path == null ? null : String(plain.call_path),
+        call_depth: typeof plain.call_depth === 'number' ? plain.call_depth : Number(plain.call_depth ?? 0),
+        iteration_key: plain.iteration_key == null ? null : String(plain.iteration_key),
+        run_name: plain.run_name == null ? null : String(plain.run_name),
+        state: String(plain.state ?? 'running'),
+        inputs: plain.inputs ?? null,
+        error: plain.error == null ? null : String(plain.error),
+        execution_type: String(plain.execution_type ?? 'local'),
+        current_pid: plain.current_pid == null ? null : Number(plain.current_pid),
+        current_phase: plain.current_phase == null ? null : String(plain.current_phase),
+        external_id: plain.external_id == null ? null : String(plain.external_id),
+        context_labels: plain.context_labels ?? null,
+        lease_expires_at: lease,
+        started_at: started,
+        completed_at: completed,
+        team_label: plain.team_label == null ? null : String(plain.team_label),
+        workspace_name: plain.workspace_name == null ? null : String(plain.workspace_name),
+        workspace_dir: plain.workspace_dir == null ? null : String(plain.workspace_dir),
+        last_updated_at: last_updated,
+    };
+
+    if (detail?.pending_control !== undefined) data.pending_control = detail.pending_control;
+    if (detail?.force_terminate !== undefined) data.force_terminate = detail.force_terminate;
+    if (detail?.state_lost_at !== undefined) data.state_lost_at = detail.state_lost_at;
+    if (detail?.team_version_id !== undefined) data.team_version_id = detail.team_version_id;
+
+    return data;
 }
 
 /** Project a RunSpan row to wire TelemetrySpanData. */

@@ -47,7 +47,7 @@ S0 moved BaseController + request Zod and **kept flat wire**. ENV is a **wire br
 | 2 | **DASH-ENV** | `DashboardController` | `/internal/dashboard/summary`, `/internal/dashboard/realms` | Medium — SPA home; BFF may proxy |
 | 3 | **DAE-ENV** | `DaemonController` | `/v1/daemons/*` | High — enroll/heartbeat/register |
 | 4 | **REV-ENV** | `ReviewsController` | `/v1/reviews/*` | High — SPA + hug/daemon |
-| 5 | **RUN-ENV** | `RunController` | `/v1/runs/*` (excl. logs/telemetry/stream) | **Highest** — outbox, claim, SPA runs |
+| 5 | **RUN-ENV** ✅ | `RunController` | `/v1/runs/*` (excl. logs/telemetry/stream) | **Done** — `slice/runs-envelope` |
 
 Do **not** start the next ENV slice until the previous slice’s verifying suites are green across **every** changed repo.
 

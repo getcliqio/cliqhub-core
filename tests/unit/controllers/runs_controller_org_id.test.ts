@@ -96,7 +96,13 @@ describe('RunController.get org_id tenancy', () => {
             undefined,
             expect.objectContaining({ org_id: ORG_A }),
         );
-        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+        expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+            ok: true,
+            data: expect.objectContaining({
+                items: [],
+                total: 0,
+            }),
+        }));
     });
 
     it('org-scoped list with foreign org_id → 403', async () => {
