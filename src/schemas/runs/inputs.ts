@@ -219,7 +219,7 @@ export type RunsClearCurrentPidInput = z.infer<typeof RunsClearCurrentPidInput>;
 
 export const RunsCrashStaleInput = z.object({
     daemon_id: z.string().optional(),
-}).optional();
+});
 export type RunsCrashStaleInput = z.infer<typeof RunsCrashStaleInput>;
 
 export const RunsDeleteByWorkspaceInput = z.object({
