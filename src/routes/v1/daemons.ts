@@ -4,12 +4,14 @@ import { CommandAckController } from '../../controllers/command_ack_controller.j
 import { DaemonAclController } from '../../controllers/daemon_acl_controller.js';
 
 export function register_daemons_routes(router: Router, auth: RequestHandler): void {
-    router.post('/daemons/register', auth, DaemonController.register);
-    router.post('/daemons/heartbeat', auth, DaemonController.heartbeat);
-    router.post('/daemons/deregister', auth, DaemonController.deregister);
-    router.post('/daemons/get', auth, DaemonController.get);
-    router.post('/daemons/get_by_id', auth, DaemonController.get_by_id);
-    router.post('/daemons/remove', auth, DaemonController.remove);
+    const daemons = new DaemonController();
+
+    router.post('/daemons/register', auth, daemons.wrap(daemons.register));
+    router.post('/daemons/heartbeat', auth, daemons.wrap(daemons.heartbeat));
+    router.post('/daemons/deregister', auth, daemons.wrap(daemons.deregister));
+    router.post('/daemons/get', auth, daemons.wrap(daemons.get));
+    router.post('/daemons/get_by_id', auth, daemons.wrap(daemons.get_by_id));
+    router.post('/daemons/remove', auth, daemons.wrap(daemons.remove));
     router.post('/daemons/ack_command', auth, CommandAckController.ack_command);
     router.post('/auth/acl', auth, DaemonAclController.get_acl);
 }

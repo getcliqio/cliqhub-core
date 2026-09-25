@@ -1,17 +1,17 @@
 # DAE-S0 — DaemonController MVC structure
 
-**Status:** Ready after DASH-S0  
+**Status:** Implemented (branch `slice/daemons-mvc-structure`)  
 **Umbrella:** [`SLICE-invent-controllers-mvc-structure.md`](./SLICE-invent-controllers-mvc-structure.md)  
 **Depends on:** DAE-ORG invent — done  
 **Envelope:** Flat
 
 ## Goal
 
-`DaemonController` → `BaseController` + `src/schemas/daemons.ts` + all `/v1/daemons/*` route wraps. Preserve invent `org_id` / `realm_id` bodies.
+`DaemonController` → `BaseController` + `src/schemas/daemons/inputs.ts` + all `/v1/daemons/*` route wraps. Preserve invent `org_id` / `realm_id` bodies.
 
 ## Endpoints (unchanged set)
 
-`list`, `get`, `register`, `heartbeat`, `deregister`, `update`, `approve`, `reject`, `rotate_secret` (exact paths as in `routes/v1/daemons.ts`).
+`register`, `heartbeat`, `deregister`, `get`, `get_by_id`, `remove` (plus `ack_command` / `auth/acl` stay on other controllers).
 
 ## GitNexus
 
@@ -22,7 +22,7 @@
 
 ## Deliverables
 
-1. `src/schemas/daemons.ts` — one `*Input` per action
+1. `src/schemas/daemons/inputs.ts` — one `*Input` per action
 2. Instance controller + `register_daemons_routes` wraps
 3. Contract-sensitive: platform enroll/register paths must stay wire-identical
 

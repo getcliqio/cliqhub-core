@@ -3,8 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ZodError } from 'zod';
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response } from 'express';
 
 vi.mock('../../../src/services/daemon.service.js', () => ({
     DaemonService: {
@@ -21,7 +20,6 @@ vi.mock('../../../src/models/index.js', async (importOriginal) => {
 });
 
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
-import { ApiError } from '../../../src/lib/api_error.js';
 import type { AuthContext } from '../../../src/types/vo.js';
 import { DaemonController } from '../../../src/controllers/daemons_controller.js';
 import { DaemonService } from '../../../src/services/daemon.service.js';
@@ -62,24 +60,23 @@ function make_req(body: Record<string, unknown>, auth?: AuthContext) {
 }
 
 describe('DaemonController.get org_id tenancy', () => {
+    const daemons = new DaemonController();
+
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(DaemonService.list).mockResolvedValue({ daemons: [], total: 0 } as never);
     });
 
-    it('without org_id → ZodError; does not invent from current_org_id', async () => {
-        const res = mock_res();
-        const next = vi.fn() as NextFunction;
-        await DaemonController.get(make_req({ limit: 1 }, pat_auth([ORG_A])), res, next);
-        expect(next.mock.calls[0][0]).toBeInstanceOf(ZodError);
+    it('without org_id → 422; does not invent from current_org_id', async () => {
+        await expect(
+            daemons.get(make_req({ limit: 1 }, pat_auth([ORG_A])) as never, mock_res() as never),
+        ).rejects.toMatchObject({ status: 422, code: 'invalid_params' });
         expect(DaemonService.list).not.toHaveBeenCalled();
     });
 
     it('with membership org_id → list(org_id)', async () => {
         const res = mock_res();
-        const next = vi.fn() as NextFunction;
-        await DaemonController.get(make_req({ org_id: ORG_A, limit: 10 }, pat_auth([ORG_A])), res, next);
-        expect(next).not.toHaveBeenCalled();
+        await daemons.get(make_req({ org_id: ORG_A, limit: 10 }, pat_auth([ORG_A])) as never, res as never);
         expect(DaemonService.list).toHaveBeenCalledWith(
             String(USER_A),
             expect.objectContaining({ org_id: ORG_A, limit: 10 }),
@@ -87,18 +84,15 @@ describe('DaemonController.get org_id tenancy', () => {
     });
 
     it('foreign org_id → 403', async () => {
-        const res = mock_res();
-        const next = vi.fn() as NextFunction;
-        await DaemonController.get(make_req({ org_id: ORG_B }, pat_auth([ORG_A])), res, next);
-        expect((next.mock.calls[0][0] as ApiError).status_code).toBe(403);
+        await expect(
+            daemons.get(make_req({ org_id: ORG_B }, pat_auth([ORG_A])) as never, mock_res() as never),
+        ).rejects.toMatchObject({ status_code: 403 });
         expect(DaemonService.list).not.toHaveBeenCalled();
     });
 
     it('realm_id path does not require org_id', async () => {
         const res = mock_res();
-        const next = vi.fn() as NextFunction;
-        await DaemonController.get(make_req({ realm_id: REALM_A }, pat_auth([ORG_A])), res, next);
-        expect(next).not.toHaveBeenCalled();
+        await daemons.get(make_req({ realm_id: REALM_A }, pat_auth([ORG_A])) as never, res as never);
         expect(DaemonService.list).toHaveBeenCalledWith(
             String(USER_A),
             expect.objectContaining({ realm_id: REALM_A, org_id: undefined }),
