@@ -54,3 +54,22 @@ export type ApiRequest<TBody, TData = unknown> = Request<
 
 /** Express `Response` typed to `{ ok: true, data: TData }`. */
 export type ApiOkResponse<TData> = Response<OkResponse<TData>>;
+
+/**
+ * Flat success shape used by resources not yet on `{ ok, data }` (e.g. Realms until RM-ENV).
+ * Prefer {@link OkResponse} / {@link ApiOkResponse} for new work.
+ */
+export type FlatOkResponse<TFields extends Record<string, unknown>> = {
+    ok: true;
+} & TFields;
+
+/** Express `Request` with typed body + flat success ResBody. */
+export type FlatApiRequest<
+    TBody,
+    TFields extends Record<string, unknown> = Record<string, unknown>,
+> = Request<ParamsDictionary, FlatOkResponse<TFields>, TBody>;
+
+/** Express `Response` typed to a flat `{ ok: true, …fields }` envelope. */
+export type FlatApiOkResponse<TFields extends Record<string, unknown> = Record<string, unknown>> = Response<
+    FlatOkResponse<TFields>
+>;

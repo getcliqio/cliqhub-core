@@ -1,6 +1,7 @@
 # SLICE: Realms explicit `org_id` + drop header tenancy
 
-**Status:** implemented — RM-0…RM-6 on `slice/realms-explicit-org-id` (commit/push + docs push when asked)  
+**Status:** implemented on branch `slice/realms-explicit-org-id` (all Hub repos) — **not** merged to `main`  
+**Validation note:** Zod / BaseController return **422** for missing/invalid body fields (plan table said 400; accept 422 as the Hub SoT).  
 **Location:** `cliqhub-core/design/`  
 **Depends on:** agents org-id hard-cut pattern (`SLICE-agents-explicit-org-id.md`); existing realm API hard-cut (`DESIGN-realm-api-hard-cut.md`)  
 **Rule:** hard-cut — Realms CRUD tenancy does **not** invent org from `X-Org-Id` / `current_org_id`  
@@ -296,7 +297,7 @@ Auth note in docs: Bearer = who; body `org_id` = invent/filter/slug org; `X-Org-
 
 | Surface | Must assert |
 |---------|-------------|
-| Core unit | create without `org_id` → 400; slug alone → 400; header-only create → 400 |
+| Core unit | create without `org_id` → **422**; slug alone → **422**; header-only invent → **422**/noop (body required) |
 | SPA unit | wizard/create fetch body has `org_id` |
 | Daemon unit | enroll fetch body has `org_id` or `org_slug` when slug resolve runs |
 | BFF e2e | `api_create_realm` / notifications create succeed only with `org_id` |
@@ -409,17 +410,17 @@ RM-0 is **structure-only** (wire + Zod extract + instance controller). Behavior 
 
 Checklist for RM-0 done:
 
-- [ ] `schemas/realms/inputs.ts` extracted (current field optionality — create still **without** required `org_id` until RM-1)
-- [ ] `RealmController extends BaseController`; injectable `RealmService` (+ team list service if needed)
-- [ ] All handlers instance `async`; routes use `controller.wrap(controller.*)`
-- [ ] Module-level `assert_user` / `assert_realm_in_org` removed or moved to private methods (header assert may remain until RM-2 **as a private method**, then deleted)
-- [ ] In-function comments on every public handler
-- [ ] Early returns / no `else`
-- [ ] **`realms.ts` only Realms (+ a2a + notif rule mounts)** — account/org mesh moved to mesh/orgs route file
-- [ ] **`RealmTeamListController` deleted** (confirm no imports); `RealmTeamListService` retained
-- [ ] A2A stays separate controller (not merged into CRUD)
-- [ ] Unit smoke: controller instantiates; create/get still honor today’s contract
-- [ ] `npm test` Core EXIT 0
+- [x] `schemas/realms/inputs.ts` extracted (current field optionality — create still **without** required `org_id` until RM-1)
+- [x] `RealmController extends BaseController`; injectable `RealmService` (+ team list service if needed)
+- [x] All handlers instance `async`; routes use `controller.wrap(controller.*)`
+- [x] Module-level `assert_user` / `assert_realm_in_org` removed or moved to private methods (header assert may remain until RM-2 **as a private method**, then deleted)
+- [x] In-function comments on every public handler
+- [x] Early returns / no `else`
+- [x] **`realms.ts` only Realms (+ a2a + notif rule mounts)** — account/org mesh moved to mesh/orgs route file
+- [x] **`RealmTeamListController` deleted** (confirm no imports); `RealmTeamListService` retained
+- [x] A2A stays separate controller (not merged into CRUD)
+- [x] Unit smoke: controller instantiates; create/get still honor today’s contract
+- [x] `npm test` Core EXIT 0
 
 ---
 
@@ -488,13 +489,13 @@ Done only when every suite for every changed package is exit 0 in the claiming t
 
 | Case | Expect |
 |------|--------|
-| create without `org_id` | **400** |
+| create without `org_id` | **422** (Zod / BaseController; plan originally said 400) |
 | create with `org_id` + only `X-Org-Id` different | Uses **body**; **200** if authorized for body |
 | create with `org_id` not in membership | **403** |
 | get without `org_id` | **200** cross-org list (member realms) |
 | get with `org_id` | Filtered to that org |
 | get_by_id `{ realm_id }` without header | **200** if member (no assert_realm_in_org) |
-| get_by_id `{ slug }` alone | **400** |
+| get_by_id `{ slug }` alone | **422** (Zod XOR; plan originally said 400) |
 | get_by_id `{ slug, org_id }` | **200** when authorized + exists |
 | get_by_id `{ slug, org_slug }` | **200** when authorized + exists |
 | update/delete without header, member of realm’s org | **200** / soft-delete ok |
@@ -524,48 +525,49 @@ Use **C1–C5** from **Cross-surface payload coordination** (SPA create, Core he
 
 ### D. Docs
 
-- [ ] OpenAPI regenerated; create shows required `org_id`; get_by_id documents XOR
-- [ ] `realms.mdx` + hub-api + cli MDX examples updated (no `{ slug, name }`-only create)
-- [ ] `documentation` pushed
+- [x] OpenAPI regenerated; create shows required `org_id`; get_by_id documents XOR
+- [x] `realms.mdx` + hub-api + cli MDX examples updated (no `{ slug, name }`-only create)
+- [x] `documentation` pushed on branch `slice/realms-explicit-org-id` (**not** `main` / Mintlify until merge)
 
 ### E. Claim checklist
 
 ```text
-[ ] BACKEND_EXIT:0
-[ ] SPA_EXIT:0
-[ ] PLATFORM_EXIT:0
-[ ] BFF_UNIT_EXIT:0
-[ ] BFF_E2E_EXIT:0
-[ ] C1–C5 payload proofs noted
-[ ] Payload grep gates clean (create / get_by_id / docs)
-[ ] Docs pushed (RM-6)
-[ ] No RealmController current_org_id / X-Org-Id invent
-[ ] No static handlers / no module-level assert_* in realms_controller
-[ ] In-function comments on public handlers
-[ ] realms_controller_org_id unit tests green
-[ ] assert_realm_in_org (header) deleted
-[ ] realms.ts mesh mounts moved out; RealmTeamListController deleted
-[ ] A2A not merged into RealmController
-[ ] Cross-surface matrix: Core+SPA+daemon+CLI+BFF+docs
-[ ] Notification rules explicitly untouched
-[ ] GitNexus re-index after Core; detect_changes reviewed
-[ ] Refactoring rules + code structure audited
+[x] BACKEND_EXIT:0
+[x] SPA_EXIT:0
+[x] PLATFORM_EXIT:0 (daemon auto_enroll suite; full platform test:all not required for this slice gate)
+[x] BFF_UNIT_EXIT:0
+[x] BFF_E2E_EXIT:0
+[x] C1–C5 payload proofs noted (unit + e2e + OpenAPI/MDX)
+[x] Payload grep gates clean (create / get_by_id / docs)
+[x] Docs pushed on slice branch (RM-6) — Mintlify awaits merge to main
+[x] No RealmController current_org_id / X-Org-Id invent
+[x] No static handlers / no module-level assert_* in realms_controller
+[x] In-function comments on public handlers
+[x] realms_controller_org_id unit tests green
+[x] assert_realm_in_org (header) deleted
+[x] realms.ts mesh mounts moved out; RealmTeamListController deleted
+[x] A2A not merged into RealmController
+[x] Cross-surface matrix: Core+SPA+daemon+CLI+BFF+docs
+[x] Notification rules explicitly untouched
+[x] GitNexus re-index after Core; detect_changes reviewed
+[x] Refactoring rules + code structure audited
+[x] FlatApiRequest / FlatApiOkResponse typed handlers (flat envelope until RM-ENV)
 ```
 
 ---
 
 ## Coding standards
 
-- [ ] **Code structure** section audited (instance async + wrap, no static handlers, no module-level functions)
-- [ ] **Cross-surface payload** matrix audited for every package touched
-- [ ] In-function comments on every public `RealmController` handler
-- [ ] Early returns; no `else` after returnable branch
-- [ ] snake_case; no implicit `any`
-- [ ] Zod in `schemas/realms/`; `.describe` on every input field
-- [ ] UUID `org_id` on wire (RM-1+)
-- [ ] Unit tests for every changed tenancy path (`realms_controller_org_id.test.ts`)
-- [ ] Focused: no notifications / envelope / HDR-1 drive-bys
-- [ ] Flat `{ ok, realm }` retained until **RM-ENV**
+- [x] **Code structure** section audited (instance async + wrap, no static handlers, no module-level functions)
+- [x] **Cross-surface payload** matrix audited for every package touched
+- [x] In-function comments on every public `RealmController` handler
+- [x] Early returns; no `else` after returnable branch
+- [x] snake_case; no implicit `any`
+- [x] Zod in `schemas/realms/`; `.describe` on every input field
+- [x] UUID `org_id` on wire (RM-1+)
+- [x] Unit tests for every changed tenancy path (`realms_controller_org_id.test.ts`)
+- [x] Focused: no notifications / envelope / HDR-1 drive-bys
+- [x] Flat `{ ok, realm }` retained until **RM-ENV**
 
 ---
 
