@@ -1,10 +1,26 @@
+/**
+ * Dashboard Hub resource — DASH-ORG hard-cut.
+ *
+ * POST /internal/dashboard/realms | summary: body `org_id` required.
+ * Never invent org from X-Org-Id / current_org_id.
+ */
+
 import { Request, Response, NextFunction } from 'express';
 import { Op } from 'sequelize';
-import { Team, Run, InAppNotification, RealmMember, Review } from '../models/index.js';
+import { z } from 'zod';
+import { Team, Run, InAppNotification, RealmMember, Review, Realm } from '../models/index.js';
 import { DaemonService } from '../services/daemon.service.js';
 import { RealmService } from '../services/realm.service.js';
 import { RunService } from '../services/run.service.js';
 import { ReviewPendingService } from '../services/review_pending.service.js';
+import { ApiError } from '../lib/api_error.js';
+import type { AuthContext } from '../types/vo.js';
+
+const dashboard_org_schema = z.object({
+	org_id: z.string().uuid().describe(
+		'Organization UUID. Required for dashboard rollups — never invent from X-Org-Id.',
+	),
+});
 
 function as_ms(value: unknown): number | null {
 	if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -46,8 +62,45 @@ function map_run_row(
 
 export class DashboardController {
 	/**
+	 * Bearer must be allowed to act on `org_id`.
+	 * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
+	 * Site hub admin may act on any org_id.
+	 */
+	private static async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
+		// No credential context — refuse rather than invent tenancy.
+		if (!auth) {
+			throw ApiError.unauthorized('authentication required');
+		}
+
+		// Site admin may target any org.
+		if (auth.user?.role === 'admin') return;
+
+		// Daemon tokens are realm-bound; tenancy is the realm's org.
+		if (auth.auth_via === 'daemon_token') {
+			if (!auth.realm_id) {
+				throw ApiError.forbidden('daemon token has no realm binding');
+			}
+			const realm = await Realm.findByPk(auth.realm_id);
+			if (!realm || realm.org_id !== org_id) {
+				throw ApiError.forbidden('org_id does not match daemon realm organization');
+			}
+			return;
+		}
+
+		// PAT / session: live membership list from auth middleware.
+		if (!auth.org_ids.includes(org_id)) {
+			throw ApiError.forbidden('not a member of the requested organization');
+		}
+	}
+
+	private static auth_from(req: Request): AuthContext | undefined {
+		return (req as Request & { auth?: AuthContext }).auth;
+	}
+
+	/**
 	 * Realm-centric dashboard: per-realm daemon/run/review/notification rollup,
 	 * sorted by most recent activity. Drives the new "fleet pulse" home view.
+	 * Body `org_id` required (DASH-ORG hard-cut).
 	 */
 	static async realms_summary(req: Request, res: Response, next: NextFunction): Promise<void> {
 		try {
@@ -57,7 +110,10 @@ export class DashboardController {
 				return;
 			}
 
-			const org_id = req.user?.current_org_id;
+			// Zod SoT — org_id required; never invent from X-Org-Id.
+			const body = dashboard_org_schema.parse(req.body ?? {});
+			await DashboardController.assert_org_authorized(DashboardController.auth_from(req), body.org_id);
+			const org_id = body.org_id;
 			const { realms: member_realms } = await RealmService.list_for_user(user_id, { org_id });
 			if (member_realms.length === 0) {
 				res.json({
@@ -77,7 +133,7 @@ export class DashboardController {
 					where: { realm_id: { [Op.in]: realm_ids }, member_type: 'daemon' },
 					attributes: ['realm_id', 'member_id'],
 				}),
-				DaemonService.list(user_id),
+				DaemonService.list(user_id, { org_id }),
 				user_daemon_ids.length > 0
 					? Run.findAll({
 						where: {
@@ -193,6 +249,7 @@ export class DashboardController {
 	 * Product home summary.
 	 * Daemons + runs are scoped to realms the caller belongs to
 	 * (same visibility as POST /v1/daemons/get and POST /v1/runs/get).
+	 * Body `org_id` required (DASH-ORG hard-cut).
 	 */
 	static async summary(req: Request, res: Response, next: NextFunction): Promise<void> {
 		try {
@@ -202,8 +259,13 @@ export class DashboardController {
 				return;
 			}
 
+			// Zod SoT — org_id required; never invent from X-Org-Id.
+			const body = dashboard_org_schema.parse(req.body ?? {});
+			await DashboardController.assert_org_authorized(DashboardController.auth_from(req), body.org_id);
+			const org_id = body.org_id;
+
 			const day_ago = Date.now() - 24 * 60 * 60 * 1000;
-			const daemon_ids = await RealmService.list_daemon_ids_for_user(user_id);
+			const daemon_ids = await RealmService.list_daemon_ids_for_user_in_org(user_id, org_id);
 			const run_where_base = daemon_ids.length > 0
 				? { daemon_id: { [Op.in]: daemon_ids } }
 				: null;
@@ -222,10 +284,10 @@ export class DashboardController {
 				pending_reviews,
 			] = await Promise.all([
 				Team.count(),
-				DaemonService.list(user_id),
-				RunService.list_recent(10, undefined, { user_id }),
-				RunService.list_recent(8, undefined, { user_id, state: 'running' }),
-				RunService.list_recent(8, undefined, { user_id, state: 'awaiting_input' }),
+				DaemonService.list(user_id, { org_id }),
+				RunService.list_recent(10, undefined, { user_id, org_id }),
+				RunService.list_recent(8, undefined, { user_id, state: 'running', org_id }),
+				RunService.list_recent(8, undefined, { user_id, state: 'awaiting_input', org_id }),
 				run_where_base
 					? Run.count({
 						where: {
@@ -260,7 +322,7 @@ export class DashboardController {
 				run_where_base
 					? Run.count({ where: run_where_base })
 					: Promise.resolve(0),
-				ReviewPendingService.list_for_user({ user_id, limit: 5, offset: 0 }),
+				ReviewPendingService.list_for_user({ user_id, org_id, limit: 5, offset: 0 }),
 			]);
 
 			const live_enriched = [...live_awaiting.runs, ...live_running.runs]
@@ -273,8 +335,7 @@ export class DashboardController {
 			].filter((id): id is string => Boolean(id)))];
 			const realms_by_daemon = await RealmService.list_realms_by_daemon_ids(realm_daemon_ids);
 
-			const org_id_s = req.user?.current_org_id;
-			const { realms: member_realms } = await RealmService.list_for_user(user_id, { org_id: org_id_s });
+			const { realms: member_realms } = await RealmService.list_for_user(user_id, { org_id });
 			const daemons_online = daemons.daemons.filter((d) => d.status === 'online').length;
 			const daemons_stale = daemons.daemons.filter((d) => d.status === 'stale').length;
 			const daemons_offline = daemons.daemons.filter((d) => d.status === 'offline').length;
