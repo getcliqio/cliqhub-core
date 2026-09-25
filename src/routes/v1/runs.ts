@@ -7,6 +7,8 @@ import { TelemetryController } from '../../controllers/telemetry_controller.js';
 import { RunEventStreamController } from '../../controllers/run_event_stream_controller.js';
 
 export function register_runs_routes(router: Router, auth: RequestHandler): void {
+    const telemetry = new TelemetryController();
+
     router.post('/runs/get', auth, RunController.get);
     router.post('/runs/get_by_id', auth, RunController.get_by_id);
     router.post('/runs/create', auth, with_dedup(RunController.create));
@@ -21,12 +23,13 @@ export function register_runs_routes(router: Router, auth: RequestHandler): void
     router.post('/runs/get_logs', auth, LogsController.get_logs);
     router.post('/runs/report_telemetry', auth, (req, res, next) => {
         // Dedup usage reports only (daemon outbox). Traces batches are larger / non-idempotent the same way.
+        const handler = telemetry.wrap(telemetry.report_telemetry);
         if (req.body?.kind === 'usage') {
-            return with_dedup(TelemetryController.report_telemetry)(req, res, next);
+            return with_dedup(handler)(req, res, next);
         }
-        return TelemetryController.report_telemetry(req, res, next);
+        return handler(req, res, next);
     });
-    router.post('/runs/get_telemetry', auth, TelemetryController.get_telemetry);
+    router.post('/runs/get_telemetry', auth, telemetry.wrap(telemetry.get_telemetry));
 
     router.post('/runs/get_status', auth, RunController.get_status);
     router.post('/runs/update_status', auth, with_dedup(RunController.update_status));
