@@ -26,7 +26,7 @@ export type AgentData = z.infer<typeof AgentData>;
 
 /**
  * Full agents resource `data` union.
- * get / get_by_id / register → AgentData | AgentData[]
+ * get / get_details / register → AgentData | AgentData[]
  * get_settings → SettingsData | SettingsData[]
  * deregister / update_settings → BooleanData
  */

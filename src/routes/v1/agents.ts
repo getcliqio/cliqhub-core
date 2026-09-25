@@ -12,7 +12,7 @@ export function register_agents_routes(router: Router, auth: RequestHandler): vo
     const controller = new AgentsController();
 
     router.post('/agents/get', auth, controller.wrap(controller.get));
-    router.post('/agents/get_by_id', auth, controller.wrap(controller.get_by_id));
+    router.post('/agents/get_details', auth, controller.wrap(controller.get_details));
     router.post('/agents/register', auth, controller.wrap(controller.register));
     router.post('/agents/deregister', auth, controller.wrap(controller.deregister));
     router.post('/agents/get_settings', auth, controller.wrap(controller.get_settings));

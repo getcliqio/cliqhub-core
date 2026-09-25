@@ -21,6 +21,7 @@ export type SettingDef = z.infer<typeof SettingDef>;
  * List → `SettingsData[]`; one subject → `SettingsData`.
  */
 export const SettingsData = z.object({
+	id: z.string().uuid().describe('Catalog row UUID (round-trip for get_settings / update_settings)'),
 	name: z.string().describe('Subject name (e.g. agent catalog name)'),
 	version: z.string().nullable().describe('Subject version, or null when unversioned'),
 	description: z.string().nullable().describe('Subject summary'),

@@ -156,6 +156,30 @@ describe.skipIf(!has_postgres)('AgentService.get_by_name', () => {
     });
 });
 
+// ── get_by_catalog_id ────────────────────────────────────────────────
+
+describe.skipIf(!has_postgres)('AgentService.get_by_catalog_id', () => {
+    it('returns org agent by id', async () => {
+        const { entry } = await register_agent(ORG_A, 'by-id-agent');
+        const agent = await service.get_by_catalog_id(ORG_A, entry.id);
+        expect(agent.id).toBe(entry.id);
+        expect(agent.name).toBe('by-id-agent');
+    });
+
+    it('returns system agent by id for any org', async () => {
+        const sys = await create_system_agent('sys-by-id');
+        const agent = await service.get_by_catalog_id(ORG_A, sys.id);
+        expect(agent.is_system).toBe(true);
+        expect(agent.name).toBe('sys-by-id');
+    });
+
+    it('hides other org custom agent id', async () => {
+        const { entry } = await register_agent(ORG_B, 'secret-agent');
+        await expect(service.get_by_catalog_id(ORG_A, entry.id))
+            .rejects.toThrow(/not found/);
+    });
+});
+
 // ── register ─────────────────────────────────────────────────────────
 
 describe.skipIf(!has_postgres)('AgentService.register', () => {
@@ -216,7 +240,7 @@ describe.skipIf(!has_postgres)('AgentService.deregister', () => {
         const name = uid();
         await register_agent(ORG_A, name);
 
-        const removed = await service.deregister(ORG_A, name);
+        const removed = await service.deregister(ORG_A, { name });
         expect(removed).toBe(true);
 
         // Hidden from list.
@@ -225,7 +249,7 @@ describe.skipIf(!has_postgres)('AgentService.deregister', () => {
     });
 
     it('returns false for nonexistent agent', async () => {
-        const result = await service.deregister(ORG_A, 'no-such-agent');
+        const result = await service.deregister(ORG_A, { name: 'no-such-agent' });
         expect(result).toBe(false);
     });
 
@@ -234,7 +258,7 @@ describe.skipIf(!has_postgres)('AgentService.deregister', () => {
         await register_agent(ORG_A, name, { version: '1.0.0' });
         await register_agent(ORG_A, name, { version: '2.0.0' });
 
-        await service.deregister(ORG_A, name, '1.0.0');
+        await service.deregister(ORG_A, { name, version: '1.0.0' });
 
         const list = await service.list(ORG_A, { names: [name] });
         expect(list).toHaveLength(1);
@@ -246,7 +270,7 @@ describe.skipIf(!has_postgres)('AgentService.deregister', () => {
         await register_agent(ORG_A, name, { version: '1.0.0' });
         await register_agent(ORG_A, name, { version: '2.0.0' });
 
-        const removed = await service.deregister(ORG_A, name);
+        const removed = await service.deregister(ORG_A, { name });
         expect(removed).toBe(true);
 
         const list = await service.list(ORG_A, { names: [name] });
@@ -259,7 +283,7 @@ describe.skipIf(!has_postgres)('AgentService.deregister', () => {
         // But let's test the is_system guard directly by querying without org filter.
         // Since deregister takes org_id, and system agents have org_id=NULL,
         // the WHERE clause won't match, so deregistered=false.
-        const result = await service.deregister(ORG_A, 'sys-protected');
+        const result = await service.deregister(ORG_A, { name: 'sys-protected' });
         expect(result).toBe(false);
     });
 });

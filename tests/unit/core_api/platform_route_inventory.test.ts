@@ -31,9 +31,9 @@ const PLATFORM_BFF_ROUTES: Array<{ method: 'GET' | 'POST'; path: string }> = [
 	{ method: 'POST', path: '/runs/cancel' },
 	{ method: 'POST', path: '/runs/resume' },
 	{ method: 'POST', path: '/runs/supply_inputs' },
-	// Phase 4: get_supported and update removed; catalog is get/get_by_id/register/deregister.
+	// Phase 4 / AG-1b: get_details (was get_by_id); catalog is get/get_details/register/deregister.
 	{ method: 'POST', path: '/agents/get' },
-	{ method: 'POST', path: '/agents/get_by_id' },
+	{ method: 'POST', path: '/agents/get_details' },
 	{ method: 'POST', path: '/agents/register' },
 	{ method: 'POST', path: '/agents/deregister' },
 	{ method: 'POST', path: '/agents/get_settings' },

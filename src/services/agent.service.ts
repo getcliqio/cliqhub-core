@@ -131,6 +131,24 @@ export class AgentService {
     }
 
     /**
+     * Fetch a single active agent by catalog UUID.
+     * Custom rows must belong to org_id; system rows are visible to any authorized org.
+     */
+    async get_by_catalog_id(org_id: string, id: string, include_manifest = true): Promise<AgentData> {
+        const agent = await AgentCatalog.findOne({
+            where: this.active_where({ id }),
+        });
+        if (!agent) {
+            throw ApiError.not_found(`agent id '${id}' not found`);
+        }
+        // System catalog is shared; custom rows are org-scoped.
+        if (!agent.is_system && agent.org_id !== org_id) {
+            throw ApiError.not_found(`agent id '${id}' not found`);
+        }
+        return to_agent_data(agent, include_manifest);
+    }
+
+    /**
      * Fetch a single active agent by name (+ optional version).
      * Throws 404 if not found.
      */
@@ -156,7 +174,7 @@ export class AgentService {
      * Register a custom agent in the given org.
      * Creates `(org_id, name, version)` or force-updates when `force` is true.
      */
-    async register(org_id: string, data: AgentsRegisterInput): Promise<{ entry: AgentData; updated: boolean }> {
+    async register(org_id: string, data: Omit<AgentsRegisterInput, 'org_id'>): Promise<{ entry: AgentData; updated: boolean }> {
         // Body fields win; otherwise fall back to values declared in the manifest.
         const manifest = this.parse_manifest(data.manifest);
         const version = data.version
@@ -217,10 +235,28 @@ export class AgentService {
     }
 
     /**
-     * Soft-delete custom agent(s) by name.
-     * With `version`: that version only. Without: all org versions.
+     * Soft-delete custom agent(s). `id` XOR `name`(+optional `version`).
      */
-    async deregister(org_id: string, name: string, version?: string): Promise<BooleanData> {
+    async deregister(org_id: string, selector: { id?: string; name?: string; version?: string }): Promise<BooleanData> {
+        // UUID → resolve to name(+exact version) then reuse name path.
+        if (selector.id) {
+            const row = await AgentCatalog.findOne({
+                where: this.active_where({ id: selector.id }),
+            });
+            if (!row) return false;
+            if (row.is_system) {
+                throw ApiError.forbidden(
+                    `cannot deregister system agent '${row.name}' — system agents are managed by the platform`,
+                );
+            }
+            if (row.org_id !== org_id) return false;
+            return this._deregister_by_name(org_id, row.name, row.version ?? undefined);
+        }
+
+        return this._deregister_by_name(org_id, selector.name!, selector.version);
+    }
+
+    private async _deregister_by_name(org_id: string, name: string, version?: string): Promise<BooleanData> {
         // No version → soft-delete every org version of this name.
         const version_filter = version ? { version } : {};
         const rows = await AgentCatalog.findAll({
@@ -261,19 +297,19 @@ export class AgentService {
     }
 
     /**
-     * Settings schema + current values for one agent → SettingsData.
+     * Settings schema + current values for one agent by catalog id → SettingsData.
      */
-    async get_settings(org_id: string, name: string, realm_id?: string): Promise<SettingsData> {
-        // Resolve the agent row first — settings are meaningless without a catalog entry.
+    async get_settings(org_id: string, id: string, realm_id?: string): Promise<SettingsData> {
+        // Resolve via UUID — org/system visibility enforced in get_by_catalog_id.
         const agent = await AgentCatalog.findOne({
-            where: this.active_where({
-                name,
-                [Op.or]: [{ org_id }, { is_system: true }],
-            }),
+            where: this.active_where({ id }),
         });
-        if (!agent) throw ApiError.not_found(`agent '${name}' not found`);
+        if (!agent) throw ApiError.not_found(`agent id '${id}' not found`);
+        if (!agent.is_system && agent.org_id !== org_id) {
+            throw ApiError.not_found(`agent id '${id}' not found`);
+        }
 
-        // Schema comes from the manifest; values come from org/realm tables overlay.
+        const name = agent.name;
         const manifest = agent.manifest ?? {};
         const { required, optional } = resolve_agent_settings(manifest);
         const all_keys = [...required, ...optional].map((s) => s.key);
@@ -301,6 +337,7 @@ export class AgentService {
 
         const counts = this.count_configured(required, optional, maps.configured);
         return {
+            id: agent.id,
             name,
             version: agent.version ?? null,
             description: agent.description ?? null,
@@ -349,6 +386,7 @@ export class AgentService {
 
             const counts = this.count_configured(required, optional, maps.configured);
             summaries.push({
+                id: agent.id,
                 name: agent.name,
                 version: agent.version ?? null,
                 description: agent.description ?? null,
@@ -363,17 +401,18 @@ export class AgentService {
     }
 
     /**
-     * Update settings at org or realm scope.
+     * Update settings at org or realm scope by catalog id.
      */
-    async update_settings(org_id: string, name: string, settings: { values?: Record<string, string>; clear?: string[] }, realm_id?: string): Promise<BooleanData> {
+    async update_settings(org_id: string, id: string, settings: { values?: Record<string, string>; clear?: string[] }, realm_id?: string): Promise<BooleanData> {
         const agent = await AgentCatalog.findOne({
-            where: this.active_where({
-                name,
-                [Op.or]: [{ org_id }, { is_system: true }],
-            }),
+            where: this.active_where({ id }),
         });
-        if (!agent) throw ApiError.not_found(`agent '${name}' not found`);
+        if (!agent) throw ApiError.not_found(`agent id '${id}' not found`);
+        if (!agent.is_system && agent.org_id !== org_id) {
+            throw ApiError.not_found(`agent id '${id}' not found`);
+        }
 
+        const name = agent.name;
         // Reject keys that are not declared on the agent manifest.
         const manifest = agent.manifest ?? {};
         const { required, optional } = resolve_agent_settings(manifest);

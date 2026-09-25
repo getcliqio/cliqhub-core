@@ -73,7 +73,7 @@ describe('AgentService.deregister team guard', () => {
         ]);
 
         try {
-            await service.deregister(ORG_ID, 'curl');
+            await service.deregister(ORG_ID, { name: 'curl' });
             expect.fail('expected conflict');
         } catch (err) {
             expect(err).toBeInstanceOf(ApiError);
@@ -97,7 +97,7 @@ describe('AgentService.deregister team guard', () => {
         } as never]);
         vi.mocked(find_teams_using_agent).mockResolvedValue([]);
 
-        const result = await service.deregister(ORG_ID, 'curl');
+        const result = await service.deregister(ORG_ID, { name: 'curl' });
         expect(result).toBe(true);
         expect(update).toHaveBeenCalledWith(expect.objectContaining({
             deleted: true,
@@ -115,7 +115,7 @@ describe('AgentService.deregister team guard', () => {
         } as never]);
 
         try {
-            await service.deregister(ORG_ID, 'exec');
+            await service.deregister(ORG_ID, { name: 'exec' });
             expect.fail('expected forbidden');
         } catch (err) {
             expect(err).toBeInstanceOf(ApiError);
