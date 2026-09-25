@@ -1,6 +1,6 @@
 # Umbrella: Invent controllers → Realms/Agents MVC structure
 
-**Status:** Active  
+**Status:** Done (all five S0 structure slices pushed)  
 **Depends on:** TEL/DASH/DAE/REV/RUN invent org_id hard-cuts (done on `slice/*-explicit-org-id`)  
 **Out of scope:** Envelope `{ ok, data }` cut (separate `*-ENV` later, like Realms RM-ENV); HDR-1; Logs / RunEventStream (not in invent set)
 
@@ -23,13 +23,13 @@ Invent slices only hard-cut body `org_id` + `assert_org_authorized`. Controllers
 
 ## Slice order (smallest → largest)
 
-| # | Slice | Controller | Paths (Core) | GitNexus impact (reindex 2026-05-14) |
-|---|-------|------------|--------------|--------------------------------------|
-| 1 | **TEL-S0** | `TelemetryController` | `/v1/runs/report_telemetry`, `/v1/runs/get_telemetry` | LOW — 5 upstream, d=1: 2 |
-| 2 | **DASH-S0** | `DashboardController` | `/v1/dashboard/get` | LOW — 5 upstream, d=1: 2 |
-| 3 | **DAE-S0** | `DaemonController` | `/v1/daemons/*` (9) | LOW — 5 upstream, d=1: 2 |
-| 4 | **REV-S0** | `ReviewsController` | `/v1/reviews/*` (7) | LOW — 5 upstream, d=1: 2 |
-| 5 | **RUN-S0** | `RunController` | `/v1/runs/*` (excl. logs/telemetry/stream) | LOW — 5 upstream, d=1: 2 |
+| # | Slice | Controller | Paths (Core) | Core tip | GitNexus (post-S0) |
+|---|-------|------------|--------------|----------|---------------------|
+| 1 | **TEL-S0** | `TelemetryController` | `/v1/runs/report_telemetry`, `/v1/runs/get_telemetry` | `29c71c8` | HIGH (BaseController interface floor) — path grep SoT |
+| 2 | **DASH-S0** | `DashboardController` | `/internal/dashboard/{summary,realms}` | `bbe9807` | HIGH (interface floor) — path grep SoT |
+| 3 | **DAE-S0** | `DaemonController` | `/v1/daemons/*` (9) | `4ebdf3a` | LOW — 5 upstream, d=1: 2 |
+| 4 | **REV-S0** | `ReviewsController` | `/v1/reviews/*` (7) | `5c42da4` | LOW — 5 upstream, d=1: 2 |
+| 5 | **RUN-S0** | `RunController` | `/v1/runs/*` (excl. logs/telemetry/stream) | `9ef74f8` | LOW — 5 upstream, d=1: 2 |
 
 **Note:** GitNexus `impact` on Express static class methods under-counts HTTP callers. **Source of truth for callers** = path string greps in `cliqhub-bff`, `cliqhub-frontend`, `cliq-platform` + Core route/controller tests. Run `impact` + `api_impact` at the start of each slice anyway; treat graph as lower-bound.
 
