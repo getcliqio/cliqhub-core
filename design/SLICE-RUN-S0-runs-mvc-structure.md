@@ -1,6 +1,6 @@
 # RUN-S0 — RunController MVC structure
 
-**Status:** Ready after REV-S0 (largest)  
+**Status:** Implemented  
 **Umbrella:** [`SLICE-invent-controllers-mvc-structure.md`](./SLICE-invent-controllers-mvc-structure.md)  
 **Depends on:** RUN-ORG invent — done  
 **Envelope:** Flat  

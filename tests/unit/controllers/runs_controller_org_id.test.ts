@@ -3,8 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ZodError } from 'zod';
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response } from 'express';
 
 vi.mock('../../../src/services/run.service.js', () => ({
     RunService: {
@@ -26,7 +25,6 @@ vi.mock('../../../src/models/index.js', async (importOriginal) => {
 });
 
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
-import { ApiError } from '../../../src/lib/api_error.js';
 import type { AuthContext } from '../../../src/types/vo.js';
 import { RunController } from '../../../src/controllers/runs_controller.js';
 import { RunService } from '../../../src/services/run.service.js';
@@ -67,37 +65,32 @@ function make_req(body: Record<string, unknown>, auth?: AuthContext) {
 }
 
 describe('RunController.get org_id tenancy', () => {
+    const runs = new RunController();
+
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(RunService.list_recent).mockResolvedValue({ runs: [], total: 0 } as never);
     });
 
-    it('org-scoped list without org_id → ZodError (422 path)', async () => {
-        const res = mock_res();
-        const next = vi.fn() as NextFunction;
-        const req = make_req({ limit: 10 }, pat_auth([ORG_A]));
-        await RunController.get(req, res, next);
-        expect(next).toHaveBeenCalled();
-        expect(next.mock.calls[0][0]).toBeInstanceOf(ZodError);
+    it('org-scoped list without org_id → 422 via parse_body; no invent', async () => {
+        // BaseController.parse_body throws errors/ApiError (`status`, not status_code).
+        await expect(
+            runs.get(make_req({ limit: 10 }, pat_auth([ORG_A])) as never, mock_res() as never),
+        ).rejects.toMatchObject({ status: 422, code: 'invalid_params' });
         expect(RunService.list_recent).not.toHaveBeenCalled();
     });
 
     it('org-scoped list does not invent from current_org_id header', async () => {
-        const res = mock_res();
-        const next = vi.fn() as NextFunction;
-        // Body empty — header/current_org_id is ORG_B on user; must still fail Zod.
-        const req = make_req({}, pat_auth([ORG_A, ORG_B]));
-        await RunController.get(req, res, next);
-        expect(next.mock.calls[0][0]).toBeInstanceOf(ZodError);
+        // Body empty — header/current_org_id is ORG_B on user; must still fail Zod via parse_body.
+        await expect(
+            runs.get(make_req({}, pat_auth([ORG_A, ORG_B])) as never, mock_res() as never),
+        ).rejects.toMatchObject({ status: 422, code: 'invalid_params' });
         expect(RunService.list_recent).not.toHaveBeenCalled();
     });
 
     it('org-scoped list with membership org_id → list_recent(org_id)', async () => {
         const res = mock_res();
-        const next = vi.fn() as NextFunction;
-        const req = make_req({ org_id: ORG_A, limit: 10 }, pat_auth([ORG_A]));
-        await RunController.get(req, res, next);
-        expect(next).not.toHaveBeenCalled();
+        await runs.get(make_req({ org_id: ORG_A, limit: 10 }, pat_auth([ORG_A])) as never, res as never);
         expect(RunService.list_recent).toHaveBeenCalledWith(
             10,
             undefined,
@@ -107,23 +100,15 @@ describe('RunController.get org_id tenancy', () => {
     });
 
     it('org-scoped list with foreign org_id → 403', async () => {
-        const res = mock_res();
-        const next = vi.fn() as NextFunction;
-        const req = make_req({ org_id: ORG_B, limit: 10 }, pat_auth([ORG_A]));
-        await RunController.get(req, res, next);
-        expect(next).toHaveBeenCalled();
-        const err = next.mock.calls[0][0] as ApiError;
-        expect(err).toBeInstanceOf(ApiError);
-        expect(err.status_code).toBe(403);
+        await expect(
+            runs.get(make_req({ org_id: ORG_B, limit: 10 }, pat_auth([ORG_A])) as never, mock_res() as never),
+        ).rejects.toMatchObject({ status_code: 403 });
         expect(RunService.list_recent).not.toHaveBeenCalled();
     });
 
     it('realm_id path does not require org_id', async () => {
         const res = mock_res();
-        const next = vi.fn() as NextFunction;
-        const req = make_req({ realm_id: REALM_A, limit: 5 }, pat_auth([ORG_A]));
-        await RunController.get(req, res, next);
-        expect(next).not.toHaveBeenCalled();
+        await runs.get(make_req({ realm_id: REALM_A, limit: 5 }, pat_auth([ORG_A])) as never, res as never);
         expect(RunService.list_recent).toHaveBeenCalledWith(
             5,
             undefined,
@@ -133,10 +118,7 @@ describe('RunController.get org_id tenancy', () => {
 
     it('daemon_id path does not invent org_id from header', async () => {
         const res = mock_res();
-        const next = vi.fn() as NextFunction;
-        const req = make_req({ daemon_id: 'daemon-1', limit: 5 }, pat_auth([ORG_A]));
-        await RunController.get(req, res, next);
-        expect(next).not.toHaveBeenCalled();
+        await runs.get(make_req({ daemon_id: 'daemon-1', limit: 5 }, pat_auth([ORG_A])) as never, res as never);
         expect(RunService.list_recent).toHaveBeenCalledWith(
             5,
             'daemon-1',
