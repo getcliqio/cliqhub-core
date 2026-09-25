@@ -1,6 +1,6 @@
 # SLICE: Reviews explicit `org_id` + drop header tenancy (REV-ORG)
 
-**Status:** in progress on branch `slice/reviews-explicit-org-id`  
+**Status:** implemented on branch `slice/reviews-explicit-org-id` — **not** merged to `main`  
 **Validation note:** Zod returns **422** for missing/invalid body fields.  
 **Depends on:** RUN-ORG / NTF-ORG patterns  
 **Rule:** hard-cut — `POST /v1/reviews/get` does **not** invent org from `X-Org-Id` / `current_org_id`  
@@ -35,14 +35,14 @@
 ## Checklist
 
 ### Core
-- [ ] `reviews_get_schema`: `org_id` UUID + refine (required without `realm_id`)
-- [ ] `ReviewsController.get`: `assert_org_authorized`; never `current_org_id`
-- [ ] `get_by_id`: optional body `org_id`; when `!has_notification` require it + permission (no header invent)
-- [ ] Unit `reviews_controller_org_id.test.ts`
+- [x] `reviews_get_schema`: `org_id` UUID + refine (required without `realm_id`)
+- [x] `ReviewsController.get`: `assert_org_authorized`; never `current_org_id`
+- [x] `get_by_id`: optional body `org_id`; when `!has_notification` require it + permission (no header invent)
+- [x] Unit `reviews_controller_org_id.test.ts`
 
 ### SPA
-- [ ] reviews_page, sidebar badges, events hug poll, review_detail get_by_id
+- [x] reviews_page, sidebar badges, events hug poll, review_detail get_by_id
 
 ### Docs + verify
-- [ ] OpenAPI regen; push docs branch
-- [ ] Core + SPA + BFF unit + BFF e2e green
+- [x] OpenAPI regen; push docs branch
+- [x] Core + SPA + BFF unit + BFF e2e green

@@ -191,7 +191,7 @@ describe.skipIf(!ready)('control plane integration (D4)', () => {
         const list = await request(app)
             .post('/v1/daemons/get')
             .set('Authorization', hub_bearer())
-            .send({});
+            .send({ org_id: alice_org_id });
         expect(list.status).toBe(200);
         expect(list.body.ok).toBe(true);
         const ids = (list.body.daemons as Array<{ id: string }>).map(d => d.id);

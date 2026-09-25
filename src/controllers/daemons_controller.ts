@@ -1,3 +1,10 @@
+/**
+ * Daemons Hub resource — DAE-ORG hard-cut on org-scoped list.
+ *
+ * POST /v1/daemons/get: body `org_id` required unless `realm_id`.
+ * Never invent org from X-Org-Id / current_org_id.
+ */
+
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { DaemonService } from '../services/daemon.service.js';
@@ -5,6 +12,9 @@ import { RealmService } from '../services/realm.service.js';
 import { resolve_enroll_realm_and_grant } from '../lib/enroll_grant.js';
 import { assert_access, assert_realm_domain } from '../auth/assert_grant.js';
 import { ApiError as HubApiError } from '../errors/api_error.js';
+import { ApiError } from '../lib/api_error.js';
+import { Realm } from '../models/index.js';
+import type { AuthContext } from '../types/vo.js';
 
 const heartbeat_schema = z.object({
     daemon_id: z.string(),
@@ -16,12 +26,28 @@ const heartbeat_schema = z.object({
 const deregister_schema = z.object({ daemon_id: z.string() });
 const get_schema = z.object({
     realm_id: z.string().optional(),
+    /**
+     * Organization UUID. Required when listing without realm_id.
+     * Never invent from X-Org-Id.
+     */
+    org_id: z.string().uuid().optional().describe(
+        'Organization UUID. Required when listing daemons without realm_id.',
+    ),
     status: z.enum(['online', 'stale', 'offline']).optional(),
     /** Substring match on daemon id / hostname (POST body only). */
     query: z.string().optional(),
     limit: z.number().int().positive().optional(),
     offset: z.number().int().nonnegative().optional(),
-}).optional();
+}).superRefine((v, ctx) => {
+    if (v.realm_id?.trim()) return;
+    if (!v.org_id) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'org_id is required when listing daemons without realm_id',
+            path: ['org_id'],
+        });
+    }
+});
 
 const get_by_id_schema = z.object({ daemon_id: z.string() });
 const remove_schema = z.object({ daemon_id: z.string() });
@@ -54,6 +80,42 @@ function hub_error_to_response(err: unknown, res: Response, next: NextFunction):
 }
 
 export class DaemonController {
+    /**
+     * Bearer must be allowed to act on `org_id`.
+     * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
+     * Site hub admin may act on any org_id.
+     */
+    private static async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
+        // No credential context — refuse rather than invent tenancy.
+        if (!auth) {
+            throw ApiError.unauthorized('authentication required');
+        }
+
+        // Site admin may target any org.
+        if (auth.user?.role === 'admin') return;
+
+        // Daemon tokens are realm-bound; tenancy is the realm's org.
+        if (auth.auth_via === 'daemon_token') {
+            if (!auth.realm_id) {
+                throw ApiError.forbidden('daemon token has no realm binding');
+            }
+            const realm = await Realm.findByPk(auth.realm_id);
+            if (!realm || realm.org_id !== org_id) {
+                throw ApiError.forbidden('org_id does not match daemon realm organization');
+            }
+            return;
+        }
+
+        // PAT / session: live membership list from auth middleware.
+        if (!auth.org_ids.includes(org_id)) {
+            throw ApiError.forbidden('not a member of the requested organization');
+        }
+    }
+
+    private static auth_from(req: Request): AuthContext | undefined {
+        return (req as Request & { auth?: AuthContext }).auth;
+    }
+
     static async register(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             require_daemon_auth(req);
@@ -145,10 +207,19 @@ export class DaemonController {
         }
     }
 
+    /**
+     * POST /v1/daemons/get — list daemons.
+     * Org-scoped list requires body `org_id` (DAE-ORG hard-cut).
+     */
     static async get(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
+            // Zod SoT — org-scoped list requires org_id; never invent from X-Org-Id.
             const filters = get_schema.parse(req.body ?? {});
-            const org_id = req.user?.current_org_id;
+            let org_id: string | undefined;
+            if (filters.org_id) {
+                await DaemonController.assert_org_authorized(DaemonController.auth_from(req), filters.org_id);
+                org_id = filters.org_id;
+            }
             const result = await DaemonService.list(req.user?.user_id, {
                 ...filters,
                 org_id,
@@ -157,8 +228,8 @@ export class DaemonController {
                 ok: true,
                 daemons: result.daemons,
                 total: result.total,
-                offset: filters?.offset ?? 0,
-                limit: filters?.limit ?? result.total,
+                offset: filters.offset ?? 0,
+                limit: filters.limit ?? result.total,
             });
         } catch (err) {
             next(err);
