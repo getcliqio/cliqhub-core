@@ -18,6 +18,8 @@ import {
     MAX_WINDOW_DAYS,
 } from '../services/run_telemetry.service.js';
 import { ApiError } from '../lib/api_error.js';
+import { Realm } from '../models/index.js';
+import type { AuthContext } from '../types/vo.js';
 
 const model_usage_schema = z.object({
     provider: z.string(),
@@ -86,11 +88,50 @@ const get_telemetry_schema = z.discriminatedUnion('kind', [
     }),
     z.object({
         kind: z.literal('summary'),
+        org_id: z.string().uuid().describe(
+            'Organization UUID. Required for fleet summary — never invent from X-Org-Id.',
+        ),
         window_days: z.number().int().positive().max(MAX_WINDOW_DAYS).optional(),
     }),
 ]);
 
 export class TelemetryController {
+    /**
+     * Bearer must be allowed to act on `org_id`.
+     * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
+     * Site hub admin may act on any org_id.
+     */
+    private static async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
+        // No credential context — refuse rather than invent tenancy.
+        if (!auth) {
+            throw ApiError.unauthorized('authentication required');
+        }
+
+        // Site admin may target any org.
+        if (auth.user?.role === 'admin') return;
+
+        // Daemon tokens are realm-bound; tenancy is the realm's org.
+        if (auth.auth_via === 'daemon_token') {
+            if (!auth.realm_id) {
+                throw ApiError.forbidden('daemon token has no realm binding');
+            }
+            const realm = await Realm.findByPk(auth.realm_id);
+            if (!realm || realm.org_id !== org_id) {
+                throw ApiError.forbidden('org_id does not match daemon realm organization');
+            }
+            return;
+        }
+
+        // PAT / session: live membership list from auth middleware.
+        if (!auth.org_ids.includes(org_id)) {
+            throw ApiError.forbidden('not a member of the requested organization');
+        }
+    }
+
+    private static auth_from(req: Request): AuthContext | undefined {
+        return (req as Request & { auth?: AuthContext }).auth;
+    }
+
     /**
      * POST /v1/runs/report_telemetry — daemon usage snapshot or OTEL spans.
      *
@@ -166,8 +207,12 @@ export class TelemetryController {
                 case 'summary': {
                     const user_id = req.user?.user_id;
                     if (!user_id) throw ApiError.unauthorized('login required');
-                    const org_id = req.user?.current_org_id;
-                    const { realms } = await RealmService.list_for_user(user_id, { org_id });
+                    // Body org_id is invent SoT (TEL-ORG) — never X-Org-Id.
+                    await TelemetryController.assert_org_authorized(
+                        TelemetryController.auth_from(req),
+                        body.org_id,
+                    );
+                    const { realms } = await RealmService.list_for_user(user_id, { org_id: body.org_id });
                     const summary = await RunTelemetryService.summary({
                         visible_realm_ids: realms.map((r) => r.id),
                         window_days: body.window_days,
