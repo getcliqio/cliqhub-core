@@ -37,7 +37,7 @@ describe('create_package_storage local', () => {
             packages_path,
             storage_backend: 'local',
             s3_endpoint: '',
-            s3_bucket: '',
+            s3_teams_bucket: '',
             s3_access_key_id: '',
             s3_secret_access_key: '',
         });
@@ -75,7 +75,7 @@ describe('create_package_storage r2', () => {
             packages_path: '/tmp',
             storage_backend: 'r2',
             s3_endpoint: 'https://s3.example',
-            s3_bucket: 'bucket',
+            s3_teams_bucket: 'bucket',
             s3_access_key_id: 'akid',
             s3_secret_access_key: 'secret',
         });
@@ -98,7 +98,7 @@ describe('create_package_storage r2', () => {
             packages_path: '/tmp',
             storage_backend: 'r2',
             s3_endpoint: 'https://s3.example',
-            s3_bucket: 'bucket',
+            s3_teams_bucket: 'bucket',
             s3_access_key_id: 'akid',
             s3_secret_access_key: 'secret',
         });
