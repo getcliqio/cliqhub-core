@@ -18,7 +18,7 @@ import type { UserRepository } from '../repositories/user_repository.js';
 import type { TokenRepository } from '../repositories/token_repository.js';
 import type { ScopeRepository } from '../repositories/scope_repository.js';
 import type { OrgMemberRepository } from '../repositories/org_member_repository.js';
-import type { AuthContext, TokenPermissionsVO } from '../types/vo.js';
+import type { AuthContext, TokenPermissionsVO } from '../schemas/auth_types.js';
 import { RealmService } from '../services/realm.service.js';
 import crypto from 'node:crypto';
 

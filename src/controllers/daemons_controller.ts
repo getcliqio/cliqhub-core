@@ -22,7 +22,7 @@ import {
     DaemonHeartbeatInput,
     DaemonRegisterInput,
     DaemonRemoveInput,
-} from '../schemas/daemons/types.js';
+} from '../schemas/daemon_types.js';
 
 function require_daemon_auth(req: Request): void {
     if (!req.auth?.user) {

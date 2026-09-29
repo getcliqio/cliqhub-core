@@ -1,7 +1,7 @@
 import { User } from '../db/models/index.js';
 import { Scope } from '../db/models/index.js';
 import type { Transaction } from 'sequelize';
-import type { UserVO, UserLoginRowVO } from '../types/vo.js';
+import type { UserVO, UserLoginRowVO } from '../schemas/user_types.js';
 
 const USER_ATTRS = ['id', 'username', 'display_name', 'email', 'role', 'suspended_at', 'suspended_reason', 'created_at', 'preferences'] as const;
 const LOGIN_ATTRS = ['id', 'username', 'password_hash', 'role', 'suspended_at'] as const;

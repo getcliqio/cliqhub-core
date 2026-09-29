@@ -20,7 +20,7 @@ vi.mock('../../../src/models/index.js', async (importOriginal) => {
 });
 
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
-import type { AuthContext } from '../../../src/types/vo.js';
+import type { AuthContext } from '../../../src/schemas/auth_types.js';
 import { DaemonController } from '../../../src/controllers/daemons_controller.js';
 import { DaemonService } from '../../../src/services/daemon.service.js';
 

@@ -13,7 +13,7 @@ import { User, ApiToken, OrgMember, OrgRole, Scope, Team, Draft } from '../../..
 import { hash_password, verify_password } from '../../../src/auth/password.js';
 import { UsersService } from '../../../src/services/users_service.js';
 import { test_config } from '../../helpers/test_container.js';
-import type { AuthContext } from '../../../src/types/vo.js';
+import type { AuthContext } from '../../../src/schemas/auth_types.js';
 
 const admin_auth: AuthContext = {
     user: { id: hub_legacy_uuid(1), username: 'admin', display_name: 'Admin', email: 'admin@test.com', role: 'admin', suspended_at: null, suspended_reason: '', created_at: '2024-01-01' },

@@ -1,6 +1,6 @@
 import { ApiError } from '../errors/api_error.js';
 import type { DraftRepository } from '../repositories/draft_repository.js';
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 
 export class DraftsService {
     constructor(private _draft_repo: DraftRepository) {}

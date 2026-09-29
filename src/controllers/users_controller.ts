@@ -6,7 +6,7 @@ import {
     users_update_schema, users_delete_schema, users_suspend_schema,
     users_unsuspend_schema, users_reset_password_schema, users_set_role_schema,
     users_update_role_schema, users_change_password_schema,
-} from '../schemas/users/types.js';
+} from '../schemas/user_types.js';
 import { to_user_dto } from '../types/mappers.js';
 
 export class UsersController extends BaseController {

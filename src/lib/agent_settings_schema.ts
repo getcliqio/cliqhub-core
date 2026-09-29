@@ -5,7 +5,7 @@
  * settings.optional so account/realm UIs can store defaults.
  */
 
-import type { SettingDef } from '../schemas/settings/types.js';
+import type { SettingDef } from '../schemas/settings_types.js';
 
 /** @deprecated Use SettingDef from schemas/settings/types. */
 export type Setting_def = SettingDef;

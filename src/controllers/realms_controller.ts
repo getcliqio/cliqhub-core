@@ -39,7 +39,7 @@ import {
     RealmAddMemberInput,
     RealmRemoveMemberInput,
     RealmTeamRefInput,
-} from '../schemas/realms/types.js';
+} from '../schemas/realm_types.js';
 
 type Realm_user = {
     user_id: string;

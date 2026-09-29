@@ -25,7 +25,7 @@ import {
     ReviewsGetMessagesInput,
     ReviewsSendMessageInput,
     ReviewsStreamMessagesQuery,
-} from '../schemas/reviews/types.js';
+} from '../schemas/review_types.js';
 
 type ReviewsFields = Record<string, unknown>;
 

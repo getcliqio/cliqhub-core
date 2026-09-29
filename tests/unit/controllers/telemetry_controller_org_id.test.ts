@@ -43,7 +43,7 @@ vi.mock('../../../src/models/index.js', async (importOriginal) => {
 
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { ApiError } from '../../../src/lib/api_error.js';
-import type { AuthContext } from '../../../src/types/vo.js';
+import type { AuthContext } from '../../../src/schemas/auth_types.js';
 import { TelemetryController } from '../../../src/controllers/telemetry_controller.js';
 import { RealmService } from '../../../src/services/realm.service.js';
 import { RunTelemetryService } from '../../../src/services/run_telemetry.service.js';

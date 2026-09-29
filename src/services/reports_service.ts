@@ -1,6 +1,6 @@
 import { ApiError } from '../errors/api_error.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 import { assert_admin_access } from '../auth/assert_grant.js';
 
 export class ReportsService {

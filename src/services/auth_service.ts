@@ -10,7 +10,7 @@ import type { ScopeRepository } from '../repositories/scope_repository.js';
 import type { OrgMemberRepository } from '../repositories/org_member_repository.js';
 import type { OrgRepository } from '../repositories/org_repository.js';
 import type { TokenRepository } from '../repositories/token_repository.js';
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 import {
     RESERVED_SCOPES, SLUG_PATTERN, EMAIL_PATTERN,
     MIN_PASSWORD_LENGTH, type EnvConfig,

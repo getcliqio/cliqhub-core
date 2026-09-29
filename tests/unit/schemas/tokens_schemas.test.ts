@@ -4,7 +4,7 @@ import {
     get_tokens_schema,
     revoke_token_schema,
     permissions_schema,
-} from '../../../src/schemas/tokens/types.js';
+} from '../../../src/schemas/token_types.js';
 
 describe('tokens_schemas', () => {
     it('accepts user type', () => {

@@ -1,5 +1,5 @@
 import type { LlmAdapter, LlmMessage } from './llm/hosted_adapter.js';
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 import { ApiError } from '../errors/api_error.js';
 import {
 	create_builder_job,

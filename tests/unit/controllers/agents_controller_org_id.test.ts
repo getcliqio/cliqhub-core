@@ -8,7 +8,7 @@ import type { Request, Response } from 'express';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { AgentsController } from '../../../src/controllers/agents_controller.js';
 import { ApiError } from '../../../src/lib/api_error.js';
-import type { AuthContext } from '../../../src/types/vo.js';
+import type { AuthContext } from '../../../src/schemas/auth_types.js';
 
 const ORG_A = hub_legacy_uuid(10);
 const ORG_B = hub_legacy_uuid(20);
@@ -207,14 +207,14 @@ describe('AgentsController AG-1a org_id tenancy', () => {
 
 describe('Agents*Input Zod AG-1a', () => {
     it('AgentsGetInput requires org_id uuid', async () => {
-        const { AgentsGetInput } = await import('../../../src/schemas/agents/types.js');
+        const { AgentsGetInput } = await import('../../../src/schemas/agent_types.js');
         expect(AgentsGetInput.safeParse({}).success).toBe(false);
         expect(AgentsGetInput.safeParse({ org_id: 'not-a-uuid' }).success).toBe(false);
         expect(AgentsGetInput.safeParse({ org_id: ORG_A }).success).toBe(true);
     });
 
     it('every agents input schema requires org_id', async () => {
-        const schemas = await import('../../../src/schemas/agents/types.js');
+        const schemas = await import('../../../src/schemas/agent_types.js');
         const cases: Array<{ schema: { safeParse: (v: unknown) => { success: boolean } }; minimal: Record<string, unknown> }> = [
             { schema: schemas.AgentsGetInput, minimal: { org_id: ORG_A } },
             { schema: schemas.AgentsGetDetailsInput, minimal: { org_id: ORG_A, name: 'exec' } },
@@ -230,7 +230,7 @@ describe('Agents*Input Zod AG-1a', () => {
     });
 
     it('AgentsGetDetailsInput enforces id XOR name', async () => {
-        const { AgentsGetDetailsInput, AgentsDeregisterInput, AgentsUpdateSettingsInput } = await import('../../../src/schemas/agents/types.js');
+        const { AgentsGetDetailsInput, AgentsDeregisterInput, AgentsUpdateSettingsInput } = await import('../../../src/schemas/agent_types.js');
         const id = hub_legacy_uuid(99);
         expect(AgentsGetDetailsInput.safeParse({ org_id: ORG_A }).success).toBe(false);
         expect(AgentsGetDetailsInput.safeParse({ org_id: ORG_A, id, name: 'exec' }).success).toBe(false);

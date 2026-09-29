@@ -8,7 +8,7 @@
 
 import { z } from 'zod';
 
-import { destination_schema } from '../../notifications/channel_config.js';
+import { destination_schema } from '../notifications/channel_config.js';
 
 const org_id_field = z.string().uuid().describe(
     'Organization this call targets. Required for account-scoped channel/rule ops and inbox. '

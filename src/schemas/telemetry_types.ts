@@ -8,7 +8,7 @@
  */
 
 import { z } from 'zod';
-import { MAX_WINDOW_DAYS } from '../../services/run_telemetry.service.js';
+import { MAX_WINDOW_DAYS } from '../services/run_telemetry.service.js';
 
 const model_usage_schema = z.object({
     provider: z.string().describe('LLM provider id'),
@@ -95,7 +95,7 @@ export type GetTelemetryInput = z.infer<typeof GetTelemetryInput>;
  */
 
 
-import type { BooleanData } from '../../types/api_response.js';
+import type { BooleanData } from '../types/api_response.js';
 
 /** Traces ingest ack — how many spans were new vs received. */
 export const TelemetryReportData = z.object({

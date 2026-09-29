@@ -325,7 +325,7 @@ export type TeamsUninstallInput = z.infer<typeof TeamsUninstallInput>;
 import type {
     QueuedInstallResult,
     QueuedUninstallResult,
-} from '../../services/dispatch.service.js';
+} from '../services/dispatch.service.js';
 
 // ─── Canonical team shape ───────────────────────────────────────────────────
 
@@ -454,3 +454,92 @@ export type TeamsInstallData = QueuedInstallResult;
  * `dispatched` is true when at least one daemon result was ok.
  */
 export type TeamsUninstallData = QueuedUninstallResult & { dispatched: boolean };
+
+
+// ── Internal persistence shapes ─────────────────────────────────────────────
+
+export type TeamVo = {
+    id: string;
+    name: string;
+    scope: string | null;
+    scope_type: 'user' | 'org' | null;
+    description: string;
+    author_id: string | null;
+    license: string;
+    visibility: 'public' | 'private' | 'draft';
+    listed: number;
+    created_at: string;
+    updated_at: string;
+    install_count: number;
+};
+
+export type TeamListItemVo = {
+    id: string;
+    name: string;
+    scope: string | null;
+    description: string;
+    author: string | null;
+    latest_version: string | null;
+    install_count: number;
+    listed?: number;
+};
+
+export type TeamVersionVo = {
+    version: string;
+    changelog: string;
+    published_at: string;
+};
+
+export type TeamVersionDetailVo = {
+    id: string;
+    team_id: string;
+    version: string;
+    changelog: string;
+    package_path: string;
+    cliq_version: string | null;
+    tools: string;
+    workflow_json: string;
+    readme: string;
+    capability_json: string;
+    agents_json: string;
+    published_at: string;
+};
+
+export type TeamTagVo = {
+    team_id: string;
+    tag: string;
+};
+
+export type TeamRoleVo = {
+    name: string;
+    content_md: string;
+};
+
+export type TeamListItemDto = {
+    id?: string;
+    name: string;
+    scope: string | null;
+    description: string;
+    author: string | null;
+    latest_version: string;
+    install_count: number;
+    tags: string[];
+    listed: boolean;
+    visibility?: string;
+    status?: 'draft' | 'published';
+};
+
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamVO = TeamVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamListItemVO = TeamListItemVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamVersionVO = TeamVersionVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamVersionDetailVO = TeamVersionDetailVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamTagVO = TeamTagVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type TeamRoleVO = TeamRoleVo;
+/** @deprecated Prefer PascalCase `*Dto` names. */
+export type TeamListItemDTO = TeamListItemDto;

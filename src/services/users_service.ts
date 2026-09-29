@@ -9,7 +9,7 @@ import type { ScopeRepository } from '../repositories/scope_repository.js';
 import type { TokenRepository } from '../repositories/token_repository.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { OrgMemberRepository } from '../repositories/org_member_repository.js';
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 import { Op, literal } from 'sequelize';
 import { User, ApiToken, Scope, Team, Draft, OrgMember, Org, OrgRole } from '../db/models/index.js';
 import { assert_access, assert_admin_access } from '../auth/assert_grant.js';

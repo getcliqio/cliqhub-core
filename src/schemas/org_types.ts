@@ -192,9 +192,9 @@ export const OrgsGetReviewableTargetsInput = z.object({
 
 export type OrgsGetReviewableTargetsInput = z.infer<typeof OrgsGetReviewableTargetsInput>;
 
-import { UserData } from '../users/types.js';
-import { RoleData } from '../roles/types.js';
-import { ScopeData } from '../scopes/types.js';
+import { UserData } from './user_types.js';
+import { RoleData } from './role_types.js';
+import { ScopeData } from './scope_types.js';
 
 /**
  * Canonical wire shape for an org member (UserData + org-context fields).
@@ -238,3 +238,15 @@ export const OrgData = z.object({
 });
 
 export type OrgData = z.infer<typeof OrgData>;
+
+
+// ── Internal persistence shapes ─────────────────────────────────────────────
+
+export type OrgMembershipVo = {
+    slug: string;
+    role: string;
+    org_id: string;
+};
+
+/** @deprecated Use PascalCase `*Vo` names. */
+export type OrgMembershipVO = OrgMembershipVo;

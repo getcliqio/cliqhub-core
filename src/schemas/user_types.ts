@@ -111,3 +111,44 @@ export const UserData = z.object({
 });
 
 export type UserData = z.infer<typeof UserData>;
+
+
+// ── Internal persistence shapes ─────────────────────────────────────────────
+
+export type UserVo = {
+    id: string;
+    username: string;
+    display_name: string;
+    email: string;
+    role: 'user' | 'admin';
+    suspended_at: string | null;
+    suspended_reason: string;
+    created_at: string;
+    preferences: Record<string, unknown>;
+};
+
+export type UserLoginRowVo = {
+    id: string;
+    username: string;
+    password_hash: string;
+    role: 'user' | 'admin';
+    suspended_at: string | null;
+};
+
+export type UserDto = {
+    id: string;
+    username: string;
+    display_name: string;
+    email: string;
+    role: string;
+    suspended_at: string | null;
+    suspended_reason: string;
+    created_at: string;
+};
+
+/** @deprecated Use PascalCase `*Vo` names. */
+export type UserVO = UserVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type UserLoginRowVO = UserLoginRowVo;
+/** @deprecated Prefer PascalCase `*Dto` names. */
+export type UserDTO = UserDto;

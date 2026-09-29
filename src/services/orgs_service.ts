@@ -7,7 +7,7 @@ import type { ScopeMemberRepository } from '../repositories/scope_member_reposit
 import type { UserRepository } from '../repositories/user_repository.js';
 import type { TeamRepository } from '../repositories/team_repository.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 import { Op, literal } from 'sequelize';
 import { User, Scope, Org, OrgMember, OrgRole, ScopeMember, Team } from '../db/models/index.js';
 import { hash_password } from '../auth/password.js';

@@ -15,8 +15,8 @@ import { generate_slug } from '../lib/slug.js';
 import { QueryTypes } from 'sequelize';
 import { EventSubmitService } from '../events/submit.service.js';
 import type { EventType } from '../events/types.js';
-import type { ReportTelemetryInput } from '../schemas/telemetry/types.js';
-import type { TelemetryUsageData } from '../schemas/telemetry/types.js';
+import type { ReportTelemetryInput } from '../schemas/telemetry_types.js';
+import type { TelemetryUsageData } from '../schemas/telemetry_types.js';
 
 /**
  * Control commands that target a single run (cancel, supply inputs).

@@ -5,7 +5,7 @@ import {
     resolve_effective_grant,
 } from '../../../src/auth/assert_grant.js';
 import { ALICE, SITE_ADMIN, UNAUTHED } from '../../helpers/fixtures.js';
-import type { AuthContext } from '../../../src/types/vo.js';
+import type { AuthContext } from '../../../src/schemas/auth_types.js';
 
 function with_grant(auth: AuthContext, permissions: AuthContext['token_permissions']): AuthContext {
     return { ...auth, token_permissions: permissions };

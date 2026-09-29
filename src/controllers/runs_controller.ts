@@ -29,7 +29,7 @@ import {
     RunsResumeInput,
     RunsSupplyInputsInput,
     RunsUpdateStatusInput,
-} from '../schemas/runs/types.js';
+} from '../schemas/run_types.js';
 import type {
     QueueItemData,
     RunCancelData,
@@ -41,7 +41,7 @@ import type {
     RunPhaseData,
     RunResumeData,
     RunSupplyInputsData,
-} from '../schemas/runs/types.js';
+} from '../schemas/run_types.js';
 
 export class RunController extends BaseController {
     private map_runs(rows: unknown[]): RunData[] {

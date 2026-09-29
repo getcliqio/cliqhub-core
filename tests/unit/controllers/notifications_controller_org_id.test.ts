@@ -64,14 +64,14 @@ vi.mock('../../../src/models/index.js', async (importOriginal) => {
 
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { ApiError } from '../../../src/lib/api_error.js';
-import type { AuthContext } from '../../../src/types/vo.js';
+import type { AuthContext } from '../../../src/schemas/auth_types.js';
 import {
     NotificationChannelsCreateInput,
     NotificationChannelsGetInput,
     NotificationRulesListInput,
     NotificationRulesSetInput,
     NotificationsGetInput,
-} from '../../../src/schemas/notifications/types.js';
+} from '../../../src/schemas/notification_types.js';
 import { NotificationsController } from '../../../src/controllers/notifications_controller.js';
 import { NotificationService } from '../../../src/services/notification.service.js';
 import { InAppNotificationService } from '../../../src/services/in_app_notification.service.js';

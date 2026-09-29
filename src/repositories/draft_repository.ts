@@ -1,6 +1,6 @@
 import { Draft } from '../db/models/index.js';
 import { fn } from 'sequelize';
-import type { DraftVO, DraftListItemVO } from '../types/vo.js';
+import type { DraftVO, DraftListItemVO } from '../schemas/draft_types.js';
 
 // Coerce a possibly-Date Sequelize column into the ISO-string form expected
 // by the VO contracts. Same shape as user_repository's helper; kept private

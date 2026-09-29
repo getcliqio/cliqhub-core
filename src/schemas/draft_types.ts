@@ -55,3 +55,44 @@ export const DraftDetailData = z.object({
 });
 
 export type DraftDetailData = z.infer<typeof DraftDetailData>;
+
+
+// ── Internal persistence shapes ─────────────────────────────────────────────
+
+export type DraftVo = {
+    id: string;
+    user_id: string;
+    title: string;
+    team_json: string;
+    created_at: string;
+    updated_at: string;
+};
+
+export type DraftListItemVo = {
+    id: string;
+    title: string;
+    updated_at: string;
+};
+
+export type DraftDto = {
+    id: string;
+    title: string;
+    team_json: string;
+    created_at: string;
+    updated_at: string;
+};
+
+export type DraftListItemDto = {
+    id: string;
+    title: string;
+    updated_at: string;
+};
+
+/** @deprecated Use PascalCase `*Vo` names. */
+export type DraftVO = DraftVo;
+/** @deprecated Use PascalCase `*Vo` names. */
+export type DraftListItemVO = DraftListItemVo;
+/** @deprecated Prefer PascalCase `*Dto` names. */
+export type DraftDTO = DraftDto;
+/** @deprecated Prefer PascalCase `*Dto` names. */
+export type DraftListItemDTO = DraftListItemDto;

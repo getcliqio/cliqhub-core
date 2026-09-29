@@ -12,7 +12,7 @@
 
 import { z } from 'zod';
 
-import { ManifestInput } from '../common/manifest.js';
+import { ManifestInput } from './manifest.js';
 
 /** Org tenancy for every agents route — must match Bearer membership / daemon realm org. */
 const OrgIdField = z.string().uuid().describe(
@@ -115,8 +115,8 @@ export type AgentsUpdateSettingsInput = z.infer<typeof AgentsUpdateSettingsInput
  */
 
 
-import type { BooleanData } from '../../types/api_response.js';
-import type { SettingsData } from '../settings/types.js';
+import type { BooleanData } from '../types/api_response.js';
+import type { SettingsData } from './settings_types.js';
 
 /** Catalog agent on the wire. */
 export const AgentData = z.object({

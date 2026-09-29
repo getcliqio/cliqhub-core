@@ -35,12 +35,12 @@ vi.mock('../../../src/models/index.js', async (importOriginal) => {
 });
 
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
-import type { AuthContext } from '../../../src/types/vo.js';
+import type { AuthContext } from '../../../src/schemas/auth_types.js';
 import { ReviewsController } from '../../../src/controllers/reviews_controller.js';
 import { ReviewPendingService } from '../../../src/services/review_pending.service.js';
 import { HugReviewsService } from '../../../src/services/hug_reviews.service.js';
 import { require_permission } from '../../../src/auth/permissions.js';
-import { reviews_get_schema } from '../../../src/schemas/reviews/types.js';
+import { reviews_get_schema } from '../../../src/schemas/review_types.js';
 
 const ORG_A = hub_legacy_uuid(10);
 const ORG_B = hub_legacy_uuid(20);

@@ -9,7 +9,7 @@ import {
 import { Org } from '../db/models/index.js';
 import { ApiError } from '../lib/api_error.js';
 import type { Destination } from '../notifications/channel_config.js';
-import type { NotificationRuleData } from '../schemas/notifications/types.js';
+import type { NotificationRuleData } from '../schemas/notification_types.js';
 
 /** Wire-compatible channel row (matches SDK NotificationChannelRecord). */
 export type ChannelRecord = {

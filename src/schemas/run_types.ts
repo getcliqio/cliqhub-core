@@ -316,7 +316,7 @@ export type RunsArtifactsDeleteInput = z.infer<typeof RunsArtifactsDeleteInput>;
  */
 
 
-import type { BooleanData } from '../../types/api_response.js';
+import type { BooleanData } from '../types/api_response.js';
 
 /** In-flight control command banner payload on run detail. */
 export const RunPendingControlData = z.object({

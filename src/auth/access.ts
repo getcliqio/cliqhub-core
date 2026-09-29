@@ -1,4 +1,4 @@
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 
 export interface TeamAccess {
     visibility: 'public' | 'private' | 'draft';

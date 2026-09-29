@@ -2,11 +2,14 @@
  * VO → DTO mappers.
  */
 
-import type { UserVo, DraftVo, DraftListItemVo } from './vo.js';
-import type { UserDto, TeamListItemDto, DraftDto, DraftListItemDto } from './dto.js';
-import type { AgentData } from '../schemas/agents/types.js';
-import type { TelemetrySpanData } from '../schemas/telemetry/types.js';
-import type { RunData } from '../schemas/runs/types.js';
+import type { UserVo } from '../schemas/user_types.js';
+import type { DraftVo, DraftListItemVo } from '../schemas/draft_types.js';
+import type { UserDto } from '../schemas/user_types.js';
+import type { TeamListItemDto } from '../schemas/team_types.js';
+import type { DraftDto, DraftListItemDto } from '../schemas/draft_types.js';
+import type { AgentData } from '../schemas/agent_types.js';
+import type { TelemetrySpanData } from '../schemas/telemetry_types.js';
+import type { RunData } from '../schemas/run_types.js';
 import type { AgentCatalog } from '../models/agent_catalog.model.js';
 import type { RunSpan } from '../models/run_span.model.js';
 import type { Run } from '../models/index.js';

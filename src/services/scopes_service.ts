@@ -6,7 +6,7 @@ import type { TeamRepository } from '../repositories/team_repository.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { OrgRepository } from '../repositories/org_repository.js';
 import type { OrgMemberRepository } from '../repositories/org_member_repository.js';
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 import { User, Scope, Org } from '../db/models/index.js';
 import { Op, literal } from 'sequelize';
 import { assert_admin_access } from '../auth/assert_grant.js';

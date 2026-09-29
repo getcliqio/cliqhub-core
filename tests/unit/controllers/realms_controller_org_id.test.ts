@@ -7,11 +7,11 @@ import type { Request, Response } from 'express';
 
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { ApiError } from '../../../src/lib/api_error.js';
-import type { AuthContext } from '../../../src/types/vo.js';
+import type { AuthContext } from '../../../src/schemas/auth_types.js';
 import {
     RealmCreateInput,
     RealmGetByIdInput,
-} from '../../../src/schemas/realms/types.js';
+} from '../../../src/schemas/realm_types.js';
 
 const ORG_A = hub_legacy_uuid(10);
 const ORG_B = hub_legacy_uuid(20);

@@ -16,9 +16,9 @@ import { ApiError } from '../lib/api_error.js';
 import { find_teams_using_agent } from '../lib/agent_catalog_usage.js';
 import { resolve_agent_settings } from '../lib/agent_settings_schema.js';
 import type { BooleanData } from '../types/api_response.js';
-import type { AgentData } from '../schemas/agents/types.js';
-import type { SettingsData, SettingDef } from '../schemas/settings/types.js';
-import type { AgentsRegisterInput } from '../schemas/agents/types.js';
+import type { AgentData } from '../schemas/agent_types.js';
+import type { SettingsData, SettingDef } from '../schemas/settings_types.js';
+import type { AgentsRegisterInput } from '../schemas/agent_types.js';
 import { to_agent_data } from '../types/mappers.js';
 
 export type AgentListFilters = {

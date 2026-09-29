@@ -22,7 +22,7 @@ vi.mock('../../../src/models/index.js', async (importOriginal) => {
 });
 
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
-import type { AuthContext } from '../../../src/types/vo.js';
+import type { AuthContext } from '../../../src/schemas/auth_types.js';
 import { RunController } from '../../../src/controllers/runs_controller.js';
 import { RunService } from '../../../src/services/run.service.js';
 

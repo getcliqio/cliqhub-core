@@ -3,7 +3,7 @@
  */
 
 import { ApiError } from '../errors/api_error.js';
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 import {
     default_daemon_grant,
     default_grant_for_subject,

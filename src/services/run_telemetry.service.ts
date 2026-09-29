@@ -18,7 +18,7 @@ import { QueryTypes } from 'sequelize';
 
 import { get_sequelize } from '../lib/sequelize.js';
 import { get_logger } from '../lib/log.js';
-import type { TelemetrySummaryData } from '../schemas/telemetry/types.js';
+import type { TelemetrySummaryData } from '../schemas/telemetry_types.js';
 
 const log = get_logger('run-telemetry');
 

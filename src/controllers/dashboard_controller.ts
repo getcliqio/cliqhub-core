@@ -19,7 +19,7 @@ import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js
 import {
     DashboardRealmsInput,
     DashboardSummaryInput,
-} from '../schemas/dashboard/types.js';
+} from '../schemas/dashboard_types.js';
 
 function as_ms(value: unknown): number | null {
     if (typeof value === 'number' && Number.isFinite(value)) return value;

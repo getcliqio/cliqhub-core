@@ -3,7 +3,7 @@ import type { z, ZodTypeAny } from 'zod';
 import { ApiError as LegacyApiError } from '../errors/api_error.js';
 import { ApiError } from '../lib/api_error.js';
 import { Realm } from '../models/index.js';
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 
 export abstract class BaseController {
     // Use `ZodTypeAny` + `z.infer<S>` so the inferred return type is the

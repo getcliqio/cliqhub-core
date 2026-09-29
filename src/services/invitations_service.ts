@@ -6,7 +6,7 @@ import type { OrgRepository } from '../repositories/org_repository.js';
 import type { OrgMemberRepository } from '../repositories/org_member_repository.js';
 import type { ScopeRepository } from '../repositories/scope_repository.js';
 import type { UserRepository } from '../repositories/user_repository.js';
-import type { AuthContext } from '../types/vo.js';
+import type { AuthContext } from '../schemas/auth_types.js';
 import { Org, AccountInvite, RealmInvite } from '../db/models/index.js';
 import { hash_password } from '../auth/password.js';
 import { sign_token } from '../auth/jwt.js';
