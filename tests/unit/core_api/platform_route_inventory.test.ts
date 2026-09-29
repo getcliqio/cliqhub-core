@@ -52,7 +52,7 @@ const PLATFORM_BFF_ROUTES: Array<{ method: 'GET' | 'POST'; path: string }> = [
 	{ method: 'POST', path: '/runs/get_telemetry' },
 	{ method: 'POST', path: '/runs/get_status' },
 	{ method: 'POST', path: '/runs/update_status' },
-	{ method: 'POST', path: '/runs/artifacts/create' },
+	{ method: 'POST', path: '/runs/create_rdr' },
 	{ method: 'POST', path: '/control/scopes/get' },
 	{ method: 'POST', path: '/control/scopes/get_by_id' },
 	{ method: 'POST', path: '/control/scopes/get_by_slug' },

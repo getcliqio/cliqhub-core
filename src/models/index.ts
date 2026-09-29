@@ -38,6 +38,7 @@ import { CustomEvent, init_custom_event } from './custom_event.model.js';
 import { RealmA2aSetting, init_realm_a2a_setting } from './realm_a2a_setting.model.js';
 import { AccountMeshSetting, init_account_mesh_setting } from './account_mesh_setting.model.js';
 import { HubEvent, init_hub_event } from './hub_event.model.js';
+import { StoredArtifact, init_stored_artifact } from './stored_artifact.model.js';
 import { WebhookDelivery, init_webhook_delivery } from './webhook_delivery.model.js';
 
 export {
@@ -69,6 +70,7 @@ export {
     RunLogLine,
     RunPhase,
     RunSpan,
+    StoredArtifact,
     Scope,
     Team,
     Workspace,
@@ -105,6 +107,7 @@ export function init_core_api_models(sequelize: Sequelize): void {
     init_custom_event(sequelize);
     init_realm_a2a_setting(sequelize);
     init_account_mesh_setting(sequelize);
+    init_stored_artifact(sequelize);
     init_webhook_delivery(sequelize);
 
     Realm.hasMany(RealmMember, { foreignKey: 'realm_id', as: 'members' });

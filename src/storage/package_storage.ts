@@ -9,7 +9,7 @@ export interface StorageConfig {
     packages_path: string;
     storage_backend: 'local' | 'r2';
     s3_endpoint: string;
-    s3_bucket: string;
+    s3_teams_bucket: string;
     s3_access_key_id: string;
     s3_secret_access_key: string;
 }
@@ -55,7 +55,7 @@ function s3_headers(cfg: StorageConfig, method: string, key: string, content_has
     const service = 's3';
     const scope = `${short_date}/${region}/${service}/aws4_request`;
 
-    const url = new URL(`${cfg.s3_endpoint}/${cfg.s3_bucket}/${key}`);
+    const url = new URL(`${cfg.s3_endpoint}/${cfg.s3_teams_bucket}/${key}`);
     const host = url.host;
 
     const headers: Record<string, string> = { host, 'x-amz-date': date_stamp, 'x-amz-content-sha256': content_hash, ...extra };
@@ -63,7 +63,7 @@ function s3_headers(cfg: StorageConfig, method: string, key: string, content_has
     const signed_headers = signed_header_keys.join(';');
     const canonical_headers = signed_header_keys.map(k => `${k}:${headers[k]}\n`).join('');
 
-    const canonical = [method, `/${cfg.s3_bucket}/${key}`, '', canonical_headers, signed_headers, content_hash].join('\n');
+    const canonical = [method, `/${cfg.s3_teams_bucket}/${key}`, '', canonical_headers, signed_headers, content_hash].join('\n');
     const canonical_hash = crypto.createHash('sha256').update(canonical).digest('hex');
     const string_to_sign = ['AWS4-HMAC-SHA256', date_stamp, scope, canonical_hash].join('\n');
 
@@ -82,7 +82,7 @@ function s3_headers(cfg: StorageConfig, method: string, key: string, content_has
 }
 
 function s3_url(cfg: StorageConfig, key: string): string {
-    return `${cfg.s3_endpoint}/${cfg.s3_bucket}/${key}`;
+    return `${cfg.s3_endpoint}/${cfg.s3_teams_bucket}/${key}`;
 }
 
 export function create_package_storage(cfg: StorageConfig) {

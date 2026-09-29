@@ -378,8 +378,8 @@ export class RunController extends BaseController {
         this.ok(res, true);
     }
 
-    /** POST /v1/runs/artifacts/create */
-    async artifacts_create(
+    /** POST /v1/runs/create_rdr — create a run data record (phase output, event artifact, transcript). */
+    async create_rdr(
         req: ApiRequest<RunsArtifactsCreateInput, RunIdData>,
         res: ApiOkResponse<RunIdData>,
     ): Promise<void> {

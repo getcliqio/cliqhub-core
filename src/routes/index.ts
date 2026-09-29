@@ -32,6 +32,7 @@ import { register_runs_routes } from './v1/runs.js';
 import { register_settings_routes } from './v1/settings.js';
 import { register_notification_channels_routes } from './v1/notification_channels.js';
 import { register_notifications_routes } from './v1/notifications.js';
+import { register_artifacts_routes } from './v1/artifacts.js';
 
 function mount_v1_json_404(router: Router): void {
     router.use((_req, res) => {
@@ -59,6 +60,7 @@ function register_control_resources(router: Router, auth: RequestHandler): void 
     register_workspaces_routes(router, auth);
     register_runs_routes(router, auth);
     register_settings_routes(router, auth);
+    register_artifacts_routes(router, auth);
 }
 
 /**
@@ -114,6 +116,7 @@ export function register_routes(app: Application, container: Container): void {
     register_settings_routes(router, auth);
     register_notification_channels_routes(router, auth);
     register_notifications_routes(router, auth);
+    register_artifacts_routes(router, auth);
 
     mount_v1_json_404(router);
     app.use('/v1', router);
