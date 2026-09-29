@@ -23,7 +23,7 @@ import {
     JiraGetWorkspacesInput,
     JiraRegisterWorkspaceInput,
     JiraRotateSecretInput,
-} from '../schemas/jira_integration/inputs.js';
+} from '../schemas/jira_integration/types.js';
 import type { Request, Response, NextFunction } from 'express';
 
 /**

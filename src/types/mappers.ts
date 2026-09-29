@@ -4,9 +4,9 @@
 
 import type { UserVo, DraftVo, DraftListItemVo } from './vo.js';
 import type { UserDto, TeamListItemDto, DraftDto, DraftListItemDto } from './dto.js';
-import type { AgentData } from '../schemas/agents_schemas.js';
-import type { TelemetrySpanData } from '../schemas/telemetry/data.js';
-import type { RunData } from '../schemas/runs/data.js';
+import type { AgentData } from '../schemas/agents/types.js';
+import type { TelemetrySpanData } from '../schemas/telemetry/types.js';
+import type { RunData } from '../schemas/runs/types.js';
 import type { AgentCatalog } from '../models/agent_catalog.model.js';
 import type { RunSpan } from '../models/run_span.model.js';
 import type { Run } from '../models/index.js';

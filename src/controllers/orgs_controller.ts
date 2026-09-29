@@ -12,10 +12,10 @@ import {
     OrgRoleIdInput, OrgRoleInput,
     OrgScopeInput, OrgScopeMemberInput,
     OrgsGetScopesInput, OrgsGetReviewableTargetsInput,
-} from '../schemas/orgs/inputs.js';
-import type { OrgData, OrgMemberData } from '../schemas/orgs/data.js';
-import type { RoleData } from '../schemas/roles/data.js';
-import type { ScopeData } from '../schemas/scopes/data.js';
+} from '../schemas/orgs/types.js';
+import type { OrgData, OrgMemberData } from '../schemas/orgs/types.js';
+import type { RoleData } from '../schemas/roles/types.js';
+import type { ScopeData } from '../schemas/scopes/types.js';
 
 export class OrgsController extends BaseController {
     constructor(

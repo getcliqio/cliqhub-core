@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { BaseController } from './base_controller.js';
 import type { ReportsService } from '../services/reports_service.js';
-import { reports_audit_schema } from '../schemas/reports_schemas.js';
+import { reports_audit_schema } from '../schemas/reports/types.js';
 
 export class ReportsController extends BaseController {
     constructor(private _reports_service: ReportsService) {

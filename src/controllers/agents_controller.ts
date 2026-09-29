@@ -12,7 +12,7 @@
  * Tenancy (AG-1a): body `org_id` + `assert_org_authorized` — never X-Org-Id / current_org_id.
  *
  * Request/response typing uses `ApiRequest<Body, Data>` / `ApiOkResponse<Data>`.
- * Inbound SoT: PascalCase Zod `Agents*Input` in `schemas/agents/inputs.ts`.
+ * Inbound SoT: PascalCase Zod `Agents*Input` in `schemas/agents/types.ts`.
  */
 
 import type { Request } from 'express';
@@ -22,8 +22,8 @@ import { AgentService } from '../services/agent.service.js';
 import { ApiError } from '../lib/api_error.js';
 import { Realm } from '../models/index.js';
 import type { ApiOkResponse, ApiRequest, BooleanData } from '../types/api_response.js';
-import type { AgentData } from '../schemas/agents/data.js';
-import type { SettingsData } from '../schemas/settings_schemas.js';
+import type { AgentData } from '../schemas/agents/types.js';
+import type { SettingsData } from '../schemas/settings/types.js';
 import {
     AgentsGetInput,
     AgentsGetDetailsInput,
@@ -31,7 +31,7 @@ import {
     AgentsDeregisterInput,
     AgentsGetSettingsInput,
     AgentsUpdateSettingsInput,
-} from '../schemas/agents/inputs.js';
+} from '../schemas/agents/types.js';
 
 export class AgentsController extends BaseController {
     private readonly _service: AgentService;

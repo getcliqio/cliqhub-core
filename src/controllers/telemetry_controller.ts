@@ -23,7 +23,7 @@ import type { ApiOkResponse, ApiRequest, BooleanData } from '../types/api_respon
 import {
     GetTelemetryInput,
     ReportTelemetryInput,
-} from '../schemas/telemetry/inputs.js';
+} from '../schemas/telemetry/types.js';
 import type {
     GetTelemetryData,
     ReportTelemetryData,
@@ -31,7 +31,7 @@ import type {
     TelemetrySpanData,
     TelemetrySummaryData,
     TelemetryUsageData,
-} from '../schemas/telemetry/data.js';
+} from '../schemas/telemetry/types.js';
 
 export class TelemetryController extends BaseController {
     /**

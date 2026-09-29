@@ -8,7 +8,7 @@ import {
     invitations_revoke_schema,
     invitations_get_by_token_schema,
     invitations_accept_schema,
-} from '../schemas/invitations_schemas.js';
+} from '../schemas/invitations/types.js';
 
 export class InvitationsController extends BaseController {
     constructor(private _invitations_service: InvitationsService) {

@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { BaseController } from './base_controller.js';
 import type { DraftsService } from '../services/drafts_service.js';
-import { drafts_get_by_id_schema, drafts_new_schema, drafts_update_schema, drafts_delete_schema } from '../schemas/drafts_schemas.js';
+import { drafts_get_by_id_schema, drafts_new_schema, drafts_update_schema, drafts_delete_schema } from '../schemas/drafts/types.js';
 import { to_draft_dto, to_draft_list_item_dto } from '../types/mappers.js';
 
 export class DraftsController extends BaseController {

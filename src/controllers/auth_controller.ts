@@ -6,7 +6,7 @@ import {
     authenticate_user_schema,
     issue_session_token_schema,
     revoke_session_token_schema,
-} from '../schemas/auth_schemas.js';
+} from '../schemas/auth/types.js';
 import { to_user_dto } from '../types/mappers.js';
 
 export class AuthController extends BaseController {

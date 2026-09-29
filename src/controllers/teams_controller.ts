@@ -20,7 +20,7 @@
  *
  * Response envelope: `{ ok: true, data: T }` via `this.ok()`.
  * List responses use `PagedData<TeamData>` — `{ items, total, offset, limit }`.
- * Inbound SoT: PascalCase Zod `Teams*Input` in `schemas/teams/inputs.ts`.
+ * Inbound SoT: PascalCase Zod `Teams*Input` in `schemas/teams/types.ts`.
  */
 
 import type { Request, Response } from 'express';
@@ -34,7 +34,7 @@ import { Team, Scope } from '../models/index.js';
 import type { TeamsService } from '../services/teams_service.js';
 import type { BuilderService } from '../services/builder_service.js';
 import type { ApiOkResponse, ApiRequest, PagedData } from '../types/api_response.js';
-import type { TeamData, TeamMutationData, TeamsGetVersionsData, TeamsGetPhasesData, TeamsInstallData, TeamsUninstallData } from '../schemas/teams/data.js';
+import type { TeamData, TeamMutationData, TeamsGetVersionsData, TeamsGetPhasesData, TeamsInstallData, TeamsUninstallData } from '../schemas/teams/types.js';
 import {
     TeamsGetInput,
     TeamsGetByIdInput,
@@ -50,8 +50,8 @@ import {
     TeamsRenameInput,
     TeamsInstallInput,
     TeamsUninstallInput,
-} from '../schemas/teams/inputs.js';
-import { teams_build_schema } from '../schemas/builder_schemas.js';
+} from '../schemas/teams/types.js';
+import { teams_build_schema } from '../schemas/builder/types.js';
 import { to_team_list_item_dto } from '../types/mappers.js';
 
 export class TeamsController extends BaseController {

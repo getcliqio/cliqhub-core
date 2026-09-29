@@ -5,9 +5,9 @@
  * settings.optional so account/realm UIs can store defaults.
  */
 
-import type { SettingDef } from '../schemas/settings_schemas.js';
+import type { SettingDef } from '../schemas/settings/types.js';
 
-/** @deprecated Use SettingDef from schemas/settings_schemas. */
+/** @deprecated Use SettingDef from schemas/settings/types. */
 export type Setting_def = SettingDef;
 
 const SCALAR_INPUT_TYPES = new Set(['string', 'number', 'boolean']);

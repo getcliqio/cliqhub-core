@@ -1,21 +1,21 @@
 /**
  * Data Transfer Objects — re-exports + legacy shapes.
  *
- * Agents: response DTOs in `schemas/agents/data.ts`; inbound Zod in
- * `schemas/agents/inputs.ts` (`Agents*Input` — type inferred from schema).
+ * Agents: response DTOs in `schemas/agents/types.ts`; inbound Zod in
+ * `schemas/agents/types.ts` (`Agents*Input` — type inferred from schema).
  */
 
 import type { BooleanData, EntityOrBooleanData } from './api_response.js';
 
 export type { BooleanData, EntityOrBooleanData };
 
-export { AgentData } from '../schemas/agents/data.js';
-export type { AgentsData } from '../schemas/agents/data.js';
-export * from '../schemas/agents/inputs.js';
-export { SettingDef, SettingsData, setting_def_schema, settings_data_schema } from '../schemas/settings_schemas.js';
+export { AgentData } from '../schemas/agents/types.js';
+export type { AgentsData } from '../schemas/agents/types.js';
+export * from '../schemas/agents/types.js';
+export { SettingDef, SettingsData, setting_def_schema, settings_data_schema } from '../schemas/settings/types.js';
 
 /** @deprecated Use SettingsData. */
-export type { AgentSettingsData } from '../schemas/settings_schemas.js';
+export type { AgentSettingsData } from '../schemas/settings/types.js';
 export { ManifestInput } from '../schemas/common/manifest.js';
 
 // ── Legacy hand-written DTOs (migrate next) ──────────────────────────

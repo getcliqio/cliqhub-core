@@ -27,7 +27,7 @@ import type {
     NotificationChannelTestData,
     NotificationData,
     NotificationRuleData,
-} from '../schemas/notifications/data.js';
+} from '../schemas/notifications/types.js';
 import {
     NotificationChannelsCreateInput,
     NotificationChannelsGetInput,
@@ -38,7 +38,7 @@ import {
     NotificationRulesRemoveInput,
     NotificationRulesSetInput,
     NotificationsGetInput,
-} from '../schemas/notifications/inputs.js';
+} from '../schemas/notifications/types.js';
 
 export class NotificationsController extends BaseController {
 

@@ -15,8 +15,8 @@ import { QueryTypes } from 'sequelize';
 import { get_sequelize } from '../lib/sequelize.js';
 import { RunSpan } from '../models/run_span.model.js';
 import { to_telemetry_span_data } from '../types/mappers.js';
-import type { ReportTelemetryInput } from '../schemas/telemetry/inputs.js';
-import type { TelemetrySpanData } from '../schemas/telemetry/data.js';
+import type { ReportTelemetryInput } from '../schemas/telemetry/types.js';
+import type { TelemetrySpanData } from '../schemas/telemetry/types.js';
 
 /** Zod traces arm of ReportTelemetryInput, without the `kind` discriminant. */
 export type TracesIngestPayload = Omit<Extract<ReportTelemetryInput, { kind: 'traces' }>, 'kind'>;

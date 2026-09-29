@@ -1,5 +1,14 @@
 import { z } from 'zod';
 
+export const reports_audit_schema = z.object({
+    action: z.string().optional(),
+    target_type: z.string().optional(),
+    admin_id: z.string().uuid().optional(),
+    limit: z.number().int().min(1).max(100).optional(),
+    offset: z.number().int().min(0).optional(),
+});
+
+
 /**
  * Canonical wire shape for an admin audit log entry.
  * Replaces inline shapes in reports_controller.ts, BFF AuditLog VO/DTO, and SPA AuditEntry.

@@ -11,7 +11,7 @@ import {
     revoke_token_schema,
     rotate_token_schema,
     validate_token_schema,
-} from '../schemas/tokens_schemas.js';
+} from '../schemas/tokens/types.js';
 import {
     clamp_grant_to_subject,
     default_daemon_grant,

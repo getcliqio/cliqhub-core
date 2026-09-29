@@ -15,7 +15,7 @@
  * Invite search lives under POST /v1/users/get { realm_id }.
  *
  * Request typing: `FlatApiRequest` / `FlatApiOkResponse` (flat `{ ok, realm }` until RM-ENV).
- * Inbound SoT: PascalCase Zod `Realm*Input` in `schemas/realms/inputs.ts`.
+ * Inbound SoT: PascalCase Zod `Realm*Input` in `schemas/realms/types.ts`.
  */
 
 import type { Request, Response } from 'express';
@@ -39,7 +39,7 @@ import {
     RealmAddMemberInput,
     RealmRemoveMemberInput,
     RealmTeamRefInput,
-} from '../schemas/realms/inputs.js';
+} from '../schemas/realms/types.js';
 
 type Realm_user = {
     user_id: string;

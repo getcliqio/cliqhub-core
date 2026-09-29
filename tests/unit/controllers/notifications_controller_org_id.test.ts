@@ -71,7 +71,7 @@ import {
     NotificationRulesListInput,
     NotificationRulesSetInput,
     NotificationsGetInput,
-} from '../../../src/schemas/notifications/inputs.js';
+} from '../../../src/schemas/notifications/types.js';
 import { NotificationsController } from '../../../src/controllers/notifications_controller.js';
 import { NotificationService } from '../../../src/services/notification.service.js';
 import { InAppNotificationService } from '../../../src/services/in_app_notification.service.js';

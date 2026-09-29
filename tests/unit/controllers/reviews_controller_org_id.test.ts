@@ -40,7 +40,7 @@ import { ReviewsController } from '../../../src/controllers/reviews_controller.j
 import { ReviewPendingService } from '../../../src/services/review_pending.service.js';
 import { HugReviewsService } from '../../../src/services/hug_reviews.service.js';
 import { require_permission } from '../../../src/auth/permissions.js';
-import { reviews_get_schema } from '../../../src/schemas/reviews_schemas.js';
+import { reviews_get_schema } from '../../../src/schemas/reviews/types.js';
 
 const ORG_A = hub_legacy_uuid(10);
 const ORG_B = hub_legacy_uuid(20);

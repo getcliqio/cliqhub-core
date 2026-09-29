@@ -11,7 +11,7 @@ import type { AuthContext } from '../../../src/types/vo.js';
 import {
     RealmCreateInput,
     RealmGetByIdInput,
-} from '../../../src/schemas/realms/inputs.js';
+} from '../../../src/schemas/realms/types.js';
 
 const ORG_A = hub_legacy_uuid(10);
 const ORG_B = hub_legacy_uuid(20);
