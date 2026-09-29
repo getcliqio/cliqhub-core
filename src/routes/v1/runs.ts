@@ -34,5 +34,5 @@ export function register_runs_routes(router: Router, auth: RequestHandler): void
     router.post('/runs/report_activity', auth, with_dedup(RunEventStreamController.report_activity));
     router.get('/runs/stream', auth, RunEventStreamController.stream);
 
-    router.post('/runs/artifacts/create', auth, RunController.artifacts_create);
+    router.post('/runs/create_rdr', auth, RunController.create_rdr);
 }

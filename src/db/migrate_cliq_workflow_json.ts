@@ -20,7 +20,7 @@ function storage_config_from_env(): StorageConfig {
 		packages_path: process.env.PACKAGES_PATH || './data/packages',
 		storage_backend: (process.env.STORAGE_BACKEND as 'local' | 'r2') || 'local',
 		s3_endpoint: process.env.S3_ENDPOINT || '',
-		s3_bucket: process.env.S3_BUCKET || '',
+		s3_teams_bucket: process.env.S3_TEAMS_BUCKET || 'cliqhub-packages',
 		s3_access_key_id: process.env.S3_ACCESS_KEY_ID || '',
 		s3_secret_access_key: process.env.S3_SECRET_ACCESS_KEY || '',
 	};

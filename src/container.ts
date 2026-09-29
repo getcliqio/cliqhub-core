@@ -99,7 +99,7 @@ export async function create_container(config: EnvConfig): Promise<Container> {
         packages_path: config.packages_path,
         storage_backend: config.storage_backend as 'local' | 'r2',
         s3_endpoint: config.s3_endpoint,
-        s3_bucket: config.s3_bucket,
+        s3_teams_bucket: config.s3_teams_bucket,
         s3_access_key_id: config.s3_access_key_id,
         s3_secret_access_key: config.s3_secret_access_key,
     });

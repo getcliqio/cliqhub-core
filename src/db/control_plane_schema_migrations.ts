@@ -1187,6 +1187,25 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
                ON cliq."agent_catalog" ("org_id") WHERE "org_id" IS NOT NULL`);
     await run(`CREATE INDEX IF NOT EXISTS "agent_catalog_is_system_idx"
                ON cliq."agent_catalog" ("is_system")`);
+
+    // ── Stored artifacts: durable file uploads from agent phases ──────
+    // Files are stored in R2; this table holds metadata + references.
+    // Completely independent of run_artifacts (runtime event store).
+
+    await run(`CREATE TABLE IF NOT EXISTS cliq."stored_artifacts" (
+        "id"          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "run_id"      TEXT NOT NULL,
+        "phase"       TEXT NOT NULL,
+        "name"        TEXT NOT NULL,
+        "description" TEXT,
+        "mime_type"   TEXT NOT NULL,
+        "size_bytes"  BIGINT NOT NULL,
+        "storage_key" TEXT NOT NULL,
+        "uploaded_by" TEXT,
+        "created_at"  BIGINT NOT NULL
+    )`);
+    await run(`CREATE INDEX IF NOT EXISTS "stored_artifacts_run_id_idx"
+               ON cliq."stored_artifacts" ("run_id")`);
 }
 
 /**

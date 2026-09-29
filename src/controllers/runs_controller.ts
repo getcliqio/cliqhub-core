@@ -177,8 +177,8 @@ const update_status_schema = z.object({
     })).min(1),
 });
 
-// --- Artifacts schemas ---
-const artifacts_create_schema = z.object({
+// --- RDR (run data record) schema ---
+const rdr_create_schema = z.object({
     run_id: z.string(),
     phase: z.string(),
     kind: z.string(),
@@ -615,9 +615,10 @@ export class RunController {
 
     // --- Artifacts ---
 
-    static async artifacts_create(req: Request, res: Response, next: NextFunction): Promise<void> {
+    /** POST /v1/runs/create_rdr — create a run data record (phase output, event artifact, transcript). */
+    static async create_rdr(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
-            const data = artifacts_create_schema.parse(req.body);
+            const data = rdr_create_schema.parse(req.body);
             const id = await RunService.create_artifact(data);
             res.json({ ok: true, id });
         } catch (err) { next(err); }

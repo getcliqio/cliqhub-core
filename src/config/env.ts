@@ -6,7 +6,8 @@ export interface EnvConfig {
     packages_path: string;
     storage_backend: 'local' | 'r2';
     s3_endpoint: string;
-    s3_bucket: string;
+    s3_teams_bucket: string;
+    s3_artifacts_bucket: string;
     s3_access_key_id: string;
     s3_secret_access_key: string;
     allowed_origins: string[];
@@ -44,7 +45,8 @@ export function load_env(): EnvConfig {
         packages_path: process.env.PACKAGES_PATH || './data/packages',
         storage_backend: (process.env.STORAGE_BACKEND || 'local') as 'local' | 'r2',
         s3_endpoint: process.env.S3_ENDPOINT || '',
-        s3_bucket: process.env.S3_BUCKET || '',
+        s3_teams_bucket: process.env.S3_TEAMS_BUCKET || 'cliqhub-packages',
+        s3_artifacts_bucket: process.env.S3_ARTIFACTS_BUCKET || 'cliq-artifacts',
         s3_access_key_id: process.env.S3_ACCESS_KEY_ID || '',
         s3_secret_access_key: process.env.S3_SECRET_ACCESS_KEY || '',
         allowed_origins: (process.env.ALLOWED_ORIGINS || '')
