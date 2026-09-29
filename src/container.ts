@@ -35,7 +35,6 @@ import { SettingsService } from './services/settings_service.js';
 import { UsersService } from './services/users_service.js';
 import { UsersController } from './controllers/users_controller.js';
 import { ScopesService } from './services/scopes_service.js';
-import { ScopesController } from './controllers/scopes_controller.js';
 import { ReportsService } from './services/reports_service.js';
 import { ReportsController } from './controllers/reports_controller.js';
 import { TokensController } from './controllers/tokens_controller.js';
@@ -51,7 +50,6 @@ export interface Container {
     invitations_controller: InvitationsController;
     tokens_controller: TokensController;
     users_controller: UsersController;
-    scopes_controller: ScopesController;
     reports_controller: ReportsController;
     org_repo: OrgRepository;
     scope_member_repo: ScopeMemberRepository;
@@ -127,7 +125,6 @@ export async function create_container(config: EnvConfig): Promise<Container> {
         scope_repo, team_repo, audit_repo, org_repo, org_member_repo, scope_member_repo,
     );
     const orgs_controller = new OrgsController(orgs_service, scopes_service);
-    const scopes_controller = new ScopesController(scopes_service);
 
     const invitations_service = new InvitationsService(
         org_repo, org_member_repo, scope_repo, user_repo, config,
@@ -150,7 +147,7 @@ export async function create_container(config: EnvConfig): Promise<Container> {
         config, auth_controller, tokens_controller, teams_controller,
         drafts_controller, orgs_controller,         invitations_controller,
         users_controller,
-        scopes_controller, reports_controller,
+        reports_controller,
         user_repo, token_repo, scope_repo, org_member_repo, org_repo, scope_member_repo,
         team_repo, version_repo, tag_repo, download_log_repo, draft_repo,
     };

@@ -270,17 +270,17 @@ describe('JWT Bearer is rejected', () => {
     it('scopes/get with JWT returns 401', async () => {
         const jwt = sign_token({ user_id: hub_legacy_uuid(1), username: 'alice', role: 'user' }, SECRET);
         const res = await request(app)
-            .post('/v1/scopes/get')
+            .post('/v1/orgs/get_scopes')
             .set('Authorization', `Bearer ${jwt}`)
-            .send({ mine: true });
+            .send({});
         expect(res.status).toBe(401);
     });
 
     it('scopes/get with cliq_dk_ returns 401', async () => {
         const res = await request(app)
-            .post('/v1/scopes/get')
+            .post('/v1/orgs/get_scopes')
             .set('Authorization', 'Bearer cliq_dk_abcdef1234567890abcdef1234567890abcdef1234567890')
-            .send({ mine: true });
+            .send({});
         expect(res.status).toBe(401);
     });
 
@@ -288,7 +288,7 @@ describe('JWT Bearer is rejected', () => {
         vi.mocked(pw.verify_password).mockResolvedValueOnce(true);
         const auth = stub_pat_auth(repos, ADMIN_USER);
         const res = await request(app)
-            .post('/v1/scopes/get')
+            .post('/v1/orgs/get_scopes')
             .set('Authorization', auth)
             .send({});
         expect(res.status).toBe(200);

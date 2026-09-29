@@ -27,11 +27,11 @@ function auth_header() {
 describe('proxy routing', () => {
     beforeEach(() => vi.clearAllMocks());
 
-    it('BFF can reach backend /v1/scopes/get', async () => {
+    it('BFF can reach backend /v1/orgs/get_scopes', async () => {
         const res = await request(app)
-            .post('/v1/scopes/get')
+            .post('/v1/orgs/get_scopes')
             .set('Authorization', auth_header())
-            .send({ mine: true });
+            .send({});
 
         expect(res.status).toBe(200);
         expect(res.body.ok).toBe(true);

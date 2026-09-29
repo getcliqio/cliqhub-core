@@ -2,11 +2,12 @@ import express from 'express';
 import { vi } from 'vitest';
 import { AuthController } from '../../src/controllers/auth_controller.js';
 import { TeamsController } from '../../src/controllers/teams_controller.js';
+import { OrgsController } from '../../src/controllers/orgs_controller.js';
 import { AuthService } from '../../src/services/auth_service.js';
 import { TeamsService } from '../../src/services/teams_service.js';
+import { OrgsService } from '../../src/services/orgs_service.js';
 import { TokensController } from '../../src/controllers/tokens_controller.js';
 import { ScopesService } from '../../src/services/scopes_service.js';
-import { ScopesController } from '../../src/controllers/scopes_controller.js';
 import { register_control_plane_routes } from '../../src/routes/index.js';
 import { error_handler } from '../../src/middleware/error_handler.js';
 import { create_auth_middleware } from '../../src/middleware/auth_middleware.js';
@@ -191,11 +192,22 @@ export function create_test_app() {
             delete_by_scope_id: vi.fn(),
         } as any,
     );
-    const scopes_controller = new ScopesController(scopes_service);
-    app.post('/v1/scopes/get', scopes_controller.wrap(scopes_controller.get));
-    app.post('/v1/scopes/new', scopes_controller.wrap(scopes_controller.new_scope));
-    app.post('/v1/scopes/update', scopes_controller.wrap(scopes_controller.update));
-    app.post('/v1/scopes/delete', scopes_controller.wrap(scopes_controller.delete_scope));
+    const orgs_service = new OrgsService(
+        repos.org_repo as any,
+        repos.org_member_repo as any,
+        repos.scope_repo as any,
+        {
+            create: vi.fn(),
+            create_on_conflict_ignore: vi.fn(),
+            find_by_scope_and_user: vi.fn().mockResolvedValue(null),
+            delete_by_scope_and_user: vi.fn().mockResolvedValue(0),
+            delete_by_scope_id: vi.fn(),
+        } as any,
+        repos.user_repo as any,
+        repos.team_repo as any,
+    );
+    const orgs_controller = new OrgsController(orgs_service, scopes_service);
+    app.post('/v1/orgs/get_scopes', orgs_controller.wrap(orgs_controller.get_scopes));
 
     register_control_plane_routes(app);
 

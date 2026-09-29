@@ -23,7 +23,7 @@ import { register_users_routes } from './v1/users.js';
 import { register_auth_routes, register_dispatch_key_routes } from './v1/auth.js';
 import { register_orgs_routes } from './v1/orgs.js';
 import { register_invitations_routes } from './v1/invitations.js';
-import { register_scopes_routes, register_control_scopes_routes } from './v1/scopes.js';
+import { register_control_scopes_routes } from './v1/scopes.js';
 import { register_events_routes } from './v1/events.js';
 import { register_reviews_routes } from './v1/reviews.js';
 import { register_agents_routes } from './v1/agents.js';
@@ -106,7 +106,6 @@ export function register_routes(app: Application, container: Container): void {
     register_auth_routes(router, auth, container);
     register_orgs_routes(router, container, auth);
     register_invitations_routes(router, container);
-    register_scopes_routes(router, auth, container);
     register_events_routes(router, auth);
     register_reviews_routes(router, auth);
     register_agents_routes(router, auth);
