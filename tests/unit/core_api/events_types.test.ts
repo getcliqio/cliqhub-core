@@ -4,7 +4,7 @@ import {
 	EVENT_TYPES,
 	is_event_type,
 	EVENT_TYPE_SEVERITY,
-} from '../../../src/events/types.js';
+} from '../../../src/schemas/event_types.js';
 
 describe('event types catalog', () => {
 	it('includes core run, phase, hug, team, daemon, realm types', () => {

@@ -1,4 +1,4 @@
-import { EVENT_TYPES, type EventType } from '../../events/types.js';
+import { EVENT_TYPES, type EventType } from '../../schemas/event_types.js';
 import { AbstractNotificationHandler } from './abstract_notification_handler.js';
 import { create_handler_for_type } from './family_handlers.js';
 

@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { Op } from 'sequelize';
 
 import { ApiError } from '../lib/api_error.js';
-import { EventSubmitService } from '../events/index.js';
+import { EventSubmitService } from './events_service.js';
 import { Review } from '../models/review.model.js';
 import { ReviewNotification } from '../models/review_notification.model.js';
 import { RealmMember, Run, RunEvent } from '../models/index.js';

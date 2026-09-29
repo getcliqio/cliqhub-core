@@ -3,15 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import { get_notification_handler } from '../notifications/handlers/index.js';
-import { CustomEventService } from '../services/custom_event.service.js';
+import { CustomEventService } from './custom_event.service.js';
 import type { NotificationDispatchStatus } from '../notifications/types.js';
 import {
 	EVENT_TYPE_SEVERITY,
 	type EventSeverity,
 	type EventType,
-} from './types.js';
-import { event_submit_schema } from './submit_schema.js';
-import { HubEvent } from './event.model.js';
+} from '../schemas/event_types.js';
+import { event_submit_schema } from '../schemas/event_types.js';
+import { HubEvent } from '../models/hub_event.model.js';
 
 const log = get_logger('events');
 

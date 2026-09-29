@@ -14,7 +14,7 @@ import {
 	RealmMember,
 	Run,
 } from '../../src/models/index.js';
-import { HubEvent } from '../../src/events/event.model.js';
+import { HubEvent } from '../../src/models/hub_event.model.js';
 import { ApiError } from '../../src/lib/api_error.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { ScopeService } from '../../src/services/control_scope_service.js';

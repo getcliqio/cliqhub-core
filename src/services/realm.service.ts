@@ -18,7 +18,7 @@ import { TokenRepository } from '../repositories/token_repository.js';
 import { RealmAgentSettingRepository } from '../repositories/realm_agent_setting_repository.js';
 import { NotificationService } from './notification.service.js';
 import { RealmDispatchKeyService } from './realm_dispatch_key.service.js';
-import { EventSubmitService } from '../events/submit.service.js';
+import { EventSubmitService } from './events_service.js';
 import { legacy_personal_realm_slugs } from '../lib/personal_realm.js';
 import {
     account_default_realm_slug,

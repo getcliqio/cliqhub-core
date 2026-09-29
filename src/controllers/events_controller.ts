@@ -3,9 +3,9 @@ import { z } from 'zod';
 
 import {
 	EVENT_TYPES,
-	EventSubmitService,
 	event_submit_schema,
-} from '../events/index.js';
+} from '../schemas/event_types.js';
+import { EventSubmitService } from '../services/events_service.js';
 import { CustomEventService } from '../services/custom_event.service.js';
 import {
 	require_authenticated_user_id,

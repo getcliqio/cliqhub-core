@@ -36,7 +36,7 @@ vi.mock('../../../src/services/in_app_notification.service.js', () => ({
     },
 }));
 
-vi.mock('../../../src/events/submit.service.js', () => ({
+vi.mock('../../../src/services/events_service.js', () => ({
     EventSubmitService: {
         submit: vi.fn(),
     },
@@ -57,7 +57,7 @@ import { RealmA2aService } from '../../../src/services/realm_a2a.service.js';
 import { DispatchService } from '../../../src/services/dispatch.service.js';
 import { QueueService } from '../../../src/services/queue.service.js';
 import { InAppNotificationService } from '../../../src/services/in_app_notification.service.js';
-import { EventSubmitService } from '../../../src/events/submit.service.js';
+import { EventSubmitService } from '../../../src/services/events_service.js';
 
 describe('A2aInvokeService', () => {
     beforeEach(() => {

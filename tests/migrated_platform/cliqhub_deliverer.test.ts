@@ -3,7 +3,7 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 
 import { CliqHubDeliverer } from '../../src/notifications/deliverers/cliqhub_deliverer.js';
 import { InAppNotificationService } from '../../src/services/in_app_notification.service.js';
-import { EventSubmitService } from '../../src/events/submit.service.js';
+import { EventSubmitService } from '../../src/services/events_service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import {

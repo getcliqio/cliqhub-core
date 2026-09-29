@@ -7,7 +7,7 @@ import { DispatchService } from './dispatch.service.js';
 import { QueueService } from './queue.service.js';
 import type { Queue_item_dto } from './queue.service.js';
 import { InAppNotificationService } from './in_app_notification.service.js';
-import { EventSubmitService } from '../events/submit.service.js';
+import { EventSubmitService } from './events_service.js';
 
 export type A2a_task_state =
     | 'submitted'

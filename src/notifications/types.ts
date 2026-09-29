@@ -2,7 +2,7 @@
  * Shared notification domain types — channel providers, event groups, DTOs.
  */
 
-import { EVENT_TYPES, type EventType, is_event_type } from '../events/types.js';
+import { EVENT_TYPES, type EventType, is_event_type } from '../schemas/event_types.js';
 
 export const CHANNEL_PROVIDERS = ['slack', 'email', 'webhook', 'cliqhub'] as const;
 export type ChannelProvider = (typeof CHANNEL_PROVIDERS)[number];

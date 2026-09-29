@@ -1,7 +1,7 @@
 import { QueryTypes } from 'sequelize';
 
 import { get_sequelize } from '../db/sequelize.js';
-import { EventSubmitService } from '../events/index.js';
+import { EventSubmitService } from './events_service.js';
 import { ReviewNotification } from '../models/review_notification.model.js';
 import { HugReviewsService } from './hug_reviews.service.js';
 

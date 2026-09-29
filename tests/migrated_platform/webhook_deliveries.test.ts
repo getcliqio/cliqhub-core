@@ -31,7 +31,7 @@ import {
     postgres_reachable,
 } from './helpers/control_plane_store.js';
 import { make_hub_bearer, stub_hub_pat_auth } from './helpers/hub_jwt.js';
-import { EventSubmitService } from '../../src/events/submit.service.js';
+import { EventSubmitService } from '../../src/services/events_service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
 import {
     WebhookDeliveryService,

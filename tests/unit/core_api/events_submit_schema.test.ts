@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
 	event_submit_schema,
 	required_fields_for,
-} from '../../../src/events/submit_schema.js';
+} from '../../../src/schemas/event_types.js';
 
 describe('required_fields_for', () => {
 	it('maps run / phase / hug / daemon / realm / team families', () => {

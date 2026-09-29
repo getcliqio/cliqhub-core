@@ -13,7 +13,7 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 
 // ── event type catalog ──────────────────────────────────────────────
 
-import { is_event_type } from '../../../src/events/types.js';
+import { is_event_type } from '../../../src/schemas/event_types.js';
 
 describe('is_event_type — custom.* support', () => {
 
@@ -41,7 +41,7 @@ describe('is_event_type — custom.* support', () => {
 
 // ── submit schema ───────────────────────────────────────────────────
 
-import { event_submit_schema, required_fields_for } from '../../../src/events/submit_schema.js';
+import { event_submit_schema, required_fields_for } from '../../../src/schemas/event_types.js';
 
 describe('event_submit_schema — custom.* events', () => {
 

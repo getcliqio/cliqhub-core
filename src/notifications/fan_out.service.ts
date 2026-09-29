@@ -1,6 +1,6 @@
 import { get_logger } from '../lib/log.js';
-import type { SubmittedEvent } from '../events/submit.service.js';
-import { EventSubmitService } from '../events/submit.service.js';
+import type { SubmittedEvent } from '../services/events_service.js';
+import { EventSubmitService } from '../services/events_service.js';
 import { Daemon, Run } from '../models/index.js';
 import { NotificationService } from '../services/notification.service.js';
 import { get_deliverer } from './deliverers/index.js';

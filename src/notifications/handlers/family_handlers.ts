@@ -1,5 +1,5 @@
-import type { SubmittedEvent } from '../../events/submit.service.js';
-import type { EventType } from '../../events/types.js';
+import type { SubmittedEvent } from '../../services/events_service.js';
+import type { EventType } from '../../schemas/event_types.js';
 import type { NotificationDispatchStatus } from '../types.js';
 import { NotificationFanOutService } from '../fan_out.service.js';
 import { AbstractNotificationHandler } from './abstract_notification_handler.js';

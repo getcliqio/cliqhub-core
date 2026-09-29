@@ -37,7 +37,7 @@ import { NotificationRule, init_notification_rule } from './notification_rule.mo
 import { CustomEvent, init_custom_event } from './custom_event.model.js';
 import { RealmA2aSetting, init_realm_a2a_setting } from './realm_a2a_setting.model.js';
 import { AccountMeshSetting, init_account_mesh_setting } from './account_mesh_setting.model.js';
-import { HubEvent, init_hub_event } from '../events/event.model.js';
+import { HubEvent, init_hub_event } from './hub_event.model.js';
 import { WebhookDelivery, init_webhook_delivery } from './webhook_delivery.model.js';
 
 export {

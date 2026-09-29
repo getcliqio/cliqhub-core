@@ -13,8 +13,8 @@ import { RealmService } from './realm.service.js';
 import { parse_log_level, split_log_chunk } from '../lib/log_line_parse.js';
 import { generate_slug } from '../lib/slug.js';
 import { QueryTypes } from 'sequelize';
-import { EventSubmitService } from '../events/submit.service.js';
-import type { EventType } from '../events/types.js';
+import { EventSubmitService } from './events_service.js';
+import type { EventType } from '../schemas/event_types.js';
 import type { ReportTelemetryInput } from '../schemas/telemetry_types.js';
 import type { TelemetryUsageData } from '../schemas/telemetry_types.js';
 

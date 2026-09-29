@@ -6,8 +6,8 @@ import {
 	close_control_plane_store,
 	init_control_plane_store,
 } from '../../../src/db/control_plane_store.js';
-import { EventSubmitService } from '../../../src/events/submit.service.js';
-import { HubEvent } from '../../../src/events/event.model.js';
+import { EventSubmitService } from '../../../src/services/events_service.js';
+import { HubEvent } from '../../../src/models/hub_event.model.js';
 
 const DATABASE_URL =
 	process.env.DATABASE_URL

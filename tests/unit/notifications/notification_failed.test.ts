@@ -9,7 +9,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 
-import { EVENT_TYPES, is_event_type, EVENT_TYPE_SEVERITY } from '../../../src/events/types.js';
+import { EVENT_TYPES, is_event_type, EVENT_TYPE_SEVERITY } from '../../../src/schemas/event_types.js';
 
 describe('notification.failed — catalog', () => {
 
