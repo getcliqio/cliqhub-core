@@ -73,7 +73,6 @@ describe('require_auth (Hub auth only)', () => {
             role: 'user',
             org_ids: [hub_legacy_uuid(3)],
             scope_ids: ['scope-uuid-cliq'],
-            current_org_id: undefined,
         });
         expect(Scope.findAll).toHaveBeenCalledTimes(2);
     });

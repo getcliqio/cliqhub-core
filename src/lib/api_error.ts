@@ -44,6 +44,10 @@ export class ApiError extends Error {
         return new ApiError(409, message, code);
     }
 
+    static unprocessable(message: string, code?: string): ApiError {
+        return new ApiError(422, message, code);
+    }
+
     static internal(message: string, code?: string): ApiError {
         return new ApiError(500, message, code);
     }

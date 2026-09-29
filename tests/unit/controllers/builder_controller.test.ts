@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
-import type { Request, Response } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import { TeamsController } from '../../../src/controllers/teams_controller.js';
 
 function make_builder_service() {
@@ -32,66 +32,52 @@ describe('TeamsController.build', () => {
         controller = new TeamsController({} as any, builder as any);
     });
 
-    it('generate rejects missing intent', async () => {
-        const req = make_req({ action: 'generate' });
+    /** Call build through wrap so errors propagate to next() */
+    function call_build(body: any, next: NextFunction) {
+        const req = make_req(body);
         const res = make_res();
-        const next = vi.fn();
-        await controller.build(req, res, next);
-        await new Promise(r => setTimeout(r, 10));
+        return controller.wrap(controller.build)(req, res, next) as Promise<void>;
+    }
+
+    it('generate rejects missing intent', async () => {
+        const next = vi.fn() as unknown as NextFunction;
+        await call_build({ action: 'generate' }, next);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('status rejects missing job_id', async () => {
-        const req = make_req({ action: 'status' });
-        const res = make_res();
-        const next = vi.fn();
-        await controller.build(req, res, next);
-        await new Promise(r => setTimeout(r, 10));
+        const next = vi.fn() as unknown as NextFunction;
+        await call_build({ action: 'status' }, next);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('improve_role rejects missing role_name', async () => {
-        const req = make_req({ action: 'improve_role', role_content: 'x' });
-        const res = make_res();
-        const next = vi.fn();
-        await controller.build(req, res, next);
-        await new Promise(r => setTimeout(r, 10));
+        const next = vi.fn() as unknown as NextFunction;
+        await call_build({ action: 'improve_role', role_content: 'x' }, next);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('suggest rejects missing team_name', async () => {
-        const req = make_req({ action: 'suggest' });
-        const res = make_res();
-        const next = vi.fn();
-        await controller.build(req, res, next);
-        await new Promise(r => setTimeout(r, 10));
+        const next = vi.fn() as unknown as NextFunction;
+        await call_build({ action: 'suggest' }, next);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('validate rejects missing team', async () => {
-        const req = make_req({ action: 'validate' });
-        const res = make_res();
-        const next = vi.fn();
-        await controller.build(req, res, next);
-        await new Promise(r => setTimeout(r, 10));
+        const next = vi.fn() as unknown as NextFunction;
+        await call_build({ action: 'validate' }, next);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('chat rejects missing message', async () => {
-        const req = make_req({ action: 'chat', team: { name: 'x', phases: [], roles: [] } });
-        const res = make_res();
-        const next = vi.fn();
-        await controller.build(req, res, next);
-        await new Promise(r => setTimeout(r, 10));
+        const next = vi.fn() as unknown as NextFunction;
+        await call_build({ action: 'chat', team: { name: 'x', phases: [], roles: [] } }, next);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('rejects missing action', async () => {
-        const req = make_req({ intent: 'build a team' });
-        const res = make_res();
-        const next = vi.fn();
-        await controller.build(req, res, next);
-        await new Promise(r => setTimeout(r, 10));
+        const next = vi.fn() as unknown as NextFunction;
+        await call_build({ intent: 'build a team' }, next);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 });

@@ -128,16 +128,16 @@ app.use(create_auth_middleware({
     org_member_repo: auth_repos.org_member_repo as any,
 }));
 
-app.post('/v1/users/get', users_controller.get);
-app.post('/v1/users/get_by_id', users_controller.get_by_id);
-app.post('/internal/users/new', users_controller.new_user);
-app.post('/v1/users/update', users_controller.update);
-app.post('/internal/users/delete', users_controller.delete_user);
-app.post('/internal/users/suspend', users_controller.suspend);
-app.post('/internal/users/change_password', users_controller.change_password);
-app.post('/v1/auth/generate_token', tokens_controller.generate_token);
-app.post('/v1/auth/get_tokens', tokens_controller.get_tokens);
-app.post('/v1/auth/revoke_token', tokens_controller.revoke_token);
+app.post('/v1/users/get', users_controller.wrap(users_controller.get));
+app.post('/v1/users/get_by_id', users_controller.wrap(users_controller.get_by_id));
+app.post('/internal/users/new', users_controller.wrap(users_controller.new_user));
+app.post('/v1/users/update', users_controller.wrap(users_controller.update));
+app.post('/internal/users/delete', users_controller.wrap(users_controller.delete_user));
+app.post('/internal/users/suspend', users_controller.wrap(users_controller.suspend));
+app.post('/internal/users/change_password', users_controller.wrap(users_controller.change_password));
+app.post('/v1/auth/generate_token', tokens_controller.wrap(tokens_controller.generate_token));
+app.post('/v1/auth/get_tokens', tokens_controller.wrap(tokens_controller.get_tokens));
+app.post('/v1/auth/revoke_token', tokens_controller.wrap(tokens_controller.revoke_token));
 app.use(error_handler);
 
 function admin_header() {

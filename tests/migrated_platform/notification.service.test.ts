@@ -63,8 +63,8 @@ async function create_test_channel(name?: string) {
 	});
 }
 
-function parse_destinations(record: { destinations: string }): Array<Record<string, unknown>> {
-	return JSON.parse(record.destinations) as Array<Record<string, unknown>>;
+function get_destinations(record: { destinations: Array<Record<string, unknown>> }): Array<Record<string, unknown>> {
+	return record.destinations;
 }
 
 describe.skipIf(!has_postgres)('NotificationService — Channels', () => {
@@ -123,7 +123,7 @@ describe.skipIf(!has_postgres)('NotificationService — Channels', () => {
 		it('creates channel with defaults (enabled=true) and expected destination type', async () => {
 			const ch = await create_test_channel();
 			expect(ch.enabled).toBe(1);
-			const dests = parse_destinations(ch);
+			const dests = get_destinations(ch);
 			expect(dests).toHaveLength(1);
 			expect(dests[0].type).toBe('slack');
 		});
@@ -137,7 +137,7 @@ describe.skipIf(!has_postgres)('NotificationService — Channels', () => {
 				enabled: false,
 			});
 			expect(ch.enabled).toBe(0);
-			expect(parse_destinations(ch)[0].type).toBe('email');
+			expect(get_destinations(ch)[0].type).toBe('email');
 		});
 
 		it('rejects missing destinations', async () => {
@@ -177,7 +177,7 @@ describe.skipIf(!has_postgres)('NotificationService — Channels', () => {
 			});
 
 			expect(updated.name).toBe(new_name);
-			expect(parse_destinations(updated)[0].type).toBe('email');
+			expect(get_destinations(updated)[0].type).toBe('email');
 		});
 
 		it('updates destinations and enabled flag', async () => {
@@ -188,7 +188,7 @@ describe.skipIf(!has_postgres)('NotificationService — Channels', () => {
 				enabled: false,
 			});
 			expect(updated.enabled).toBe(0);
-			const dests = parse_destinations(updated);
+			const dests = get_destinations(updated);
 			expect(String(dests[0].webhook_url)).toContain('hooks.slack.com');
 		});
 

@@ -9,33 +9,33 @@ export class DraftsController extends BaseController {
         super();
     }
 
-    get = this.wrap(async (req: Request, res: Response) => {
+    async get(req: Request, res: Response): Promise<void> {
         const result = await this._drafts_service.get(req.auth);
         const drafts = result.drafts.map(to_draft_list_item_dto);
         this.ok(res, { drafts });
-    });
+    }
 
-    get_by_id = this.wrap(async (req: Request, res: Response) => {
+    async get_by_id(req: Request, res: Response): Promise<void> {
         const body = this.parse_body(drafts_get_by_id_schema, req);
         const draft = await this._drafts_service.get_by_id(req.auth, body);
         this.ok(res, to_draft_dto(draft));
-    });
+    }
 
-    new_draft = this.wrap(async (req: Request, res: Response) => {
+    async new_draft(req: Request, res: Response): Promise<void> {
         const body = this.parse_body(drafts_new_schema, req);
         const result = await this._drafts_service.new_draft(req.auth, body);
         this.ok(res, result);
-    });
+    }
 
-    update = this.wrap(async (req: Request, res: Response) => {
+    async update(req: Request, res: Response): Promise<void> {
         const body = this.parse_body(drafts_update_schema, req);
         const result = await this._drafts_service.update(req.auth, body);
         this.ok(res, result);
-    });
+    }
 
-    delete_draft = this.wrap(async (req: Request, res: Response) => {
+    async delete_draft(req: Request, res: Response): Promise<void> {
         const body = this.parse_body(drafts_delete_schema, req);
         const result = await this._drafts_service.delete_draft(req.auth, body);
         this.ok(res, result);
-    });
+    }
 }

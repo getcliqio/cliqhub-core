@@ -194,7 +194,7 @@ describe.skipIf(!ready)('control plane integration (D4)', () => {
             .send({ org_id: alice_org_id });
         expect(list.status).toBe(200);
         expect(list.body.ok).toBe(true);
-        const ids = (list.body.daemons as Array<{ id: string }>).map(d => d.id);
+        const ids = ((list.body.data?.items ?? list.body.daemons) as Array<{ id: string }>).map(d => d.id);
         expect(ids).toContain(reg.body.daemon.daemon_id);
 
         const by_realm = await request(app)
@@ -202,7 +202,7 @@ describe.skipIf(!ready)('control plane integration (D4)', () => {
             .set('Authorization', hub_bearer())
             .send({ realm_id });
         expect(by_realm.status).toBe(200);
-        const realm_ids = (by_realm.body.daemons as Array<{ id: string }>).map(d => d.id);
+        const realm_ids = ((by_realm.body.data?.items ?? by_realm.body.daemons) as Array<{ id: string }>).map(d => d.id);
         expect(realm_ids).toContain(reg.body.daemon.daemon_id);
 
         const by_id = await request(app)
@@ -217,7 +217,7 @@ describe.skipIf(!ready)('control plane integration (D4)', () => {
             .set('Authorization', hub_bearer())
             .send({});
         expect(realms.status).toBe(200);
-        expect((realms.body.realms as Array<{ id: string }>).some(r => r.id === realm_id)).toBe(true);
+        expect(((realms.body.data?.items ?? realms.body.realms) as Array<{ id: string }>).some(r => r.id === realm_id)).toBe(true);
 
         const realm_one = await request(app)
             .post('/v1/realms/get_by_id')

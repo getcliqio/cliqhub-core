@@ -104,7 +104,7 @@ export class TokensController extends BaseController {
         return realm_ids;
     }
 
-    generate_token = this.wrap(async (req: Request, res: Response) => {
+    async generate_token(req: Request, res: Response): Promise<void> {
         const user = this._require_auth(req);
         const body = this.parse_body(generate_token_schema, req);
 
@@ -201,9 +201,9 @@ export class TokensController extends BaseController {
             id: record.id,
             realm_ids,
         }, 201);
-    });
+    }
 
-    get_tokens = this.wrap(async (req: Request, res: Response) => {
+    async get_tokens(req: Request, res: Response): Promise<void> {
         const user = this._require_auth(req);
         const body = this.parse_body(get_tokens_schema, req);
         const limit = body.limit ?? 50;
@@ -265,9 +265,9 @@ export class TokensController extends BaseController {
             };
         });
         this.ok(res, { tokens, total });
-    });
+    }
 
-    revoke_token = this.wrap(async (req: Request, res: Response) => {
+    async revoke_token(req: Request, res: Response): Promise<void> {
         const user = this._require_auth(req);
         const body = this.parse_body(revoke_token_schema, req);
         const token = await this._token_repo.find_by_id(body.token_id);
@@ -284,9 +284,9 @@ export class TokensController extends BaseController {
         const count = await this._token_repo.soft_revoke(body.token_id);
         if (count === 0) throw new ApiError('not_found', 'Token not found', 404);
         this.ok(res, { revoked: true, type: body.type });
-    });
+    }
 
-    rotate_token = this.wrap(async (req: Request, res: Response) => {
+    async rotate_token(req: Request, res: Response): Promise<void> {
         const user = this._require_auth(req);
         const body = this.parse_body(rotate_token_schema, req);
 
@@ -331,13 +331,13 @@ export class TokensController extends BaseController {
             token: raw_token,
             permissions: token.permissions,
         });
-    });
+    }
 
     /**
      * Introspect a plaintext user/realm token (daemon Hub-identity check).
      * Caller must present their own Bearer; body carries the token under test.
      */
-    validate_token = this.wrap(async (req: Request, res: Response) => {
+    async validate_token(req: Request, res: Response): Promise<void> {
         this._require_auth(req);
         const body = this.parse_body(validate_token_schema, req);
         const plaintext = body.token.trim();
@@ -383,5 +383,5 @@ export class TokensController extends BaseController {
             user_id: row.user_id,
             permissions: row.permissions,
         });
-    });
+    }
 }

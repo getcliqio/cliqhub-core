@@ -25,7 +25,7 @@ export function register_realms_routes(router: Router, auth: RequestHandler): vo
     router.post('/realms/add_team', auth, realms.wrap(realms.add_team));
     router.post('/realms/remove_team', auth, realms.wrap(realms.remove_team));
     router.post('/realms/get_notification_rules', auth, notifications.wrap(notifications.rules_list));
-    router.post('/realms/set_notification_rule', auth, notifications.wrap(notifications.rules_set));
-    router.post('/realms/remove_notification_rule', auth, notifications.wrap(notifications.rules_remove));
+    router.post('/realms/set_notification_rules', auth, notifications.wrap(notifications.rules_set));
+    router.post('/realms/remove_notification_rules', auth, notifications.wrap(notifications.rules_remove));
     router.post('/realms/a2a', auth, RealmA2aController.handle);
 }

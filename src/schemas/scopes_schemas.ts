@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 export const scopes_get_schema = z.object({
-    /** When true, return the caller's scopes (not admin-wide catalog). */
-    mine: z.boolean().optional(),
+    /** Filter to a specific org's scopes (admin-only catalog). */
+    org_id: z.string().uuid().optional(),
     /** Substring match on slug/display_name (POST body only). Preferred over `search`. */
     query: z.string().optional(),
     /** @deprecated use `query` */

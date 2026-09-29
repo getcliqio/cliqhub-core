@@ -21,7 +21,6 @@ import { BaseController } from './base_controller.js';
 import { AgentService } from '../services/agent.service.js';
 import { ApiError } from '../lib/api_error.js';
 import { Realm } from '../models/index.js';
-import type { AuthContext } from '../types/vo.js';
 import type { ApiOkResponse, ApiRequest, BooleanData } from '../types/api_response.js';
 import type { AgentData } from '../schemas/agents/data.js';
 import type { SettingsData } from '../schemas/settings_schemas.js';
@@ -43,34 +42,6 @@ export class AgentsController extends BaseController {
     }
 
     /**
-     * Bearer must be allowed to act on `org_id`.
-     * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
-     */
-    private async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
-        // No credential context — refuse rather than invent tenancy.
-        if (!auth) {
-            throw ApiError.unauthorized('authentication required');
-        }
-
-        // Daemon tokens are realm-bound; tenancy is the realm's org, not a membership list.
-        if (auth.auth_via === 'daemon_token') {
-            if (!auth.realm_id) {
-                throw ApiError.forbidden('daemon token has no realm binding');
-            }
-            const realm = await Realm.findByPk(auth.realm_id);
-            if (!realm || realm.org_id !== org_id) {
-                throw ApiError.forbidden('org_id does not match daemon realm organization');
-            }
-            return;
-        }
-
-        // PAT / session: live membership list from auth middleware.
-        if (!auth.org_ids.includes(org_id)) {
-            throw ApiError.forbidden('not a member of the requested organization');
-        }
-    }
-
-    /**
      * When settings carry realm_id, realm must belong to the same org_id.
      */
     private async assert_realm_in_org(realm_id: string | undefined, org_id: string): Promise<void> {
@@ -79,10 +50,6 @@ export class AgentsController extends BaseController {
         if (!realm || realm.org_id !== org_id) {
             throw ApiError.forbidden('realm does not belong to the requested organization');
         }
-    }
-
-    private auth_from(req: Request): AuthContext | undefined {
-        return (req as Request & { auth?: AuthContext }).auth;
     }
 
     /**

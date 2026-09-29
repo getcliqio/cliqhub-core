@@ -25,8 +25,6 @@ declare global {
                 scope_ids: string[];
                 /** Hub account role — `admin` is site-wide. */
                 role: string;
-                /** Active org context for this request. */
-                current_org_id?: string;
             };
         }
     }
@@ -98,7 +96,6 @@ export async function require_auth(req: Request, res: Response, next: NextFuncti
             org_ids,
             scope_ids,
             role: String(hub_user.role ?? 'user'),
-            current_org_id: req.auth.current_org_id,
         };
 
         next();

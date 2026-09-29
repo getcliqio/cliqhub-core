@@ -40,7 +40,7 @@ app.use((req, _res, next) => {
     }
     next();
 });
-app.post('/v1/teams/build', builder_auth, teams_controller.build);
+app.post('/v1/teams/build', builder_auth, teams_controller.wrap(teams_controller.build));
 app.use(error_handler);
 
 function auth_header() {

@@ -162,6 +162,6 @@ describe.skipIf(!has_postgres)('dispatch enqueue + claim HTTP (Slice 2)', () => 
             .send({
                 realm_id: session.default_realm_id,
             });
-        expect(enq.status).toBe(400);
+        expect(enq.status).toBe(422);
     });
 });

@@ -32,19 +32,23 @@ describe('DraftsController', () => {
         controller = new DraftsController(service as any);
     });
 
+    const next = vi.fn() as unknown as NextFunction;
+
+    function call(method: (req: Request, res: Response) => Promise<void>, req: Request, res: Response) {
+        return controller.wrap(method)(req, res, next);
+    }
+
     it('get delegates to service', async () => {
         const req = make_req({});
         const res = make_res();
-        const next = vi.fn();
-        await controller.get(req, res, next);
+        await call(controller.get, req, res);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
     });
 
     it('get_by_id rejects non-integer id', async () => {
         const req = make_req({ id: 'abc' });
         const res = make_res();
-        const next = vi.fn();
-        await controller.get_by_id(req, res, next);
+        await call(controller.get_by_id, req, res);
         await new Promise(r => setTimeout(r, 10));
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
@@ -52,16 +56,14 @@ describe('DraftsController', () => {
     it('get_by_id delegates with valid id', async () => {
         const req = make_req({ id: hub_legacy_uuid(1) });
         const res = make_res();
-        const next = vi.fn();
-        await controller.get_by_id(req, res, next);
+        await call(controller.get_by_id, req, res);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
     });
 
     it('new_draft rejects missing team_json', async () => {
         const req = make_req({ title: 'Test' });
         const res = make_res();
-        const next = vi.fn();
-        await controller.new_draft(req, res, next);
+        await call(controller.new_draft, req, res);
         await new Promise(r => setTimeout(r, 10));
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
@@ -69,16 +71,14 @@ describe('DraftsController', () => {
     it('new_draft delegates with valid body', async () => {
         const req = make_req({ team_json: '{}' });
         const res = make_res();
-        const next = vi.fn();
-        await controller.new_draft(req, res, next);
+        await call(controller.new_draft, req, res);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
     });
 
     it('update rejects missing id', async () => {
         const req = make_req({ team_json: '{}' });
         const res = make_res();
-        const next = vi.fn();
-        await controller.update(req, res, next);
+        await call(controller.update, req, res);
         await new Promise(r => setTimeout(r, 10));
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
@@ -86,8 +86,7 @@ describe('DraftsController', () => {
     it('update rejects missing team_json', async () => {
         const req = make_req({ id: hub_legacy_uuid(1) });
         const res = make_res();
-        const next = vi.fn();
-        await controller.update(req, res, next);
+        await call(controller.update, req, res);
         await new Promise(r => setTimeout(r, 10));
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
@@ -95,16 +94,14 @@ describe('DraftsController', () => {
     it('update delegates with valid body', async () => {
         const req = make_req({ id: hub_legacy_uuid(1), team_json: '{}' });
         const res = make_res();
-        const next = vi.fn();
-        await controller.update(req, res, next);
+        await call(controller.update, req, res);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
     });
 
     it('delete_draft rejects non-integer id', async () => {
         const req = make_req({ id: 'abc' });
         const res = make_res();
-        const next = vi.fn();
-        await controller.delete_draft(req, res, next);
+        await call(controller.delete_draft, req, res);
         await new Promise(r => setTimeout(r, 10));
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
@@ -112,8 +109,7 @@ describe('DraftsController', () => {
     it('delete_draft delegates with valid id', async () => {
         const req = make_req({ id: hub_legacy_uuid(1) });
         const res = make_res();
-        const next = vi.fn();
-        await controller.delete_draft(req, res, next);
+        await call(controller.delete_draft, req, res);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
     });
 });

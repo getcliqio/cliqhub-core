@@ -403,7 +403,7 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
             .set('Authorization', bearer_for(ALICE))
             .send({ realm_id });
         expect(listed.status).toBe(200);
-        const listed_ids = (listed.body.daemons as Array<{ id: string }>).map((d) => d.id);
+        const listed_ids = ((listed.body.data?.items ?? listed.body.daemons) as Array<{ id: string }>).map((d) => d.id);
         expect(listed_ids).toEqual(expect.arrayContaining([d1, d2]));
     });
 

@@ -21,6 +21,10 @@ describe('ReportsController', () => {
     let controller: ReportsController;
     const next = vi.fn() as unknown as NextFunction;
 
+    function call(method: (req: Request, res: Response) => Promise<void>, req: Request, res: Response) {
+        return controller.wrap(method)(req, res, next);
+    }
+
     beforeEach(() => {
         vi.clearAllMocks();
         controller = new ReportsController(mock_service as any);
@@ -28,47 +32,47 @@ describe('ReportsController', () => {
 
     it('audit accepts empty body and delegates to service', async () => {
         const res = mock_res();
-        await controller.audit(make_req(), res, next);
+        await call(controller.audit, make_req(), res);
         expect(mock_service.audit).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(200);
     });
 
     it('audit rejects limit > 100 with 422', async () => {
         const res = mock_res();
-        await controller.audit(make_req({ limit: 200 }), res, next);
+        await call(controller.audit, make_req({ limit: 200 }), res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('audit passes with valid action filter', async () => {
         const res = mock_res();
-        await controller.audit(make_req({ action: 'create' }), res, next);
+        await call(controller.audit, make_req({ action: 'create' }), res);
         expect(mock_service.audit).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(200);
     });
 
     it('audit passes with valid target_type filter', async () => {
         const res = mock_res();
-        await controller.audit(make_req({ target_type: 'team' }), res, next);
+        await call(controller.audit, make_req({ target_type: 'team' }), res);
         expect(mock_service.audit).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(200);
     });
 
     it('audit passes with admin_id filter', async () => {
         const res = mock_res();
-        await controller.audit(make_req({ admin_id: hub_legacy_uuid(3) }), res, next);
+        await call(controller.audit, make_req({ admin_id: hub_legacy_uuid(3) }), res);
         expect(mock_service.audit).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(200);
     });
 
     it('audit rejects negative offset with 422', async () => {
         const res = mock_res();
-        await controller.audit(make_req({ offset: -5 }), res, next);
+        await call(controller.audit, make_req({ offset: -5 }), res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('audit rejects non-integer admin_id with 422', async () => {
         const res = mock_res();
-        await controller.audit(make_req({ admin_id: 'abc' }), res, next);
+        await call(controller.audit, make_req({ admin_id: 'abc' }), res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 });

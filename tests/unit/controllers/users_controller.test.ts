@@ -32,17 +32,17 @@ function make_app() {
         req.auth = { user: { id: hub_legacy_uuid(1), role: 'admin' }, org_slugs: [], org_ids: [], scopes: [] } as any;
         next();
     });
-    app.post('/v1/users/get', controller.get);
-    app.post('/v1/users/get_by_id', controller.get_by_id);
-    app.post('/internal/users/new', controller.new_user);
-    app.post('/v1/users/update', controller.update);
-    app.post('/v1/users/delete', controller.delete_user);
-    app.post('/v1/users/suspend', controller.suspend);
-    app.post('/v1/users/unsuspend', controller.unsuspend);
-    app.post('/internal/users/reset_password', controller.reset_password);
-    app.post('/internal/users/set_role', controller.set_role);
-    app.post('/internal/users/update_role', controller.update_role);
-    app.post('/internal/users/change_password', controller.change_password);
+    app.post('/v1/users/get', controller.wrap(controller.get));
+    app.post('/v1/users/get_by_id', controller.wrap(controller.get_by_id));
+    app.post('/internal/users/new', controller.wrap(controller.new_user));
+    app.post('/v1/users/update', controller.wrap(controller.update));
+    app.post('/v1/users/delete', controller.wrap(controller.delete_user));
+    app.post('/v1/users/suspend', controller.wrap(controller.suspend));
+    app.post('/v1/users/unsuspend', controller.wrap(controller.unsuspend));
+    app.post('/internal/users/reset_password', controller.wrap(controller.reset_password));
+    app.post('/internal/users/set_role', controller.wrap(controller.set_role));
+    app.post('/internal/users/update_role', controller.wrap(controller.update_role));
+    app.post('/internal/users/change_password', controller.wrap(controller.change_password));
     app.use(error_handler);
     return app;
 }

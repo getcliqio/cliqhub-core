@@ -48,7 +48,7 @@ describe('proxy routing', () => {
 
         expect(res.status).toBe(200);
         expect(res.body.ok).toBe(true);
-        expect(res.body.data).toHaveProperty('teams');
+        expect(res.body.data).toHaveProperty('items');
     });
 
     it('health endpoint responds on /v1/health', async () => {

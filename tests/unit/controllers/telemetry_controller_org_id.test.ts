@@ -75,7 +75,6 @@ function make_req(body: Record<string, unknown>, auth?: AuthContext) {
         user: auth?.user
             ? {
                 user_id: String(auth.user.id),
-                current_org_id: ORG_B,
             }
             : undefined,
     } as unknown as Request;
@@ -103,7 +102,7 @@ describe('TelemetryController TEL-ENV envelope', () => {
         vi.mocked(RunSpanService.ingest).mockResolvedValue(2);
     });
 
-    it('summary without org_id → 422; no invent from current_org_id', async () => {
+    it('summary without org_id → 422', async () => {
         await expect(
             telemetry.get_telemetry(
                 make_req({ kind: 'summary' }, pat_auth([ORG_A])) as never,

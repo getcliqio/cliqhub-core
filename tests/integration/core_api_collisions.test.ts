@@ -159,7 +159,7 @@ describe.skipIf(!ready)('core_api control + dispatch paths (postgres)', () => {
             .set('Authorization', hub_bearer())
             .send({});
         expect(res.status).toBe(200);
-        const teams = res.body.data?.teams ?? res.body.teams;
+        const teams = res.body.data?.items ?? res.body.data?.teams ?? res.body.teams;
         expect(Array.isArray(teams)).toBe(true);
     });
 

@@ -28,6 +28,7 @@ import request from 'supertest';
 import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
 import { OrgsService } from '../../src/services/orgs_service.js';
 import { OrgsController } from '../../src/controllers/orgs_controller.js';
+import { ScopesService } from '../../src/services/scopes_service.js';
 import { UsersService } from '../../src/services/users_service.js';
 import { UsersController } from '../../src/controllers/users_controller.js';
 import { make_mock_repos, test_config } from '../helpers/test_container.js';
@@ -74,7 +75,14 @@ const orgs_service = new OrgsService(
     repos.team_repo as any,
     repos.audit_repo as any,
 );
-const orgs_controller = new OrgsController(orgs_service);
+const orgs_controller = new OrgsController(orgs_service, new ScopesService(
+    repos.scope_repo as any,
+    repos.team_repo as any,
+    repos.audit_repo as any,
+    repos.org_repo as any,
+    repos.org_member_repo as any,
+    scope_member_repo as any,
+));
 
 const users_service = new UsersService(
     repos.user_repo as any,
@@ -86,24 +94,26 @@ const users_service = new UsersService(
 );
 const users_controller = new UsersController(users_service);
 
-app.post('/v1/orgs/get', orgs_controller.get);
-app.post('/v1/orgs/get_by_id', orgs_controller.get_by_id);
-app.post('/v1/orgs/list_roles', orgs_controller.list_roles);
-app.post('/internal/orgs/new', orgs_controller.new_org);
-app.post('/v1/orgs/update', orgs_controller.update);
-app.post('/internal/orgs/delete', orgs_controller.delete_org);
-app.post('/v1/orgs/add_member', orgs_controller.add_member);
-app.post('/v1/orgs/remove_member', orgs_controller.remove_member);
-app.post('/internal/orgs/get_role', orgs_controller.get_role);
-app.post('/internal/orgs/create_role', orgs_controller.create_role);
-app.post('/internal/orgs/update_role', orgs_controller.update_role);
-app.post('/internal/orgs/delete_role', orgs_controller.delete_role);
-app.post('/internal/users/update_role', users_controller.update_role);
-app.post('/v1/orgs/leave', orgs_controller.leave);
-app.post('/v1/orgs/new_scope', orgs_controller.new_scope);
-app.post('/v1/orgs/delete_scope', orgs_controller.delete_scope);
-app.post('/v1/orgs/assign_scope_member', orgs_controller.assign_scope_member);
-app.post('/v1/orgs/unassign_scope_member', orgs_controller.unassign_scope_member);
+app.post('/v1/orgs/get',                   orgs_controller.wrap(orgs_controller.get));
+app.post('/v1/orgs/get_by_id',             orgs_controller.wrap(orgs_controller.get_by_id));
+app.post('/v1/orgs/list_roles',            orgs_controller.wrap(orgs_controller.list_roles));
+app.post('/internal/orgs/new',             orgs_controller.wrap(orgs_controller.new_org));
+app.post('/v1/orgs/update',                orgs_controller.wrap(orgs_controller.update));
+app.post('/internal/orgs/delete',          orgs_controller.wrap(orgs_controller.delete_org));
+app.post('/v1/orgs/add_member',            orgs_controller.wrap(orgs_controller.add_member));
+app.post('/v1/orgs/remove_member',         orgs_controller.wrap(orgs_controller.remove_member));
+app.post('/internal/orgs/get_role',        orgs_controller.wrap(orgs_controller.get_role));
+app.post('/internal/orgs/create_role',     orgs_controller.wrap(orgs_controller.create_role));
+app.post('/internal/orgs/update_role',     orgs_controller.wrap(orgs_controller.update_role));
+app.post('/internal/orgs/delete_role',     orgs_controller.wrap(orgs_controller.delete_role));
+app.post('/internal/users/update_role',    users_controller.wrap(users_controller.update_role));
+app.post('/v1/orgs/leave',                 orgs_controller.wrap(orgs_controller.leave));
+app.post('/v1/orgs/new_scope',             orgs_controller.wrap(orgs_controller.new_scope));
+app.post('/v1/orgs/update_scope',          orgs_controller.wrap(orgs_controller.update_scope));
+app.post('/v1/orgs/delete_scope',          orgs_controller.wrap(orgs_controller.delete_scope));
+app.post('/v1/orgs/assign_scope_member',   orgs_controller.wrap(orgs_controller.assign_scope_member));
+app.post('/v1/orgs/unassign_scope_member', orgs_controller.wrap(orgs_controller.unassign_scope_member));
+app.post('/v1/orgs/get_scopes',            orgs_controller.wrap(orgs_controller.get_scopes));
 app.use(error_handler);
 
 const ALICE_USER = {

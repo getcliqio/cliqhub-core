@@ -189,11 +189,11 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
         expect(login.body.data.scopes).toContain(alice.username);
 
         const scopes = await request(app)
-            .post('/v1/scopes/get')
+            .post('/v1/orgs/get_scopes')
             .set('Authorization', bearer(login.body.data.token))
-            .send({ mine: true });
+            .send({ user_id: alice.user_id });
         expect(scopes.status).toBe(200);
-        const scope_slugs = (scopes.body.data.scopes as Array<{ slug: string }>).map((s) => s.slug);
+        const scope_slugs = (scopes.body.data.items as Array<{ slug: string }>).map((s) => s.slug);
         expect(scope_slugs).toContain(alice.username);
 
         const alice_realms = await request(app)
@@ -201,7 +201,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
             .set('Authorization', bearer(alice.token))
             .send({});
         expect(alice_realms.status).toBe(200);
-        const personal = (alice_realms.body.realms as Array<{ id: string; slug: string; name: string }>)
+        const personal = (alice_realms.body.data?.items ?? alice_realms.body.realms as Array<{ id: string; slug: string; name: string }>)
             .find((r) => r.id === alice.default_realm_id);
         expect(personal?.slug).toBe('default');
 
@@ -209,7 +209,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
             .post('/v1/realms/get')
             .set('Authorization', bearer(bob.token))
             .send({});
-        const bob_ids = (bob_realms.body.realms as Array<{ id: string }>).map((r) => r.id);
+        const bob_ids = (bob_realms.body.data?.items ?? bob_realms.body.realms as Array<{ id: string }>).map((r) => r.id);
         expect(bob_ids).toContain(bob.default_realm_id);
         expect(bob_ids).not.toContain(alice.default_realm_id);
     });
@@ -264,7 +264,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
             .post('/v1/realms/get')
             .set('Authorization', bearer(bob.token))
             .send({});
-        const bob_realms_view = bob_list.body.realms as Array<{ id: string; slug: string }>;
+        const bob_realms_view = (bob_list.body.data?.items ?? bob_list.body.realms) as Array<{ id: string; slug: string }>;
         const bob_ids = new Set(bob_realms_view.map((r) => r.id));
         const bob_slugs = new Set(bob_realms_view.map((r) => r.slug));
         expect(bob_ids.has(bob.default_realm_id)).toBe(true);
@@ -279,7 +279,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
             .set('Authorization', bearer(carol.token))
             .send({});
         const carol_slugs = new Set(
-            (carol_list.body.realms as Array<{ slug: string }>).map((r) => r.slug),
+            ((carol_list.body.data?.items ?? carol_list.body.realms) as Array<{ slug: string }>).map((r) => r.slug),
         );
         expect(carol_slugs.has(shared_b)).toBe(true);
         expect(carol_slugs.has(shared_a)).toBe(false);
@@ -288,7 +288,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
             .post('/v1/realms/get')
             .set('Authorization', bearer(alice.token))
             .send({});
-        const alice_realms_view = alice_list.body.realms as Array<{ id: string; slug: string }>;
+        const alice_realms_view = (alice_list.body.data?.items ?? alice_list.body.realms) as Array<{ id: string; slug: string }>;
         const alice_ids = new Set(alice_realms_view.map((r) => r.id));
         const alice_slugs = new Set(alice_realms_view.map((r) => r.slug));
         expect(alice_ids.has(alice.default_realm_id)).toBe(true);
@@ -367,7 +367,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
             .set('Authorization', bearer(bob.token))
             .send({});
         expect(
-            (bob_after.body.realms as Array<{ slug: string }>).some((r) => r.slug === shared_a),
+            ((bob_after.body.data?.items ?? bob_after.body.realms) as Array<{ slug: string }>).some((r) => r.slug === shared_a),
         ).toBe(false);
 
         const bob_get_a = await request(app)
@@ -421,7 +421,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
             .post('/v1/realms/get')
             .set('Authorization', bearer(bob.token))
             .send({});
-        const bob_realms_view = bob_realms.body.realms as Array<{ id: string; slug: string }>;
+        const bob_realms_view = (bob_realms.body.data?.items ?? bob_realms.body.realms) as Array<{ id: string; slug: string }>;
         const bob_ids = new Set(bob_realms_view.map((r) => r.id));
         // Bob still sees his personal default realm.
         expect(bob_ids.has(bob.default_realm_id)).toBe(true);

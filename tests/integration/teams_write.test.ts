@@ -59,8 +59,8 @@ const auth_service = new AuthService(
 );
 const auth_controller = new AuthController(auth_service);
 
-app.post('/internal/auth/signup', auth_controller.signup);
-app.post('/internal/auth/authenticate_user', auth_controller.authenticate_user);
+app.post('/internal/auth/signup', auth_controller.wrap(auth_controller.signup));
+app.post('/internal/auth/authenticate_user', auth_controller.wrap(auth_controller.authenticate_user));
 
 const teams_service = new TeamsService(
     repos.team_repo as any, repos.version_repo as any,
@@ -70,15 +70,15 @@ const teams_service = new TeamsService(
 );
 const teams_controller = new TeamsController(teams_service);
 
-app.post('/v1/teams/get', teams_controller.get);
-app.post('/v1/teams/publish', teams_controller.publish);
-app.post('/v1/teams/download', teams_controller.download);
-app.post('/v1/teams/delete', teams_controller.delete_team);
-app.post('/v1/teams/delete_version', teams_controller.delete_version);
-app.post('/v1/teams/create', teams_controller.create);
-app.post('/v1/teams/update', teams_controller.update);
-app.post('/v1/teams/unpublish', teams_controller.unpublish);
-app.post('/v1/teams/rename', teams_controller.rename);
+app.post('/v1/teams/get',            teams_controller.wrap(teams_controller.get));
+app.post('/v1/teams/publish',        teams_controller.wrap(teams_controller.publish));
+app.post('/v1/teams/download',       teams_controller.wrap(teams_controller.download));
+app.post('/v1/teams/delete',         teams_controller.wrap(teams_controller.delete_team));
+app.post('/v1/teams/delete_version', teams_controller.wrap(teams_controller.delete_version));
+app.post('/v1/teams/create',         teams_controller.wrap(teams_controller.create));
+app.post('/v1/teams/update',         teams_controller.wrap(teams_controller.update));
+app.post('/v1/teams/unpublish',      teams_controller.wrap(teams_controller.unpublish));
+app.post('/v1/teams/rename',         teams_controller.wrap(teams_controller.rename));
 
 app.use(error_handler);
 
@@ -390,7 +390,7 @@ describe('POST /v1/teams/get (mine=true)', () => {
             .set('Authorization', auth_header())
             .send({ mine: true, scope: 'alice' });
         expect(res.status).toBe(200);
-        expect(res.body.data.teams).toHaveLength(1);
+        expect(res.body.data.items).toHaveLength(1);
     });
 
     it('returns grouped scopes when group_by_scope is true', async () => {
@@ -405,6 +405,6 @@ describe('POST /v1/teams/get (mine=true)', () => {
             .set('Authorization', auth_header())
             .send({ mine: true, group_by_scope: true });
         expect(res.status).toBe(200);
-        expect(res.body.data.scopes).toBeDefined();
+        expect(res.body.data.items).toBeDefined();
     });
 });

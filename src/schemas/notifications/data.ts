@@ -7,6 +7,8 @@
 
 import { z } from 'zod';
 
+import { destination_schema } from '../../notifications/channel_config.js';
+
 /** Configured delivery channel on the wire. */
 export const NotificationChannelData = z.object({
 	id: z.string().describe('Channel UUID'),
@@ -14,7 +16,7 @@ export const NotificationChannelData = z.object({
 	org_id: z.string().nullable().optional().describe('Owning org for account channels'),
 	user_id: z.string().nullable().optional().describe('Owning user for personal account channels'),
 	name: z.string().describe('Unique name within the realm or org scope'),
-	destinations: z.string().describe('Serialized destination array JSON (built from channel_destinations rows)'),
+	destinations: z.array(destination_schema).describe('Delivery destinations — typed array where each item has a fixed `type` (slack | email | webhook | http | jira | cliqhub | channel_ref) and type-specific required fields'),
 	enabled: z.number().describe('1 = enabled, 0 = disabled'),
 	created_at: z.number().describe('Create time (unix ms)'),
 	updated_at: z.number().describe('Last update time (unix ms)'),
@@ -33,6 +35,7 @@ export type NotificationChannelTestData = z.infer<typeof NotificationChannelTest
 export const NotificationRuleData = z.object({
 	id: z.string().describe('Rule UUID'),
 	realm_id: z.string().nullable().describe('Realm scope, or null for org-global rules'),
+	org_id: z.string().nullable().optional().describe('Owning org for org-global rules'),
 	team_slug: z.string().nullable().describe('Team slug under the realm, or null for realm/org-wide'),
 	event: z.string().describe('Event selector (exact, family wildcard, or *)'),
 	channel_id: z.string().describe('Target channel id'),

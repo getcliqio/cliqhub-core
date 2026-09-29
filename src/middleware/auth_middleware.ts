@@ -7,6 +7,9 @@
  * Browser sessions are owned by the BFF (`session_id` cookie). The BFF
  * forwards `Authorization: Bearer <target_token>` (a `cliq_tok_…`) on
  * data-plane calls. Reject anything else (JWT, `cliq_dk_…`, bare secrets).
+ *
+ * Org tenancy is always explicit in the request body (`org_id`).
+ * The legacy `X-Org-Id` header is no longer read or consumed.
  */
 
 import type { Request, Response, NextFunction } from 'express';
@@ -49,14 +52,12 @@ export function create_auth_middleware(deps: AuthDeps) {
         // Realm / daemon token (`cliq_dt_…`)
         if (token.startsWith('cliq_dt_')) {
             req.auth = await resolve_daemon_token(token, deps);
-            req.auth.current_org_id = resolve_current_org_id(req, req.auth);
             return next();
         }
 
         // User PAT (`cliq_tok_…`) — includes BFF session PATs
         if (token.startsWith('cliq_tok_')) {
             req.auth = await resolve_api_token(token, deps);
-            req.auth.current_org_id = resolve_current_org_id(req, req.auth);
             return next();
         }
 
@@ -162,29 +163,3 @@ async function build_auth_context(
     };
 }
 
-/**
- * Resolve the active org for this request. Checks `X-Org-Id` header
- * first; falls back to the user's personal org (slug === username).
- * Returns undefined if user has no org membership.
- */
-export function resolve_current_org_id(
-    req: { headers: Record<string, string | string[] | undefined> },
-    auth: { user: { username: string } | null; org_ids: string[]; org_slugs: string[] },
-): string | undefined {
-    const header_val = req.headers['x-org-id'];
-    if (header_val) {
-        const requested = String(Array.isArray(header_val) ? header_val[0] : header_val).trim();
-        if (requested && auth.org_ids.includes(requested)) {
-            return requested;
-        }
-    }
-
-    if (!auth.user || auth.org_ids.length === 0) return undefined;
-
-    // Default: personal org (slug === username).
-    const personal_idx = auth.org_slugs.indexOf(auth.user.username);
-    if (personal_idx >= 0) return auth.org_ids[personal_idx];
-
-    // Fallback: first org membership.
-    return auth.org_ids[0];
-}

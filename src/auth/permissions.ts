@@ -175,27 +175,3 @@ export async function require_permission(
     }
 }
 
-/**
- * Express middleware helper: extract org + user ids from the request
- * and check a permission. Works with both Hub-layer and Core-API shapes.
- */
-export async function require_permission_from_req(
-    req: { auth?: { user?: { id: string; role?: string } | null; current_org_id?: string }; user?: { user_id?: string; role?: string; current_org_id?: string } },
-    permission: string,
-): Promise<void> {
-    const hub_user = req.auth?.user;
-    const core_user = req.user;
-
-    const user_id = hub_user?.id ?? core_user?.user_id;
-    if (!user_id) {
-        throw new ApiError('unauthorized', 'Authentication required', 401);
-    }
-
-    const org_id = req.auth?.current_org_id ?? core_user?.current_org_id;
-    if (!org_id) {
-        throw new ApiError('forbidden', 'No active organization context', 403);
-    }
-
-    const site_role = hub_user?.role ?? core_user?.role;
-    await require_permission(String(org_id), String(user_id), permission, { site_role });
-}

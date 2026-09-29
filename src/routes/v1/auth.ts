@@ -13,11 +13,11 @@ export function register_auth_routes(
     auth: RequestHandler,
     container: Container,
 ): void {
-    const { tokens_controller } = container;
-    router.post('/auth/generate_token', tokens_controller.generate_token);
-    router.post('/auth/get_tokens', tokens_controller.get_tokens);
-    router.post('/auth/validate_token', tokens_controller.validate_token);
-    router.post('/auth/revoke_token', tokens_controller.revoke_token);
-    router.post('/auth/rotate_token', tokens_controller.rotate_token);
+    const { tokens_controller: c } = container;
+    router.post('/auth/generate_token', c.wrap(c.generate_token));
+    router.post('/auth/get_tokens', c.wrap(c.get_tokens));
+    router.post('/auth/validate_token', c.wrap(c.validate_token));
+    router.post('/auth/revoke_token', c.wrap(c.revoke_token));
+    router.post('/auth/rotate_token', c.wrap(c.rotate_token));
     register_dispatch_key_routes(router, auth);
 }

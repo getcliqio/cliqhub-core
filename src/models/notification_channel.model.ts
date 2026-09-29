@@ -47,7 +47,10 @@ export function init_notification_channel(sequelize: Sequelize): void {
             indexes: [
                 { fields: ['realm_id'] },
                 { fields: ['org_id'], name: 'notification_channels_org_id_idx' },
-                { unique: true, fields: ['realm_id', 'name'] },
+                // Matches DB: (realm_id, name) WHERE realm_id IS NOT NULL
+                { unique: true, fields: ['realm_id', 'name'], where: { realm_id: { ne: null } } },
+                // Matches DB: (org_id, name) WHERE realm_id IS NULL
+                { unique: true, fields: ['org_id', 'name'], where: { realm_id: null } },
             ],
         },
     ) as ModelStatic<NotificationChannelModel>;

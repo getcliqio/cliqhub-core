@@ -15,7 +15,6 @@ import { ReviewMessageService } from '../services/review_message.service.js';
 import { ReviewPendingService } from '../services/review_pending.service.js';
 import { require_permission } from '../auth/permissions.js';
 import { Realm } from '../models/index.js';
-import type { AuthContext } from '../types/vo.js';
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
 import {
     ReviewsGetInput,
@@ -32,47 +31,11 @@ type ReviewsFields = Record<string, unknown>;
 
 export class ReviewsController extends BaseController {
     /**
-     * Bearer must be allowed to act on `org_id`.
-     * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
-     * Site hub admin may act on any org_id.
-     */
-    private async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
-        // No credential context — refuse rather than invent tenancy.
-        if (!auth) {
-            throw ApiError.unauthorized('authentication required');
-        }
-
-        // Site admin may target any org.
-        if (auth.user?.role === 'admin') return;
-
-        // Daemon tokens are realm-bound; tenancy is the realm's org.
-        if (auth.auth_via === 'daemon_token') {
-            if (!auth.realm_id) {
-                throw ApiError.forbidden('daemon token has no realm binding');
-            }
-            const realm = await Realm.findByPk(auth.realm_id);
-            if (!realm || realm.org_id !== org_id) {
-                throw ApiError.forbidden('org_id does not match daemon realm organization');
-            }
-            return;
-        }
-
-        // PAT / session: live membership list from auth middleware.
-        if (!auth.org_ids.includes(org_id)) {
-            throw ApiError.forbidden('not a member of the requested organization');
-        }
-    }
-
-    private auth_from(req: Request): AuthContext | undefined {
-        return req.auth;
-    }
-
-    /**
      * POST /v1/reviews/get — list open HUG reviews for caller's notifications.
      * Org-scoped list requires body `org_id` (REV-ORG hard-cut).
      *
      * @param req - Body: {@link ReviewsGetInput}
-     * @param res - Flat `{ ok: true, reviews, total, offset, limit }`
+     * @param res - `{ ok: true, data: { items, total, offset, limit } }`
      */
     async get(
         req: FlatApiRequest<ReviewsGetInput, ReviewsFields>,
@@ -99,13 +62,14 @@ export class ReviewsController extends BaseController {
             offset: body.offset,
         });
 
-        // Flat envelope — fields at top level (not this.ok / { ok, data }).
         res.json({
             ok: true,
-            reviews: result.reviews,
-            total: result.total,
-            offset: body.offset ?? 0,
-            limit: body.limit ?? 50,
+            data: {
+                items: result.reviews,
+                total: result.total,
+                offset: body.offset ?? 0,
+                limit: body.limit ?? 50,
+            },
         });
     }
 

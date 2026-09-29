@@ -91,7 +91,7 @@ describe.skipIf(!has_postgres)('notification_channels.secret column', () => {
         });
 
         const fetched = await NotificationService.get_channel(created.id);
-        const dests = JSON.parse(fetched.destinations) as Array<Record<string, unknown>>;
+        const dests = fetched.destinations as Array<Record<string, unknown>>;
         expect(dests[0].secret).not.toBe('whsec_abcdef12345');
     });
 

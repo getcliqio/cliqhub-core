@@ -284,15 +284,15 @@ describe('JWT Bearer is rejected', () => {
         expect(res.status).toBe(401);
     });
 
-    it('scopes/get with stubbed PAT returns 200', async () => {
+    it('scopes/get with stubbed admin PAT returns 200', async () => {
         vi.mocked(pw.verify_password).mockResolvedValueOnce(true);
-        const auth = stub_pat_auth(repos, ALICE_USER);
+        const auth = stub_pat_auth(repos, ADMIN_USER);
         const res = await request(app)
             .post('/v1/scopes/get')
             .set('Authorization', auth)
-            .send({ mine: true });
+            .send({});
         expect(res.status).toBe(200);
-        expect(res.body.data.scopes).toEqual([]);
+        expect(res.body.data.scopes).toBeDefined();
     });
 });
 

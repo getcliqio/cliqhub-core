@@ -28,7 +28,7 @@ describe('POST /v1/teams/get (unified list)', () => {
 
         const res = await request(app).post('/v1/teams/get').send({});
         expect(res.status).toBe(200);
-        expect(res.body.data.teams).toHaveLength(1);
+        expect(res.body.data.items).toHaveLength(1);
         expect(res.body.data.total).toBe(1);
     });
 
@@ -56,14 +56,14 @@ describe('POST /v1/teams/get (unified list)', () => {
         repos.tag_repo.find_by_team_ids.mockResolvedValueOnce([]);
         const res = await request(app).post('/v1/teams/get').send({ query: 'match' });
         expect(res.status).toBe(200);
-        expect(res.body.data.teams).toHaveLength(1);
+        expect(res.body.data.items).toHaveLength(1);
     });
 
     it('returns 200 with empty search results', async () => {
         repos.team_repo.count_filtered.mockResolvedValueOnce(0);
         repos.team_repo.list_filtered.mockResolvedValueOnce([]);
         const res = await request(app).post('/v1/teams/get').send({ query: 'nope' });
-        expect(res.body.data.teams).toEqual([]);
+        expect(res.body.data.items).toEqual([]);
     });
 });
 

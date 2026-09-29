@@ -256,11 +256,11 @@ describe.skipIf(!has_postgres)('RunService — Core CRUD', () => {
         });
     });
 
-    describe.skipIf(!has_postgres)('list_by_workspace', () => {
+    describe.skipIf(!has_postgres)('list_recent — workspace_id scope', () => {
         it('returns runs for specific workspace', async () => {
             await create_run();
 
-            const result = await RunService.list_by_workspace(workspace_id);
+            const result = await RunService.list_recent(50, undefined, { workspace_id });
             result.runs.forEach((r: any) => expect(r.workspace_id).toBe(workspace_id));
         });
     });
@@ -366,19 +366,19 @@ describe.skipIf(!has_postgres)('RunService — State transitions', () => {
             const count = await RunService.crash_stale();
             expect(count).toBeGreaterThanOrEqual(2);
 
-            const active = await RunService.list_active(workspace_id);
-            expect(active).toHaveLength(0);
+            const result = await RunService.list_recent(50, undefined, { workspace_id, active_only: true });
+            expect(result.runs).toHaveLength(0);
         });
     });
 
-    describe.skipIf(!has_postgres)('list_children', () => {
-        it('returns child runs', async () => {
+    describe.skipIf(!has_postgres)('list_recent — parent_run_id scope', () => {
+        it('returns child runs in chronological ASC order', async () => {
             const parent_id = await create_run();
             await create_run({ parent_run_id: parent_id, parent_phase: 'build' });
             await create_run({ parent_run_id: parent_id, parent_phase: 'test' });
 
-            const children = await RunService.list_children(parent_id);
-            expect(children).toHaveLength(2);
+            const result = await RunService.list_recent(50, undefined, { parent_run_id: parent_id });
+            expect(result.runs).toHaveLength(2);
         });
     });
 
@@ -390,7 +390,7 @@ describe.skipIf(!has_postgres)('RunService — State transitions', () => {
             const count = await RunService.delete_by_workspace(workspace_id);
             expect(count).toBeGreaterThanOrEqual(2);
 
-            const remaining = await RunService.list_by_workspace(workspace_id);
+            const remaining = await RunService.list_recent(50, undefined, { workspace_id });
             expect(remaining.runs).toHaveLength(0);
         });
     });

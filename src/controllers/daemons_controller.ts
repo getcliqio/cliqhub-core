@@ -14,8 +14,6 @@ import { resolve_enroll_realm_and_grant } from '../lib/enroll_grant.js';
 import { assert_access, assert_realm_domain } from '../auth/assert_grant.js';
 import { ApiError as HubApiError } from '../errors/api_error.js';
 import { ApiError } from '../lib/api_error.js';
-import { Realm } from '../models/index.js';
-import type { AuthContext } from '../types/vo.js';
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
 import {
     DaemonDeregisterInput,
@@ -55,42 +53,6 @@ function respond_hub_error(err: unknown, res: Response): boolean {
 type DaemonFields = Record<string, unknown>;
 
 export class DaemonController extends BaseController {
-    /**
-     * Bearer must be allowed to act on `org_id`.
-     * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
-     * Site hub admin may act on any org_id.
-     */
-    private async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
-        // No credential context — refuse rather than invent tenancy.
-        if (!auth) {
-            throw ApiError.unauthorized('authentication required');
-        }
-
-        // Site admin may target any org.
-        if (auth.user?.role === 'admin') return;
-
-        // Daemon tokens are realm-bound; tenancy is the realm's org.
-        if (auth.auth_via === 'daemon_token') {
-            if (!auth.realm_id) {
-                throw ApiError.forbidden('daemon token has no realm binding');
-            }
-            const realm = await Realm.findByPk(auth.realm_id);
-            if (!realm || realm.org_id !== org_id) {
-                throw ApiError.forbidden('org_id does not match daemon realm organization');
-            }
-            return;
-        }
-
-        // PAT / session: live membership list from auth middleware.
-        if (!auth.org_ids.includes(org_id)) {
-            throw ApiError.forbidden('not a member of the requested organization');
-        }
-    }
-
-    private auth_from(req: Request): AuthContext | undefined {
-        return req.auth;
-    }
-
     async register(
         req: FlatApiRequest<DaemonRegisterInput, DaemonFields>,
         res: FlatApiOkResponse<DaemonFields>,
@@ -196,6 +158,9 @@ export class DaemonController extends BaseController {
     /**
      * POST /v1/daemons/get — list daemons.
      * Org-scoped list requires body `org_id` (DAE-ORG hard-cut).
+     *
+     * @param req - Body: {@link DaemonGetInput}
+     * @param res - `{ ok: true, data: { items: DaemonFields[], total, offset, limit } }`
      */
     async get(
         req: FlatApiRequest<DaemonGetInput, DaemonFields>,
@@ -214,10 +179,12 @@ export class DaemonController extends BaseController {
         });
         res.json({
             ok: true,
-            daemons: result.daemons,
-            total: result.total,
-            offset: filters.offset ?? 0,
-            limit: filters.limit ?? result.total,
+            data: {
+                items: result.daemons,
+                total: result.total,
+                offset: filters.offset ?? 0,
+                limit: filters.limit ?? result.total,
+            },
         });
     }
 

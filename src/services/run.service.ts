@@ -473,12 +473,16 @@ export class RunService {
 
     /**
      * List runs the caller can read. Access is gated by realm membership:
-     *   - `daemon_id`     → runs on that daemon (caller must already be
-     *                       authorised to reach this code path).
+     *   - `daemon_id`     → runs on that daemon (keyed scope, no realm gate).
+     *   - `parent_run_id` → child runs of a parent (keyed scope, no realm gate).
+     *   - `workspace_id`  → runs on that workspace (keyed scope, no realm gate).
      *   - `realm_id`      → runs on any daemon in that realm.
      *   - `user_id`       → runs on any daemon in any realm the user is a
      *                       member of (default UI path).
      *   - `site_admin`    → no realm gate (all runs).
+     *
+     * `active_only` constrains state to `running`; takes precedence over
+     * any explicit `state` filter. Primarily used with `workspace_id`.
      *
      * Legacy team-scope gating (`scope_ids`) was ANDed on top and hid runs
      * whose teams live outside the caller's owned scopes — e.g. published
@@ -512,22 +516,37 @@ export class RunService {
             org_id?: string;
             sort_by?: 'run_name' | 'state' | 'team' | 'started_at' | 'last_updated_at';
             sort_dir?: 'asc' | 'desc';
+            /** List child runs of this parent. Keyed scope — skips realm gate. */
+            parent_run_id?: string;
+            /** List runs for this workspace. Keyed scope — skips realm gate. */
+            workspace_id?: string;
+            /** Constrain to running state only; overrides `state` filter. */
+            active_only?: boolean;
         },
     ): Promise<{ runs: ReturnType<typeof RunService._enrich_run>[]; total: number }> {
         const where: Record<string, unknown> = {};
         if (daemon_id) {
             where.daemon_id = daemon_id;
         }
+        if (filters?.parent_run_id) {
+            where.parent_run_id = filters.parent_run_id;
+        }
+        if (filters?.workspace_id) {
+            where.workspace_id = filters.workspace_id;
+        }
+        // Keyed scopes (daemon_id / parent_run_id / workspace_id) carry their
+        // own tenancy bound — no realm gate needed or appropriate.
+        const keyed_scope = Boolean(daemon_id ?? filters?.parent_run_id ?? filters?.workspace_id);
         // Realm gate: strict `team_runs.realm_id` match. The realm is
         // snapshotted at run-create time (see RunService.create) so
         // membership churn on the daemon side can't leak runs across
         // realms. No daemon-hop fallback — that path is what caused
         // cross-user run leakage when a daemon ended up as a member of
         // multiple realms (see prod fossil 99a2f0f1).
-        if (!daemon_id && filters?.realm_id) {
+        if (!keyed_scope && filters?.realm_id) {
             where.realm_id = filters.realm_id;
         }
-        if (!daemon_id && !filters?.realm_id && !filters?.site_admin && filters?.user_id) {
+        if (!keyed_scope && !filters?.realm_id && !filters?.site_admin && filters?.user_id) {
             // Intersect the user's realms with the active org (if the
             // request carries one). Without this the home dashboard
             // leaks runs from every org the user has touched — the
@@ -538,7 +557,9 @@ export class RunService {
             if (realm_ids.length === 0) return { runs: [], total: 0 };
             where.realm_id = { [Op.in]: realm_ids };
         }
-        if (filters?.state) {
+        if (filters?.active_only) {
+            where.state = 'running';
+        } else if (filters?.state) {
             where.state = Array.isArray(filters.state)
                 ? { [Op.in]: filters.state }
                 : filters.state;
@@ -571,8 +592,11 @@ export class RunService {
 
         const offset = Math.max(0, filters?.offset ?? 0);
         const page_limit = Math.min(Math.max(1, limit), 200);
-        const sort_dir = (filters?.sort_dir ?? 'desc').toUpperCase() as 'ASC' | 'DESC';
-        const sort_by = filters?.sort_by ?? 'last_updated_at';
+        // Children default to chronological ASC; all other scopes default DESC.
+        const default_sort_dir = filters?.parent_run_id ? 'asc' : 'desc';
+        const default_sort_by = filters?.parent_run_id ? 'started_at' : 'last_updated_at';
+        const sort_dir = (filters?.sort_dir ?? default_sort_dir).toUpperCase() as 'ASC' | 'DESC';
+        const sort_by = filters?.sort_by ?? default_sort_by;
 
         // Map logical sort key -> Sequelize order clause.
         // `last_updated_at` = COALESCE(completed_at, started_at) — no dedicated
@@ -598,21 +622,6 @@ export class RunService {
             limit: page_limit,
             offset,
             subQuery: false,
-        });
-        return { runs: rows.map(RunService._enrich_run), total };
-    }
-
-    static async list_by_workspace(workspace_id: string, limit = 50, offset = 0) {
-        const where = { workspace_id };
-        const page_limit = Math.min(Math.max(1, limit), 200);
-        const page_offset = Math.max(0, offset);
-        const total = await Run.count({ where });
-        const rows = await Run.findAll({
-            where,
-            include: RunService._run_includes,
-            order: [['started_at', 'DESC']],
-            limit: page_limit,
-            offset: page_offset,
         });
         return { runs: rows.map(RunService._enrich_run), total };
     }
@@ -1183,20 +1192,6 @@ export class RunService {
 
     static async delete_by_workspace(workspace_id: string): Promise<number> {
         return Run.destroy({ where: { workspace_id } });
-    }
-
-    static async list_children(parent_run_id: string) {
-        return Run.findAll({
-            where: { parent_run_id },
-            order: [['started_at', 'ASC']],
-        });
-    }
-
-    static async list_active(workspace_id: string) {
-        return Run.findAll({
-            where: { workspace_id, state: 'running' },
-            order: [['started_at', 'DESC']],
-        });
     }
 
     // ── Events ─────────────────────────────────────────────────────

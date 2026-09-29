@@ -2,7 +2,7 @@
  * Internal plane vs public /v1 — positive, negative, edge.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { setup_sequelize_mocks } from '../helpers/mock_sequelize.js';
 setup_sequelize_mocks();
@@ -19,8 +19,6 @@ vi.mock('../../src/auth/password.js', () => ({
     hash_password: vi.fn().mockResolvedValue('$2b$10$hashed'),
     verify_password: vi.fn().mockResolvedValue(true),
 }));
-
-const SECRET = 'test-secret';
 
 const ADMIN = {
     id: hub_legacy_uuid(99), username: 'admin', display_name: 'Admin',
@@ -64,16 +62,9 @@ function build_app(repos: ReturnType<typeof make_mock_repos>) {
 describe('internal plane', () => {
     const repos = make_mock_repos();
     const app = build_app(repos);
-    const prev_token = process.env.INTERNAL_API_TOKEN;
 
     beforeEach(() => {
         vi.clearAllMocks();
-        delete process.env.INTERNAL_API_TOKEN;
-    });
-
-    afterEach(() => {
-        if (prev_token === undefined) delete process.env.INTERNAL_API_TOKEN;
-        if (prev_token !== undefined) process.env.INTERNAL_API_TOKEN = prev_token;
     });
 
     function mock_user(user: typeof ADMIN | typeof MEMBER) {
@@ -82,7 +73,7 @@ describe('internal plane', () => {
 
     // ── positive ──────────────────────────────────────────────────
 
-    it('POST /internal/auth/signup succeeds without auth when token unset', async () => {
+    it('POST /internal/auth/signup succeeds without auth', async () => {
         const res = await request(app).post('/internal/auth/signup').send({});
         expect(res.status).toBe(200);
         expect(res.body.data.signed_up).toBe(true);
@@ -128,34 +119,6 @@ describe('internal plane', () => {
             .send({});
         expect(res.status).toBe(403);
         expect(res.body.error.message).toMatch(/admin/i);
-    });
-
-    // ── edge ──────────────────────────────────────────────────────
-
-    it('rejects signup when INTERNAL_API_TOKEN set and header missing', async () => {
-        process.env.INTERNAL_API_TOKEN = 'secret-internal';
-        const res = await request(app).post('/internal/auth/signup').send({});
-        expect(res.status).toBe(403);
-    });
-
-    it('accepts signup when INTERNAL_API_TOKEN matches header', async () => {
-        process.env.INTERNAL_API_TOKEN = 'secret-internal';
-        const res = await request(app)
-            .post('/internal/auth/signup')
-            .set('X-Internal-Token', 'secret-internal')
-            .send({});
-        expect(res.status).toBe(200);
-    });
-
-    it('rejects admin users/new when internal token wrong', async () => {
-        process.env.INTERNAL_API_TOKEN = 'secret-internal';
-        mock_user(ADMIN);
-        const res = await request(app)
-            .post('/internal/users/new')
-            .set('Authorization', `Bearer ${TEST_PAT_PLAINTEXT}`)
-            .set('X-Internal-Token', 'wrong')
-            .send({});
-        expect(res.status).toBe(403);
     });
 });
 

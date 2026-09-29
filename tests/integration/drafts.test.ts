@@ -39,7 +39,7 @@ describe('Teams draft surface (replaces /v1/drafts/*)', () => {
             .set('Authorization', auth_header())
             .send({ mine: true, status: 'draft' });
         expect(res.status).toBe(200);
-        expect(res.body.data.teams).toHaveLength(1);
+        expect(res.body.data.items).toHaveLength(1);
     });
 
     it('POST /v1/teams/create requires auth', async () => {

@@ -21,6 +21,10 @@ describe('AuthController', () => {
     let controller: AuthController;
     const next = vi.fn() as unknown as NextFunction;
 
+    function call(method: (req: Request, res: Response) => Promise<void>, req: Request, res: Response) {
+        return controller.wrap(method)(req, res, next);
+    }
+
     beforeEach(() => {
         vi.clearAllMocks();
         controller = new AuthController(mock_auth_service as any);
@@ -29,21 +33,21 @@ describe('AuthController', () => {
     it('signup rejects missing password', async () => {
         const req = { body: { username: 'alice', email: 'a@b.com' } } as Request;
         const res = mock_res();
-        await controller.signup(req, res, next);
+        await call(controller.signup, req, res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('signup rejects missing username', async () => {
         const req = { body: { email: 'a@b.com', password: '12345678' } } as Request;
         const res = mock_res();
-        await controller.signup(req, res, next);
+        await call(controller.signup, req, res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('signup rejects missing email', async () => {
         const req = { body: { username: 'alice', password: '12345678' } } as Request;
         const res = mock_res();
-        await controller.signup(req, res, next);
+        await call(controller.signup, req, res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
@@ -63,7 +67,7 @@ describe('AuthController', () => {
         });
         const req = { body: { username: 'alice', email: 'a@b.com', password: '12345678' } } as Request;
         const res = mock_res();
-        await controller.signup(req, res, next);
+        await call(controller.signup, req, res);
         expect(mock_auth_service.signup).toHaveBeenCalledWith('alice', 'a@b.com', '12345678');
         expect(res.status).toHaveBeenCalledWith(200);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
@@ -79,7 +83,7 @@ describe('AuthController', () => {
     it('authenticate_user rejects missing password', async () => {
         const req = { body: { username: 'alice' } } as Request;
         const res = mock_res();
-        await controller.authenticate_user(req, res, next);
+        await call(controller.authenticate_user, req, res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
@@ -101,7 +105,7 @@ describe('AuthController', () => {
         });
         const req = { body: { username: 'alice', password: 'secret' } } as Request;
         const res = mock_res();
-        await controller.authenticate_user(req, res, next);
+        await call(controller.authenticate_user, req, res);
         expect(res.status).toHaveBeenCalledWith(200);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
             ok: true,
@@ -118,7 +122,7 @@ describe('AuthController', () => {
             auth: { user: { id: hub_legacy_uuid(99), role: 'admin' } },
         } as unknown as Request;
         const res = mock_res();
-        await controller.issue_session_token(req, res, next);
+        await call(controller.issue_session_token, req, res);
         expect(mock_auth_service.issue_session_token).toHaveBeenCalledWith(req.auth, hub_legacy_uuid(2));
         expect(res.status).toHaveBeenCalledWith(200);
     });
@@ -127,7 +131,7 @@ describe('AuthController', () => {
         mock_auth_service.revoke_session_token.mockResolvedValueOnce({ ok: true });
         const req = { body: { token: 'cliq_tok_x' } } as Request;
         const res = mock_res();
-        await controller.revoke_session_token(req, res, next);
+        await call(controller.revoke_session_token, req, res);
         expect(mock_auth_service.revoke_session_token).toHaveBeenCalledWith('cliq_tok_x');
         expect(res.status).toHaveBeenCalledWith(200);
     });

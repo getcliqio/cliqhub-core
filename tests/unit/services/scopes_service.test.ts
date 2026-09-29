@@ -99,10 +99,10 @@ function build_service(overrides: {
 }
 
 /* ================================================================
-   get
+   list_catalog
    ================================================================ */
 
-describe('ScopesService — get', () => {
+describe('ScopesService — list_catalog', () => {
     let service: ScopesService;
 
     beforeEach(() => {
@@ -118,7 +118,7 @@ describe('ScopesService — get', () => {
     });
 
     it('returns paginated scopes for admin', async () => {
-        const result = await service.get(SITE_ADMIN, {});
+        const result = await service.list_catalog(SITE_ADMIN, {});
 
         expect(result.total).toBe(2);
         expect(result.scopes).toHaveLength(2);
@@ -130,30 +130,30 @@ describe('ScopesService — get', () => {
         mock_scope_count.mockResolvedValueOnce(0);
         mock_scope_find_all.mockResolvedValueOnce([]);
 
-        await service.get(SITE_ADMIN, { search: 'alp' });
+        await service.list_catalog(SITE_ADMIN, { search: 'alp' });
 
         expect(mock_scope_count).toHaveBeenCalled();
         expect(mock_scope_find_all).toHaveBeenCalled();
     });
 
     it('caps limit to 100', async () => {
-        const result = await service.get(SITE_ADMIN, { limit: 500 });
+        const result = await service.list_catalog(SITE_ADMIN, { limit: 500 });
         expect(result.limit).toBe(100);
     });
 
     it('respects explicit limit and offset', async () => {
-        const result = await service.get(SITE_ADMIN, { limit: 10, offset: 20 });
+        const result = await service.list_catalog(SITE_ADMIN, { limit: 10, offset: 20 });
         expect(result.limit).toBe(10);
         expect(result.offset).toBe(20);
     });
 
     it('returns 403 for non-admin user', async () => {
-        await expect(service.get(ALICE, {}))
+        await expect(service.list_catalog(ALICE, {}))
             .rejects.toThrow('Admin access required');
     });
 
     it('returns 401 for unauthenticated request', async () => {
-        await expect(service.get(UNAUTHED, {}))
+        await expect(service.list_catalog(UNAUTHED, {}))
             .rejects.toThrow('Authentication required');
     });
 });

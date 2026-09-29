@@ -79,11 +79,6 @@ export type AuthContext = {
     token_scopes?: string[];
     /** Set when authenticated with a daemon token (`cliq_dt_`) for a single primary realm. */
     realm_id?: string;
-    /**
-     * Active org context for this request. Resolved from `X-Org-Id` header
-     * or defaults to the user's personal org (slug === username).
-     */
-    current_org_id?: string;
     /** How the Bearer credential was resolved (`pat` | `daemon_token`). */
     auth_via?: 'jwt' | 'pat' | 'daemon_token';
     /** @deprecated Act-as is a BFF session update; Core no longer embeds impersonation. */

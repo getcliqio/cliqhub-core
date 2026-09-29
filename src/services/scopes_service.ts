@@ -63,39 +63,103 @@ export class ScopesService {
         return 'org';
     }
 
-    async get(auth: AuthContext, params: {
-        mine?: boolean;
-        search?: string;
-        limit?: number;
-        offset?: number;
-    }) {
+    /**
+     * Return scopes accessible to a specific user via DB query (owner or member).
+     * Replaces the stale auth.scopes session cache used by the old mine:true path.
+     */
+    async get_for_user(
+        auth: AuthContext,
+        user_id: string,
+        params: { org_id?: string; search?: string; limit?: number; offset?: number },
+    ) {
         this._require_auth(auth);
-
-        if (params.mine) {
-            return this._list_mine(auth, params.search);
-        }
-
-        this._require_scopes_admin(auth);
-
-        const limit = Math.min(params.limit || 50, 100);
-        const offset = params.offset || 0;
+        const limit = Math.min(params.limit ?? 50, 100);
+        const offset = params.offset ?? 0;
 
         const where: Record<string, unknown> = {};
+
+        const { ScopeMember } = await import('../db/models/index.js');
+        const member_rows = await ScopeMember.findAll({
+            where: { user_id },
+            attributes: ['scope_id'],
+            raw: true,
+        });
+        const member_scope_ids = (member_rows as Array<{ scope_id: string }>).map((r) => r.scope_id);
+
+        const ownership_filter: Record<string, unknown> = member_scope_ids.length > 0
+            ? { [Op.or]: [{ owner_id: user_id }, { id: { [Op.in]: member_scope_ids } }] }
+            : { owner_id: user_id };
+        Object.assign(where, ownership_filter);
+
+        if (params.org_id) {
+            Object.assign(where, { org_id: params.org_id });
+        }
         if (params.search) {
+            const like = `%${escape_like(params.search)}%`;
             Object.assign(where, {
                 [Op.or]: [
-                    { slug: { [Op.iLike]: `%${escape_like(params.search)}%` } },
-                    { display_name: { [Op.iLike]: `%${escape_like(params.search)}%` } },
+                    { slug: { [Op.iLike]: like } },
+                    { display_name: { [Op.iLike]: like } },
                 ],
             });
         }
 
         const total = await Scope.count({ where });
+        const rows = await Scope.findAll({
+            where,
+            attributes: ['id', 'slug', 'display_name', 'owner_id', 'org_id', 'visibility', 'scope_type', 'created_at'],
+            order: [['slug', 'ASC']],
+            limit,
+            offset,
+            raw: true,
+        });
 
-        const scopes = await Scope.findAll({
+        const items = rows.map((s: any) => ({
+            id: s.id,
+            slug: s.slug,
+            display_name: s.display_name ?? null,
+            visibility: s.visibility,
+            scope_type: s.scope_type,
+            owner_id: s.owner_id,
+            org_id: s.org_id ?? null,
+            created_at: s.created_at instanceof Date ? s.created_at.toISOString() : s.created_at,
+        }));
+
+        return { items, total, offset, limit };
+    }
+
+    /**
+     * Full scope catalog for site admins — paginated, with optional org filter.
+     * Replaces the get() path that required scopes_admin and lacked org_id filter.
+     */
+    async list_catalog(
+        auth: AuthContext,
+        params: { org_id?: string; search?: string; limit?: number; offset?: number },
+    ) {
+        this._require_auth(auth);
+        this._require_scopes_admin(auth);
+        const limit = Math.min(params.limit ?? 50, 100);
+        const offset = params.offset ?? 0;
+
+        const where: Record<string, unknown> = {};
+        if (params.org_id) {
+            Object.assign(where, { org_id: params.org_id });
+        }
+        if (params.search) {
+            const like = `%${escape_like(params.search)}%`;
+            Object.assign(where, {
+                [Op.or]: [
+                    { slug: { [Op.iLike]: like } },
+                    { display_name: { [Op.iLike]: like } },
+                ],
+            });
+        }
+
+        const total = await Scope.count({ where });
+        const rows = await Scope.findAll({
             where,
             attributes: [
-                'id', 'slug', 'display_name', 'owner_id', 'visibility', 'scope_type', 'created_at',
+                'id', 'slug', 'display_name', 'owner_id', 'org_id', 'visibility', 'scope_type', 'created_at',
                 [literal('(SELECT count(*) FROM teams t WHERE t.scope = "Scope"."slug")'), 'team_count'],
             ],
             include: [{ model: User, attributes: ['username'], required: false }],
@@ -106,33 +170,20 @@ export class ScopesService {
             nest: true,
         });
 
-        const result = scopes.map((s: any) => ({
-            ...s,
-            owner_username: s.User?.username ?? null,
-            User: undefined,
-        }));
-
-        return { scopes: result, total, limit, offset };
-    }
-
-    private _list_mine(auth: AuthContext, search?: string) {
-        const query = search?.trim().toLowerCase();
-        let scopes = auth.scopes.map((s) => ({
+        const scopes = rows.map((s: any) => ({
             id: s.id,
             slug: s.slug,
-            display_name: s.display_name ?? s.slug,
+            display_name: s.display_name ?? null,
             visibility: s.visibility,
             scope_type: s.scope_type,
             owner_id: s.owner_id,
-            org_id: s.org_id,
+            org_id: s.org_id ?? null,
+            team_count: Number(s.team_count ?? 0),
+            owner_username: s.User?.username ?? null,
+            created_at: s.created_at instanceof Date ? (s.created_at as Date).toISOString() : s.created_at,
         }));
-        if (query) {
-            scopes = scopes.filter((s) =>
-                s.slug.toLowerCase().includes(query)
-                || String(s.display_name).toLowerCase().includes(query),
-            );
-        }
-        return { scopes, total: scopes.length };
+
+        return { scopes, total, offset, limit };
     }
 
     async new_scope(auth: AuthContext, params: {

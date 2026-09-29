@@ -10,7 +10,7 @@ function mock_res() {
 const fake_auth = { user: { id: hub_legacy_uuid(1) }, org_slugs: [], org_ids: [], scopes: [] };
 
 const mock_service = {
-    get: vi.fn().mockResolvedValue({ scopes: [], total: 0, limit: 50, offset: 0 }),
+    list_catalog: vi.fn().mockResolvedValue({ scopes: [], total: 0, limit: 50, offset: 0 }),
     new_scope: vi.fn().mockResolvedValue({ id: hub_legacy_uuid(1), slug: 'my-scope' }),
     update: vi.fn().mockResolvedValue({ updated: true }),
     delete_scope: vi.fn().mockResolvedValue({ deleted: true }),
@@ -24,95 +24,91 @@ describe('ScopesController', () => {
     let controller: ScopesController;
     const next = vi.fn() as unknown as NextFunction;
 
+    function call(method: (req: Request, res: Response) => Promise<void>, req: Request, res: Response) {
+        return controller.wrap(method)(req, res, next);
+    }
+
     beforeEach(() => {
         vi.clearAllMocks();
         controller = new ScopesController(mock_service as any);
     });
 
-    // --- get ---
-
     it('get accepts empty body and delegates to service', async () => {
         const res = mock_res();
-        await controller.get(make_req(), res, next);
-        expect(mock_service.get).toHaveBeenCalled();
+        await call(controller.get, make_req(), res);
+        expect(mock_service.list_catalog).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(200);
     });
 
     it('get rejects limit > 100 with 422', async () => {
         const res = mock_res();
-        await controller.get(make_req({ limit: 200 }), res, next);
+        await call(controller.get, make_req({ limit: 200 }), res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('get passes with valid search string', async () => {
         const res = mock_res();
-        await controller.get(make_req({ search: 'my-scope' }), res, next);
-        expect(mock_service.get).toHaveBeenCalled();
+        await call(controller.get, make_req({ search: 'my-scope' }), res);
+        expect(mock_service.list_catalog).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(200);
     });
 
     it('get rejects negative offset with 422', async () => {
         const res = mock_res();
-        await controller.get(make_req({ offset: -1 }), res, next);
+        await call(controller.get, make_req({ offset: -1 }), res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
-    // --- new_scope ---
-
     it('new_scope passes with slug and owner_username', async () => {
         const res = mock_res();
-        await controller.new_scope(make_req({ slug: 'dev', owner_username: 'alice' }), res, next);
+        await call(controller.new_scope, make_req({ slug: 'dev', owner_username: 'alice' }), res);
         expect(mock_service.new_scope).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(201);
     });
 
     it('new_scope rejects missing slug with 422', async () => {
         const res = mock_res();
-        await controller.new_scope(make_req({ owner_username: 'alice' }), res, next);
+        await call(controller.new_scope, make_req({ owner_username: 'alice' }), res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
     it('new_scope allows omitting owner_username (defaults to caller for org create)', async () => {
         const res = mock_res();
-        await controller.new_scope(make_req({ slug: 'dev', org_id: hub_legacy_uuid(1), scope_type: 'org' }), res, next);
+        await call(controller.new_scope, make_req({ slug: 'dev', org_id: hub_legacy_uuid(1), scope_type: 'org' }), res);
         expect(mock_service.new_scope).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(201);
     });
 
     it('new_scope passes with optional visibility', async () => {
         const res = mock_res();
-        await controller.new_scope(make_req({ slug: 'dev', owner_username: 'alice', visibility: 'private' }), res, next);
+        await call(controller.new_scope, make_req({ slug: 'dev', owner_username: 'alice', visibility: 'private' }), res);
         expect(mock_service.new_scope).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(201);
     });
 
-    // --- update ---
-
     it('update passes with valid scope_id', async () => {
         const res = mock_res();
-        await controller.update(make_req({ scope_id: hub_legacy_uuid(1), display_name: 'New Name' }), res, next);
+        await call(controller.update, make_req({ scope_id: hub_legacy_uuid(1), display_name: 'New Name' }), res);
         expect(mock_service.update).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(200);
     });
 
     it('update rejects missing scope_id with 422', async () => {
         const res = mock_res();
-        await controller.update(make_req({ display_name: 'New Name' }), res, next);
+        await call(controller.update, make_req({ display_name: 'New Name' }), res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
-    // --- delete_scope ---
-
     it('delete_scope passes with valid scope_id', async () => {
         const res = mock_res();
-        await controller.delete_scope(make_req({ scope_id: hub_legacy_uuid(5) }), res, next);
+        await call(controller.delete_scope, make_req({ scope_id: hub_legacy_uuid(5) }), res);
         expect(mock_service.delete_scope).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(200);
     });
 
     it('delete_scope rejects non-integer scope_id with 422', async () => {
         const res = mock_res();
-        await controller.delete_scope(make_req({ scope_id: 'bad' }), res, next);
+        await call(controller.delete_scope, make_req({ scope_id: 'bad' }), res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 });

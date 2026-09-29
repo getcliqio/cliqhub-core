@@ -144,10 +144,10 @@ export function create_test_app() {
     );
     const auth_controller = new AuthController(auth_service);
 
-    app.post('/internal/auth/signup', require_internal_network, auth_controller.signup);
-    app.post('/internal/auth/authenticate_user', require_internal_network, auth_controller.authenticate_user);
-    app.post('/internal/auth/issue_session_token', require_internal, auth_controller.issue_session_token);
-    app.post('/internal/auth/revoke_session_token', require_internal_network, auth_controller.revoke_session_token);
+    app.post('/internal/auth/signup', require_internal_network, auth_controller.wrap(auth_controller.signup));
+    app.post('/internal/auth/authenticate_user', require_internal_network, auth_controller.wrap(auth_controller.authenticate_user));
+    app.post('/internal/auth/issue_session_token', require_internal, auth_controller.wrap(auth_controller.issue_session_token));
+    app.post('/internal/auth/revoke_session_token', require_internal_network, auth_controller.wrap(auth_controller.revoke_session_token));
 
     const teams_service = new TeamsService(
         repos.team_repo as any, repos.version_repo as any,
@@ -155,27 +155,27 @@ export function create_test_app() {
     );
     const teams_controller = new TeamsController(teams_service);
 
-    app.post('/v1/teams/get', teams_controller.get);
-    app.post('/v1/teams/get_by_id', teams_controller.get_by_id);
-    app.post('/v1/teams/get_versions', teams_controller.get_versions);
-    app.post('/v1/teams/create', teams_controller.create);
-    app.post('/v1/teams/update', teams_controller.update);
-    app.post('/v1/teams/publish', teams_controller.publish);
-    app.post('/v1/teams/unpublish', teams_controller.unpublish);
-    app.post('/v1/teams/download', teams_controller.download);
-    app.post('/v1/teams/delete', teams_controller.delete_team);
-    app.post('/v1/teams/delete_version', teams_controller.delete_version);
-    app.post('/v1/teams/rename', teams_controller.rename);
+    app.post('/v1/teams/get',            teams_controller.wrap(teams_controller.get));
+    app.post('/v1/teams/get_by_id',      teams_controller.wrap(teams_controller.get_by_id));
+    app.post('/v1/teams/get_versions',   teams_controller.wrap(teams_controller.get_versions));
+    app.post('/v1/teams/create',         teams_controller.wrap(teams_controller.create));
+    app.post('/v1/teams/update',         teams_controller.wrap(teams_controller.update));
+    app.post('/v1/teams/publish',        teams_controller.wrap(teams_controller.publish));
+    app.post('/v1/teams/unpublish',      teams_controller.wrap(teams_controller.unpublish));
+    app.post('/v1/teams/download',       teams_controller.wrap(teams_controller.download));
+    app.post('/v1/teams/delete',         teams_controller.wrap(teams_controller.delete_team));
+    app.post('/v1/teams/delete_version', teams_controller.wrap(teams_controller.delete_version));
+    app.post('/v1/teams/rename',         teams_controller.wrap(teams_controller.rename));
 
     const tokens_controller = new TokensController(
         repos.token_repo as any,
         repos.org_member_repo as any,
     );
-    app.post('/v1/auth/generate_token', tokens_controller.generate_token);
-    app.post('/v1/auth/get_tokens', tokens_controller.get_tokens);
-    app.post('/v1/auth/validate_token', tokens_controller.validate_token);
-    app.post('/v1/auth/revoke_token', tokens_controller.revoke_token);
-    app.post('/v1/auth/rotate_token', tokens_controller.rotate_token);
+    app.post('/v1/auth/generate_token', tokens_controller.wrap(tokens_controller.generate_token));
+    app.post('/v1/auth/get_tokens', tokens_controller.wrap(tokens_controller.get_tokens));
+    app.post('/v1/auth/validate_token', tokens_controller.wrap(tokens_controller.validate_token));
+    app.post('/v1/auth/revoke_token', tokens_controller.wrap(tokens_controller.revoke_token));
+    app.post('/v1/auth/rotate_token', tokens_controller.wrap(tokens_controller.rotate_token));
 
     const scopes_service = new ScopesService(
         repos.scope_repo as any,
@@ -192,10 +192,10 @@ export function create_test_app() {
         } as any,
     );
     const scopes_controller = new ScopesController(scopes_service);
-    app.post('/v1/scopes/get', scopes_controller.get);
-    app.post('/v1/scopes/new', scopes_controller.new_scope);
-    app.post('/v1/scopes/update', scopes_controller.update);
-    app.post('/v1/scopes/delete', scopes_controller.delete_scope);
+    app.post('/v1/scopes/get', scopes_controller.wrap(scopes_controller.get));
+    app.post('/v1/scopes/new', scopes_controller.wrap(scopes_controller.new_scope));
+    app.post('/v1/scopes/update', scopes_controller.wrap(scopes_controller.update));
+    app.post('/v1/scopes/delete', scopes_controller.wrap(scopes_controller.delete_scope));
 
     register_control_plane_routes(app);
 

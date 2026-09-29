@@ -15,7 +15,6 @@ import { RealmService } from '../services/realm.service.js';
 import { RunService } from '../services/run.service.js';
 import { ReviewPendingService } from '../services/review_pending.service.js';
 import { ApiError } from '../lib/api_error.js';
-import type { AuthContext } from '../types/vo.js';
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
 import {
     DashboardRealmsInput,
@@ -63,42 +62,6 @@ function map_run_row(
 type DashboardFields = Record<string, unknown>;
 
 export class DashboardController extends BaseController {
-    /**
-     * Bearer must be allowed to act on `org_id`.
-     * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
-     * Site hub admin may act on any org_id.
-     */
-    private async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
-        // No credential context — refuse rather than invent tenancy.
-        if (!auth) {
-            throw ApiError.unauthorized('authentication required');
-        }
-
-        // Site admin may target any org.
-        if (auth.user?.role === 'admin') return;
-
-        // Daemon tokens are realm-bound; tenancy is the realm's org.
-        if (auth.auth_via === 'daemon_token') {
-            if (!auth.realm_id) {
-                throw ApiError.forbidden('daemon token has no realm binding');
-            }
-            const realm = await Realm.findByPk(auth.realm_id);
-            if (!realm || realm.org_id !== org_id) {
-                throw ApiError.forbidden('org_id does not match daemon realm organization');
-            }
-            return;
-        }
-
-        // PAT / session: live membership list from auth middleware.
-        if (!auth.org_ids.includes(org_id)) {
-            throw ApiError.forbidden('not a member of the requested organization');
-        }
-    }
-
-    private auth_from(req: Request): AuthContext | undefined {
-        return req.auth;
-    }
-
     /**
      * Realm-centric dashboard: per-realm daemon/run/review/notification rollup,
      * sorted by most recent activity. Drives the new "fleet pulse" home view.

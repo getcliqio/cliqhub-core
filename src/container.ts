@@ -123,7 +123,11 @@ export async function create_container(config: EnvConfig): Promise<Container> {
     const orgs_service = new OrgsService(
         org_repo, org_member_repo, scope_repo, scope_member_repo, user_repo, team_repo, audit_repo,
     );
-    const orgs_controller = new OrgsController(orgs_service);
+    const scopes_service = new ScopesService(
+        scope_repo, team_repo, audit_repo, org_repo, org_member_repo, scope_member_repo,
+    );
+    const orgs_controller = new OrgsController(orgs_service, scopes_service);
+    const scopes_controller = new ScopesController(scopes_service);
 
     const invitations_service = new InvitationsService(
         org_repo, org_member_repo, scope_repo, user_repo, config,
@@ -138,11 +142,6 @@ export async function create_container(config: EnvConfig): Promise<Container> {
     const users_controller = new UsersController(users_service);
 
     const tokens_controller = new TokensController(token_repo, org_member_repo);
-
-    const scopes_service = new ScopesService(
-        scope_repo, team_repo, audit_repo, org_repo, org_member_repo, scope_member_repo,
-    );
-    const scopes_controller = new ScopesController(scopes_service);
 
     const reports_service = new ReportsService(audit_repo);
     const reports_controller = new ReportsController(reports_service);

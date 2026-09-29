@@ -1,0 +1,312 @@
+/**
+ * Teams API — Zod request schemas (SoT for inbound bodies).
+ *
+ * Naming: PascalCase value + type with the same name (Zod idiom):
+ *   `TeamsGetInput` schema → `type TeamsGetInput = z.infer<…>`
+ *
+ * Every field must have `.describe(…)` (feeds Hub OpenAPI / Mintlify).
+ *
+ * Routes:
+ *   POST /v1/teams/get             — list / search catalog + realm coverage + daemon inventory
+ *   POST /v1/teams/get_by_id       — single team detail
+ *   POST /v1/teams/get_versions    — version history for a team
+ *   POST /v1/teams/get_phases      — workflow phases for a version
+ *   POST /v1/teams/create          — create a team as draft
+ *   POST /v1/teams/update          — update draft manifest / description
+ *   POST /v1/teams/publish         — publish a version
+ *   POST /v1/teams/unpublish       — revert published team to draft
+ *   POST /v1/teams/download        — fetch pack for a version
+ *   POST /v1/teams/delete          — soft-delete a team
+ *   POST /v1/teams/delete_version  — remove a specific version
+ *   POST /v1/teams/rename          — rename a team within its scope
+ *   POST /v1/teams/build           — AI builder actions (generate/validate/suggest/chat)
+ *   POST /v1/teams/install         — fan-out install to daemon_ids XOR realm_id
+ *   POST /v1/teams/uninstall       — fan-out uninstall from daemon_id/daemon_ids XOR realm_id
+ */
+
+import { z } from 'zod';
+
+// ─── Shared field fragments ─────────────────────────────────────────────────
+
+/** Pagination page size. */
+const LimitField = z.number().int().min(1).max(200).optional()
+    .describe('Page size (default 50, max 200)');
+
+/** Zero-based page offset. */
+const OffsetField = z.number().int().min(0).optional()
+    .describe('Zero-based page offset (default 0)');
+
+/** Shared sort direction. */
+const SortDirField = z.enum(['asc', 'desc']).optional()
+    .describe('Sort direction (default asc)');
+
+// ─── Read handlers ──────────────────────────────────────────────────────────
+
+/**
+ * POST /v1/teams/get — unified list with AND filters.
+ *
+ * Mode selection (mutually exclusive; all other params apply as AND filters):
+ *   - `daemon_id`  → live installed teams from that daemon
+ *   - `realm_id`   → realm team roster with daemon coverage
+ *   - neither      → Hub catalog search
+ */
+export const TeamsGetInput = z.object({
+    query: z.string().optional()
+        .describe('Substring match on team name or description'),
+    tag: z.string().optional()
+        .describe('Filter by tag slug'),
+    scope: z.string().optional()
+        .describe('Filter to teams owned by this scope (publisher)'),
+    mine: z.boolean().optional()
+        .describe('When true, return only teams authored by the caller'),
+    group_by_scope: z.boolean().optional()
+        .describe('When true, group results by scope instead of a flat list'),
+    listed: z.boolean().optional()
+        .describe('Filter by listed flag (public marketplace visibility)'),
+    status: z.enum(['draft', 'published']).optional()
+        .describe('Filter by team status'),
+    realm_id: z.string().min(1).optional()
+        .describe('Realm mode: return team roster with daemon coverage for this realm'),
+    daemon_id: z.string().min(1).optional()
+        .describe('Daemon mode: return live installed teams from this daemon'),
+    origin: z.enum(['published', 'local']).optional()
+        .describe('Realm mode: filter by team origin (published catalog vs local)'),
+    coverage: z.enum(['full', 'partial', 'none']).optional()
+        .describe('Realm mode: filter by coverage status across realm daemons'),
+    sort_by: z.enum(['team', 'origin', 'coverage']).optional()
+        .describe('Realm mode: sort dimension'),
+    sort_dir: SortDirField,
+    limit: LimitField,
+    offset: OffsetField,
+});
+export type TeamsGetInput = z.infer<typeof TeamsGetInput>;
+
+/**
+ * POST /v1/teams/get_by_id — fetch one team by UUID or by name + scope.
+ * Exactly one of `team_id` or `name` is required.
+ */
+export const TeamsGetByIdInput = z.object({
+    name: z.string().optional()
+        .describe('Team name — mutually exclusive with team_id'),
+    scope: z.string().optional()
+        .describe('Scope (publisher) slug; required when name is provided and scope is ambiguous'),
+    team_id: z.string().uuid().optional()
+        .describe('Team UUID — mutually exclusive with name'),
+    version: z.string().optional()
+        .describe('Pin to a specific published version; omit for latest'),
+}).refine(
+    (d) => Boolean(d.name) || Boolean(d.team_id),
+    { message: 'Provide exactly one of team_id or name' },
+);
+export type TeamsGetByIdInput = z.infer<typeof TeamsGetByIdInput>;
+
+/** POST /v1/teams/get_versions — version history for a team. */
+export const TeamsGetVersionsInput = z.object({
+    name: z.string().min(1).describe('Team name'),
+    scope: z.string().optional().describe('Scope (publisher) slug'),
+    latest_only: z.boolean().optional()
+        .describe('When true, return only the latest version string instead of the full list'),
+});
+export type TeamsGetVersionsInput = z.infer<typeof TeamsGetVersionsInput>;
+
+/**
+ * POST /v1/teams/get_phases — workflow phases for a published version.
+ * Omit `version_id` to resolve the latest semver. Echoes the resolved version_id
+ * so callers can pin older runs via run.team_version_id.
+ */
+export const TeamsGetPhasesInput = z.object({
+    team_id: z.string().uuid().describe('Team UUID'),
+    version_id: z.string().uuid().optional()
+        .describe('Version row UUID; omit for latest published version'),
+});
+export type TeamsGetPhasesInput = z.infer<typeof TeamsGetPhasesInput>;
+
+// ─── Write handlers ─────────────────────────────────────────────────────────
+
+/**
+ * POST /v1/teams/create — create a team as draft.
+ * Seeds version 0.1.0 when a manifest is provided.
+ * Name must match `^[a-z][a-z0-9-]*$`.
+ */
+export const TeamsCreateInput = z.object({
+    name: z.string()
+        .min(1, 'name is required')
+        .regex(/^[a-z][a-z0-9-]*$/, 'Team name must be lowercase letters, numbers, and hyphens, starting with a letter')
+        .describe('Team name — lowercase letters, numbers, and hyphens; must start with a letter'),
+    scope: z.string().min(1, 'scope is required')
+        .describe('Scope (publisher) slug; caller must have write access to this scope'),
+    description: z.string().optional()
+        .describe('Human-readable summary'),
+    manifest: z.union([z.string(), z.record(z.unknown())]).optional()
+        .describe('Team manifest as YAML string or parsed object; seeds version 0.1.0 when provided'),
+    team_json: z.string().optional()
+        .describe('SPA builder canvas JSON string (alternative to manifest)'),
+});
+export type TeamsCreateInput = z.infer<typeof TeamsCreateInput>;
+
+/**
+ * POST /v1/teams/update — update draft manifest / description.
+ * Auto patch-bumps semver; pass `bump` for minor/major.
+ * Exactly one of `team_id` or `name` is required.
+ */
+export const TeamsUpdateInput = z.object({
+    name: z.string().optional()
+        .describe('Team name — mutually exclusive with team_id as the lookup key'),
+    scope: z.string().optional()
+        .describe('Scope (publisher) slug'),
+    team_id: z.string().uuid().optional()
+        .describe('Team UUID — mutually exclusive with name as the lookup key'),
+    description: z.string().optional()
+        .describe('Updated human-readable summary'),
+    manifest: z.union([z.string(), z.record(z.unknown())]).optional()
+        .describe('Updated manifest as YAML string or parsed object; triggers a new patch version'),
+    team_json: z.string().optional()
+        .describe('Updated SPA builder canvas JSON string'),
+    bump: z.enum(['minor', 'major']).optional()
+        .describe('Bump magnitude when updating manifest; omit for patch (default)'),
+}).refine(
+    (d) => Boolean(d.name) || Boolean(d.team_id),
+    { message: 'Provide exactly one of team_id or name' },
+);
+export type TeamsUpdateInput = z.infer<typeof TeamsUpdateInput>;
+
+/**
+ * POST /v1/teams/publish — publish a draft version.
+ * Requires either `team_id` or `name`. `visibility` must not be `draft`.
+ */
+export const TeamsPublishInput = z.object({
+    name: z.string().optional()
+        .describe('Team name — mutually exclusive with team_id as the lookup key'),
+    scope: z.string().optional()
+        .describe('Scope (publisher) slug'),
+    team_id: z.string().uuid().optional()
+        .describe('Team UUID — mutually exclusive with name as the lookup key'),
+    version: z.string().optional()
+        .describe('Explicit version string; omit to auto-bump from latest'),
+    bump: z.enum(['patch', 'minor', 'major']).optional()
+        .describe('Bump magnitude when auto-versioning; omit for patch'),
+    changelog: z.string().optional()
+        .describe('Release notes for this version'),
+    description: z.string().optional()
+        .describe('Updated description to apply on publish'),
+    license: z.string().optional()
+        .describe('SPDX license identifier'),
+    tags: z.array(z.string()).optional()
+        .describe('Tag slugs to attach'),
+    visibility: z.enum(['public', 'private']).optional()
+        .describe('Visibility after publish; must be public or private (draft is rejected)'),
+    data_base64: z.string().optional()
+        .describe('Base64-encoded team package zip (required for first publish without prior versions)'),
+    agents: z.record(z.unknown()).optional()
+        .describe('Agent binding overrides for this version'),
+}).refine(
+    (d) => Boolean(d.name) || Boolean(d.team_id),
+    { message: 'Provide exactly one of team_id or name' },
+);
+export type TeamsPublishInput = z.infer<typeof TeamsPublishInput>;
+
+/** POST /v1/teams/unpublish — revert a published team to draft status. */
+export const TeamsUnpublishInput = z.object({
+    name: z.string().optional()
+        .describe('Team name — mutually exclusive with team_id'),
+    scope: z.string().optional()
+        .describe('Scope (publisher) slug'),
+    team_id: z.string().uuid().optional()
+        .describe('Team UUID — mutually exclusive with name'),
+}).refine(
+    (d) => Boolean(d.name) || Boolean(d.team_id),
+    { message: 'Provide exactly one of team_id or name' },
+);
+export type TeamsUnpublishInput = z.infer<typeof TeamsUnpublishInput>;
+
+/** POST /v1/teams/download — fetch the package for a published version. */
+export const TeamsDownloadInput = z.object({
+    name: z.string().min(1, 'name is required').describe('Team name'),
+    scope: z.string().optional().describe('Scope (publisher) slug'),
+    version: z.string().optional()
+        .describe('Specific version to download; omit for latest published'),
+});
+export type TeamsDownloadInput = z.infer<typeof TeamsDownloadInput>;
+
+/** POST /v1/teams/delete — soft-delete a team and all its versions. */
+export const TeamsDeleteTeamInput = z.object({
+    name: z.string().optional()
+        .describe('Team name — mutually exclusive with team_id'),
+    scope: z.string().optional()
+        .describe('Scope (publisher) slug'),
+    team_id: z.string().uuid().optional()
+        .describe('Team UUID — mutually exclusive with name'),
+}).refine(
+    (d) => Boolean(d.name) || Boolean(d.team_id),
+    { message: 'Provide exactly one of team_id or name' },
+);
+export type TeamsDeleteTeamInput = z.infer<typeof TeamsDeleteTeamInput>;
+
+/** POST /v1/teams/delete_version — remove a specific published version. */
+export const TeamsDeleteVersionInput = z.object({
+    name: z.string().min(1, 'name is required').describe('Team name'),
+    scope: z.string().optional().describe('Scope (publisher) slug'),
+    version: z.string().min(1, 'version is required').describe('Version string to remove'),
+});
+export type TeamsDeleteVersionInput = z.infer<typeof TeamsDeleteVersionInput>;
+
+/** POST /v1/teams/rename — rename a team within its scope. */
+export const TeamsRenameInput = z.object({
+    name: z.string().min(1, 'name is required').describe('Current team name'),
+    scope: z.string().min(1, 'scope is required').describe('Scope (publisher) slug'),
+    new_name: z.string()
+        .min(1, 'new_name is required')
+        .regex(/^[a-z][a-z0-9-]*$/, 'New name must be lowercase letters, numbers, and hyphens, starting with a letter')
+        .describe('New team name — same slug rules as create'),
+});
+export type TeamsRenameInput = z.infer<typeof TeamsRenameInput>;
+
+// ─── Fleet install / uninstall ──────────────────────────────────────────────
+
+/**
+ * POST /v1/teams/install — fan-out install to daemon_ids XOR realm_id.
+ * Exactly one of `daemon_ids` (non-empty) or `realm_id` must be provided.
+ */
+export const TeamsInstallInput = z.object({
+    team_id: z.string().uuid().describe('Published team UUID to install'),
+    daemon_ids: z.array(z.string().min(1)).optional()
+        .describe('Explicit daemon targets — mutually exclusive with realm_id'),
+    realm_id: z.string().min(1).optional()
+        .describe('Install to every daemon in this realm — mutually exclusive with daemon_ids'),
+    agent_settings: z.record(z.string(), z.record(z.string(), z.string())).optional()
+        .describe('Per-agent key/value setting overrides applied at install time'),
+    force: z.boolean().optional()
+        .describe('When true, re-install even if the current version is already present'),
+    version: z.string().optional()
+        .describe('Pin to a specific published version; omit for latest'),
+}).refine(
+    (v) => {
+        const has_daemons = (v.daemon_ids?.length ?? 0) > 0;
+        const has_realm = Boolean(v.realm_id);
+        return has_daemons !== has_realm;
+    },
+    { message: 'Provide exactly one of daemon_ids or realm_id' },
+);
+export type TeamsInstallInput = z.infer<typeof TeamsInstallInput>;
+
+/**
+ * POST /v1/teams/uninstall — fan-out uninstall from daemon_id/daemon_ids XOR realm_id.
+ * Exactly one target group must be provided.
+ */
+export const TeamsUninstallInput = z.object({
+    scope: z.string().min(1).describe('Scope (publisher) slug of the team'),
+    slug: z.string().min(1).describe('Team slug within the scope'),
+    daemon_id: z.string().min(1).optional()
+        .describe('Single daemon target — mutually exclusive with realm_id'),
+    daemon_ids: z.array(z.string().min(1)).optional()
+        .describe('Multiple daemon targets — mutually exclusive with realm_id'),
+    realm_id: z.string().min(1).optional()
+        .describe('Uninstall from every daemon in this realm — mutually exclusive with daemon_id/daemon_ids'),
+}).refine(
+    (v) => {
+        const ids = [...(v.daemon_id ? [v.daemon_id] : []), ...(v.daemon_ids ?? [])];
+        return (ids.length > 0) !== Boolean(v.realm_id);
+    },
+    { message: 'Provide exactly one of daemon_id/daemon_ids or realm_id' },
+);
+export type TeamsUninstallInput = z.infer<typeof TeamsUninstallInput>;

@@ -105,7 +105,7 @@ export const NotificationRulesListInput = z.object({
 });
 export type NotificationRulesListInput = z.infer<typeof NotificationRulesListInput>;
 
-/** POST /v1/orgs|realms/set_notification_rule */
+/** POST /v1/orgs|realms/set_notification_rules */
 export const NotificationRulesSetInput = z.object({
     org_id: org_id_field.optional(),
     realm_id: z.string().min(1).optional().describe('When set, upsert a realm/team rule; omit for org-global'),
@@ -125,7 +125,7 @@ export const NotificationRulesSetInput = z.object({
 });
 export type NotificationRulesSetInput = z.infer<typeof NotificationRulesSetInput>;
 
-/** POST /v1/orgs|realms/remove_notification_rule */
+/** POST /v1/orgs|realms/remove_notification_rules */
 export const NotificationRulesRemoveInput = z.object({
     id: z.string().uuid().describe('Rule UUID to delete'),
 });

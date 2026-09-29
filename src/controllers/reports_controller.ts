@@ -8,9 +8,9 @@ export class ReportsController extends BaseController {
         super();
     }
 
-    audit = this.wrap(async (req: Request, res: Response) => {
+    async audit(req: Request, res: Response): Promise<void> {
         const body = this.parse_body(reports_audit_schema, req);
         const result = await this._reports_service.audit(req.auth, body);
         this.ok(res, result);
-    });
+    }
 }

@@ -15,9 +15,7 @@ import { NotificationService } from '../services/notification.service.js';
 import { InAppNotificationService } from '../services/in_app_notification.service.js';
 import { ApiError } from '../lib/api_error.js';
 import type { ApiOkResponse, ApiRequest, BooleanData, PagedData } from '../types/api_response.js';
-import type { AuthContext } from '../types/vo.js';
 import type { Request } from 'express';
-import { Realm, NotificationRule } from '../models/index.js';
 import {
     require_account_notification_admin,
     require_authenticated_user_id,
@@ -43,42 +41,6 @@ import {
 } from '../schemas/notifications/inputs.js';
 
 export class NotificationsController extends BaseController {
-
-    /**
-     * Bearer must be allowed to act on `org_id`.
-     * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
-     * Site hub admin may act on any org_id.
-     */
-    private async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
-        // No credential context — refuse rather than invent tenancy.
-        if (!auth) {
-            throw ApiError.unauthorized('authentication required');
-        }
-
-        // Site admin may target any org (account channel admin path).
-        if (auth.user?.role === 'admin') return;
-
-        // Daemon tokens are realm-bound; tenancy is the realm's org.
-        if (auth.auth_via === 'daemon_token') {
-            if (!auth.realm_id) {
-                throw ApiError.forbidden('daemon token has no realm binding');
-            }
-            const realm = await Realm.findByPk(auth.realm_id);
-            if (!realm || realm.org_id !== org_id) {
-                throw ApiError.forbidden('org_id does not match daemon realm organization');
-            }
-            return;
-        }
-
-        // PAT / session: live membership list from auth middleware.
-        if (!auth.org_ids.includes(org_id)) {
-            throw ApiError.forbidden('not a member of the requested organization');
-        }
-    }
-
-    private auth_from(req: Request): AuthContext | undefined {
-        return req.auth;
-    }
 
     /**
      * List channels (account or realm).
@@ -220,10 +182,8 @@ export class NotificationsController extends BaseController {
 
         if (realm_id) {
             await require_realm_notification_member(realm_id, user_id);
-            // effective = merge org + realm tiers; org tier from realm's owning org.
             if (body.effective) {
-                const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'] });
-                this.ok(res, await NotificationService.list_effective_rules(realm_id, realm?.org_id ?? undefined));
+                this.ok(res, await NotificationService.list_effective_rules(realm_id));
                 return;
             }
             this.ok(res, await NotificationService.list_rules({ realm_id, team_slug: body.team_slug }));
@@ -280,8 +240,7 @@ export class NotificationsController extends BaseController {
     async rules_remove(req: ApiRequest<NotificationRulesRemoveInput, BooleanData>, res: ApiOkResponse<BooleanData>): Promise<void> {
         const user_id = require_authenticated_user_id(req);
         const { id } = this.parse_body(NotificationRulesRemoveInput, req);
-        // Load before destroy so we can authorize against owning scope.
-        const rule = await NotificationRule.findByPk(id);
+        const rule = await NotificationService.get_rule(id);
         if (!rule) {
             this.ok(res, false);
             return;

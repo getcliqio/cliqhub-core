@@ -1,10 +1,8 @@
 /**
  * Regression tests for org-scoped realm lookups used by the dashboard
- * runs list. Before the X-Org-Id header fix, `/v1/runs/get` would
- * return runs from every org the user has ever touched — the org
- * switcher up top became decorative. `list_realm_ids_for_user_in_org`
- * is the new intersection helper that wires the header into the
- * realm gate.
+ * runs list. `list_realm_ids_for_user_in_org` is the intersection helper
+ * that gates realm results to the specified org — prevents runs from all
+ * orgs leaking into the list when org_id is explicitly supplied.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';

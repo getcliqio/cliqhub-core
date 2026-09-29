@@ -161,17 +161,15 @@ export class OrgsService {
     /**
      * Org-scoped picker targets for HUG reviewers / dispatch destinations:
      * notification channels (and users when wired). Caller must be an org member.
+     * `org_id` is required — no header-based fallback.
      */
     async get_reviewable_targets(
         auth: AuthContext,
-        params: { org_id?: string; query?: string },
+        params: { org_id: string; query?: string },
     ): Promise<{ users: Array<{ username: string; display_name?: string }>; channels: Array<{ id: string; name: string }> }> {
         this._require_auth(auth);
 
-        const org_id = params.org_id
-            ?? auth.current_org_id
-            ?? auth.org_ids?.[0]
-            ?? null;
+        const org_id = params.org_id;
         if (!org_id) throw new ApiError('invalid_params', 'org_id is required', 400);
 
         await this.assert_org_member_or_admin(auth, org_id);

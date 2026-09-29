@@ -71,7 +71,6 @@ function make_req(body: Record<string, unknown>, auth?: AuthContext) {
                 email: 'alice@test.com',
                 org_ids: auth.org_ids,
                 role: auth.user.role,
-                current_org_id: ORG_B,
             }
             : undefined,
     } as unknown as Request;
@@ -99,7 +98,7 @@ describe('ReviewsController.get org_id tenancy', () => {
         vi.mocked(ReviewPendingService.list_for_user).mockResolvedValue({ reviews: [], total: 0 } as never);
     });
 
-    it('without org_id → 422; does not invent from current_org_id', async () => {
+    it('without org_id → 422', async () => {
         await expect(
             reviews.get(make_req({ limit: 1 }, pat_auth([ORG_A])) as never, mock_res() as never),
         ).rejects.toMatchObject({ status: 422, code: 'invalid_params' });

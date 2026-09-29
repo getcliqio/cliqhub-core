@@ -180,10 +180,9 @@ describe('RealmController org_id tenancy', () => {
         expect(mock_realm.create).not.toHaveBeenCalled();
     });
 
-    it('create ignores current_org_id / does not invent from header', async () => {
+    it('create uses body org_id, not a header fallback', async () => {
         const res = mock_res();
         const req = make_req({ org_id: ORG_A, slug: 'prod', name: 'Prod' }, pat_auth([ORG_A]));
-        (req.user as { current_org_id?: string }).current_org_id = ORG_B;
         await controller.create(req, res);
         expect(mock_realm.create).toHaveBeenCalledWith(
             expect.any(String),

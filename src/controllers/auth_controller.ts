@@ -16,7 +16,7 @@ export class AuthController extends BaseController {
         super();
     }
 
-    signup = this.wrap(async (req: Request, res: Response) => {
+    async signup(req: Request, res: Response): Promise<void> {
         const body = this.parse_body(signup_schema, req);
         const result = await this._auth_service.signup(
             body.username,
@@ -33,9 +33,9 @@ export class AuthController extends BaseController {
             default_realm_qualified: result.default_realm_qualified,
             enroll_token: result.enroll_token,
         });
-    });
+    }
 
-    authenticate_user = this.wrap(async (req: Request, res: Response) => {
+    async authenticate_user(req: Request, res: Response): Promise<void> {
         const body = this.parse_body(authenticate_user_schema, req);
         const result = await this._auth_service.authenticate_user(body.username, body.password);
         this.ok(res, {
@@ -49,17 +49,17 @@ export class AuthController extends BaseController {
             enroll_token: result.enroll_token,
             orgs: result.orgs,
         });
-    });
+    }
 
-    issue_session_token = this.wrap(async (req: Request, res: Response) => {
+    async issue_session_token(req: Request, res: Response): Promise<void> {
         const body = this.parse_body(issue_session_token_schema, req);
         const result = await this._auth_service.issue_session_token(req.auth, body.user_id);
         this.ok(res, result);
-    });
+    }
 
-    revoke_session_token = this.wrap(async (req: Request, res: Response) => {
+    async revoke_session_token(req: Request, res: Response): Promise<void> {
         const body = this.parse_body(revoke_session_token_schema, req);
         const result = await this._auth_service.revoke_session_token(body.token);
         this.ok(res, result);
-    });
+    }
 }

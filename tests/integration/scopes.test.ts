@@ -60,12 +60,10 @@ const scopes_service = new ScopesService(
 );
 const scopes_controller = new ScopesController(scopes_service);
 
-app.post('/v1/scopes/get', scopes_controller.get);
-app.post('/v1/scopes/new', scopes_controller.new_scope);
-app.post('/v1/scopes/update', scopes_controller.update);
-app.post('/v1/scopes/delete', scopes_controller.delete_scope);
-app.post('/v1/scopes/add_user', scopes_controller.add_user);
-app.post('/v1/scopes/remove_user', scopes_controller.remove_user);
+app.post('/v1/scopes/get', scopes_controller.wrap(scopes_controller.get));
+app.post('/v1/scopes/new', scopes_controller.wrap(scopes_controller.new_scope));
+app.post('/v1/scopes/update', scopes_controller.wrap(scopes_controller.update));
+app.post('/v1/scopes/delete', scopes_controller.wrap(scopes_controller.delete_scope));
 app.use(error_handler);
 
 const ADMIN_USER = {

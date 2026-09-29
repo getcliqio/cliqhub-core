@@ -6,8 +6,10 @@ import {
 	NotificationRule,
 	Realm,
 } from '../models/index.js';
+import { Org } from '../db/models/index.js';
 import { ApiError } from '../lib/api_error.js';
 import type { Destination } from '../notifications/channel_config.js';
+import type { NotificationRuleData } from '../schemas/notifications/data.js';
 
 /** Wire-compatible channel row (matches SDK NotificationChannelRecord). */
 export type ChannelRecord = {
@@ -19,8 +21,8 @@ export type ChannelRecord = {
 	/** Owning user — set for personal channels. */
 	user_id?: string | null;
 	name: string;
-	/** Serialized destination array (built from channel_destinations rows). */
-	destinations: string;
+	/** Parsed destination list (built from channel_destinations rows). */
+	destinations: Destination[];
 	enabled: number;
 	created_at: number;
 	updated_at: number;
@@ -34,29 +36,27 @@ export class NotificationService {
 	private static to_channel_record(row: {
 		id: string;
 		realm_id: string | null;
+		org_id?: string | null;
+		user_id?: string | null;
 		name: string;
 		enabled: number;
 		created_at: number;
 		updated_at: number;
+		destinations_rows?: Array<{ type: string; config: Record<string, unknown> }>;
 	}): ChannelRecord {
-		// Destinations live in a child table; serialize to the wire JSON string clients expect.
-		const dest_rows = (row as any).destinations_rows;
-		const destinations_str = Array.isArray(dest_rows)
-			? JSON.stringify(
-				dest_rows.map((r: { type: string; config: Record<string, unknown> }) => ({
-					type: r.type,
-					...r.config,
-				})),
-			)
-			: '[]';
+		const dest_rows = row.destinations_rows ?? [];
+		const destinations = dest_rows.map((r) => ({
+			type: r.type,
+			...r.config,
+		})) as Destination[];
 
 		return {
 			id: row.id,
 			realm_id: row.realm_id ?? null,
-			org_id: (row as any).org_id ?? null,
-			user_id: (row as any).user_id ?? null,
+			org_id: row.org_id ?? null,
+			user_id: row.user_id ?? null,
 			name: row.name,
-			destinations: destinations_str,
+			destinations,
 			enabled: row.enabled,
 			created_at: Number(row.created_at),
 			updated_at: Number(row.updated_at),
@@ -111,7 +111,8 @@ export class NotificationService {
 
 		let child_destinations: Destination[] = [];
 		try {
-			child_destinations = JSON.parse(target.destinations ?? '[]') as Destination[];
+			const raw = target.destinations;
+			child_destinations = Array.isArray(raw) ? (raw as Destination[]) : [];
 		} catch {
 			return;
 		}
@@ -125,30 +126,62 @@ export class NotificationService {
 		}
 	}
 
-	/** Throw conflict if `name` is already taken in the given realm/org scope. */
+	/** Throw conflict if `name` is already taken in the given realm/org scope, or crosses scopes within the same org. */
 	private static async assert_channel_name_available(name: string, realm_id: string | null, org_id: string | null): Promise<void> {
-		// Names are unique per realm, or per org among account (realm_id null) channels.
-		const clash_where: Record<string, unknown> = { name };
+		// 1. Same-scope uniqueness check (realm vs realm, org vs org).
+		const same_scope_where: Record<string, unknown> = { name };
 		if (realm_id) {
-			clash_where.realm_id = realm_id;
+			same_scope_where.realm_id = realm_id;
+		} else {
+			same_scope_where.realm_id = { [Op.is]: null };
+			if (org_id) same_scope_where.org_id = org_id;
 		}
-		if (!realm_id) {
-			clash_where.realm_id = { [Op.is]: null };
-			if (org_id) clash_where.org_id = org_id;
+		const same_scope_clash = await NotificationChannel.findOne({ where: same_scope_where });
+		if (same_scope_clash) {
+			let scope_label = 'in your global settings';
+			if (same_scope_clash.realm_id) {
+				const owner_realm = await Realm.findByPk(same_scope_clash.realm_id, { attributes: ['slug', 'name'] });
+				const realm_label = owner_realm?.name || owner_realm?.slug || same_scope_clash.realm_id;
+				scope_label = `in realm "${realm_label}"`;
+			}
+			throw ApiError.conflict(
+				`A channel named '${name}' already exists ${scope_label}. Choose a different name.`,
+			);
 		}
 
-		const clash = await NotificationChannel.findOne({ where: clash_where });
-		if (!clash) return;
-
-		let scope_label = 'in your global settings';
-		if (clash.realm_id) {
-			const owner_realm = await Realm.findByPk(clash.realm_id, { attributes: ['slug', 'name'] });
-			const realm_label = owner_realm?.name || owner_realm?.slug || clash.realm_id;
-			scope_label = `in realm "${realm_label}"`;
+		// 2. Cross-scope check: org-level channel names are reserved across the entire org.
+		if (realm_id) {
+			// Creating a realm channel — check if the org already has an org-level channel with this name.
+			const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'] });
+			if (realm?.org_id) {
+				const org_clash = await NotificationChannel.findOne({
+					where: { name, org_id: realm.org_id, realm_id: { [Op.is]: null } },
+				});
+				if (org_clash) {
+					const org = await Org.findByPk(realm.org_id, { attributes: ['display_name', 'slug'] });
+					const org_label = org?.display_name || org?.slug || realm.org_id;
+					throw ApiError.conflict(
+						`A channel named '${name}' already exists at the organization level in ${org_label}. Use the organization channel or choose a different name.`,
+					);
+				}
+			}
+		} else if (org_id) {
+			// Creating an org-level channel — check if any realm in this org already has a channel with this name.
+			const org_realms = await Realm.findAll({ where: { org_id }, attributes: ['id', 'name', 'slug'] });
+			if (org_realms.length > 0) {
+				const realm_ids = org_realms.map((r) => r.id);
+				const realm_clash = await NotificationChannel.findOne({
+					where: { name, realm_id: { [Op.in]: realm_ids } },
+				});
+				if (realm_clash) {
+					const owner = org_realms.find((r) => r.id === realm_clash.realm_id);
+					const realm_label = owner?.name || owner?.slug || realm_clash.realm_id;
+					throw ApiError.conflict(
+						`A channel named '${name}' already exists in realm "${realm_label}". Choose a different name or remove the realm channel first.`,
+					);
+				}
+			}
 		}
-		throw ApiError.conflict(
-			`A channel named '${name}' already exists ${scope_label}. Choose a different name.`,
-		);
 	}
 
 	// ── Channels ───────────────────────────────────────────────────
@@ -261,24 +294,7 @@ export class NotificationService {
 			if (!realm) throw ApiError.not_found(`realm '${realm_id}' not found`);
 		}
 
-		/** Org-scoped name uniqueness for account channels; realm-scoped for realm channels. */
-		const scope_filter: Record<string, unknown> = { name };
-		if (realm_id) {
-			scope_filter.realm_id = realm_id;
-		}
-		if (!realm_id) {
-			scope_filter.realm_id = { [Op.is]: null };
-			if (org_id) scope_filter.org_id = org_id;
-		}
-		const existing = await NotificationChannel.findOne({ where: scope_filter });
-		if (existing) {
-			const scope_label = realm_id
-				? `in realm "${(await Realm.findByPk(realm_id, { attributes: ['slug', 'name'] }))?.name ?? realm_id}"`
-				: 'in your global settings';
-			throw ApiError.conflict(
-				`A channel named '${name}' already exists ${scope_label}. Choose a different name.`,
-			);
-		}
+		await NotificationService.assert_channel_name_available(name, realm_id, org_id);
 
 		const now = Date.now();
 		const channel_id = randomUUID();
@@ -423,10 +439,6 @@ export class NotificationService {
 
 	/**
 	 * Send a synthetic test notification through a channel's destinations.
-	 * Returns counts of successful deliveries and any error messages.
-	 */
-	/**
-	 * Send a synthetic test notification through a channel's destinations.
 	 * If `destination_index` is provided, only that single destination is tested.
 	 */
 	static async test_channel(id: string, destination_index?: number): Promise<{ delivered: number; errors: string[] }> {
@@ -568,7 +580,7 @@ export class NotificationService {
 		team_slug?: string | null;
 		/** Org context — filters org-level rules (realm_id IS NULL) to this org. */
 		org_id?: string;
-	} = {}): Promise<Array<{ id: string; realm_id: string | null; team_slug: string | null; event: string; channel_id: string; priority: number; created_at: number; updated_at: number }>> {
+	} = {}): Promise<NotificationRuleData[]> {
 		const where: Record<string, unknown> = {};
 		if (opts.realm_id) {
 			where.realm_id = opts.realm_id;
@@ -587,6 +599,7 @@ export class NotificationService {
 		return rows.map((r) => ({
 			id: r.id!,
 			realm_id: r.realm_id,
+			org_id: r.org_id ? String(r.org_id) : null,
 			team_slug: r.team_slug,
 			event: r.event,
 			channel_id: r.channel_id,
@@ -597,13 +610,14 @@ export class NotificationService {
 	}
 
 	/** List effective rules for a realm (org-level + realm overrides). */
-	static async list_effective_rules(realm_id: string, org_id?: string): Promise<Array<{ id: string; realm_id: string | null; team_slug: string | null; event: string; channel_id: string; priority: number; created_at: number; updated_at: number; tier: 'global' | 'realm' }>> {
-		const global_rules = await NotificationService.list_rules({ org_id });
+	static async list_effective_rules(realm_id: string, org_id?: string): Promise<Array<NotificationRuleData & { tier: 'global' | 'realm' }>> {
+		const resolved_org_id = org_id ?? (await Realm.findByPk(realm_id, { attributes: ['org_id'] }))?.org_id ?? undefined;
+		const global_rules = await NotificationService.list_rules({ org_id: resolved_org_id });
 		const realm_rules = await NotificationService.list_rules({ realm_id });
 
 		const realm_events = new Set(realm_rules.map((r) => r.event));
 
-		const effective: Array<ReturnType<typeof NotificationService.list_effective_rules> extends Promise<(infer T)[]> ? T : never> = [];
+		const effective: Array<NotificationRuleData & { tier: 'global' | 'realm' }> = [];
 		for (const r of global_rules) {
 			if (!realm_events.has(r.event)) {
 				effective.push({ ...r, tier: 'global' });
@@ -625,13 +639,41 @@ export class NotificationService {
 		event: string;
 		channel_id: string;
 		priority?: number;
-	}): Promise<{ id: string; realm_id: string | null; team_slug: string | null; event: string; channel_id: string; priority: number; created_at: number; updated_at: number }> {
+	}): Promise<NotificationRuleData> {
 		const realm_id = data.realm_id?.trim() || null;
 		const org_id = realm_id ? null : (data.org_id ?? null);
 		const team_slug = data.team_slug?.trim() || null;
 		const event = data.event.trim();
 		const channel_id = data.channel_id.trim();
 		if (!event || !channel_id) throw ApiError.bad_request('event and channel_id are required');
+
+		// Validate that the channel belongs to the same org as this rule.
+		const channel = await NotificationChannel.findByPk(channel_id, { attributes: ['id', 'realm_id', 'org_id'] });
+		if (!channel) throw ApiError.not_found(`notification channel '${channel_id}' not found`);
+
+		if (realm_id) {
+			// Realm rule: channel must be in this realm, or be an org-level channel from the realm's org.
+			if (channel.realm_id !== null && channel.realm_id !== realm_id) {
+				throw ApiError.forbidden(`Channel '${channel_id}' does not belong to this realm or its organization`);
+			}
+			if (channel.realm_id === null) {
+				// Org-level channel — verify it belongs to the realm's org.
+				const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'] });
+				const channel_org = channel.org_id ? String(channel.org_id) : null;
+				if (!realm || channel_org !== realm.org_id) {
+					throw ApiError.forbidden(`Channel '${channel_id}' does not belong to this organization`);
+				}
+			}
+		} else if (org_id) {
+			// Org rule: channel must be an org-level channel for this org.
+			if (channel.realm_id !== null) {
+				throw ApiError.forbidden(`Channel '${channel_id}' is a realm channel and cannot be used for an org-level rule`);
+			}
+			const channel_org = channel.org_id ? String(channel.org_id) : null;
+			if (channel_org !== org_id) {
+				throw ApiError.forbidden(`Channel '${channel_id}' does not belong to this organization`);
+			}
+		}
 
 		const now = Date.now();
 		const existing = await NotificationRule.findOne({
@@ -648,6 +690,7 @@ export class NotificationService {
 			return {
 				id: existing.id!,
 				realm_id: existing.realm_id,
+				org_id: existing.org_id ? String(existing.org_id) : null,
 				team_slug: existing.team_slug,
 				event: existing.event,
 				channel_id: existing.channel_id,
@@ -670,12 +713,29 @@ export class NotificationService {
 		return {
 			id: row.id!,
 			realm_id: row.realm_id,
+			org_id: row.org_id ? String(row.org_id) : null,
 			team_slug: row.team_slug,
 			event: row.event,
 			channel_id: row.channel_id,
 			priority: row.priority,
 			created_at: Number(row.created_at),
 			updated_at: Number(row.updated_at),
+		};
+	}
+
+	static async get_rule(id: string): Promise<NotificationRuleData | null> {
+		const rule = await NotificationRule.findByPk(id);
+		if (!rule) return null;
+		return {
+			id: rule.id!,
+			realm_id: rule.realm_id,
+			org_id: rule.org_id ? String(rule.org_id) : null,
+			team_slug: rule.team_slug,
+			event: rule.event,
+			channel_id: rule.channel_id,
+			priority: rule.priority,
+			created_at: Number(rule.created_at),
+			updated_at: Number(rule.updated_at),
 		};
 	}
 

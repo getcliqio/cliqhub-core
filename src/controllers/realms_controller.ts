@@ -18,7 +18,7 @@
  * Inbound SoT: PascalCase Zod `Realm*Input` in `schemas/realms/inputs.ts`.
  */
 
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 
 import { BaseController } from './base_controller.js';
 import { ApiError } from '../lib/api_error.js';
@@ -27,7 +27,6 @@ import { RealmTeamListService } from '../services/realm_team_list.service.js';
 import { DispatchService } from '../services/dispatch.service.js';
 import { Realm } from '../models/index.js';
 import { Org } from '../db/models/index.js';
-import type { AuthContext } from '../types/vo.js';
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
 import type { Realm_dto } from '../services/realm.service.js';
 import {
@@ -68,10 +67,6 @@ export class RealmController extends BaseController {
         super();
     }
 
-    private auth_from(req: Request): AuthContext | undefined {
-        return (req as Request & { auth?: AuthContext }).auth;
-    }
-
     private assert_user(req: Request): Realm_user {
         // Session/PAT hydrate only — daemon-only tokens never reach these handlers via this path.
         if (!req.user) {
@@ -86,42 +81,14 @@ export class RealmController extends BaseController {
     }
 
     /**
-     * Bearer must be allowed to act on `org_id`.
-     * PAT/session: org_id ∈ auth.org_ids. Daemon token: realm.org_id === org_id.
-     */
-    private async assert_org_authorized(auth: AuthContext | undefined, org_id: string): Promise<void> {
-        // No credential context — refuse rather than invent tenancy.
-        if (!auth) {
-            throw ApiError.unauthorized('authentication required');
-        }
-
-        // Daemon tokens are realm-bound; tenancy is the realm's org, not a membership list.
-        if (auth.auth_via === 'daemon_token') {
-            if (!auth.realm_id) {
-                throw ApiError.forbidden('daemon token has no realm binding');
-            }
-            const realm = await Realm.findByPk(auth.realm_id);
-            if (!realm || realm.org_id !== org_id) {
-                throw ApiError.forbidden('org_id does not match daemon realm organization');
-            }
-            return;
-        }
-
-        // PAT / session: live membership list from auth middleware.
-        if (!auth.org_ids.includes(org_id)) {
-            throw ApiError.forbidden('not a member of the requested organization');
-        }
-    }
-
-    /**
      * Create a realm in the org named by body.org_id.
      *
      * @param req - Body: {@link RealmCreateInput}
      * @param res - Flat `{ ok: true, realm }`
      */
     async create(
-        req: FlatApiRequest<RealmCreateInput, Realm_one>,
-        res: FlatApiOkResponse<Realm_one>,
+        req: Request,
+        res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
         // Zod SoT — org_id required; never invent from X-Org-Id.
@@ -139,11 +106,11 @@ export class RealmController extends BaseController {
      * List realms visible to the user (optional org_id filter).
      *
      * @param req - Body: {@link RealmGetInput}
-     * @param res - Flat `{ ok: true, realms, total }`
+     * @param res - `{ ok: true, data: { items, total, offset, limit } }`
      */
     async get(
-        req: FlatApiRequest<RealmGetInput, Realm_list>,
-        res: FlatApiOkResponse<Realm_list>,
+        req: Request,
+        res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
         // Empty / omitted body is valid — all fields optional.
@@ -168,7 +135,15 @@ export class RealmController extends BaseController {
             sort_by: body.sort_by,
             sort_dir: body.sort_dir,
         });
-        res.json({ ok: true, realms, total });
+        res.json({
+            ok: true,
+            data: {
+                items: realms,
+                total,
+                offset: body.offset ?? 0,
+                limit: body.limit ?? 50,
+            },
+        });
     }
 
     /**
@@ -178,8 +153,8 @@ export class RealmController extends BaseController {
      * @param res - Flat `{ ok: true, realm }`
      */
     async get_by_id(
-        req: FlatApiRequest<RealmGetByIdInput, Realm_one>,
-        res: FlatApiOkResponse<Realm_one>,
+        req: Request,
+        res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
         // Zod XOR — realm_id | (slug+org_id) | (slug+org_slug); bare slug rejected.
@@ -220,8 +195,8 @@ export class RealmController extends BaseController {
      * @param res - Flat `{ ok: true, realm }`
      */
     async update(
-        req: FlatApiRequest<RealmUpdateInput, Realm_one>,
-        res: FlatApiOkResponse<Realm_one>,
+        req: Request,
+        res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
         // Zod SoT — realm_id + name; no body org_id required for mutations.
@@ -238,8 +213,8 @@ export class RealmController extends BaseController {
      * @param res - Flat `{ ok: true }`
      */
     async delete(
-        req: FlatApiRequest<RealmDeleteInput>,
-        res: FlatApiOkResponse,
+        req: Request,
+        res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
         // Zod SoT — realm_id required; no body org_id / header gate.
@@ -256,8 +231,8 @@ export class RealmController extends BaseController {
      * @param res - Flat `{ ok: true, members }`
      */
     async get_members(
-        req: FlatApiRequest<RealmGetMembersInput, Realm_members>,
-        res: FlatApiOkResponse<Realm_members>,
+        req: Request,
+        res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
         // Zod SoT — realm_id + optional member_type filter.
@@ -278,8 +253,8 @@ export class RealmController extends BaseController {
      * @param res - Flat `{ ok: true, member }`
      */
     async add_member(
-        req: FlatApiRequest<RealmAddMemberInput, Realm_member_one>,
-        res: FlatApiOkResponse<Realm_member_one>,
+        req: Request,
+        res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
         const body = this.parse_body(RealmAddMemberInput, req);
@@ -312,8 +287,8 @@ export class RealmController extends BaseController {
      * @param res - Flat `{ ok: true }`
      */
     async remove_member(
-        req: FlatApiRequest<RealmRemoveMemberInput>,
-        res: FlatApiOkResponse,
+        req: Request,
+        res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
         const body = this.parse_body(RealmRemoveMemberInput, req);
@@ -340,8 +315,8 @@ export class RealmController extends BaseController {
      * @param res - Flat `{ ok: true, team_list, install }`
      */
     async add_team(
-        req: FlatApiRequest<RealmTeamRefInput, Realm_team_add>,
-        res: FlatApiOkResponse<Realm_team_add>,
+        req: Request,
+        res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
         // Zod SoT — realm_id + published team scope/slug.
@@ -369,8 +344,8 @@ export class RealmController extends BaseController {
      * @param res - Flat `{ ok: true, team_list, uninstall }`
      */
     async remove_team(
-        req: FlatApiRequest<RealmTeamRefInput, Realm_team_remove>,
-        res: FlatApiOkResponse<Realm_team_remove>,
+        req: Request,
+        res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
         const body = this.parse_body(RealmTeamRefInput, req);

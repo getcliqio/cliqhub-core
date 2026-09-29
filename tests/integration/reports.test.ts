@@ -37,7 +37,7 @@ app.use(create_auth_middleware({
 const reports_service = new ReportsService(audit_repo as any);
 const reports_controller = new ReportsController(reports_service);
 
-app.post('/internal/reports/audit', reports_controller.audit);
+app.post('/internal/reports/audit', reports_controller.wrap(reports_controller.audit));
 app.use(error_handler);
 
 const ADMIN_USER = {
