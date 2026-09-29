@@ -7,6 +7,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 
 import { ApiError } from '../lib/api_error.js';
+import { ApiError as HubApiError } from '../errors/api_error.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('errors');
@@ -29,6 +30,22 @@ export function core_api_error_handler(
         };
         if (err.code) body.code = err.code;
         res.status(err.status_code).json(body);
+        return;
+    }
+
+    // Hub product-plane ApiError (errors/api_error.ts) — different constructor
+    // signature (code, message, status) and property name (.status not .status_code).
+    // Services like teams/users/scopes/orgs/auth throw this variant; without this
+    // branch it falls through to the generic 500 handler and the BFF sees a
+    // malformed error envelope, which then surfaces as generic "Backend request
+    // failed" / "Login required" errors in the CLI.
+    if (err instanceof HubApiError) {
+        const body: { ok: false; error: string; code?: string } = {
+            ok: false,
+            error: err.message,
+        };
+        if (err.code) body.code = err.code;
+        res.status(err.status).json(body);
         return;
     }
 
