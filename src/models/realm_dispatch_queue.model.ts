@@ -1,5 +1,5 @@
-import type { Model, ModelStatic, Sequelize } from 'sequelize';
-import { DataTypes } from 'sequelize';
+import { DataTypes, type Sequelize } from 'sequelize';
+import { BaseModel } from './base_model.js';
 
 export type Realm_dispatch_kind = 'run' | 'install' | 'uninstall';
 
@@ -14,34 +14,25 @@ export type Realm_dispatch_status =
     | 'failed'
     | 'cancelled';
 
-export interface Realm_dispatch_queue_attributes {
-    id: string;
-    realm_id: string;
-    kind: Realm_dispatch_kind;
-    payload: Record<string, unknown>;
-    priority: number;
-    status: Realm_dispatch_status;
-    claimed_by: string | null;
-    claimed_at: number | null;
-    run_id: string | null;
-    results: unknown[] | null;
-    submitted_by: string;
-    submitted_at: number;
-    error: string | null;
-    created_at: number;
-    updated_at: number;
-}
+export class RealmDispatchQueue extends BaseModel {
+    declare id: string;
+    declare realm_id: string;
+    declare kind: Realm_dispatch_kind;
+    declare payload: Record<string, unknown>;
+    declare priority: number;
+    declare status: Realm_dispatch_status;
+    declare claimed_by: string | null;
+    declare claimed_at: number | null;
+    declare run_id: string | null;
+    declare results: unknown[] | null;
+    declare submitted_by: string;
+    declare submitted_at: number;
+    declare error: string | null;
+    declare created_at: number;
+    declare updated_at: number;
 
-export type Realm_dispatch_queue_model =
-    Model<Realm_dispatch_queue_attributes> & Realm_dispatch_queue_attributes;
-
-/** Set by `init_realm_dispatch_queue` — uses the store Sequelize's Model class. */
-export let RealmDispatchQueue: ModelStatic<Realm_dispatch_queue_model>;
-
-export function init_realm_dispatch_queue(sequelize: Sequelize): void {
-    RealmDispatchQueue = sequelize.define(
-        'RealmDispatchQueue',
-        {
+    static register(sequelize: Sequelize): void {
+        RealmDispatchQueue.init({
             id: { type: DataTypes.TEXT, primaryKey: true },
             realm_id: { type: DataTypes.TEXT, allowNull: false },
             kind: { type: DataTypes.TEXT, allowNull: false },
@@ -57,11 +48,32 @@ export function init_realm_dispatch_queue(sequelize: Sequelize): void {
             error: { type: DataTypes.TEXT, allowNull: true },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
             updated_at: { type: DataTypes.BIGINT, allowNull: false },
-        },
-        {
+        }, {
+            sequelize,
             schema: 'cliq',
             tableName: 'realm_dispatch_queue',
             timestamps: false,
-        },
-    ) as ModelStatic<Realm_dispatch_queue_model>;
+        });
+    }
 }
+
+/** @deprecated Use RealmDispatchQueue directly */
+export type Realm_dispatch_queue_model = RealmDispatchQueue;
+
+export type Realm_dispatch_queue_attributes = {
+    id: string;
+    realm_id: string;
+    kind: Realm_dispatch_kind;
+    payload: Record<string, unknown>;
+    priority: number;
+    status: Realm_dispatch_status;
+    claimed_by: string | null;
+    claimed_at: number | null;
+    run_id: string | null;
+    results: unknown[] | null;
+    submitted_by: string;
+    submitted_at: number;
+    error: string | null;
+    created_at: number;
+    updated_at: number;
+};

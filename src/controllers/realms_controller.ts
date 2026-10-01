@@ -21,12 +21,18 @@
 import type { Request, Response } from 'express';
 
 import { BaseController } from './base_controller.js';
+import { get_logger } from '../lib/log.js';
 import { ApiError } from '../lib/api_error.js';
+import { AdminCheck } from '../lib/site_admin.js';
 import { RealmService } from '../services/realm.service.js';
 import { RealmTeamListService } from '../services/realm_team_list.service.js';
 import { DispatchService } from '../services/dispatch.service.js';
-import { Realm } from '../models/index.js';
-import { Org } from '../db/models/index.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+
+const _realm_repo_rc = new RealmRepository();
+import { OrgRepository } from '../repositories/org_repository.js';
+
+const _org_repo_rc = new OrgRepository();
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
 import type { Realm_dto } from '../services/realm.service.js';
 import {
@@ -55,6 +61,8 @@ type Realm_member_one = { member: unknown };
 type Realm_team_add = { team_list: unknown; install: unknown };
 type Realm_team_remove = { team_list: unknown; uninstall: unknown };
 
+const log = get_logger('ctrl.realms');
+
 /**
  * Flat response helpers (envelope { ok, data } deferred to RM-ENV).
  */
@@ -68,15 +76,14 @@ export class RealmController extends BaseController {
     }
 
     private assert_user(req: Request): Realm_user {
-        // Session/PAT hydrate only — daemon-only tokens never reach these handlers via this path.
-        if (!req.user) {
+        if (!req.auth?.user) {
             throw ApiError.forbidden('Not authenticated');
         }
         return {
-            user_id: req.user.user_id,
-            email: req.user.email ?? '',
-            scope_ids: req.user.scope_ids,
-            org_ids: req.user.org_ids,
+            user_id: req.auth.user.id,
+            email: req.auth.user.email ?? '',
+            scope_ids: req.auth.scopes.map(s => s.id),
+            org_ids: req.auth.org_ids,
         };
     }
 
@@ -91,14 +98,15 @@ export class RealmController extends BaseController {
         res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
+        log.debug('create', { user_id: user.user_id });
         // Zod SoT — org_id required; never invent from X-Org-Id.
         const body = this.parse_body(RealmCreateInput, req);
-        // Bearer membership (or daemon realm org) must include body.org_id.
-        await this.assert_org_authorized(this.auth_from(req), body.org_id);
+        // Route policy: realms.create in body.org_id.
 
         const realm = await this._realm.create(user.user_id, body.slug, body.name, {
             org_id: body.org_id,
         });
+        log.info('realm_created', { id: realm.id });
         res.json({ ok: true, realm });
     }
 
@@ -113,16 +121,16 @@ export class RealmController extends BaseController {
         res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
+        log.debug('get', { user_id: user.user_id });
         // Empty / omitted body is valid — all fields optional.
         if (req.body == null || typeof req.body !== 'object') {
             (req as Request & { body: Record<string, unknown> }).body = {};
         }
         const body = this.parse_body(RealmGetInput, req);
 
-        // Optional filter: when set, caller must be authorized for that org.
-        if (body.org_id) {
-            await this.assert_org_authorized(this.auth_from(req), body.org_id);
-        }
+        // `all` is honoured for site admins only (hub-wide Admin views).
+        const site_admin = body.all === true && AdminCheck.is_site_admin(req);
+        // Optional org filter: route policy checked membership of body.org_id.
 
         // Omitted org_id = list across every org the user belongs to.
         const { realms, total } = await this._realm.list_for_user(user.user_id, {
@@ -134,6 +142,7 @@ export class RealmController extends BaseController {
             offset: body.offset,
             sort_by: body.sort_by,
             sort_dir: body.sort_dir,
+            ...(site_admin ? { site_admin: true } : {}),
         });
         res.json({
             ok: true,
@@ -157,6 +166,7 @@ export class RealmController extends BaseController {
         res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
+        log.debug('get_by_id', { user_id: user.user_id });
         // Zod XOR — realm_id | (slug+org_id) | (slug+org_slug); bare slug rejected.
         const body = this.parse_body(RealmGetByIdInput, req);
 
@@ -170,7 +180,7 @@ export class RealmController extends BaseController {
         // Slug path — resolve org explicitly (never fall back to current_org_id).
         let org_id = body.org_id;
         if (body.org_slug) {
-            const org = await Org.findOne({ where: { slug: body.org_slug } });
+            const org = await _org_repo_rc.find_one_q({ where: { slug: body.org_slug } });
             if (!org) {
                 throw ApiError.not_found('Org not found');
             }
@@ -181,9 +191,7 @@ export class RealmController extends BaseController {
             throw ApiError.bad_request('slug requires org_id or org_slug');
         }
 
-        // Bearer must be allowed for the resolved org before slug lookup.
-        await this.assert_org_authorized(this.auth_from(req), org_id);
-
+        // Route policy resolved the realm by (org, slug) and checked realm view.
         const realm = await this._realm.get_by_slug(body.slug!, user.user_id, { org_id });
         res.json({ ok: true, realm });
     }
@@ -199,10 +207,12 @@ export class RealmController extends BaseController {
         res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
+        log.debug('update', { user_id: user.user_id });
         // Zod SoT — realm_id + name; no body org_id required for mutations.
         const body = this.parse_body(RealmUpdateInput, req);
         // No header org gate — RealmService enforces caller may mutate this realm.
         const realm = await this._realm.update(body.realm_id, user.user_id, { name: body.name });
+        log.info('realm_updated', { id: body.realm_id });
         res.json({ ok: true, realm });
     }
 
@@ -217,10 +227,12 @@ export class RealmController extends BaseController {
         res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
+        log.debug('delete', { user_id: user.user_id });
         // Zod SoT — realm_id required; no body org_id / header gate.
         const body = this.parse_body(RealmDeleteInput, req);
         // Membership / role enforced in service (not ambient X-Org-Id).
         await this._realm.remove(body.realm_id, user.user_id);
+        log.info('realm_deleted', { id: body.realm_id });
         res.json({ ok: true });
     }
 
@@ -235,6 +247,7 @@ export class RealmController extends BaseController {
         res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
+        log.debug('get_members', { user_id: user.user_id });
         // Zod SoT — realm_id + optional member_type filter.
         const body = this.parse_body(RealmGetMembersInput, req);
         // Caller must already be a realm member; service returns typed roster.
@@ -257,6 +270,7 @@ export class RealmController extends BaseController {
         res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
+        log.debug('add_member', { user_id: user.user_id });
         const body = this.parse_body(RealmAddMemberInput, req);
 
         // Daemons join via enroll token — never via add_member.
@@ -277,6 +291,7 @@ export class RealmController extends BaseController {
             member_id,
             role: body.role,
         });
+        log.info('member_added', { realm_id: body.realm_id, member_id });
         res.json({ ok: true, member });
     }
 
@@ -291,6 +306,7 @@ export class RealmController extends BaseController {
         res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
+        log.debug('remove_member', { user_id: user.user_id });
         const body = this.parse_body(RealmRemoveMemberInput, req);
 
         // Same username/email → UUID resolve as add_member.
@@ -305,6 +321,7 @@ export class RealmController extends BaseController {
             body.member_type,
             member_id,
         );
+        log.info('member_removed', { realm_id: body.realm_id, member_id });
         res.json({ ok: true });
     }
 
@@ -319,6 +336,7 @@ export class RealmController extends BaseController {
         res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
+        log.debug('add_team', { user_id: user.user_id });
         // Zod SoT — realm_id + published team scope/slug.
         const body = this.parse_body(RealmTeamRefInput, req);
         const entry = { scope: body.scope, slug: body.slug };
@@ -334,6 +352,7 @@ export class RealmController extends BaseController {
             user.org_ids,
         );
 
+        log.info('team_added', { realm_id: body.realm_id, scope: body.scope, slug: body.slug });
         res.json({ ok: true, team_list, install: fanout });
     }
 
@@ -348,6 +367,7 @@ export class RealmController extends BaseController {
         res: Response,
     ): Promise<void> {
         const user = this.assert_user(req);
+        log.debug('remove_team', { user_id: user.user_id });
         const body = this.parse_body(RealmTeamRefInput, req);
         const entry = { scope: body.scope, slug: body.slug };
 
@@ -362,6 +382,7 @@ export class RealmController extends BaseController {
             org_ids: user.org_ids,
         });
 
+        log.info('team_removed', { realm_id: body.realm_id, scope: body.scope, slug: body.slug });
         res.json({ ok: true, team_list, uninstall });
     }
 }

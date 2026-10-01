@@ -3,7 +3,7 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { setup_sequelize_mocks } from '../../helpers/mock_sequelize.js';
 setup_sequelize_mocks();
 
-import { OrgMember } from '../../../src/db/models/index.js';
+import { OrgMember, OrgRole } from '../../../src/models/index.js';
 import { OrgMemberRepository } from '../../../src/repositories/org_member_repository.js';
 
 describe('OrgMemberRepository', () => {
@@ -40,9 +40,17 @@ describe('OrgMemberRepository', () => {
         expect(result).toBe(2);
     });
 
-    it('create inserts membership', async () => {
+    it('create inserts membership with the matching org role id (B1)', async () => {
+        vi.mocked(OrgRole.findOne).mockResolvedValueOnce({ id: 'role-member' } as any);
         await repo.create(hub_legacy_uuid(1), hub_legacy_uuid(2), 'member');
-        expect(OrgMember.create).toHaveBeenCalledWith({ org_id: hub_legacy_uuid(1), user_id: hub_legacy_uuid(2), role: 'member' });
+        expect(OrgRole.findOne).toHaveBeenCalledWith(expect.objectContaining({ where: { org_id: hub_legacy_uuid(1), slug: 'member' } }));
+        expect(OrgMember.create).toHaveBeenCalledWith({ org_id: hub_legacy_uuid(1), user_id: hub_legacy_uuid(2), role: 'member', role_id: 'role-member' });
+    });
+
+    it('create still inserts when the org has no such role (role_id null)', async () => {
+        vi.mocked(OrgRole.findOne).mockResolvedValueOnce(null);
+        await repo.create(hub_legacy_uuid(1), hub_legacy_uuid(2), 'member');
+        expect(OrgMember.create).toHaveBeenCalledWith({ org_id: hub_legacy_uuid(1), user_id: hub_legacy_uuid(2), role: 'member', role_id: null });
     });
 
     it('update_role changes member role', async () => {

@@ -11,7 +11,8 @@ import express from 'express';
 import request from 'supertest';
 import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
 import { create_auth_middleware } from '../../src/middleware/auth_middleware.js';
-import { require_internal, require_internal_network } from '../../src/middleware/internal_only.js';
+import { create_route_policy_middleware } from '../../src/middleware/enforce_route_policy.js';
+import type { AccessStore } from '../../src/auth/route_policy/engine.js';
 import { error_handler } from '../../src/middleware/error_handler.js';
 import { make_mock_repos, test_config } from '../helpers/test_container.js';
 
@@ -41,17 +42,19 @@ function build_app(repos: ReturnType<typeof make_mock_repos>) {
         scope_repo: repos.scope_repo as any,
         org_member_repo: repos.org_member_repo as any,
     }));
+    // bff_only / site_admin policies never consult the store.
+    app.use(create_route_policy_middleware({ store: {} as AccessStore }));
 
     const internal = express.Router();
-    internal.post('/auth/signup', require_internal_network, (_req, res) => {
+    internal.post('/auth/signup', (_req, res) => {
         res.json({ ok: true, data: { signed_up: true } });
     });
-    internal.post('/users/new', require_internal, (_req, res) => {
+    internal.post('/users/new', (_req, res) => {
         res.json({ ok: true, data: { id: hub_legacy_uuid(1), username: 'bob' } });
     });
     app.use('/internal', internal);
 
-    app.post('/internal/auth/authenticate_user', require_internal_network, (_req, res) => {
+    app.post('/internal/auth/authenticate_user', (_req, res) => {
         res.json({ ok: true, data: { token: 'cliq_tok_x' } });
     });
 
@@ -118,7 +121,7 @@ describe('internal plane', () => {
             .set('Authorization', `Bearer ${TEST_PAT_PLAINTEXT}`)
             .send({});
         expect(res.status).toBe(403);
-        expect(res.body.error.message).toMatch(/admin/i);
+        expect(res.body.error.code).toBe('forbidden');
     });
 });
 

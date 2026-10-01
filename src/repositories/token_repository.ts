@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { ApiToken } from '../db/models/index.js';
+import { ApiToken } from '../models/index.js';
 import { fn, Op } from 'sequelize';
-import type { TokenPermissions, Token_type } from '../db/models/api_token.js';
+import type { TokenPermissions, Token_type } from '../models/api_token.model.js';
+import { BaseRepository } from './base_repository.js';
 
-export class TokenRepository {
+export class TokenRepository extends BaseRepository<ApiToken> {
+    protected readonly model = ApiToken;
     async find_by_prefix(prefix: string) {
         return ApiToken.findOne({
             where: {

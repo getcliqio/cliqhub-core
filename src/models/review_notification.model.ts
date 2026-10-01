@@ -1,5 +1,5 @@
-import type { Model, ModelStatic, Sequelize } from 'sequelize';
-import { DataTypes } from 'sequelize';
+import { DataTypes, type Sequelize } from 'sequelize';
+import { BaseModel } from './base_model.js';
 
 /**
  * Per-destination notification row for a HUG review.
@@ -8,35 +8,27 @@ import { DataTypes } from 'sequelize';
  * group gets one row. This is the unit of policy evaluation and the
  * audit trail for who responded and when.
  */
-export interface ReviewNotificationAttributes {
-    id: string;
-    review_id: string;
+export class ReviewNotification extends BaseModel {
+    declare id: string;
+    declare review_id: string;
     /** Which reviewer group this destination belongs to. */
-    group_idx: number;
+    declare group_idx: number;
     /** Original reviewer string — e.g. "elan", "ops-slack". */
-    channel_target: string;
+    declare channel_target: string;
     /** Resolved notification_channels.id (if target matched a channel). */
-    channel_id: string | null;
+    declare channel_id: string | null;
     /** Resolved user ID (if target matched an org member). NULL for shared channels. */
-    user_id: string | null;
+    declare user_id: string | null;
     /** User ID of whoever actually responded (from auth context). */
-    responded_by: string | null;
-    responded_at: Date | null;
+    declare responded_by: string | null;
+    declare responded_at: Date | null;
     /** The decision: PASS, REJECT, ROUTE:*. */
-    action: string | null;
-    comment: string | null;
-    created_at: Date;
-}
+    declare action: string | null;
+    declare comment: string | null;
+    declare created_at: Date;
 
-export type ReviewNotificationModel =
-    Model<ReviewNotificationAttributes> & ReviewNotificationAttributes;
-
-export let ReviewNotification: ModelStatic<ReviewNotificationModel>;
-
-export function init_review_notification(sequelize: Sequelize): void {
-    ReviewNotification = sequelize.define(
-        'ReviewNotification',
-        {
+    static register(sequelize: Sequelize): void {
+        ReviewNotification.init({
             id: { type: DataTypes.TEXT, primaryKey: true },
             review_id: { type: DataTypes.TEXT, allowNull: false },
             group_idx: { type: DataTypes.SMALLINT, allowNull: false },
@@ -48,8 +40,8 @@ export function init_review_notification(sequelize: Sequelize): void {
             action: { type: DataTypes.TEXT, allowNull: true },
             comment: { type: DataTypes.TEXT, allowNull: true },
             created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
-        },
-        {
+        }, {
+            sequelize,
             schema: 'cliq',
             tableName: 'review_notifications',
             timestamps: false,
@@ -57,6 +49,20 @@ export function init_review_notification(sequelize: Sequelize): void {
                 { fields: ['review_id'] },
                 { fields: ['user_id'], where: { user_id: { [Symbol.for('ne')]: null } } },
             ],
-        },
-    ) as ModelStatic<ReviewNotificationModel>;
+        });
+    }
 }
+
+export type ReviewNotificationAttributes = {
+    id: string;
+    review_id: string;
+    group_idx: number;
+    channel_target: string;
+    channel_id: string | null;
+    user_id: string | null;
+    responded_by: string | null;
+    responded_at: Date | null;
+    action: string | null;
+    comment: string | null;
+    created_at: Date;
+};

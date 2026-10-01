@@ -3,9 +3,10 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { AbstractChannelDeliverer, type DeliveryContext } from './abstract_channel_deliverer.js';
 import type { NotificationPayload } from '../types.js';
 import { get_logger } from '../../lib/log.js';
-import { WebhookDelivery } from '../../models/index.js';
+import { WebhookDeliveryRepository } from '../../repositories/webhook_delivery_repository.js';
 
 const log = get_logger('notify.webhook');
+const webhook_delivery_repo = new WebhookDeliveryRepository();
 
 // Header names match the GitHub webhook convention (X-Hub-Signature-256)
 // closely enough to feel familiar, but scoped under X-Cliq-* so a receiver
@@ -106,7 +107,7 @@ export class WebhookDeliverer extends AbstractChannelDeliverer {
 		const channel_id = context?.channel_id;
 		if (channel_id) {
 			try {
-				await WebhookDelivery.create({
+				await webhook_delivery_repo.create_one({
 					id: randomUUID(),
 					channel_id,
 					event_type: payload.event,

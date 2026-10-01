@@ -1,8 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Realm_mesh_provider_mode } from '../models/realm_a2a_setting.model.js';
-import { Realm } from '../models/index.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+
+const _realm_repo_a2a = new RealmRepository();
 import type { RealmModel } from '../models/realm.model.js';
 import { RealmService } from './realm.service.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.realm_a2a');
 import { OrgMeshService } from './org_mesh.service.js';
 import { ApiError } from '../lib/api_error.js';
 import { get_mesh_adapter, list_mesh_adapters } from '../mesh/registry.js';
@@ -88,13 +93,15 @@ export class RealmA2aService {
     }
 
     static async get_or_create(realm_id: string): Promise<Realm_a2a_settings_dto> {
-        const realm = await Realm.findByPk(realm_id);
+        log.debug('get_or_create', { realm_id });
+        const realm = await _realm_repo_a2a.find_by_id(realm_id);
         if (!realm || realm.deleted) throw ApiError.not_found('Realm not found');
         return to_dto(realm);
     }
 
     static async get_for_admin(realm_id: string, user_id: string): Promise<Realm_a2a_settings_dto> {
-        await RealmService.require_admin(realm_id, user_id);
+        log.debug('get_for_admin', { realm_id, user_id });
+        // Callers authorized this: realms/a2a (route policy: admin + realms.update).
         return RealmA2aService.get_or_create(realm_id);
     }
 
@@ -109,8 +116,9 @@ export class RealmA2aService {
             provider_settings?: Record<string, unknown>;
         },
     ): Promise<Realm_a2a_settings_dto> {
-        await RealmService.require_admin(realm_id, user_id);
-        const realm = await Realm.findByPk(realm_id);
+        log.debug('update_for_admin', { realm_id, user_id });
+        // Callers authorized this: realms/a2a (route policy: admin + realms.update).
+        const realm = await _realm_repo_a2a.find_by_id(realm_id);
         if (!realm || realm.deleted) throw ApiError.not_found('Realm not found');
 
         if (patch.a2a_enabled !== undefined) {
@@ -140,6 +148,7 @@ export class RealmA2aService {
 
         realm.updated_at = Date.now();
         await realm.save();
+        log.info('realm_a2a_updated', { realm_id });
         return to_dto(realm);
     }
 
@@ -147,8 +156,9 @@ export class RealmA2aService {
         realm_id: string,
         user_id: string,
     ): Promise<Realm_a2a_settings_dto & { bearer: string }> {
+        log.debug('rotate_bearer', { realm_id, user_id });
         await RealmService.require_admin(realm_id, user_id);
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await _realm_repo_a2a.find_by_id(realm_id);
         if (!realm || realm.deleted) throw ApiError.not_found('Realm not found');
 
         const plaintext = mint_bearer_plaintext();
@@ -157,16 +167,18 @@ export class RealmA2aService {
         realm.a2a_bearer_token_prefix = token_hash.slice(0, 16);
         realm.updated_at = Date.now();
         await realm.save();
+        log.info('bearer_rotated', { realm_id });
         const dto = await to_dto(realm);
         return { ...dto, bearer: plaintext };
     }
 
     static async verify_bearer(plaintext: string): Promise<{ realm_id: string }> {
+        log.debug('verify_bearer', {});
         const trimmed = plaintext.trim();
         if (!trimmed) throw ApiError.unauthorized('Invalid A2A bearer');
 
         const token_hash = hash_bearer(trimmed);
-        const realm = await Realm.findOne({
+        const realm = await _realm_repo_a2a.find_one_q({
             where: { a2a_bearer_token_hash: token_hash },
         });
         if (!realm || realm.deleted) throw ApiError.unauthorized('Invalid A2A bearer');
@@ -176,7 +188,7 @@ export class RealmA2aService {
     }
 
     static async is_enabled(realm_id: string): Promise<boolean> {
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await _realm_repo_a2a.find_by_id(realm_id);
         if (!realm || realm.deleted) return false;
         return realm.a2a_enabled === true;
     }
@@ -191,9 +203,10 @@ export class RealmA2aService {
         body: unknown;
         headers: Record<string, string | string[] | undefined>;
     }): Promise<{ realm_id: string }> {
+        log.debug('authorize_send', { slug: input.slug });
         const where: Record<string, unknown> = { slug: input.slug };
         if (input.org_id) where.org_id = input.org_id;
-        const realm = await Realm.findOne({ where });
+        const realm = await _realm_repo_a2a.find_one_q({ where });
         if (!realm || realm.deleted) throw ApiError.not_found(`Realm '${input.slug}' not found`);
 
         if (!realm.a2a_enabled) throw ApiError.forbidden('A2A is disabled for this realm');
@@ -229,14 +242,17 @@ export class RealmA2aService {
     }
 
     static async connect_mesh(realm_id: string, user_id: string): Promise<Realm_a2a_settings_dto> {
+        log.debug('connect_mesh', { realm_id, user_id });
         return RealmA2aService._run_mesh_action(realm_id, user_id, 'connect');
     }
 
     static async disconnect_mesh(realm_id: string, user_id: string): Promise<Realm_a2a_settings_dto> {
+        log.debug('disconnect_mesh', { realm_id, user_id });
         return RealmA2aService._run_mesh_action(realm_id, user_id, 'disconnect');
     }
 
     static async refresh_mesh(realm_id: string, user_id: string): Promise<Realm_a2a_settings_dto> {
+        log.debug('refresh_mesh', { realm_id, user_id });
         return RealmA2aService._run_mesh_action(realm_id, user_id, 're_register');
     }
 
@@ -245,8 +261,8 @@ export class RealmA2aService {
         user_id: string,
         action: 'connect' | 'disconnect' | 're_register',
     ): Promise<Realm_a2a_settings_dto> {
-        await RealmService.require_admin(realm_id, user_id);
-        const realm = await Realm.findByPk(realm_id);
+        // Callers authorized this: realms/a2a (route policy: admin + realms.update).
+        const realm = await _realm_repo_a2a.find_by_id(realm_id);
         if (!realm || realm.deleted) throw ApiError.not_found('Realm not found');
 
         const effective = await resolve_effective_provider(realm);

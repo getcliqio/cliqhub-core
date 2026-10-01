@@ -12,7 +12,7 @@ const mock_scope_update = vi.fn();
 const mock_scope_count = vi.fn().mockResolvedValue(0);
 const mock_scope_find_all = vi.fn().mockResolvedValue([]);
 
-vi.mock('../../../src/db/models/index.js', () => ({
+vi.mock('../../../src/models/index.js', () => ({
     User: {
         findByPk: (...args: any[]) => mock_user_find_by_pk(...args),
         findOne: (...args: any[]) => mock_user_find_one(...args),
@@ -33,6 +33,11 @@ vi.mock('../../../src/db/models/index.js', () => ({
 function make_scope_repo() {
     return {
         find_by_slug: vi.fn(),
+        find_by_id: vi.fn().mockResolvedValue(null),
+        find_count: vi.fn().mockResolvedValue(0),
+        find_all: vi.fn().mockResolvedValue([]),
+        find_catalog_page: vi.fn().mockResolvedValue([]),
+        update_where: vi.fn().mockResolvedValue([1]),
         create: vi.fn().mockResolvedValue(hub_legacy_uuid(1)),
         delete_by_id: vi.fn().mockResolvedValue(undefined),
     };
@@ -104,6 +109,7 @@ function build_service(overrides: {
 
 describe('ScopesService — list_catalog', () => {
     let service: ScopesService;
+    let scope_repo: ReturnType<typeof make_scope_repo>;
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -111,10 +117,11 @@ describe('ScopesService — list_catalog', () => {
             { id: hub_legacy_uuid(1), slug: 'alpha', display_name: 'Alpha', owner_id: hub_legacy_uuid(1), visibility: 'public', scope_type: 'user', team_count: 3, created_at: '2025-01-01', User: { username: 'alice' } },
             { id: hub_legacy_uuid(2), slug: 'beta', display_name: 'Beta', owner_id: hub_legacy_uuid(2), visibility: 'private', scope_type: 'org', team_count: 0, created_at: '2025-02-01', User: { username: 'bob' } },
         ];
-        mock_scope_count.mockResolvedValueOnce(2);
-        mock_scope_find_all.mockResolvedValueOnce(fake_scopes);
         const built = build_service();
         service = built.service;
+        scope_repo = built.scope_repo;
+        scope_repo.find_count.mockResolvedValue(2);
+        scope_repo.find_catalog_page.mockResolvedValue(fake_scopes);
     });
 
     it('returns paginated scopes for admin', async () => {
@@ -127,13 +134,13 @@ describe('ScopesService — list_catalog', () => {
     });
 
     it('passes search term to both queries', async () => {
-        mock_scope_count.mockResolvedValueOnce(0);
-        mock_scope_find_all.mockResolvedValueOnce([]);
+        scope_repo.find_count.mockResolvedValueOnce(0);
+        scope_repo.find_catalog_page.mockResolvedValueOnce([]);
 
         await service.list_catalog(SITE_ADMIN, { search: 'alp' });
 
-        expect(mock_scope_count).toHaveBeenCalled();
-        expect(mock_scope_find_all).toHaveBeenCalled();
+        expect(scope_repo.find_count).toHaveBeenCalled();
+        expect(scope_repo.find_catalog_page).toHaveBeenCalled();
     });
 
     it('caps limit to 100', async () => {
@@ -280,6 +287,7 @@ describe('ScopesService — new_scope', () => {
 
 describe('ScopesService — update', () => {
     let service: ScopesService;
+    let scope_repo: ReturnType<typeof make_scope_repo>;
     let audit_repo: ReturnType<typeof make_audit_repo>;
 
     const EXISTING_SCOPE = {
@@ -294,20 +302,21 @@ describe('ScopesService — update', () => {
         vi.clearAllMocks();
         const built = build_service();
         service = built.service;
+        scope_repo = built.scope_repo;
         audit_repo = built.audit_repo;
     });
 
     it('updates visibility and display_name', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce(EXISTING_SCOPE);
+        scope_repo.find_by_id.mockResolvedValueOnce(EXISTING_SCOPE);
 
         const result = await service.update(SITE_ADMIN, {
             scope_id: hub_legacy_uuid(5), visibility: 'private', display_name: 'Alpha Updated',
         });
 
         expect(result.updated).toBe(true);
-        expect(mock_scope_update).toHaveBeenCalledWith(
-            { visibility: 'private', display_name: 'Alpha Updated' },
-            { where: { id: hub_legacy_uuid(5) } },
+        expect(scope_repo.update_where).toHaveBeenCalledWith(
+            { id: hub_legacy_uuid(5) },
+            expect.objectContaining({ visibility: 'private', display_name: 'Alpha Updated' }),
         );
         expect(audit_repo.create).toHaveBeenCalledWith(
             hub_legacy_uuid(99), 'scope.update', 'scope', 'alpha',
@@ -319,39 +328,39 @@ describe('ScopesService — update', () => {
     });
 
     it('updates owner_id', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce(EXISTING_SCOPE);
+        scope_repo.find_by_id.mockResolvedValueOnce(EXISTING_SCOPE);
         mock_user_find_by_pk.mockResolvedValueOnce({ id: hub_legacy_uuid(2) });
 
         const result = await service.update(SITE_ADMIN, { scope_id: hub_legacy_uuid(5), owner_id: hub_legacy_uuid(2) });
 
         expect(result.updated).toBe(true);
-        expect(mock_scope_update).toHaveBeenCalledWith(
-            { owner_id: hub_legacy_uuid(2) },
-            { where: { id: hub_legacy_uuid(5) } },
+        expect(scope_repo.update_where).toHaveBeenCalledWith(
+            { id: hub_legacy_uuid(5) },
+            expect.objectContaining({ owner_id: hub_legacy_uuid(2) }),
         );
     });
 
     it('returns updated:false when no fields changed', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce(EXISTING_SCOPE);
+        scope_repo.find_by_id.mockResolvedValueOnce(EXISTING_SCOPE);
 
         const result = await service.update(SITE_ADMIN, {
             scope_id: hub_legacy_uuid(5), visibility: 'public', display_name: 'Alpha',
         });
 
         expect(result.updated).toBe(false);
-        expect(mock_scope_update).not.toHaveBeenCalled();
+        expect(scope_repo.update_where).not.toHaveBeenCalled();
         expect(audit_repo.create).not.toHaveBeenCalled();
     });
 
     it('returns 404 when scope not found', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce(null);
+        scope_repo.find_by_id.mockResolvedValueOnce(null);
 
         await expect(service.update(SITE_ADMIN, { scope_id: hub_legacy_uuid(999) }))
             .rejects.toThrow('Scope not found');
     });
 
     it('returns 404 when new owner not found', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce(EXISTING_SCOPE);
+        scope_repo.find_by_id.mockResolvedValueOnce(EXISTING_SCOPE);
         mock_user_find_by_pk.mockResolvedValueOnce(null);
 
         await expect(service.update(SITE_ADMIN, { scope_id: hub_legacy_uuid(5), owner_id: hub_legacy_uuid(888) }))
@@ -359,21 +368,21 @@ describe('ScopesService — update', () => {
     });
 
     it('returns 422 when setting user scope to private', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce(EXISTING_USER_SCOPE);
+        scope_repo.find_by_id.mockResolvedValueOnce(EXISTING_USER_SCOPE);
 
         await expect(service.update(SITE_ADMIN, { scope_id: hub_legacy_uuid(6), visibility: 'private' }))
             .rejects.toThrow('User scopes cannot be set to private');
     });
 
     it('allows setting org scope to private', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce(EXISTING_SCOPE);
+        scope_repo.find_by_id.mockResolvedValueOnce(EXISTING_SCOPE);
 
         const result = await service.update(SITE_ADMIN, { scope_id: hub_legacy_uuid(5), visibility: 'private' });
 
         expect(result.updated).toBe(true);
-        expect(mock_scope_update).toHaveBeenCalledWith(
-            { visibility: 'private' },
-            { where: { id: hub_legacy_uuid(5) } },
+        expect(scope_repo.update_where).toHaveBeenCalledWith(
+            { id: hub_legacy_uuid(5) },
+            expect.objectContaining({ visibility: 'private' }),
         );
     });
 
@@ -403,7 +412,7 @@ describe('ScopesService — delete_scope', () => {
     });
 
     it('deletes scope successfully', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce({ id: hub_legacy_uuid(5), slug: 'alpha' });
+        scope_repo.find_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(5), slug: 'alpha' });
         team_repo.list_by_scope.mockResolvedValueOnce([]);
 
         const result = await service.delete_scope(SITE_ADMIN, { scope_id: hub_legacy_uuid(5) });
@@ -414,14 +423,14 @@ describe('ScopesService — delete_scope', () => {
     });
 
     it('returns 404 when scope not found', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce(null);
+        scope_repo.find_by_id.mockResolvedValueOnce(null);
 
         await expect(service.delete_scope(SITE_ADMIN, { scope_id: hub_legacy_uuid(999) }))
             .rejects.toThrow('Scope not found');
     });
 
     it('returns 422 when scope has teams', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce({ id: hub_legacy_uuid(5), slug: 'alpha' });
+        scope_repo.find_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(5), slug: 'alpha' });
         team_repo.list_by_scope.mockResolvedValueOnce([{ id: hub_legacy_uuid(1), name: 'team-a' }, { id: hub_legacy_uuid(2), name: 'team-b' }]);
 
         await expect(service.delete_scope(SITE_ADMIN, { scope_id: hub_legacy_uuid(5) }))
@@ -429,7 +438,7 @@ describe('ScopesService — delete_scope', () => {
     });
 
     it('returns 403 for non-admin user', async () => {
-        mock_scope_find_by_pk.mockResolvedValueOnce({ id: hub_legacy_uuid(5), slug: 'alpha', org_id: null });
+        scope_repo.find_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(5), slug: 'alpha', org_id: null });
         await expect(service.delete_scope(ALICE, { scope_id: hub_legacy_uuid(5) }))
             .rejects.toThrow(/Admin access required|Missing scopes:admin/);
     });

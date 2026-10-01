@@ -8,7 +8,9 @@
 
 import { A2aInvokeService } from '../../services/a2a_invoke.service.js';
 import { AgentCardService } from '../../services/agent_card.service.js';
-import { Realm } from '../../models/index.js';
+import { RealmRepository } from '../../repositories/realm_repository.js';
+
+const _realm_repo_svp = new RealmRepository();
 import {
     Svantic_connected_session,
     type Dispatch_handler,
@@ -153,7 +155,7 @@ class Svantic_connected_pool {
 
     private async _load_agent_card(realm_id: string): Promise<Record<string, unknown>> {
         try {
-            const realm = await Realm.findByPk(realm_id);
+            const realm = await _realm_repo_svp.find_by_id(realm_id);
             if (!realm || realm.deleted) return {};
             const card = await AgentCardService.build_for_realm(realm);
             return card as unknown as Record<string, unknown>;

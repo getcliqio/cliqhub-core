@@ -23,7 +23,7 @@ const coverage_map: Record<string, string> = {
     'spec/access.service.test.ts': 'tests/migrated_platform/access.service.test.ts',
     'spec/agent.service.test.ts': 'tests/migrated_platform/agent.service.test.ts',
     'spec/api_error.test.ts': 'tests/unit/middleware/error_handler.test.ts',
-    'spec/auth.middleware.test.ts': 'tests/unit/core_api/require_auth.test.ts',
+    'spec/auth.middleware.test.ts': 'tests/unit/middleware/auth_middleware.test.ts',
     'spec/config.test.ts': 'tests/unit/config/env.test.ts',
     'spec/daemon.service.test.ts': 'tests/migrated_platform/daemon.service.test.ts',
     'spec/database.test.ts': 'tests/unit/db/control_plane_store.test.ts',

@@ -67,12 +67,13 @@ function forged_bearer(): string {
 
 function mock_hub_user(): void {
     stub_pat_auth(repos, ALICE, { once: false });
-    repos.user_repo.find_by_id.mockResolvedValue(ALICE);
+    repos.user_repo.find_profile_by_id.mockResolvedValue(ALICE);
     repos.scope_repo.find_owned_by_user.mockResolvedValue([
         { id: hub_legacy_uuid(1), slug: 'cliq', display_name: 'Cliq', visibility: 'public', scope_type: 'user', owner_id: hub_legacy_uuid(1), org_id: null },
     ]);
     repos.org_member_repo.find_orgs_by_user.mockResolvedValue([]);
     repos.scope_repo.find_member_scopes.mockResolvedValue([]);
+    repos.scope_repo.find_default_scopes.mockResolvedValue([]);
     repos.scope_repo.find_by_org_ids.mockResolvedValue([]);
 }
 
@@ -113,7 +114,20 @@ describe.skipIf(!ready)('core_api settings/get with Hub JWT (postgres)', () => {
         const { close_control_plane_store, init_control_plane_store } = await import(
             '../../src/db/control_plane_store.js'
         );
+        const { init_sequelize, close_sequelize } = await import(
+            '../../src/db/sequelize.js'
+        );
+        const { init_models } = await import(
+            '../../src/models/index.js'
+        );
+        const { move_registry_to_cliq_schema } = await import(
+            '../../src/models/migrations/hub_schema_migrations.js'
+        );
         await close_control_plane_store();
+        // Registry (public) sequelize must be initialized so require_auth can query public.scopes
+        const hub_sq = init_sequelize(DATABASE_URL);
+        init_models(hub_sq);
+        await move_registry_to_cliq_schema(hub_sq);
         await init_control_plane_store(DATABASE_URL);
     });
 
@@ -121,7 +135,11 @@ describe.skipIf(!ready)('core_api settings/get with Hub JWT (postgres)', () => {
         const { close_control_plane_store } = await import(
             '../../src/db/control_plane_store.js'
         );
+        const { close_sequelize } = await import(
+            '../../src/db/sequelize.js'
+        );
         await close_control_plane_store();
+        await close_sequelize();
     });
 
     beforeEach(() => {
@@ -129,7 +147,21 @@ describe.skipIf(!ready)('core_api settings/get with Hub JWT (postgres)', () => {
         mock_hub_user();
     });
 
+    it('settings are site-admin only: a regular user gets 403 (S1/S2)', async () => {
+        for (const path of ['/v1/settings/set', '/v1/settings/remove', '/v1/settings/get', '/v1/settings/get_by_key']) {
+            const res = await request(app)
+                .post(path)
+                .set('Authorization', hub_bearer())
+                .send({ key: 'docker.base_image', value: 'x' });
+            expect(res.status, path).toBe(403);
+        }
+    });
+
     it('POST /v1/settings/get with valid Hub PAT returns 200', async () => {
+        // Settings are site-admin only (S1/S2).
+        const SITE_ADMIN = { ...ALICE, role: 'admin' as const };
+        stub_pat_auth(repos, SITE_ADMIN, { once: false });
+        repos.user_repo.find_profile_by_id.mockResolvedValue(SITE_ADMIN);
         const res = await request(app)
             .post('/v1/settings/get')
             .set('Authorization', hub_bearer())

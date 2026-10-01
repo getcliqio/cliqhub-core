@@ -13,6 +13,9 @@ import { StoredArtifactRepository } from '../repositories/stored_artifact_reposi
 import type { StoredArtifactAttributes } from '../models/stored_artifact.model.js';
 import { ApiError } from '../errors/api_error.js';
 import type { ArtifactsSubmitInput, ArtifactData, ArtifactsSubmitOutput } from '../schemas/artifacts_schemas.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.artifact_storage');
 
 export class ArtifactStorageService {
     private readonly _r2: R2Client;
@@ -33,6 +36,7 @@ export class ArtifactStorageService {
         input: ArtifactsSubmitInput,
         uploaded_by?: string,
     ): Promise<ArtifactsSubmitOutput> {
+        log.debug('submit', { run_id: input.run_id, name: input.name, uploaded_by });
         // Decode content to a Buffer for size checking and R2 upload.
         const buf = input.encoding === 'base64'
             ? Buffer.from(input.content, 'base64')
@@ -70,6 +74,7 @@ export class ArtifactStorageService {
         });
 
         const download_url = this._r2.presigned_get_url(storage_key);
+        log.info('artifact_created', { artifact_id, run_id: input.run_id, name: input.name, size_bytes: buf.length });
 
         return {
             artifact_id,
@@ -84,6 +89,7 @@ export class ArtifactStorageService {
      * Each entry includes a fresh presigned download URL.
      */
     async get(run_id: string, phase?: string): Promise<ArtifactData[]> {
+        log.debug('get', { run_id, phase });
         const rows = await this._repo.find_by_run(run_id, phase);
         return rows.map(r => this._to_artifact_data(r));
     }
@@ -93,6 +99,7 @@ export class ArtifactStorageService {
      * Throws 404 when not found.
      */
     async get_by_id(artifact_id: string): Promise<ArtifactData> {
+        log.debug('get_by_id', { artifact_id });
         const row = await this._repo.find_by_id(artifact_id);
         if (!row) throw new ApiError('not_found', `Artifact '${artifact_id}' not found`);
 
@@ -104,6 +111,7 @@ export class ArtifactStorageService {
      * No-ops silently when the artifact doesn't exist.
      */
     async delete(artifact_id: string): Promise<boolean> {
+        log.debug('delete', { artifact_id });
         const row = await this._repo.find_by_id(artifact_id);
         if (!row) return false;
 
@@ -111,6 +119,7 @@ export class ArtifactStorageService {
             await this._r2.delete_object(row.storage_key);
         }
         await this._repo.delete_by_id(artifact_id);
+        log.info('artifact_deleted', { artifact_id });
         return true;
     }
 

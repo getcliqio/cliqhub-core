@@ -11,6 +11,9 @@
  */
 
 import { LlmAgent, InMemoryRunner } from '@google/adk';
+import { get_logger } from '../../lib/log.js';
+
+const log = get_logger('svc.llm');
 
 export interface LlmMessage {
 	role: 'system' | 'user' | 'assistant';
@@ -34,11 +37,12 @@ export class HostedLlmAdapter implements LlmAdapter {
 		this._model = process.env.BUILDER_MODEL || 'gemini-3.6-flash';
 
 		if (!process.env.GEMINI_API_KEY) {
-			console.error('[builder] GEMINI_API_KEY is not set — builder requests will fail');
+			log.error('builder_api_key_missing', { env: 'GEMINI_API_KEY', effect: 'builder requests will fail' });
 		}
 	}
 
 	async complete(messages: LlmMessage[]): Promise<LlmResponse> {
+		log.debug('complete', { model: this._model, message_count: messages.length });
 		if (!process.env.GEMINI_API_KEY) {
 			throw new Error('GEMINI_API_KEY environment variable is not set.');
 		}

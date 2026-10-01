@@ -63,7 +63,7 @@ describe.skipIf(!ready)('control_plane_store (postgres)', () => {
         // Qualified table names prove schema + sync landed (not search_path alone).
         await sequelize.query('SELECT 1 FROM cliq.daemons LIMIT 0');
         await sequelize.query('SELECT 1 FROM cliq.daemon_config LIMIT 0');
-        await sequelize.query('SELECT 1 FROM cliq.scopes LIMIT 0');
+        await sequelize.query('SELECT 1 FROM cliq.daemon_teams LIMIT 0');
 
         const [scope_rows] = await sequelize.query(
             `SELECT slug FROM cliq.scopes WHERE slug IN ('cliq', 'measureone')`,
@@ -79,7 +79,7 @@ describe.skipIf(!ready)('control_plane_store (postgres)', () => {
 
     it('seed is idempotent — second boot inserts zero new seed rows', async () => {
         const { seed_control_plane } = await import(
-            '../../src/db/control_plane_seed.js'
+            '../../src/models/migrations/control_plane_seed.js'
         );
         const { init_control_plane_store, close_control_plane_store } = await import(
             '../../src/db/control_plane_store.js'

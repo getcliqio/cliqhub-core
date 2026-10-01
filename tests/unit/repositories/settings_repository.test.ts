@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setup_sequelize_mocks } from '../../helpers/mock_sequelize.js';
 setup_sequelize_mocks();
-import { Setting } from '../../../src/db/models/index.js';
+import { Setting } from '../../../src/models/index.js';
 import { SettingsRepository } from '../../../src/repositories/settings_repository.js';
 
 describe('SettingsRepository', () => {

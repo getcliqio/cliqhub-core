@@ -18,7 +18,6 @@
     },
     "dependencies": {
         "@faker-js/faker": "^9.9.0",
-        "@getcliqio/cliq-store": "1.9.6",
         "@google/adk": "^1.1.0",
         "@svantic/sdk": "^1.8.3",
         "bcrypt": "^6.0.0",

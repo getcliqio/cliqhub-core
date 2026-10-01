@@ -13,14 +13,19 @@
  */
 
 import { Op, QueryTypes } from 'sequelize';
-import { Daemon } from '../models/index.js';
+import { DaemonRepository } from '../repositories/daemon_repository.js';
 import { get_sequelize } from '../lib/sequelize.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.run_reaper');
 
 // RunService is imported lazily inside crash_and_emit so this module
 // stays cheap to load in tests that mock the models layer minimally
 // (see tests/unit/run_reaper.service.test.ts). Loading RunService at
 // module-eval time would trigger its static _run_includes initializer,
 // which touches Team/Scope/Workspace models the reaper doesn't need.
+
+const daemon_repo = new DaemonRepository();
 
 const REAPER_INTERVAL_MS = parseInt(
     process.env.RUN_REAPER_INTERVAL_MS ?? '60000', 10,
@@ -68,7 +73,8 @@ async function crash_and_emit(
         // reaper from making progress on the next batch.
         try {
             await RunService._emit_lifecycle(row.run_id, 'run.crashed', { error: error_message });
-        } catch {
+        } catch (err) {
+            log.warn('crash_event_emit_failed', { error: err instanceof Error ? err.message : String(err) });
             /* swallow — see comment above */
         }
     }
@@ -80,16 +86,15 @@ async function crash_and_emit(
 async function reap_stale_daemons(): Promise<number> {
     const cutoff = Date.now() - STALE_THRESHOLD_MS;
 
-    const stale_daemon_ids = await Daemon.findAll({
-        attributes: ['id'],
-        where: {
+    const stale_daemon_ids = await daemon_repo.find_all(
+        {
             [Op.or]: [
                 { last_heartbeat: { [Op.lt]: cutoff } },
                 { last_heartbeat: null },
             ],
         },
-        raw: true,
-    });
+        { attributes: ['id'], raw: true },
+    );
 
     if (stale_daemon_ids.length === 0) return 0;
 
@@ -135,32 +140,31 @@ async function reap(): Promise<number> {
     const leases = await reap_expired_leases();
     const count = stale + orphaned + leases;
     if (stale > 0) {
-        console.log(`[RunReaper] reaped ${stale} zombie run(s) from stale daemon(s)`);
+        log.info('runs_reaped_stale_daemon', { count: stale });
     }
     if (orphaned > 0) {
-        console.log(`[RunReaper] reaped ${orphaned} orphaned run(s) from deleted daemon(s)`);
+        log.info('runs_reaped_orphaned_daemon', { count: orphaned });
     }
     if (leases > 0) {
-        console.log(`[RunReaper] reaped ${leases} run(s) with expired action lease`);
+        log.info('runs_reaped_expired_lease', { count: leases });
     }
     return count;
 }
 
 /** Start the periodic reaper. Idempotent. Runs once immediately, then on interval. */
 export function start_run_reaper(): void {
+    log.debug('start_run_reaper', {});
     if (_timer) return;
-    console.log(
-        `[RunReaper] started (interval=${REAPER_INTERVAL_MS}ms, threshold=${STALE_THRESHOLD_MS}ms)`,
-    );
+    log.info('reaper_started', { interval_ms: REAPER_INTERVAL_MS, threshold_ms: STALE_THRESHOLD_MS });
 
     // Run once immediately at startup to catch anything from a previous crash.
     reap().catch((err) => {
-        console.error('[RunReaper] initial scan failed:', err instanceof Error ? err.message : err);
+        log.error('reaper_scan_failed', { error: err instanceof Error ? err.message : String(err) });
     });
 
     _timer = setInterval(() => {
         reap().catch((err) => {
-            console.error('[RunReaper] scan failed:', err instanceof Error ? err.message : err);
+            log.error('reaper_scan_failed', { error: err instanceof Error ? err.message : String(err) });
         });
     }, REAPER_INTERVAL_MS);
     _timer.unref();
@@ -168,6 +172,7 @@ export function start_run_reaper(): void {
 
 /** Stop the reaper (graceful shutdown). */
 export function stop_run_reaper(): void {
+    log.debug('stop_run_reaper', {});
     if (_timer) {
         clearInterval(_timer);
         _timer = null;

@@ -113,12 +113,6 @@ describe('ReviewsController.get org_id tenancy', () => {
         );
     });
 
-    it('foreign org_id → 403', async () => {
-        await expect(
-            reviews.get(make_req({ org_id: ORG_B }, pat_auth([ORG_A])) as never, mock_res() as never),
-        ).rejects.toMatchObject({ status_code: 403 });
-        expect(ReviewPendingService.list_for_user).not.toHaveBeenCalled();
-    });
 });
 
 describe('ReviewsController.get_by_id org_id tenancy', () => {
@@ -127,32 +121,6 @@ describe('ReviewsController.get_by_id org_id tenancy', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         vi.mocked(HugReviewsService.get).mockResolvedValue({ review_id: 'rev-1' } as never);
-    });
-
-    it('no notification and no org_id → 403 (no header invent)', async () => {
-        vi.mocked(HugReviewsService.has_notification_for_user).mockResolvedValue(false);
-        await expect(
-            reviews.get_by_id(
-                make_req({ review_id: 'rev-1' }, pat_auth([ORG_A])) as never,
-                mock_res() as never,
-            ),
-        ).rejects.toMatchObject({ status_code: 403 });
-        expect(require_permission).not.toHaveBeenCalled();
-    });
-
-    it('no notification with org_id → require_permission(body.org_id)', async () => {
-        vi.mocked(HugReviewsService.has_notification_for_user).mockResolvedValue(false);
-        const res = mock_res();
-        await reviews.get_by_id(
-            make_req({ review_id: 'rev-1', org_id: ORG_A }, pat_auth([ORG_A])) as never,
-            res as never,
-        );
-        expect(require_permission).toHaveBeenCalledWith(
-            ORG_A,
-            String(USER_A),
-            'reviews.view',
-            expect.any(Object),
-        );
     });
 
     it('with notification → no org_id required', async () => {
@@ -164,5 +132,13 @@ describe('ReviewsController.get_by_id org_id tenancy', () => {
         );
         expect(require_permission).not.toHaveBeenCalled();
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+    });
+});
+
+describe('org tenancy is the route policy\'s job', () => {
+    it('/v1/reviews/get with an org you are not in → 404', async () => {
+        const { policy_status } = await import('../../helpers/policy_decision.js');
+        const FOREIGN = '00000000-0000-4000-8000-0000000000ff';
+        expect(await policy_status('POST /v1/reviews/get', { id: 'u1' }, { org_id: FOREIGN })).toBe(404);
     });
 });

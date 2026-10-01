@@ -198,22 +198,6 @@ describe('NotificationsController org_id tenancy', () => {
         });
     });
 
-    it('channels_create with org_id not in membership → 403', async () => {
-        const res = mock_res();
-        const req = make_req(
-            { org_id: ORG_B, name: 'ops', destinations: [{ type: 'cliqhub' }] },
-            pat_auth([ORG_A]),
-        );
-        let caught: unknown;
-        try {
-            await controller.channels_create(req as never, res as never);
-        } catch (err) {
-            caught = err;
-        }
-        expect(caught).toBeInstanceOf(ApiError);
-        expect((caught as ApiError).status_code).toBe(403);
-    });
-
     it('channels_create with body org_id → 200 and persists org_id', async () => {
         const res = mock_res();
         const req = make_req(
@@ -224,7 +208,6 @@ describe('NotificationsController org_id tenancy', () => {
         expect(NotificationService.create_channel).toHaveBeenCalledWith(
             expect.objectContaining({ org_id: ORG_A, realm_id: null }),
         );
-        expect(require_account_notification_admin).toHaveBeenCalledWith(req, ORG_A);
         expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
     });
 
@@ -277,5 +260,12 @@ describe('NotificationsController org_id tenancy', () => {
         expect(NotificationService.set_rule).toHaveBeenCalledWith(
             expect.objectContaining({ org_id: ORG_A, realm_id: null }),
         );
+    });
+});
+
+describe('notification tenancy is the route policy\'s job', () => {
+    it('account channel create in an org you are not in → 404', async () => {
+        const { policy_status } = await import('../../helpers/policy_decision.js');
+        expect(await policy_status('POST /v1/notification_channels/create', { id: 'u1' }, { org_id: ORG_B, name: 'ops' })).toBe(404);
     });
 });

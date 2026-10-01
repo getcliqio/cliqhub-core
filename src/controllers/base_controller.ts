@@ -2,7 +2,9 @@ import type { Request, Response, NextFunction } from 'express';
 import type { z, ZodTypeAny } from 'zod';
 import { ApiError as LegacyApiError } from '../errors/api_error.js';
 import { ApiError } from '../lib/api_error.js';
-import { Realm } from '../models/index.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+
+const _realm_repo_bc = new RealmRepository();
 import type { AuthContext } from '../schemas/auth_types.js';
 
 export abstract class BaseController {
@@ -51,13 +53,14 @@ export abstract class BaseController {
             throw ApiError.unauthorized('authentication required');
         }
 
-        if (auth.user?.role === 'admin') return;
+        // Site admin = user token only; daemon tokens are bound to their realm's org (S18).
+        if (auth.user?.role === 'admin' && auth.auth_via !== 'daemon_token') return;
 
         if (auth.auth_via === 'daemon_token') {
             if (!auth.realm_id) {
                 throw ApiError.forbidden('daemon token has no realm binding');
             }
-            const realm = await Realm.findByPk(auth.realm_id);
+            const realm = await _realm_repo_bc.find_by_id(auth.realm_id);
             if (!realm || realm.org_id !== org_id) {
                 throw ApiError.forbidden('org_id does not match daemon realm organization');
             }

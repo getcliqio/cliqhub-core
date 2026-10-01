@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { setup_sequelize_mocks } from '../../helpers/mock_sequelize.js';
 setup_sequelize_mocks();
-import { AuditLog } from '../../../src/db/models/index.js';
+import { AuditLog } from '../../../src/models/index.js';
 import { AuditRepository } from '../../../src/repositories/audit_repository.js';
 
 describe('AuditRepository', () => {

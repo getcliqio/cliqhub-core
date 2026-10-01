@@ -7,14 +7,14 @@
  *   POST /v1/artifacts/delete     — remove artifact
  */
 
-import type { Router, RequestHandler } from 'express';
+import type { Router } from 'express';
 import { ArtifactsController } from '../../controllers/artifacts_controller.js';
 
-export function register_artifacts_routes(router: Router, auth: RequestHandler): void {
+export function register_artifacts_routes(router: Router): void {
     const ctrl = new ArtifactsController();
 
-    router.post('/artifacts/submit',     auth, ctrl.wrap(ctrl.submit));
-    router.post('/artifacts/get',        auth, ctrl.wrap(ctrl.get));
-    router.post('/artifacts/get_by_id',  auth, ctrl.wrap(ctrl.get_by_id));
-    router.post('/artifacts/delete',     auth, ctrl.wrap(ctrl.delete));
+    router.post('/artifacts/submit', ctrl.wrap(ctrl.submit));
+    router.post('/artifacts/get', ctrl.wrap(ctrl.get));
+    router.post('/artifacts/get_by_id', ctrl.wrap(ctrl.get_by_id));
+    router.post('/artifacts/delete', ctrl.wrap(ctrl.delete));
 }

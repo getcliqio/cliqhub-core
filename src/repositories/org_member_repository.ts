@@ -1,7 +1,9 @@
-import { OrgMember, Org, User } from '../db/models/index.js';
+import { OrgMember, OrgRole, Org, User } from '../models/index.js';
 import { literal } from 'sequelize';
+import { BaseRepository } from './base_repository.js';
 
-export class OrgMemberRepository {
+export class OrgMemberRepository extends BaseRepository<OrgMember> {
+    protected readonly model = OrgMember;
     async find_orgs_by_user(user_id: string) {
         return OrgMember.findAll({
             where: { user_id },
@@ -45,8 +47,14 @@ export class OrgMemberRepository {
         return OrgMember.count({ where: { org_id, role: 'admin' } });
     }
 
+    /**
+     * Add a member with the org role whose slug matches `role` (`member`, `admin`, …).
+     * `role_id` is what permission checks read; without it every check says
+     * "No role assigned" (B1).
+     */
     async create(org_id: string, user_id: string, role: string): Promise<void> {
-        await OrgMember.create({ org_id, user_id, role });
+        const org_role = await OrgRole.findOne({ where: { org_id, slug: role }, attributes: ['id'], raw: true });
+        await OrgMember.create({ org_id, user_id, role, role_id: org_role?.id ?? null });
     }
 
     async update_role(org_id: string, user_id: string, role: string): Promise<void> {

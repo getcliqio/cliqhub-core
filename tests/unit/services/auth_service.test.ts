@@ -22,7 +22,7 @@ const { RealmService } = await import('../../../src/services/realm.service.js');
 
 function make_user_repo() {
     return {
-        find_by_id: vi.fn(), find_by_username: vi.fn(),
+        find_profile_by_id: vi.fn(), find_by_username: vi.fn(),
         find_by_username_or_email: vi.fn(), find_by_email: vi.fn(),
         create: vi.fn().mockResolvedValue(1),
         find_by_id_with_transaction: vi.fn().mockResolvedValue(ALICE.user),
@@ -34,7 +34,8 @@ function make_scope_repo() {
         find_owned_by_user: vi.fn().mockResolvedValue([]),
         find_by_org_ids: vi.fn().mockResolvedValue([]),
         find_member_scopes: vi.fn().mockResolvedValue([]),
-        find_by_slug: vi.fn(),
+        find_default_scopes: vi.fn().mockResolvedValue([]),
+        find_by_slug: vi.fn().mockResolvedValue(null),
         find_by_slug_with_transaction: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(1),
     };
@@ -89,7 +90,7 @@ describe('AuthService', () => {
 
     describe('mint_session_pat', () => {
         it('creates cliq_tok_ with session: name and default grant', async () => {
-            user_repo.find_by_id.mockResolvedValueOnce(ALICE.user);
+            user_repo.find_profile_by_id.mockResolvedValueOnce(ALICE.user);
             org_member_repo.find_orgs_by_user.mockResolvedValueOnce([
                 { org_id: hub_legacy_uuid(10), slug: 'alice', role: 'admin' },
             ]);
@@ -116,12 +117,12 @@ describe('AuthService', () => {
         });
 
         it('rejects missing user', async () => {
-            user_repo.find_by_id.mockResolvedValueOnce(null);
+            user_repo.find_profile_by_id.mockResolvedValueOnce(null);
             await expect(service.mint_session_pat(hub_legacy_uuid(999))).rejects.toThrow('User not found');
         });
 
         it('rejects suspended user', async () => {
-            user_repo.find_by_id.mockResolvedValueOnce({
+            user_repo.find_profile_by_id.mockResolvedValueOnce({
                 ...ALICE.user!,
                 suspended_at: '2025-06-01',
             });
@@ -132,7 +133,7 @@ describe('AuthService', () => {
     describe('signup', () => {
         it('creates user, account, and session PAT', async () => {
             user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
-            user_repo.find_by_id.mockResolvedValue(ALICE.user);
+            user_repo.find_profile_by_id.mockResolvedValue(ALICE.user);
             const result = await service.signup('alice', 'alice@test.com', 'password123');
             expect(result.user).toBeDefined();
             expect(result.token).toMatch(/^cliq_tok_/);
@@ -144,7 +145,7 @@ describe('AuthService', () => {
 
         it('uses username as account_slug', async () => {
             user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
-            user_repo.find_by_id.mockResolvedValue(ALICE.user);
+            user_repo.find_profile_by_id.mockResolvedValue(ALICE.user);
             const result = await service.signup('Alice', 'alice@test.com', 'password123');
             expect(result.account_slug).toBe('alice');
         });
@@ -179,7 +180,7 @@ describe('AuthService', () => {
 
         it('creates account default realm on signup', async () => {
             user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
-            user_repo.find_by_id.mockResolvedValue(ALICE.user);
+            user_repo.find_profile_by_id.mockResolvedValue(ALICE.user);
             vi.mocked(RealmService.ensure_account_default_realm).mockResolvedValueOnce({
                 realm: {
                     id: 'realm-account',
@@ -202,7 +203,7 @@ describe('AuthService', () => {
 
         it('fails signup when account default realm creation fails', async () => {
             user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
-            user_repo.find_by_id.mockResolvedValue(ALICE.user);
+            user_repo.find_profile_by_id.mockResolvedValue(ALICE.user);
             vi.mocked(RealmService.ensure_account_default_realm).mockRejectedValueOnce(new Error('realm conflict'));
             await expect(service.signup('carol', 'carol@test.com', 'password123'))
                 .rejects.toThrow('realm conflict');
@@ -214,7 +215,7 @@ describe('AuthService', () => {
             user_repo.find_by_username.mockResolvedValueOnce({
                 id: hub_legacy_uuid(1), username: 'alice', password_hash: 'hash', role: 'user', suspended_at: null,
             });
-            user_repo.find_by_id.mockResolvedValue(ALICE.user);
+            user_repo.find_profile_by_id.mockResolvedValue(ALICE.user);
             vi.mocked(password.verify_password).mockResolvedValueOnce(true);
             const result = await service.authenticate_user('alice', 'password123');
             expect(result.token).toMatch(/^cliq_tok_/);
@@ -226,7 +227,7 @@ describe('AuthService', () => {
             user_repo.find_by_username.mockResolvedValueOnce({
                 id: hub_legacy_uuid(1), username: 'alice', password_hash: 'hash', role: 'user', suspended_at: null,
             });
-            user_repo.find_by_id.mockResolvedValue(ALICE.user);
+            user_repo.find_profile_by_id.mockResolvedValue(ALICE.user);
             vi.mocked(password.verify_password).mockResolvedValueOnce(true);
             org_member_repo.find_orgs_by_user.mockResolvedValue([
                 { org_id: hub_legacy_uuid(10), slug: 'acme', role: 'member' },
@@ -264,7 +265,7 @@ describe('AuthService', () => {
     describe('issue_session_token', () => {
         it('mints PAT as target for site admin', async () => {
             const target = { ...ALICE.user!, id: hub_legacy_uuid(2), username: 'bob' };
-            user_repo.find_by_id.mockResolvedValue(target);
+            user_repo.find_profile_by_id.mockResolvedValue(target);
             const result = await service.issue_session_token(SITE_ADMIN, hub_legacy_uuid(2));
             expect(result.user_id).toBe(hub_legacy_uuid(2));
             expect(result.token).toMatch(/^cliq_tok_/);
@@ -281,13 +282,13 @@ describe('AuthService', () => {
         });
 
         it('rejects missing target', async () => {
-            user_repo.find_by_id.mockResolvedValueOnce(null);
+            user_repo.find_profile_by_id.mockResolvedValueOnce(null);
             await expect(service.issue_session_token(SITE_ADMIN, hub_legacy_uuid(2)))
                 .rejects.toThrow('User not found');
         });
 
         it('rejects suspended target', async () => {
-            user_repo.find_by_id.mockResolvedValueOnce({
+            user_repo.find_profile_by_id.mockResolvedValueOnce({
                 ...ALICE.user!,
                 id: hub_legacy_uuid(2),
                 suspended_at: '2025-06-01',

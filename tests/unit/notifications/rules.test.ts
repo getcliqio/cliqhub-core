@@ -41,6 +41,8 @@ vi.mock('../../../src/models/index.js', () => {
             _rows: mock_rule_rows,
         },
         Realm: { findByPk: vi.fn(async () => ({ id: 'realm-1' })) },
+        Org: {},
+        NotificationChannel: {},
     };
 });
 

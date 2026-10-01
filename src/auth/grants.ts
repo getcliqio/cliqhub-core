@@ -229,3 +229,34 @@ export function clamp_grant_to_subject(grant: Token_grant, subject: Grant_subjec
         access: grant.access,
     };
 }
+
+/**
+ * Narrow `grant` so it never exceeds `ceiling` — the grant of the token making
+ * the request. A restricted PAT must not mint a wider one (S25).
+ */
+export function clamp_grant_to_grant(grant: Token_grant, ceiling: Token_grant): Token_grant {
+    const clamp_domain = (
+        wanted: Array<string | '*'> | '*' | undefined,
+        allowed: Array<string | '*'> | '*' | undefined,
+    ): Array<string | '*'> | '*' | undefined => {
+        if (allowed === '*' || (Array.isArray(allowed) && allowed.includes('*'))) return wanted;
+        const allowed_list = (allowed ?? []).filter((x) => x !== '*');
+        if (wanted === '*' || (Array.isArray(wanted) && wanted.includes('*'))) return [...allowed_list];
+        return (wanted ?? []).filter((w) => allowed_list.includes(w));
+    };
+
+    const access: Grant_access = {};
+    for (const [entity, levels_wanted] of Object.entries(grant.access ?? {}) as Array<[Grant_entity, Access_level[]]>) {
+        const cap = (ceiling.access?.[entity] ?? []).reduce((m, l) => Math.max(m, LEVEL_RANK[l] ?? 0), 0);
+        const kept = (levels_wanted ?? []).filter((l) => (LEVEL_RANK[l] ?? 99) <= cap);
+        if (kept.length > 0) access[entity] = kept;
+    }
+
+    return {
+        domains: {
+            orgs: clamp_domain(grant.domains?.orgs, ceiling.domains?.orgs),
+            realms: clamp_domain(grant.domains?.realms, ceiling.domains?.realms),
+        },
+        access,
+    };
+}

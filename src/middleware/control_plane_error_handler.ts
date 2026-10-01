@@ -9,6 +9,7 @@ import { ZodError } from 'zod';
 import { ApiError } from '../lib/api_error.js';
 import { ApiError as BaseApiError } from '../errors/api_error.js';
 import { get_logger } from '../lib/log.js';
+import { log_request_error, public_error_message } from './error_logging.js';
 
 const log = get_logger('errors');
 
@@ -19,12 +20,14 @@ export function core_api_error_handler(
     _next: NextFunction,
 ): void {
     if (err instanceof ZodError) {
+        log_request_error(req, 400, err);
         res.status(400).json({ ok: false, error: err.errors.map(e => e.message).join(', ') });
         return;
     }
 
     // BaseController.parse_body throws errors/ApiError ({ code, status }).
     if (err instanceof BaseApiError) {
+        log_request_error(req, err.status, err);
         res.status(err.status).json({ ok: false, error: err.message, code: err.code });
         return;
     }
@@ -35,6 +38,7 @@ export function core_api_error_handler(
             error: err.message,
         };
         if (err.code) body.code = err.code;
+        log_request_error(req, err.status_code, err);
         res.status(err.status_code).json(body);
         return;
     }
@@ -48,6 +52,7 @@ export function core_api_error_handler(
         || sequelize_name === 'SequelizeValidationError'
     ) {
         const message = err instanceof Error ? err.message : 'Validation error';
+        log_request_error(req, 400, err);
         res.status(400).json({ ok: false, error: message });
         return;
     }
@@ -68,12 +73,6 @@ export function core_api_error_handler(
         return;
     }
 
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    log.error('unhandled_core_api_error', {
-        request_id: req.request_id ?? null,
-        path: req.originalUrl || req.url,
-        method: req.method,
-        error: message,
-    });
-    res.status(500).json({ ok: false, error: message });
+    log_request_error(req, 500, err);
+    res.status(500).json({ ok: false, error: public_error_message(err) });
 }

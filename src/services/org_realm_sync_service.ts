@@ -11,7 +11,11 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { Realm, RealmMember } from '../models/index.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
+
+const _realm_repo_ors = new RealmRepository();
+const _realm_member_repo_ors = new RealmMemberRepository();
 import type { Realm_member_role } from '../models/realm_member.model.js';
 import { get_logger } from '../lib/log.js';
 
@@ -27,7 +31,7 @@ export class OrgRealmSyncService {
         org_id: string,
         user_id: string,
     ): Promise<number> {
-        const realms = await Realm.findAll({
+        const realms = await _realm_repo_ors.find_all_q({
             where: { org_id, deleted: false },
             attributes: ['id', 'owner_user_id'],
         });
@@ -38,7 +42,7 @@ export class OrgRealmSyncService {
         for (const realm of realms) {
             if (realm.owner_user_id === user_id_str) continue;
 
-            const removed = await RealmMember.destroy({
+            const removed = await _realm_member_repo_ors.delete_where_q({
                 where: { realm_id: realm.id, member_type: 'user', member_id: user_id_str },
             });
             if (removed > 0) revoked += 1;
@@ -63,12 +67,12 @@ export class OrgRealmSyncService {
         let granted = 0;
 
         for (const realm_id of realm_ids) {
-            const existing = await RealmMember.findOne({
+            const existing = await _realm_member_repo_ors.find_one_q({
                 where: { realm_id, member_type: 'user', member_id: user_id_str },
             });
             if (existing) continue;
 
-            await RealmMember.create({
+            await _realm_member_repo_ors.create_one({
                 id: randomUUID(),
                 realm_id,
                 member_type: 'user',
@@ -88,7 +92,7 @@ export class OrgRealmSyncService {
      * Used by the frontend to populate the "add to realms" picker.
      */
     static async list_org_realm_ids(org_id: string): Promise<string[]> {
-        const realms = await Realm.findAll({
+        const realms = await _realm_repo_ors.find_all_q({
             where: { org_id, deleted: false },
             attributes: ['id'],
         });

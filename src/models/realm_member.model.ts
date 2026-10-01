@@ -1,35 +1,27 @@
-import type { Model, ModelStatic, Sequelize } from 'sequelize';
-import { DataTypes } from 'sequelize';
+import { DataTypes, type Sequelize } from 'sequelize';
+import { BaseModel } from './base_model.js';
 
 export type Realm_member_type = 'user' | 'daemon' | 'group';
 export type Realm_member_role = 'admin' | 'operator' | 'member';
 
-export interface RealmMemberAttributes {
-    id: string;
-    realm_id: string;
-    member_type: Realm_member_type;
-    member_id: string;
-    role: Realm_member_role;
-    created_at: number;
-}
+export class RealmMember extends BaseModel {
+    declare id: string;
+    declare realm_id: string;
+    declare member_type: Realm_member_type;
+    declare member_id: string;
+    declare role: Realm_member_role;
+    declare created_at: number;
 
-export type RealmMemberModel = Model<RealmMemberAttributes> & RealmMemberAttributes;
-
-/** Set by `init_realm_member` — uses the store Sequelize's Model class. */
-export let RealmMember: ModelStatic<RealmMemberModel>;
-
-export function init_realm_member(sequelize: Sequelize): void {
-    RealmMember = sequelize.define(
-        'RealmMember',
-        {
+    static register(sequelize: Sequelize): void {
+        RealmMember.init({
             id: { type: DataTypes.TEXT, primaryKey: true },
             realm_id: { type: DataTypes.TEXT, allowNull: false },
             member_type: { type: DataTypes.TEXT, allowNull: false },
             member_id: { type: DataTypes.TEXT, allowNull: false },
             role: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'operator' },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
-        },
-        {
+        }, {
+            sequelize,
             schema: 'cliq',
             tableName: 'realm_members',
             timestamps: false,
@@ -40,6 +32,18 @@ export function init_realm_member(sequelize: Sequelize): void {
                     name: 'realm_members_realm_type_id_uniq',
                 },
             ],
-        },
-    ) as ModelStatic<RealmMemberModel>;
+        });
+    }
 }
+
+/** @deprecated Use RealmMember directly */
+export type RealmMemberModel = RealmMember;
+
+export type RealmMemberAttributes = {
+    id: string;
+    realm_id: string;
+    member_type: Realm_member_type;
+    member_id: string;
+    role: Realm_member_role;
+    created_at: number;
+};

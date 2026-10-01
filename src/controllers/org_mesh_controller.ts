@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { OrgMeshService } from '../services/org_mesh.service.js';
 import { ApiError } from '../lib/api_error.js';
+import { get_logger } from '../lib/log.js';
 
 const org_id_schema = z.object({
     org_id: z.string().min(1),
@@ -16,14 +17,17 @@ const update_schema = z.object({
 });
 
 function assert_user(req: Request): { user_id: string } {
-    if (!req.user?.user_id) throw ApiError.forbidden('Not authenticated');
-    return { user_id: String(req.user.user_id) };
+    if (!req.auth?.user?.id) throw ApiError.forbidden('Not authenticated');
+    return { user_id: req.auth!.user!.id };
 }
+
+const log = get_logger('ctrl.org_mesh');
 
 export class OrgMeshController {
     static async get(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const user = assert_user(req);
+            log.debug('get', { user_id: user.user_id });
             const body = org_id_schema.parse(req.body ?? {});
             const settings = await OrgMeshService.get_for_admin(body.org_id, user.user_id);
             res.json({ ok: true, ...settings });
@@ -35,8 +39,10 @@ export class OrgMeshController {
     static async update(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
             const user = assert_user(req);
+            log.debug('update', { user_id: user.user_id });
             const body = update_schema.parse(req.body ?? {});
             const settings = await OrgMeshService.update_for_admin(body.org_id, user.user_id, body);
+            log.info('mesh_updated', { org_id: body.org_id });
             res.json({ ok: true, ...settings });
         } catch (err) {
             next(err);

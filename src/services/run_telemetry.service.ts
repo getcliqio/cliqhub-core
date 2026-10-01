@@ -49,12 +49,6 @@ export type SummaryOptions = {
     now_ms?: number;
 };
 
-/** @deprecated Use SummaryOptions. */
-export type Summary_options = SummaryOptions;
-
-/** @deprecated Use TelemetrySummaryData (Zod DTO). */
-export type Telemetry_summary = TelemetrySummaryData;
-
 export class RunTelemetryService {
     static async summary(opts: SummaryOptions): Promise<TelemetrySummaryData> {
         // Clamp lookback so admins cannot unbounded-scan the span table.

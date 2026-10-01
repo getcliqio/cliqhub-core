@@ -31,15 +31,22 @@ import { Op } from 'sequelize';
 import { verify_password } from '../auth/password.js';
 import { TokenRepository } from '../repositories/token_repository.js';
 import { ApiError } from '../lib/api_error.js';
+import { get_logger } from '../lib/log.js';
 import { RealmService } from './realm.service.js';
 import { NotificationService } from './notification.service.js';
-import {
-    NotificationChannel,
-    NotificationRule,
-    Realm,
-    RealmMember,
-} from '../models/index.js';
-import { User } from '../db/models/index.js';
+import { UserRepository } from '../repositories/user_repository.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { NotificationChannelRepository } from '../repositories/notification_channel_repository.js';
+import { NotificationRuleRepository } from '../repositories/notification_rule_repository.js';
+
+const log = get_logger('svc.jira');
+
+const _user_repo_ji = new UserRepository();
+const _realm_member_repo_ji = new RealmMemberRepository();
+const _realm_repo_ji = new RealmRepository();
+const _notif_channel_repo_ji = new NotificationChannelRepository();
+const _notif_rule_repo_ji = new NotificationRuleRepository();
 
 /**
  * Seven lifecycle event types wired into the JIRA integration (see
@@ -120,6 +127,7 @@ const _token_repo = new TokenRepository();
  * body PAT (Forge).
  */
 export async function authenticate_jira_pat(api_token: string): Promise<{ user_id: string }> {
+    log.debug('authenticate_jira_pat', {});
     const token = api_token.trim();
     if (!token.startsWith('cliq_tok_')) {
         throw ApiError.unauthorized('invalid api_token');
@@ -160,15 +168,11 @@ export async function authenticate_jira_pat(api_token: string): Promise<{ user_i
  * table's row set). Fresh sequelize query — no cached view.
  */
 async function _list_admin_realms(user_id: string): Promise<JiraAdminRealm[]> {
-    const memberships = await RealmMember.findAll({
-        where: { member_type: 'user', member_id: user_id, role: 'admin' },
-        attributes: ['realm_id'],
-    });
+    const memberships = await _realm_member_repo_ji.find_all_q({ where: { member_type: 'user', member_id: user_id, role: 'admin' }, attributes: ['realm_id'] });
     if (memberships.length === 0) return [];
 
     const realm_ids = memberships.map((m) => m.realm_id);
-    const realms = await Realm.findAll({
-        where: { id: { [Op.in]: realm_ids } },
+    const realms = await _realm_repo_ji.find_all_q({ where: { id: { [Op.in]: realm_ids } },
         attributes: ['id', 'slug', 'name'],
         order: [['slug', 'ASC']],
     });
@@ -187,7 +191,8 @@ export class JiraIntegrationService {
      * that realm. Idempotent per (realm_id, workspace_id).
      */
     static async register(user_id: string, input: JiraRegisterInput): Promise<JiraRegisterResult> {
-        const user = await User.findByPk(user_id);
+        log.debug('register', { user_id, realm_id: input.realm_id, workspace_id: input.workspace_id });
+        const user = await _user_repo_ji.find_by_id(user_id);
         if (!user) throw ApiError.unauthorized('invalid caller');
 
         const realm_id = input.realm_id.trim();
@@ -195,7 +200,7 @@ export class JiraIntegrationService {
 
         // Verify realm exists AND caller is admin. require_admin throws
         // 403 if the user isn't a member with role=admin.
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await _realm_repo_ji.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found(`realm '${realm_id}' not found`);
         await RealmService.require_admin(realm_id, String(user_id));
 
@@ -229,6 +234,7 @@ export class JiraIntegrationService {
             name: channel_name,
             destinations: [{ type: 'webhook', url: input.webhook_url, secret: webhook_secret }],
         });
+        log.info('jira_channel_created', { channel_id: created.id, realm_id, workspace_id });
 
         for (const event of JIRA_LIFECYCLE_EVENTS) {
             await NotificationService.set_rule({ realm_id, event, channel_id: created.id });
@@ -251,6 +257,7 @@ export class JiraIntegrationService {
         realm_id: string;
         workspace_id: string;
     }): Promise<{ secret: string }> {
+        log.debug('rotate_secret', { user_id, realm_id: input.realm_id, workspace_id: input.workspace_id });
         const realm_id = input.realm_id.trim();
         if (!realm_id) throw ApiError.bad_request('realm_id is required');
         await RealmService.require_admin(realm_id, String(user_id));
@@ -272,6 +279,7 @@ export class JiraIntegrationService {
      * called).
      */
     static async list_realms(user_id: string): Promise<JiraAdminRealm[]> {
+        log.debug('list_realms', { user_id });
         return _list_admin_realms(String(user_id));
     }
 
@@ -284,11 +292,12 @@ export class JiraIntegrationService {
      * Sorted by realm slug, then workspace_id, for stable UI output.
      */
     static async list_channels(user_id: string): Promise<JiraChannelListRow[]> {
+        log.debug('list_channels', { user_id });
         const realms = await _list_admin_realms(String(user_id));
         if (realms.length === 0) return [];
 
         const realm_ids = realms.map((r) => r.id);
-        const channels = await NotificationChannel.findAll({
+        const channels = await _notif_channel_repo_ji.find_all_q({
             where: {
                 realm_id: { [Op.in]: realm_ids },
                 name: { [Op.like]: `${JIRA_CHANNEL_NAME_PREFIX}%` },
@@ -343,6 +352,7 @@ export class JiraIntegrationService {
         realm_id: string;
         workspace_id: string;
     }): Promise<{ removed: boolean }> {
+        log.debug('disconnect', { user_id, realm_id: input.realm_id, workspace_id: input.workspace_id });
         const realm_id = input.realm_id.trim();
         if (!realm_id) throw ApiError.bad_request('realm_id is required');
         await RealmService.require_admin(realm_id, String(user_id));
@@ -351,8 +361,9 @@ export class JiraIntegrationService {
         const existing = await NotificationService.find_channel_by_name(channel_name, realm_id);
         if (!existing) return { removed: false };
 
-        await NotificationRule.destroy({ where: { channel_id: existing.id } });
-        await NotificationChannel.destroy({ where: { id: existing.id } });
+        await _notif_rule_repo_ji.delete_where({ channel_id: existing.id } as any);
+        await _notif_channel_repo_ji.delete_where({ id: existing.id } as any);
+        log.info('jira_channel_disconnected', { channel_id: existing.id, realm_id });
         return { removed: true };
     }
 

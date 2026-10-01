@@ -30,14 +30,14 @@ vi.mock('../../../src/services/realm.service.js', () => ({
     },
 }));
 
-const _mock_require_permission = vi.fn().mockImplementation(
+const _mock_require_permission = vi.hoisted(() => vi.fn().mockImplementation(
     async (org_id: string, user_id: string, _perm: string, opts?: { site_role?: string }) => {
         if (opts?.site_role === 'admin') return;
         if (user_id === hub_legacy_uuid(3)) return;
         const { ApiError } = await import('../../../src/errors/api_error.js');
         throw new ApiError('forbidden', `Permission '${_perm}' is required`, 403);
     },
-);
+));
 vi.mock('../../../src/auth/permissions.js', async (importOriginal) => {
     const orig = await importOriginal() as Record<string, unknown>;
     return {
@@ -46,7 +46,7 @@ vi.mock('../../../src/auth/permissions.js', async (importOriginal) => {
     };
 });
 
-vi.mock('../../../src/db/models/index.js', () => ({
+vi.mock('../../../src/models/index.js', () => ({
     User: { findOne: vi.fn(), create: vi.fn(), findAll: vi.fn().mockResolvedValue([]) },
     Org: { findByPk: vi.fn().mockResolvedValue({ slug: 'acme' }) },
     AccountInvite: {
@@ -56,6 +56,57 @@ vi.mock('../../../src/db/models/index.js', () => ({
         create: vi.fn(),
         update: vi.fn().mockResolvedValue([1]),
     },
+    RealmInvite: {},
+    OrgMember: {},
+    OrgRole: {},
+    Realm: {},
+    RealmMember: {},
+    RealmAgentSetting: {},
+    UserRealmAgentSetting: {},
+    OrgAgentSetting: {},
+    NotificationChannel: {},
+    NotificationRule: {},
+    NotificationSubscription: {},
+    WebhookDelivery: {},
+    InAppNotification: {},
+    ChannelDestination: {},
+    HubEvent: {},
+    CustomEvent: {},
+    ApiToken: {},
+    AccountAgentSetting: {},
+    AccountMeshSetting: {},
+    Daemon: {},
+    DaemonConfig: {},
+    DaemonTeam: {},
+    Scope: {},
+    ScopeMember: {},
+    Team: {},
+    TeamVersion: {},
+    RealmDispatchKey: {},
+    RealmDispatchQueue: {},
+    RealmA2aSetting: {},
+    Run: {},
+    RunEvent: {},
+    RunLog: {},
+    RunLogLine: {},
+    RunLogChunk: {},
+    RunPhase: {},
+    RunArtifact: {},
+    RunSpan: {},
+    Workspace: {},
+    WorkspaceTeam: {},
+    WorkspaceSecret: {},
+    Agent: {},
+    Container: {},
+    Draft: {},
+    AuditLog: {},
+    DownloadLog: {},
+    Setting: {},
+    TeamTag: {},
+    Review: {},
+    ReviewMessage: {},
+    ReviewNotification: {},
+    StoredArtifact: {},
 }));
 
 vi.mock('../../../src/auth/jwt.js', () => ({
@@ -89,7 +140,7 @@ function make_scope_repo() {
 
 function make_user_repo() {
     return {
-        find_by_id: vi.fn(),
+        find_profile_by_id: vi.fn(),
         find_by_username_or_email: vi.fn(),
         find_by_email: vi.fn().mockResolvedValue(null),
         create: vi.fn(),
@@ -101,6 +152,7 @@ function make_service(opts?: { with_config?: boolean }) {
     const org_member_repo = make_org_member_repo();
     const scope_repo = make_scope_repo();
     const user_repo = make_user_repo();
+    const mint_session_pat = vi.fn().mockResolvedValue({ token: 'cliq_tok_session' });
     const config = opts?.with_config
         ? { jwt_secret: 'test-secret', jwt_expires_in: '1h' } as any
         : undefined;
@@ -110,8 +162,9 @@ function make_service(opts?: { with_config?: boolean }) {
         scope_repo as any,
         user_repo as any,
         config,
+        mint_session_pat,
     );
-    return { service, org_repo, org_member_repo, scope_repo, user_repo };
+    return { service, org_repo, org_member_repo, scope_repo, user_repo, mint_session_pat };
 }
 
 describe('InvitationsService — create (org)', () => {
@@ -127,7 +180,7 @@ describe('InvitationsService — create (org)', () => {
     it('adds existing user immediately', async () => {
         org_member_repo.find_by_org_and_user.mockResolvedValueOnce(null);
         user_repo.find_by_email.mockResolvedValueOnce({ id: hub_legacy_uuid(8) });
-        user_repo.find_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(8), username: 'existing' });
+        user_repo.find_profile_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(8), username: 'existing' });
 
         const result = await service.create(ORG_ADMIN, {
             target_type: 'org',
@@ -146,7 +199,7 @@ describe('InvitationsService — create (org)', () => {
     });
 
     it('creates pending invite for unknown email', async () => {
-        const { AccountInvite } = await import('../../../src/db/models/index.js');
+        const { AccountInvite } = await import('../../../src/models/index.js');
         user_repo.find_by_email.mockResolvedValueOnce(null);
         (AccountInvite.findOne as any).mockResolvedValueOnce(null);
         (AccountInvite.create as any).mockResolvedValueOnce({ id: hub_legacy_uuid(42) });
@@ -177,7 +230,7 @@ describe('InvitationsService — accept (org)', () => {
     });
 
     it('creates user without Account and joins org', async () => {
-        const { AccountInvite } = await import('../../../src/db/models/index.js');
+        const { AccountInvite } = await import('../../../src/models/index.js');
         (AccountInvite.findOne as any).mockResolvedValueOnce({
             id: hub_legacy_uuid(7),
             org_id: hub_legacy_uuid(1),
@@ -202,7 +255,7 @@ describe('InvitationsService — accept (org)', () => {
         expect(result.accepted).toBe(true);
         expect(result.target_type).toBe('org');
         expect(result.user_id).toBe(hub_legacy_uuid(77));
-        expect(result.token).toBeTruthy();
+        expect(result.token).toBe('cliq_tok_session'); // session PAT, not a JWT (B2)
         expect(user_repo.create).toHaveBeenCalled();
         expect(scope_repo.create).toHaveBeenCalled();
         expect(org_member_repo.create).toHaveBeenCalledWith(hub_legacy_uuid(1), hub_legacy_uuid(77), 'member');

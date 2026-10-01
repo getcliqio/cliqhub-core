@@ -1,4 +1,5 @@
 import { load_env } from './config/env.js';
+import { get_logger } from './lib/log.js';
 import { create_container } from './container.js';
 import { create_app } from './app.js';
 import { close_sequelize } from './db/sequelize.js';
@@ -17,6 +18,8 @@ import {
     start_review_expiry_sweep,
     stop_review_expiry_sweep,
 } from './services/review_expiry_sweep.service.js';
+const log = get_logger('server');
+
 async function main() {
     const config = load_env();
 
@@ -42,12 +45,11 @@ async function main() {
     // Bind explicitly to '::' so the backend is reachable on Railway's
     // IPv6-only private network. Node's default behavior is system-dependent.
     const server = app.listen(config.port, '::', () => {
-        console.log(`[Backend] Listening on [::]:${config.port}`);
-        console.log(`[Backend] Env: ${config.node_env}`);
+        log.info('listening', { port: config.port, host: '::', env: config.node_env });
     });
 
     const shutdown = async () => {
-        console.log('[Backend] Shutting down...');
+        log.info('shutting_down', {});
         stop_run_reaper();
         stop_dedup_gc();
         stop_command_outbox_worker();
@@ -64,6 +66,8 @@ async function main() {
 }
 
 main().catch((err) => {
-    console.error('[Backend] Failed to start:', err);
+    log.fatal('startup_failed', {
+        error: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
+    });
     process.exit(1);
 });

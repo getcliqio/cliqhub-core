@@ -6,15 +6,59 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../../src/models/index.js', () => ({
     Realm: { findByPk: vi.fn() },
+    DaemonTeam: {},
     Team: {},
     Scope: {},
+    ScopeMember: {},
+    User: {},
     Daemon: { findAll: vi.fn() },
     RealmAgentSetting: { findAll: vi.fn() },
+    UserRealmAgentSetting: { findAll: vi.fn().mockResolvedValue([]) },
+    OrgAgentSetting: { findAll: vi.fn().mockResolvedValue([]) },
     RealmMember: { findAll: vi.fn() },
-}));
-
-vi.mock('../../../src/db/models/index.js', () => ({
     AccountAgentSetting: { findAll: vi.fn() },
+    NotificationChannel: {},
+    NotificationRule: {},
+    NotificationSubscription: {},
+    WebhookDelivery: {},
+    InAppNotification: {},
+    ChannelDestination: {},
+    HubEvent: {},
+    CustomEvent: {},
+    Org: {},
+    OrgMember: {},
+    OrgRole: {},
+    ApiToken: {},
+    AccountInvite: {},
+    RealmInvite: {},
+    RealmDispatchKey: {},
+    RealmDispatchQueue: {},
+    RealmA2aSetting: {},
+    AccountMeshSetting: {},
+    DaemonConfig: {},
+    Draft: {},
+    AuditLog: {},
+    DownloadLog: {},
+    Setting: {},
+    TeamTag: {},
+    Agent: {},
+    Container: {},
+    Run: {},
+    RunEvent: {},
+    RunLog: {},
+    RunLogLine: {},
+    RunLogChunk: {},
+    RunPhase: {},
+    RunArtifact: {},
+    RunSpan: {},
+    Workspace: {},
+    WorkspaceTeam: {},
+    WorkspaceSecret: {},
+    TeamVersion: {},
+    Review: {},
+    ReviewMessage: {},
+    ReviewNotification: {},
+    StoredArtifact: {},
 }));
 
 vi.mock('../../../src/services/realm.service.js', () => ({
@@ -39,7 +83,7 @@ vi.mock('../../../src/lib/log.js', () => ({
 }));
 
 import { Realm, RealmAgentSetting } from '../../../src/models/index.js';
-import { AccountAgentSetting } from '../../../src/db/models/index.js';
+import { AccountAgentSetting } from '../../../src/models/index.js';
 import { RealmService } from '../../../src/services/realm.service.js';
 import { DispatchService } from '../../../src/services/dispatch.service.js';
 import { RealmTeamListService } from '../../../src/services/realm_team_list.service.js';
@@ -69,7 +113,6 @@ describe('RealmTeamListService.sync_team', () => {
             ['org-1'],
         );
 
-        expect(RealmService.require_admin).toHaveBeenCalledWith('rlm_1', 'user-1');
         expect(DispatchService.install_team).toHaveBeenCalledWith({
             team_id: 'acme/claims',
             realm_id: 'rlm_1',

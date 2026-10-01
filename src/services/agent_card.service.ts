@@ -1,8 +1,16 @@
-import { Realm } from '../models/index.js';
-import { Team as HubTeam, TeamVersion } from '../db/models/index.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { TeamRepository } from '../repositories/team_repository.js';
+import { TeamVersionRepository } from '../repositories/team_version_repository.js';
+
+const _realm_repo_ac = new RealmRepository();
+const _team_repo_ac = new TeamRepository();
+const _tv_repo_ac = new TeamVersionRepository();
 import { ApiError } from '../lib/api_error.js';
 import { RealmA2aService } from './realm_a2a.service.js';
 import type { TeamListEntry } from '../models/realm.model.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.agent_card');
 
 export interface A2a_skill {
     id: string;
@@ -75,12 +83,12 @@ function parse_capability(raw: string | null | undefined): {
 }
 
 async function skill_from_team_entry(entry: TeamListEntry): Promise<A2a_skill | null> {
-    const hub_team = await HubTeam.findOne({
+    const hub_team = await _team_repo_ac.find_one_q({
         where: { scope: entry.scope, name: entry.slug },
     });
     if (!hub_team) return null;
 
-    const latest = await TeamVersion.findOne({
+    const latest = await _tv_repo_ac.find_one_q({
         where: { team_id: hub_team.id },
         order: [['published_at', 'DESC']],
     });
@@ -118,9 +126,10 @@ export class AgentCardService {
      * Accepts optional org_id for org-scoped resolution.
      */
     static async build_for_slug(slug: string, opts?: { org_id?: string }): Promise<A2a_agent_card> {
+        log.debug('build_for_slug', { slug, org_id: opts?.org_id });
         const where: Record<string, unknown> = { slug };
         if (opts?.org_id) where.org_id = opts.org_id;
-        const realm = await Realm.findOne({ where });
+        const realm = await _realm_repo_ac.find_one_q({ where });
         if (!realm || realm.deleted) {
             throw ApiError.not_found(`Realm '${slug}' not found`);
         }
@@ -141,6 +150,7 @@ export class AgentCardService {
         org_id?: string;
         team_list: TeamListEntry[];
     }): Promise<A2a_agent_card> {
+        log.debug('build_for_realm', { realm_id: realm.id, realm_slug: realm.slug });
         const team_list = realm.team_list ?? [];
         const skills: A2a_skill[] = [];
 
@@ -171,10 +181,10 @@ export class AgentCardService {
         let org_slug = '';
         if (realm.org_id) {
             try {
-                const { Org } = await import('../db/models/index.js');
+                const { Org } = await import('../models/index.js');
                 const org = await Org.findByPk(realm.org_id, { attributes: ['slug'] });
                 org_slug = org?.slug ?? '';
-            } catch { /* best-effort */ }
+            } catch (err) { log.warn('agent_card_org_lookup_failed', { error: err instanceof Error ? err.message : String(err) }); /* best-effort */ }
         }
 
         const base = public_api_base();

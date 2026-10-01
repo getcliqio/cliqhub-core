@@ -17,7 +17,12 @@ function mock_res() {
 
 /** Build a fake Express request with the given body. */
 function make_req(body: Record<string, unknown> = {}, user?: Record<string, unknown>) {
-    return { body, user: user ?? { user_id: 'u-1' }, headers: { 'content-type': 'application/json' } } as unknown as Request;
+    const auth_user = user ?? { id: 'u-1' };
+    return {
+        body,
+        auth: { user: auth_user, org_ids: [], org_slugs: [], scopes: [] },
+        headers: { 'content-type': 'application/json' },
+    } as unknown as Request;
 }
 
 /** Fake artifact data returned by the mock service. */

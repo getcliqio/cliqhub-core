@@ -96,6 +96,7 @@ describe('OrgRealmSyncService', () => {
                     member_id: '42',
                     role: 'member',
                 }),
+                undefined,
             );
         });
 

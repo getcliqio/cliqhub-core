@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import crypto from 'node:crypto';
 import { BaseController } from './base_controller.js';
+import { get_logger } from '../lib/log.js';
 import { ApiError } from '../errors/api_error.js';
 import { hash_password, verify_password } from '../auth/password.js';
 import type { TokenRepository } from '../repositories/token_repository.js';
@@ -14,6 +15,7 @@ import {
 } from '../schemas/token_types.js';
 import {
     clamp_grant_to_subject,
+    clamp_grant_to_grant,
     default_daemon_grant,
     default_grant_for_subject,
     normalize_grant,
@@ -37,6 +39,8 @@ function sha256_hex(plaintext: string): string {
     return crypto.createHash('sha256').update(plaintext).digest('hex');
 }
 
+const log = get_logger('ctrl.tokens');
+
 export class TokensController extends BaseController {
     constructor(
         private _token_repo: TokenRepository,
@@ -58,7 +62,8 @@ export class TokensController extends BaseController {
         try {
             const { realms } = await RealmService.list_for_user(String(user.id));
             realm_ids = realms.map((r) => r.id);
-        } catch {
+        } catch (err) {
+            log.warn('realm_list_failed', { error: err instanceof Error ? err.message : String(err) });
             realm_ids = [];
         }
         return {
@@ -72,11 +77,12 @@ export class TokensController extends BaseController {
     private async _resolve_user_grant(req: Request, raw: unknown): Promise<Token_grant> {
         const subject = await this._subject_for(req);
         const fallback = default_grant_for_subject(subject);
-        if (raw == null || (typeof raw === 'object' && Object.keys(raw as object).length === 0)) {
-            return fallback;
-        }
-        const normalized = normalize_grant(raw, fallback);
-        return clamp_grant_to_subject(normalized, subject);
+        const wanted = raw == null || (typeof raw === 'object' && Object.keys(raw as object).length === 0)
+            ? fallback
+            : clamp_grant_to_subject(normalize_grant(raw, fallback), subject);
+        // A restricted PAT (stored grant) cannot mint anything wider than itself (S25).
+        const caller_grant = req.auth?.token_permissions as Token_grant | undefined;
+        return caller_grant ? clamp_grant_to_grant(wanted, caller_grant) : wanted;
     }
 
     private async _resolve_realm_ids(
@@ -97,6 +103,12 @@ export class TokensController extends BaseController {
         }
 
         const user = this._require_auth(req);
+        // A restricted PAT may only mint daemon tokens for realms it covers (S25).
+        const caller_realms = (req.auth?.token_permissions as Token_grant | undefined)?.domains?.realms;
+        if (Array.isArray(caller_realms) && !caller_realms.includes('*')) {
+            const outside = realm_ids.filter((r) => !caller_realms.includes(r));
+            if (outside.length > 0) throw new ApiError('forbidden', 'This token cannot mint tokens for those realms', 403);
+        }
         for (const realm_id of realm_ids) {
             // Realm members may mint (daemon bootstrap); admins keep list/revoke.
             await RealmService.assert_member(realm_id, String(user.id));
@@ -106,6 +118,7 @@ export class TokensController extends BaseController {
 
     async generate_token(req: Request, res: Response): Promise<void> {
         const user = this._require_auth(req);
+        log.debug('generate_token', { user_id: user.id, type: req.body?.type });
         const body = this.parse_body(generate_token_schema, req);
 
         /**
@@ -195,6 +208,7 @@ export class TokensController extends BaseController {
             ? permissions.domains.realms.filter((r): r is string => typeof r === 'string' && r !== '*')
             : [];
 
+        log.info('token_generated', { id: record.id, type: 'user' });
         this.ok(res, {
             token: raw_token,
             name: token_name,
@@ -205,6 +219,7 @@ export class TokensController extends BaseController {
 
     async get_tokens(req: Request, res: Response): Promise<void> {
         const user = this._require_auth(req);
+        log.debug('get_tokens', { user_id: user.id });
         const body = this.parse_body(get_tokens_schema, req);
         const limit = body.limit ?? 50;
         const offset = body.offset ?? 0;
@@ -269,6 +284,7 @@ export class TokensController extends BaseController {
 
     async revoke_token(req: Request, res: Response): Promise<void> {
         const user = this._require_auth(req);
+        log.debug('revoke_token', { user_id: user.id });
         const body = this.parse_body(revoke_token_schema, req);
         const token = await this._token_repo.find_by_id(body.token_id);
         if (!token || token.revoked_at) throw new ApiError('not_found', 'Token not found', 404);
@@ -278,21 +294,31 @@ export class TokensController extends BaseController {
             if (!realm_admin_ok) {
                 throw new ApiError('forbidden', 'Not your token', 403);
             }
+            // The token must belong to that realm; otherwise a realm admin could
+            // revoke any realm's token by naming their own realm (S24).
+            const grant = token.permissions as Token_grant | undefined;
+            const token_realms = Array.isArray(grant?.domains?.realms) ? grant!.domains.realms as string[] : [];
+            if (!token_realms.includes(body.realm_id!)) {
+                throw new ApiError('not_found', 'Token not found', 404);
+            }
             await RealmService.require_admin(body.realm_id!, String(user.id));
         }
 
         const count = await this._token_repo.soft_revoke(body.token_id);
         if (count === 0) throw new ApiError('not_found', 'Token not found', 404);
+        log.info('token_revoked', { token_id: body.token_id, type: body.type });
         this.ok(res, { revoked: true, type: body.type });
     }
 
     async rotate_token(req: Request, res: Response): Promise<void> {
         const user = this._require_auth(req);
+        log.debug('rotate_token', { user_id: user.id, type: req.body?.type });
         const body = this.parse_body(rotate_token_schema, req);
 
         if (body.type === 'a2a') {
             const realm_id = body.realm_id!;
             const created = await RealmA2aService.rotate_bearer(realm_id, String(user.id));
+            log.info('token_rotated', { type: 'a2a', realm_id });
             this.ok(res, {
                 type: 'a2a',
                 token: created.bearer,
@@ -313,6 +339,7 @@ export class TokensController extends BaseController {
             const raw_token = `cliq_dt_${crypto.randomBytes(32).toString('base64url')}`;
             const token_hash = sha256_hex(raw_token);
             await this._token_repo.update_hash(body.token_id!, token_hash, token_hash.slice(0, 16));
+            log.info('token_rotated', { token_id: body.token_id, type: 'realm' });
             this.ok(res, {
                 type: 'realm',
                 token: raw_token,
@@ -326,6 +353,7 @@ export class TokensController extends BaseController {
         const prefix = sha256_hex(raw_token).slice(0, 16);
         await this._token_repo.update_hash(body.token_id!, token_hash, prefix);
 
+        log.info('token_rotated', { token_id: body.token_id, type: 'user' });
         this.ok(res, {
             type: 'user',
             token: raw_token,
@@ -338,6 +366,7 @@ export class TokensController extends BaseController {
      * Caller must present their own Bearer; body carries the token under test.
      */
     async validate_token(req: Request, res: Response): Promise<void> {
+        log.debug('validate_token', { user_id: req.auth?.user?.id });
         this._require_auth(req);
         const body = this.parse_body(validate_token_schema, req);
         const plaintext = body.token.trim();

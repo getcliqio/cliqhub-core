@@ -1,9 +1,16 @@
 import { Op } from 'sequelize';
 
-import { InAppNotification, RealmMember } from '../models/index.js';
+import { InAppNotificationRepository } from '../repositories/in_app_notification_repository.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
 import type { NotificationPayload } from '../notifications/types.js';
 import { ApiError } from '../lib/api_error.js';
 import { randomUUID } from 'node:crypto';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.in_app_notification');
+
+const in_app_repo = new InAppNotificationRepository();
+const realm_member_repo = new RealmMemberRepository();
 
 const KNOWN_TOP_LEVEL = new Set([
 	'event',
@@ -124,10 +131,11 @@ export class InAppNotificationService {
 					rec.realm_slug = slug_map.get(rec.realm_id) ?? null;
 				}
 			}
-		} catch { /* best-effort — slugs stay null */ }
+		} catch (err) { log.debug('notification_slug_lookup_failed', { error: err instanceof Error ? err.message : String(err) }); /* best-effort — slugs stay null */ }
 	}
 
 	static async create_from_payload(payload: NotificationPayload, user_id?: string | null): Promise<InAppNotificationRecord> {
+		log.debug('create_from_payload', { event: payload.event, realm_id: payload.realm_id, user_id });
 		// event is the routing key for rules and the inbox type filter.
 		const event = String(payload.event ?? '').trim();
 		if (!event) throw new Error('notification payload.event is required');
@@ -147,10 +155,10 @@ export class InAppNotificationService {
 				const { Realm } = await import('../models/index.js');
 				const realm = await Realm.findByPk(realm_id_val, { attributes: ['org_id'] });
 				if (realm?.org_id) org_id = realm.org_id;
-			} catch { /* best-effort */ }
+			} catch (err) { log.warn('notification_org_lookup_failed', { error: err instanceof Error ? err.message : String(err) }); /* best-effort */ }
 		}
 
-		const row = await InAppNotification.create({
+		const row = await in_app_repo.create_one({
 			id,
 			event,
 			title: payload.title?.trim() || null,
@@ -166,6 +174,7 @@ export class InAppNotificationService {
 			payload_json: JSON.stringify(InAppNotificationService.extra_payload(payload)),
 			created_at,
 		});
+		log.info('notification_created', { id, event, realm_id: realm_id_val });
 		return InAppNotificationService.to_record(row);
 	}
 
@@ -194,6 +203,7 @@ export class InAppNotificationService {
 		limit?: number;
 		offset?: number;
 	}): Promise<{ notifications: InAppNotificationRecord[]; total: number }> {
+		log.debug('list_for_user', { user_id: opts.user_id, realm_id: opts.realm_id, org_id: opts.org_id });
 		const user_id = opts.user_id.trim();
 		if (!user_id) throw ApiError.unauthorized('Authentication required');
 
@@ -201,10 +211,10 @@ export class InAppNotificationService {
 		const limit = Math.min(Math.max(1, limit_raw), 100);
 		const offset = Math.max(0, opts.offset ?? 0);
 
-		const memberships = await RealmMember.findAll({
-			where: { member_type: 'user', member_id: user_id },
-			attributes: ['realm_id'],
-		});
+		const memberships = await realm_member_repo.find_all(
+			{ member_type: 'user', member_id: user_id },
+			{ attributes: ['realm_id'] },
+		);
 		const member_realm_ids = memberships.map((m) => m.realm_id);
 
 		// Accept either legacy single `realm_id` or the newer multi-select
@@ -297,9 +307,8 @@ export class InAppNotificationService {
 			? and_parts[0]
 			: { [Op.and]: and_parts };
 
-		const total = await InAppNotification.count({ where });
-		const rows = await InAppNotification.findAll({
-			where,
+		const total = await in_app_repo.find_count(where as any);
+		const rows = await in_app_repo.find_all(where as any, {
 			order: [['created_at', 'DESC']],
 			limit,
 			offset,

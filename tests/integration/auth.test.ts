@@ -44,7 +44,7 @@ describe('POST /internal/auth/signup', () => {
         repos.scope_repo.find_by_slug_with_transaction.mockResolvedValueOnce(null);
         repos.scope_repo.create.mockResolvedValueOnce(1);
         repos.user_repo.find_by_id_with_transaction.mockResolvedValueOnce(ALICE_USER);
-        repos.user_repo.find_by_id.mockResolvedValue(ALICE_USER);
+        repos.user_repo.find_profile_by_id.mockResolvedValue(ALICE_USER);
 
         const res = await request(app)
             .post('/internal/auth/signup')
@@ -70,7 +70,7 @@ describe('POST /internal/auth/signup', () => {
         repos.scope_repo.find_by_slug_with_transaction.mockResolvedValueOnce(null);
         repos.scope_repo.create.mockResolvedValueOnce(1);
         repos.user_repo.find_by_id_with_transaction.mockResolvedValueOnce(ALICE_USER);
-        repos.user_repo.find_by_id.mockResolvedValue(ALICE_USER);
+        repos.user_repo.find_profile_by_id.mockResolvedValue(ALICE_USER);
 
         const res = await request(app).post('/internal/auth/signup')
             .send({ username: 'alice', email: 'a@b.com', password: 'password123' });
@@ -116,7 +116,7 @@ describe('POST /internal/auth/authenticate_user', () => {
         repos.user_repo.find_by_username.mockResolvedValueOnce({
             id: hub_legacy_uuid(1), username: 'alice', password_hash: 'hash', role: 'user', suspended_at: null,
         });
-        repos.user_repo.find_by_id.mockResolvedValue(ALICE_USER);
+        repos.user_repo.find_profile_by_id.mockResolvedValue(ALICE_USER);
         vi.mocked(pw.verify_password).mockResolvedValueOnce(true);
 
         const res = await request(app).post('/internal/auth/authenticate_user')
@@ -171,7 +171,7 @@ describe('POST /internal/auth/issue_session_token', () => {
         repos.token_repo.find_by_prefix.mockResolvedValue({
             id: 'admin-tok', type: 'user', user_id: hub_legacy_uuid(99), token_hash: 'hash', permissions: {}, scopes: [],
         });
-        repos.user_repo.find_by_id.mockImplementation(async (id: string) => {
+        repos.user_repo.find_profile_by_id.mockImplementation(async (id: string) => {
             if (id === hub_legacy_uuid(99)) return ADMIN_USER;
             if (id === hub_legacy_uuid(2)) return { ...ALICE_USER, id: hub_legacy_uuid(2), username: 'bob' };
             return null;
@@ -179,6 +179,7 @@ describe('POST /internal/auth/issue_session_token', () => {
         repos.scope_repo.find_owned_by_user.mockResolvedValue([]);
         repos.org_member_repo.find_orgs_by_user.mockResolvedValue([]);
         repos.scope_repo.find_member_scopes.mockResolvedValue([]);
+        repos.scope_repo.find_default_scopes.mockResolvedValue([]);
         repos.token_repo.create.mockResolvedValue({ id: 'session-tok' });
 
         const res = await request(app)
@@ -195,10 +196,11 @@ describe('POST /internal/auth/issue_session_token', () => {
         repos.token_repo.find_by_prefix.mockResolvedValue({
             id: 'u-tok', type: 'user', user_id: hub_legacy_uuid(1), token_hash: 'hash', permissions: {}, scopes: [],
         });
-        repos.user_repo.find_by_id.mockResolvedValue(ALICE_USER);
+        repos.user_repo.find_profile_by_id.mockResolvedValue(ALICE_USER);
         repos.scope_repo.find_owned_by_user.mockResolvedValue([]);
         repos.org_member_repo.find_orgs_by_user.mockResolvedValue([]);
         repos.scope_repo.find_member_scopes.mockResolvedValue([]);
+        repos.scope_repo.find_default_scopes.mockResolvedValue([]);
 
         const res = await request(app)
             .post('/internal/auth/issue_session_token')

@@ -2,7 +2,7 @@ import yaml from 'js-yaml';
 import JSZip from 'jszip';
 
 import type { InputFieldSpec } from '../lib/input_field_spec.js';
-import { coerce_input_field_specs } from '../lib/input_field_spec.js';
+import { InputFieldSpecUtil } from '../lib/input_field_spec.js';
 
 export interface ParsedTeamYml {
     name: string;
@@ -173,7 +173,7 @@ export function enrich_required_inputs(
     }
 
     /** Coerce declared inputs through the canonical spec validator. */
-    const coerced = coerce_input_field_specs(declared_inputs);
+    const coerced = InputFieldSpecUtil.coerce(declared_inputs);
 
     if (referenced.size === 0 && coerced.length === 0) {
         return coerced;

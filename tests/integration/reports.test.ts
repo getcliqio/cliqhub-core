@@ -3,6 +3,8 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { setup_sequelize_mocks } from '../helpers/mock_sequelize.js';
 setup_sequelize_mocks();
 
+import { create_route_policy_middleware } from '../../src/middleware/enforce_route_policy.js';
+import { unit_access_store } from '../helpers/test_container.js';
 import express from 'express';
 import request from 'supertest';
 import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
@@ -33,6 +35,7 @@ app.use(create_auth_middleware({
     scope_repo: repos.scope_repo as any,
     org_member_repo: repos.org_member_repo as any,
 }));
+app.use(create_route_policy_middleware({ store: unit_access_store() }));
 
 const reports_service = new ReportsService(audit_repo as any);
 const reports_controller = new ReportsController(reports_service);

@@ -4,9 +4,8 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 
 vi.mock('../../../src/models/index.js', () => ({
     Workspace: { count: vi.fn(async () => 0) },
-    Team: { count: vi.fn(async () => 0) },
+    DaemonTeam: { count: vi.fn(async () => 0) },
     Agent: { count: vi.fn(async () => 0) },
-    Scope: { name: 'Scope' },
     Realm: { findByPk: vi.fn() },
     Run: {
         count: vi.fn(async () => 0),

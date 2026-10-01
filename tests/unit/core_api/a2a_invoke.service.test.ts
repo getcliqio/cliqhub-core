@@ -5,9 +5,6 @@ vi.mock('../../../src/models/index.js', () => ({
     Realm: { findByPk: vi.fn() },
     Run: { findByPk: vi.fn() },
     RealmMember: { findOne: vi.fn() },
-}));
-
-vi.mock('../../../src/db/models/index.js', () => ({
     Team: { findOne: vi.fn() },
     TeamVersion: { findOne: vi.fn() },
 }));
@@ -52,7 +49,7 @@ vi.mock('../../../src/lib/api_error.js', () => ({
 
 import { A2aInvokeService } from '../../../src/services/a2a_invoke.service.js';
 import { Realm, Run, RealmMember } from '../../../src/models/index.js';
-import { Team as HubTeam, TeamVersion } from '../../../src/db/models/index.js';
+import { Team as HubTeam, TeamVersion } from '../../../src/models/index.js';
 import { RealmA2aService } from '../../../src/services/realm_a2a.service.js';
 import { DispatchService } from '../../../src/services/dispatch.service.js';
 import { QueueService } from '../../../src/services/queue.service.js';

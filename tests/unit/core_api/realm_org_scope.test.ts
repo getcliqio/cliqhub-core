@@ -31,10 +31,63 @@ vi.mock('../../../src/models/index.js', () => ({
     Realm: { findAll: mocks.realm_find },
     Daemon: { findByPk: vi.fn() },
     Run: {},
+    DaemonTeam: {},
     Team: {},
+    TeamVersion: {},
     Scope: {},
     RealmDispatchQueue: {},
+    ApiToken: { findOne: vi.fn(), findByPk: vi.fn() },
+    AgentCatalog: { findAll: vi.fn(), findOne: vi.fn() },
+    RealmAgentSetting: {},
+    UserRealmAgentSetting: {},
+    OrgAgentSetting: {},
+    RealmInvite: { findOne: vi.fn() },
+    User: { findByPk: vi.fn() },
+    NotificationChannel: {},
+    NotificationRule: {},
+    Org: {},
+    OrgAgentSetting: {},
+    RealmDispatchKey: {},
+    RealmDispatchQueue: {},
+    RealmA2aSetting: {},
+    AccountMeshSetting: {},
+    AccountAgentSetting: {},
+    AccountInvite: {},
+    DaemonConfig: {},
+    OrgMember: {},
+    OrgRole: {},
+    Draft: {},
+    AuditLog: {},
+    DownloadLog: {},
+    Setting: {},
+    TeamTag: {},
+    Agent: {},
+    Container: {},
+    RunEvent: {},
+    RunLog: {},
+    RunLogLine: {},
+    RunLogChunk: {},
+    RunPhase: {},
+    RunArtifact: {},
+    RunSpan: {},
+    WorkspaceTeam: {},
+    WorkspaceSecret: {},
+    InAppNotification: {},
+    WebhookDelivery: {},
+    ChannelDestination: {},
+    NotificationSubscription: {},
+    HubEvent: {},
+    CustomEvent: {},
+    Review: {},
+    ReviewMessage: {},
+    ReviewNotification: {},
+    StoredArtifact: {},
+    ApiToken: { findOne: vi.fn(), findByPk: vi.fn() },
+    Run: {},
 }));
+
+const visible = vi.hoisted(() => ({ visible_realm_ids: vi.fn(), org_standing: vi.fn() }));
+vi.mock('../../../src/auth/route_policy/visible.js', () => visible);
 
 import { RealmService } from '../../../src/services/realm.service.js';
 
@@ -43,41 +96,16 @@ describe('RealmService.list_realm_ids_for_user_in_org', () => {
         vi.clearAllMocks();
     });
 
-    it('returns the intersection of the user\'s realms and the org', async () => {
-        // User is a member of three realms across two orgs.
-        mock_member_find.mockResolvedValueOnce([
-            { realm_id: 'r-in-org-1' },
-            { realm_id: 'r-in-org-2' },
-            { realm_id: 'r-other-org' },
-        ]);
-        // Only two of those belong to org #7.
-        mock_realm_find.mockResolvedValueOnce([
-            { id: 'r-in-org-1' },
-            { id: 'r-in-org-2' },
-        ]);
-
+    it('delegates to visible_realm_ids scoped to the org (same rules as the route policy)', async () => {
+        visible.visible_realm_ids.mockResolvedValueOnce(['r-in-org-1', 'r-in-org-2']);
         const out = await RealmService.list_realm_ids_for_user_in_org('user-42', hub_legacy_uuid(7));
-
         expect(out).toEqual(['r-in-org-1', 'r-in-org-2']);
-        // Assert the Realm.findAll was scoped by org — this is the whole
-        // point of the helper.
-        const [realm_call] = mock_realm_find.mock.calls[0];
-        expect(realm_call.where.org_id).toBe(hub_legacy_uuid(7));
-        // ALIVE filter must be applied so soft-deleted realms don't leak.
-        expect(realm_call.where.deleted).toBe(false);
+        expect(visible.visible_realm_ids).toHaveBeenCalledWith('user-42', { org_id: hub_legacy_uuid(7) });
     });
 
-    it('short-circuits without a Realm.findAll call when the user has no realms at all', async () => {
-        mock_member_find.mockResolvedValueOnce([]);
-        const out = await RealmService.list_realm_ids_for_user_in_org('user-42', hub_legacy_uuid(7));
-        expect(out).toEqual([]);
-        expect(mock_realm_find).not.toHaveBeenCalled();
-    });
-
-    it('returns an empty list when the user has realms but none in the requested org', async () => {
-        mock_member_find.mockResolvedValueOnce([{ realm_id: 'r-other-org' }]);
-        mock_realm_find.mockResolvedValueOnce([]);
-        const out = await RealmService.list_realm_ids_for_user_in_org('user-42', hub_legacy_uuid(99));
-        expect(out).toEqual([]);
+    it('list_realm_ids_for_user uses the same visibility rules', async () => {
+        visible.visible_realm_ids.mockResolvedValueOnce([]);
+        expect(await RealmService.list_realm_ids_for_user('user-42')).toEqual([]);
+        expect(visible.visible_realm_ids).toHaveBeenCalledWith('user-42');
     });
 });

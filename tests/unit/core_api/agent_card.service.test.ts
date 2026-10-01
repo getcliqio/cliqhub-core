@@ -3,9 +3,6 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 
 vi.mock('../../../src/models/index.js', () => ({
     Realm: { findOne: vi.fn() },
-}));
-
-vi.mock('../../../src/db/models/index.js', () => ({
     Team: { findOne: vi.fn() },
     TeamVersion: { findOne: vi.fn() },
 }));
@@ -24,7 +21,7 @@ vi.mock('../../../src/lib/api_error.js', () => ({
 
 import { AgentCardService } from '../../../src/services/agent_card.service.js';
 import { Realm } from '../../../src/models/index.js';
-import { Team as HubTeam, TeamVersion } from '../../../src/db/models/index.js';
+import { Team as HubTeam, TeamVersion } from '../../../src/models/index.js';
 import { RealmA2aService } from '../../../src/services/realm_a2a.service.js';
 
 describe('AgentCardService', () => {

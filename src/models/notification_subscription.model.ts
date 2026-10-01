@@ -1,35 +1,26 @@
 import { randomUUID } from 'node:crypto';
-import type { Model, ModelStatic, Sequelize } from 'sequelize';
-import { DataTypes } from 'sequelize';
+import { DataTypes, type Sequelize } from 'sequelize';
+import { BaseModel } from './base_model.js';
 
-export interface NotificationSubscriptionAttributes {
-    id?: string;
+export class NotificationSubscription extends BaseModel {
+    declare id: string;
     /** Set for realm bindings; null for account-scoped bindings. */
-    realm_id: string | null;
-    channel_id: string;
-    event: string;
-    scope: string;
-    created_at: number;
-}
+    declare realm_id: string | null;
+    declare channel_id: string;
+    declare event: string;
+    declare scope: string;
+    declare created_at: number;
 
-export type NotificationSubscriptionModel =
-    Model<NotificationSubscriptionAttributes> & NotificationSubscriptionAttributes;
-
-/** Set by `init_notification_subscription` — uses the store Sequelize's Model class. */
-export let NotificationSubscription: ModelStatic<NotificationSubscriptionModel>;
-
-export function init_notification_subscription(sequelize: Sequelize): void {
-    NotificationSubscription = sequelize.define(
-        'NotificationSubscription',
-        {
+    static register(sequelize: Sequelize): void {
+        NotificationSubscription.init({
             id: { type: DataTypes.UUID, primaryKey: true, defaultValue: () => randomUUID() },
             realm_id: { type: DataTypes.TEXT, allowNull: true },
             channel_id: { type: DataTypes.TEXT, allowNull: false },
             event: { type: DataTypes.TEXT, allowNull: false },
             scope: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'global' },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
-        },
-        {
+        }, {
+            sequelize,
             schema: 'cliq',
             tableName: 'notification_subscriptions',
             timestamps: false,
@@ -37,6 +28,15 @@ export function init_notification_subscription(sequelize: Sequelize): void {
                 { fields: ['realm_id'] },
                 { fields: ['realm_id', 'event'] },
             ],
-        },
-    ) as ModelStatic<NotificationSubscriptionModel>;
+        });
+    }
 }
+
+export type NotificationSubscriptionAttributes = {
+    id?: string;
+    realm_id: string | null;
+    channel_id: string;
+    event: string;
+    scope: string;
+    created_at: number;
+};

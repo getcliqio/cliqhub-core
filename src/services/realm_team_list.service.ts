@@ -6,8 +6,21 @@
  * Auto-inject on registration reads this list to bootstrap new daemons.
  */
 
-import { Realm, Team, Scope, Daemon, RealmAgentSetting, RealmMember } from '../models/index.js';
-import { OrgAgentSetting } from '../db/models/index.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+import { DaemonRepository } from '../repositories/daemon_repository.js';
+import { RealmAgentSettingRepository } from '../repositories/realm_agent_setting_repository.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
+import { ScopeRepository } from '../repositories/scope_repository.js';
+import { OrgAgentSettingRepository } from '../repositories/org_agent_setting_repository.js';
+
+const _realm_repo_rtl = new RealmRepository();
+const _dt_repo_rtl = new DaemonTeamRepository();
+const _daemon_repo_rtl = new DaemonRepository();
+const _ras_repo = new RealmAgentSettingRepository();
+const _realm_member_repo_rtl = new RealmMemberRepository();
+const _scope_repo_rtl = new ScopeRepository();
+const _org_agent_setting_repo = new OrgAgentSettingRepository();
 import { RealmService } from './realm.service.js';
 import { DispatchService } from './dispatch.service.js';
 import { InAppNotificationService } from './in_app_notification.service.js';
@@ -37,10 +50,10 @@ export class RealmTeamListService {
         const out: Record<string, Record<string, string>> = {};
 
         try {
-            const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'] });
+            const realm = await _realm_repo_rtl.find_by_id(realm_id, { attributes: ['org_id'] });
             const org_id = realm?.org_id;
             if (org_id) {
-                const org_rows = await OrgAgentSetting.findAll({
+                const org_rows = await _org_agent_setting_repo.find_all_q({
                     where: { org_id },
                 });
                 for (const row of org_rows) {
@@ -52,13 +65,14 @@ export class RealmTeamListService {
                     out[name][key] = value;
                 }
             }
-        } catch {
+        } catch (err) {
+            log.debug('org_settings_unavailable', { error: err instanceof Error ? err.message : String(err) });
             /* org settings may not be initialized yet */
         }
 
-        const realm_rows = await RealmAgentSetting.findAll({ where: { realm_id } });
+        const realm_rows = await _ras_repo.find_all_q({ where: { realm_id } });
         for (const row of realm_rows) {
-            const value = String(row.setting_value ?? '').trim();
+            const value = String((row as any).setting_value ?? '').trim();
             if (!value) continue;
             if (!out[row.agent_name]) out[row.agent_name] = {};
             out[row.agent_name][row.setting_key] = value;
@@ -72,7 +86,7 @@ export class RealmTeamListService {
      * Used after agent settings are fixed so previously-failed installs retry.
      */
     static async reinject_online_daemons(realm_id: string, user_id: string): Promise<void> {
-        const memberships = await RealmMember.findAll({
+        const memberships = await _realm_member_repo_rtl.find_all_q({
             where: { realm_id, member_type: 'daemon' },
             attributes: ['member_id'],
             raw: true,
@@ -80,7 +94,7 @@ export class RealmTeamListService {
         if (memberships.length === 0) return;
 
         const daemon_ids = memberships.map((m) => m.member_id);
-        const daemons = await Daemon.findAll({
+        const daemons = await _daemon_repo_rtl.find_all_q({
             where: { id: { [Op.in]: daemon_ids }, status: 'online' },
             attributes: ['id'],
         });
@@ -93,7 +107,7 @@ export class RealmTeamListService {
     /** Read the team list for a realm. */
     static async get(realm_id: string, user_id: string): Promise<TeamListEntry[]> {
         await RealmService.assert_member(realm_id, user_id);
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
         return (realm as any).team_list ?? [];
     }
@@ -106,9 +120,9 @@ export class RealmTeamListService {
     ): Promise<TeamListEntry[]> {
         await RealmService.require_admin(realm_id, user_id);
         const deduped = dedupe(teams);
-        await Realm.update(
-            { team_list: deduped as any, updated_at: Date.now() },
-            { where: { id: realm_id } },
+        await _realm_repo_rtl.update_where(
+            { id: realm_id } as any,
+            { team_list: deduped as any, updated_at: Date.now() } as any,
         );
         log.info(`team list set: realm=${realm_id} count=${deduped.length}`);
         void import('./mesh_lifecycle.service.js')
@@ -123,8 +137,8 @@ export class RealmTeamListService {
         user_id: string,
         entry: TeamListEntry,
     ): Promise<TeamListEntry[]> {
-        await RealmService.require_admin(realm_id, user_id);
-        const realm = await Realm.findByPk(realm_id);
+        // Callers authorized this: realms/add_team (route policy: operate + realms.teams.manage).
+        const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
         const current: TeamListEntry[] = (realm as any).team_list ?? [];
@@ -134,9 +148,9 @@ export class RealmTeamListService {
         }
 
         const updated = [...current, { scope: entry.scope, slug: entry.slug }];
-        await Realm.update(
-            { team_list: updated as any, updated_at: Date.now() },
-            { where: { id: realm_id } },
+        await _realm_repo_rtl.update_where(
+            { id: realm_id } as any,
+            { team_list: updated as any, updated_at: Date.now() } as any,
         );
         log.info(`team list add: realm=${realm_id} team=${key}`);
         void import('./mesh_lifecycle.service.js')
@@ -156,7 +170,7 @@ export class RealmTeamListService {
             { scope: 'cliq', slug: 'hello-world' },
         ];
 
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) return;
 
         const current: TeamListEntry[] = (realm as any).team_list ?? [];
@@ -169,9 +183,9 @@ export class RealmTeamListService {
         if (to_add.length === 0) return;
 
         const updated = [...current, ...to_add];
-        await Realm.update(
-            { team_list: updated as any, updated_at: Date.now() },
-            { where: { id: realm_id } },
+        await _realm_repo_rtl.update_where(
+            { id: realm_id } as any,
+            { team_list: updated as any, updated_at: Date.now() } as any,
         );
         log.info(`seeded builtin teams into realm=${realm_id}: ${to_add.map((t) => `${t.scope}/${t.slug}`).join(', ')}`);
     }
@@ -182,8 +196,8 @@ export class RealmTeamListService {
         user_id: string,
         entry: TeamListEntry,
     ): Promise<TeamListEntry[]> {
-        await RealmService.require_admin(realm_id, user_id);
-        const realm = await Realm.findByPk(realm_id);
+        // Callers authorized this: realms/remove_team (route policy: operate + realms.teams.manage).
+        const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
         const current: TeamListEntry[] = (realm as any).team_list ?? [];
@@ -194,9 +208,9 @@ export class RealmTeamListService {
             return current;
         }
 
-        await Realm.update(
-            { team_list: updated as any, updated_at: Date.now() },
-            { where: { id: realm_id } },
+        await _realm_repo_rtl.update_where(
+            { id: realm_id } as any,
+            { team_list: updated as any, updated_at: Date.now() } as any,
         );
         log.info(`team list remove: realm=${realm_id} team=${key}`);
         void import('./mesh_lifecycle.service.js')
@@ -216,7 +230,7 @@ export class RealmTeamListService {
         org_ids?: string[],
     ): Promise<ApplyTeamResult[]> {
         await RealmService.require_admin(realm_id, user_id);
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
         const team_list: TeamListEntry[] = (realm as any).team_list ?? [];
@@ -274,8 +288,8 @@ export class RealmTeamListService {
         scope_ids?: string[],
         org_ids?: string[],
     ): Promise<ApplyTeamResult> {
-        await RealmService.require_admin(realm_id, user_id);
-        const realm = await Realm.findByPk(realm_id);
+        // Callers authorized this: realms/add_team, right after add (route policy: operate + realms.teams.manage).
+        const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
         const team_list: TeamListEntry[] = (realm as any).team_list ?? [];
@@ -340,7 +354,7 @@ export class RealmTeamListService {
         org_ids?: string[],
     ): Promise<void> {
         try {
-            const realm = await Realm.findByPk(realm_id);
+            const realm = await _realm_repo_rtl.find_by_id(realm_id);
             if (!realm) return;
 
             const team_list: TeamListEntry[] = (realm as any).team_list ?? [];
@@ -406,7 +420,7 @@ export class RealmTeamListService {
         total: number,
     ): Promise<void> {
         try {
-            const daemon = await Daemon.findByPk(daemon_id);
+            const daemon = await _daemon_repo_rtl.find_by_id(daemon_id);
             const daemon_name = daemon?.name ?? null;
             const preview = failed.slice(0, 5).map((f) => `${f.team_ref} (${f.error})`).join('; ');
             const more = failed.length > 5 ? ` and ${failed.length - 5} more` : '';
@@ -439,7 +453,7 @@ export class RealmTeamListService {
         user_id: string,
     ): Promise<void> {
         try {
-            const realm = await Realm.findByPk(realm_id);
+            const realm = await _realm_repo_rtl.find_by_id(realm_id);
             if (!realm) return;
 
             const team_list: TeamListEntry[] = (realm as any).team_list ?? [];
@@ -462,11 +476,11 @@ export class RealmTeamListService {
         desired_keys: Set<string>,
         user_id: string,
     ): Promise<void> {
-        const installed = await Team.findAll({ where: { daemon_id } });
+        const installed = await _dt_repo_rtl.find_all_q({ where: { daemon_id } });
         if (installed.length === 0) return;
 
         const scope_ids_on_daemon = [...new Set(installed.map((t) => t.scope_id))];
-        const scopes = await Scope.findAll({
+        const scopes = await _scope_repo_rtl.find_all_q({
             where: { id: scope_ids_on_daemon },
             attributes: ['id', 'slug'],
         });
@@ -501,22 +515,22 @@ export class RealmTeamListService {
     static async remove_from_all_realms(scope_slug: string, team_slug: string): Promise<void> {
         const key = `${scope_slug}/${team_slug}`;
 
-        const realms = await Realm.findAll({ attributes: ['id', 'team_list'] });
+        const realms = await _realm_repo_rtl.find_all_q({ attributes: ['id', 'team_list'] });
         for (const realm of realms) {
             const current: TeamListEntry[] = (realm as any).team_list ?? [];
             const updated = current.filter((e) => `${e.scope}/${e.slug}` !== key);
             if (updated.length < current.length) {
-                await Realm.update(
-                    { team_list: updated as any, updated_at: Date.now() },
-                    { where: { id: (realm as any).id } },
+                await _realm_repo_rtl.update_where(
+                    { id: (realm as any).id } as any,
+                    { team_list: updated as any, updated_at: Date.now() } as any,
                 );
                 log.info(`cascade remove: realm=${(realm as any).id} team=${key}`);
             }
         }
 
-        const scope_row = await Scope.findOne({ where: { slug: scope_slug }, attributes: ['id'] });
+        const scope_row = await _scope_repo_rtl.find_one_q({ where: { slug: scope_slug }, attributes: ['id'] });
         if (scope_row) {
-            await Team.destroy({ where: { scope_id: (scope_row as any).id, slug: team_slug } } as any);
+            await _dt_repo_rtl.delete_where_q({ where: { scope_id: (scope_row as any).id, slug: team_slug } } as any);
             log.info(`cascade purge cliq.teams: ${key}`);
         }
     }

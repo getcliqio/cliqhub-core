@@ -1,7 +1,8 @@
-import { User } from '../db/models/index.js';
-import { Scope } from '../db/models/index.js';
+import { User } from '../models/index.js';
+import { Scope } from '../models/index.js';
 import type { Transaction } from 'sequelize';
 import type { UserVO, UserLoginRowVO } from '../schemas/user_types.js';
+import { BaseRepository } from './base_repository.js';
 
 const USER_ATTRS = ['id', 'username', 'display_name', 'email', 'role', 'suspended_at', 'suspended_reason', 'created_at', 'preferences'] as const;
 const LOGIN_ATTRS = ['id', 'username', 'password_hash', 'role', 'suspended_at'] as const;
@@ -72,8 +73,11 @@ function to_login_vo(row: RawLoginRow): UserLoginRowVO {
     };
 }
 
-export class UserRepository {
-    async find_by_id(id: string): Promise<UserVO | null> {
+export class UserRepository extends BaseRepository<User> {
+    protected readonly model = User;
+
+    /** Returns a VO projection (not a raw Sequelize instance). Use `find_by_id` for the raw instance. */
+    async find_profile_by_id(id: string): Promise<UserVO | null> {
         const row = await User.findByPk(id, { attributes: [...USER_ATTRS], raw: true }) as unknown as RawUserRow | null;
         return row ? to_user_vo(row) : null;
     }
@@ -116,8 +120,7 @@ export class UserRepository {
         return user.id;
     }
 
-    async find_by_id_with_transaction(id: string, transaction: Transaction): Promise<UserVO | null> {
-        const row = await User.findByPk(id, { attributes: [...USER_ATTRS], raw: true, transaction }) as unknown as RawUserRow | null;
+    async find_by_id_with_transaction(id: string, transaction: Transaction): Promise<UserVO | null> {        const row = await User.findByPk(id, { attributes: [...USER_ATTRS], raw: true, transaction }) as unknown as RawUserRow | null;
         return row ? to_user_vo(row) : null;
     }
 

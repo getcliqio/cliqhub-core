@@ -7,6 +7,10 @@ const STATUS_MAP: Record<string, number> = {
     rate_limited: 429,
 };
 
+export function status_for_code(code: string): number {
+    return STATUS_MAP[code] ?? 500;
+}
+
 export class ApiError extends Error {
     code: string;
     status: number;
@@ -24,8 +28,4 @@ export class ParamError extends ApiError {
         super('invalid_params', message, 422);
         this.name = 'ParamError';
     }
-}
-
-export function status_for_code(code: string): number {
-    return STATUS_MAP[code] ?? 500;
 }

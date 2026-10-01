@@ -12,11 +12,15 @@
 
 import { randomUUID } from 'node:crypto';
 import { Op } from 'sequelize';
-import { Team, Scope } from '../models/index.js';
-import { RealmDispatchQueue } from '../models/realm_dispatch_queue.model.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+import { ScopeRepository } from '../repositories/scope_repository.js';
+import { RealmDispatchQueueRepository } from '../repositories/realm_dispatch_queue_repository.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('daemon-team-cache');
+const daemon_team_repo = new DaemonTeamRepository();
+const scope_repo = new ScopeRepository();
+const rdq_repo = new RealmDispatchQueueRepository();
 
 export interface HeartbeatTeamEntry {
     id: string;
@@ -68,12 +72,10 @@ export class DaemonTeamCacheService {
             const composite_key = `${scope_id}\0${t.slug}`;
             live_keys.add(composite_key);
 
-            let existing = await Team.findOne({
-                where: { daemon_id, scope_id, slug: t.slug },
-            });
+            let existing = await daemon_team_repo.find_one({ daemon_id, scope_id, slug: t.slug });
             if (!existing) {
-                existing = await Team.findOne({
-                    where: { daemon_id: { [Op.is]: null } as any, scope_id, slug: t.slug },
+                existing = await daemon_team_repo.find_one({
+                    daemon_id: { [Op.is]: null } as any, scope_id, slug: t.slug,
                 });
             }
 
@@ -96,7 +98,7 @@ export class DaemonTeamCacheService {
                 // Prefer the daemon-reported id for CLI-originated installs so
                 // Hub and daemon share one PK. Hub-driven installs mint first
                 // and pass that id down, so heartbeat usually hits the branch above.
-                await Team.create({
+                await daemon_team_repo.create_one({
                     id: t.id || randomUUID(),
                     daemon_id,
                     scope_id,
@@ -113,7 +115,7 @@ export class DaemonTeamCacheService {
         }
 
         // Prune Hub rows the daemon no longer reports.
-        const all_rows = await Team.findAll({ where: { daemon_id } });
+        const all_rows = await daemon_team_repo.find_all({ daemon_id });
         for (const row of all_rows) {
             const key = `${row.scope_id}\0${row.slug}`;
             if (!live_keys.has(key)) {
@@ -130,10 +132,10 @@ export class DaemonTeamCacheService {
     private static async _resolve_scopes(slugs: string[]): Promise<Map<string, string>> {
         if (slugs.length === 0) return new Map();
 
-        const rows = await Scope.findAll({
-            where: { slug: { [Op.in]: slugs } },
-            attributes: ['id', 'slug'],
-        });
+        const rows = await scope_repo.find_all(
+            { slug: { [Op.in]: slugs } },
+            { attributes: ['id', 'slug'] },
+        );
 
         const map = new Map<string, string>();
         for (const row of rows) {
@@ -151,14 +153,14 @@ export class DaemonTeamCacheService {
         if (!realm_id) return result;
 
         const cutoff = Date.now() - 10 * 60 * 1000;
-        const rows = await RealmDispatchQueue.findAll({
-            where: {
+        const rows = await rdq_repo.find_all(
+            {
                 realm_id,
                 kind: 'uninstall',
                 created_at: { [Op.gte]: cutoff },
-            },
-            attributes: ['payload'],
-        });
+            } as any,
+            { attributes: ['payload'] },
+        );
 
         for (const row of rows) {
             const p = row.payload as { scope?: string; slug?: string };
@@ -175,7 +177,7 @@ export class DaemonTeamCacheService {
         realm_id?: string,
     ): void {
         if (!realm_id) return;
-        void RealmDispatchQueue.findOrCreate({
+        void rdq_repo.find_or_create({
             where: {
                 realm_id,
                 kind: 'uninstall',

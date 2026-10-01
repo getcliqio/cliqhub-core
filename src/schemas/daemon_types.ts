@@ -46,8 +46,11 @@ export const DaemonGetInput = z.object({
     query: z.string().optional().describe('Substring match on daemon id / hostname'),
     limit: z.number().int().positive().optional().describe('Page size'),
     offset: z.number().int().nonnegative().optional().describe('Page offset'),
+    all: z.boolean().optional().describe('Site admins only: every record on the hub, not just the caller\'s realm memberships (ignored for everyone else). org_id still narrows.'),
 }).superRefine((v, ctx) => {
     if (v.realm_id?.trim()) return;
+    // `all` (site admins) may omit org_id; the controller refuses it for everyone else.
+    if (v.all) return;
     if (!v.org_id) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,

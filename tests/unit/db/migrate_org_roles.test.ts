@@ -14,7 +14,7 @@ vi.mock('../../../src/lib/log.js', () => ({
     }),
 }));
 
-vi.mock('../../../src/db/models/index.js', () => ({
+vi.mock('../../../src/models/index.js', () => ({
     Org: {
         findAll: vi.fn(),
         sequelize: {
@@ -32,8 +32,8 @@ vi.mock('../../../src/db/models/index.js', () => ({
     },
 }));
 
-import { seed_default_roles_for_org } from '../../../src/db/migrate_org_roles.js';
-import { OrgRole } from '../../../src/db/models/index.js';
+import { seed_default_roles_for_org } from '../../../src/models/migrations/migrate_org_roles.js';
+import { OrgRole } from '../../../src/models/index.js';
 import { DEFAULT_ROLES } from '../../../src/auth/permissions.js';
 
 const mocked_role = vi.mocked(OrgRole);

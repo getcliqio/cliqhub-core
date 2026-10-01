@@ -12,7 +12,7 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 vi.mock('../../src/models/index.js', () => ({
     Workspace: { findByPk: vi.fn(), findOne: vi.fn(), create: vi.fn() },
     Run: { findByPk: vi.fn() },
-    Team: {
+    DaemonTeam: {
         findByPk: vi.fn(),
         findOne: vi.fn(),
         findAll: vi.fn(),
@@ -21,11 +21,56 @@ vi.mock('../../src/models/index.js', () => ({
     },
     Daemon: { findByPk: vi.fn(), findAll: vi.fn() },
     Scope: { findByPk: vi.fn(), findOne: vi.fn() },
-}));
-
-vi.mock('../../src/db/models/index.js', () => ({
+    ScopeMember: {},
     Team: { findByPk: vi.fn(), findOne: vi.fn() },
     TeamVersion: { findOne: vi.fn(), findAll: vi.fn() },
+    RealmMember: {},
+    Realm: {},
+    RealmAgentSetting: {},
+    UserRealmAgentSetting: {},
+    OrgAgentSetting: {},
+    User: {},
+    WorkspaceTeam: {},
+    NotificationChannel: {},
+    NotificationRule: {},
+    NotificationSubscription: {},
+    Org: {},
+    OrgMember: {},
+    OrgRole: {},
+    ApiToken: {},
+    AccountInvite: {},
+    RealmInvite: {},
+    RealmDispatchKey: {},
+    RealmDispatchQueue: {},
+    RealmA2aSetting: {},
+    AgentCatalog: {},
+    AccountAgentSetting: {},
+    AccountMeshSetting: {},
+    DaemonConfig: {},
+    Draft: {},
+    AuditLog: {},
+    DownloadLog: {},
+    Setting: {},
+    TeamTag: {},
+    Agent: {},
+    Container: {},
+    RunEvent: {},
+    RunLog: {},
+    RunLogLine: {},
+    RunLogChunk: {},
+    RunPhase: {},
+    RunArtifact: {},
+    RunSpan: {},
+    WorkspaceSecret: {},
+    InAppNotification: {},
+    WebhookDelivery: {},
+    ChannelDestination: {},
+    HubEvent: {},
+    CustomEvent: {},
+    Review: {},
+    ReviewMessage: {},
+    ReviewNotification: {},
+    StoredArtifact: {},
 }));
 
 vi.mock('../../src/services/run.service.js', () => ({
@@ -95,8 +140,7 @@ vi.mock('../../src/services/hug_reviews.service.js', () => ({
     },
 }));
 
-import { Workspace, Run, Team, Daemon, Scope } from '../../src/models/index.js';
-import { Team as HubTeam, TeamVersion } from '../../src/db/models/index.js';
+import { Workspace, Run, DaemonTeam, Daemon, Scope, Team, TeamVersion } from '../../src/models/index.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
 import { AccessService } from '../../src/services/access.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
@@ -190,14 +234,14 @@ beforeEach(() => {
 
     // Default mock returns — overridden per test as needed
     vi.mocked(Workspace.findByPk).mockResolvedValue(make_workspace() as any);
-    vi.mocked(Team.findByPk).mockResolvedValue(make_team() as any);
-    vi.mocked(HubTeam.findByPk).mockResolvedValue({
+    vi.mocked(DaemonTeam.findByPk).mockResolvedValue(make_team() as any);
+    vi.mocked(Team.findByPk).mockResolvedValue({
         id: hub_legacy_uuid(1),
         name: 'my-team',
         scope: 'my-scope',
         description: 'test team',
     } as any);
-    vi.mocked(HubTeam.findOne).mockResolvedValue(null as any);
+    vi.mocked(Team.findOne).mockResolvedValue(null as any);
     vi.mocked(TeamVersion.findOne).mockResolvedValue({
         team_id: hub_legacy_uuid(1),
         version: '1.0.0',
@@ -214,8 +258,8 @@ beforeEach(() => {
     vi.mocked(Daemon.findAll).mockResolvedValue([make_daemon()] as any);
     vi.mocked(Scope.findOne).mockResolvedValue({ id: 'scope-1', slug: 'my-scope' } as any);
     vi.mocked(Scope.findByPk).mockResolvedValue({ id: 'scope-1', slug: 'my-scope' } as any);
-    vi.mocked(Team.findOne).mockResolvedValue(null as any);
-    vi.mocked(Team.create).mockResolvedValue(make_team() as any);
+    vi.mocked(DaemonTeam.findOne).mockResolvedValue(null as any);
+    vi.mocked(DaemonTeam.create).mockResolvedValue(make_team() as any);
     vi.mocked(AccessService.list_daemon_ids_for_user).mockResolvedValue(['daemon-1']);
     vi.mocked(RealmService.list_realms_for_daemon).mockResolvedValue([]);
 });
@@ -258,7 +302,7 @@ describe('DispatchService.dispatch_run', () => {
     });
 
     it('allows missing team when manifest_yaml is provided', async () => {
-        vi.mocked(Team.findByPk).mockResolvedValueOnce(null as any);
+        vi.mocked(DaemonTeam.findByPk).mockResolvedValueOnce(null as any);
 
         const result = await DispatchService.dispatch_run(
             make_dispatch_input({ manifest_yaml: 'name: x\nphases: []\n' }),
@@ -496,22 +540,6 @@ describe('DispatchService.resume', () => {
         );
     });
 
-    it('enforces observe-daemon access before enqueue', async () => {
-        vi.mocked(Run.findByPk).mockResolvedValueOnce({
-            id: 'run-noaccess',
-            run_id: 'run-noaccess',
-            daemon_id: 'daemon-1',
-        } as any);
-        vi.mocked(AccessService.assert_can_observe_daemon).mockRejectedValueOnce(
-            new Error('forbidden: user lacks access to daemon'),
-        );
-
-        await expect(
-            DispatchService.resume('run-noaccess', 'phase-1', [], 'user-1'),
-        ).rejects.toThrow(/forbidden/i);
-
-        expect(mock_enqueue).not.toHaveBeenCalled();
-    });
 });
 
 // ── install_team ────────────────────────────────────────────────────
@@ -545,11 +573,11 @@ describe('DispatchService.install_team', () => {
     });
 
     it('throws not_found when team does not exist', async () => {
-        vi.mocked(HubTeam.findByPk).mockResolvedValue(null as any);
-        vi.mocked(HubTeam.findOne).mockResolvedValue(null as any);
+        vi.mocked(Team.findByPk).mockResolvedValue(null as any);
+        vi.mocked(Team.findOne).mockResolvedValue(null as any);
         vi.mocked(TeamVersion.findOne).mockResolvedValue(null as any);
         vi.mocked(TeamVersion.findAll).mockResolvedValue([] as any);
-        vi.mocked(Team.findByPk).mockResolvedValue(null as any);
+        vi.mocked(DaemonTeam.findByPk).mockResolvedValue(null as any);
 
         await expect(
             DispatchService.install_team({
@@ -624,8 +652,8 @@ describe('DispatchService.dispatch_claimed_run', () => {
 
     beforeEach(() => {
         vi.mocked(Scope.findOne).mockResolvedValue({ id: 'scope-cliq', slug: 'cliq' } as any);
-        vi.mocked(Team.findByPk).mockResolvedValue(null as any);
-        vi.mocked(Team.findOne).mockResolvedValue({
+        vi.mocked(DaemonTeam.findByPk).mockResolvedValue(null as any);
+        vi.mocked(DaemonTeam.findOne).mockResolvedValue({
             id: 'team-daemon-row',
             daemon_id: 'daemon-1',
             scope_id: 'scope-cliq',
@@ -649,7 +677,7 @@ describe('DispatchService.dispatch_claimed_run', () => {
             scope_ids: ['scope-cliq'],
         });
 
-        expect(Team.findOne).toHaveBeenCalled();
+        expect(DaemonTeam.findOne).toHaveBeenCalled();
         expect(RunService.create).toHaveBeenCalledWith(
             expect.any(String),
             'team-daemon-row',
@@ -686,7 +714,7 @@ describe('DispatchService.dispatch_claimed_run', () => {
     });
 
     it('fails clearly when scope/slug is not on the claiming daemon', async () => {
-        vi.mocked(Team.findOne).mockResolvedValue(null as any);
+        vi.mocked(DaemonTeam.findOne).mockResolvedValue(null as any);
 
         await expect(
             DispatchService.dispatch_claimed_run(claimed_item as any, {

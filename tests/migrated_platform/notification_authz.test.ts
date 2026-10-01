@@ -29,7 +29,7 @@ const uid = () => `authz-${Date.now()}-${Math.random().toString(36).slice(2, 8)}
 function mock_user(id: number, role: 'user' | 'admin' = 'user') {
 	stub_hub_pat_auth(repos);
 	const user_id = hub_legacy_uuid(id);
-	repos.user_repo.find_by_id.mockResolvedValue({
+	repos.user_repo.find_profile_by_id.mockResolvedValue({
 		id: user_id,
 		username: `user-${id}`,
 		display_name: `User ${id}`,
@@ -99,7 +99,7 @@ describe.skipIf(!has_postgres)('Notification AuthZ', () => {
 		expect(res.body.data.org_id).toBe(org_id);
 	});
 
-	it('account channel create without org_id → 422', async () => {
+	it('account channel create without org_id or realm_id → 400 (route policy: scope required)', async () => {
 		mock_user(1, 'admin');
 		const res = await request(app)
 			.post('/v1/notification_channels/create')
@@ -108,7 +108,7 @@ describe.skipIf(!has_postgres)('Notification AuthZ', () => {
 				name: uid(),
 				destinations: [{ type: 'slack', webhook_url: 'https://hooks.slack.com/services/T/B/X' }],
 			});
-		expect(res.status).toBe(422);
+		expect(res.status).toBe(400);
 	});
 
 });

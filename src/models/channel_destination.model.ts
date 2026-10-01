@@ -1,5 +1,5 @@
-import type { Model, ModelStatic, Sequelize } from 'sequelize';
-import { DataTypes } from 'sequelize';
+import { DataTypes, type Sequelize } from 'sequelize';
+import { BaseModel } from './base_model.js';
 
 export interface ChannelDestinationAttributes {
     id: string;
@@ -12,23 +12,22 @@ export interface ChannelDestinationAttributes {
     created_at: number;
 }
 
-export type ChannelDestinationModel =
-    Model<ChannelDestinationAttributes> & ChannelDestinationAttributes;
+export class ChannelDestination extends BaseModel {
+    declare id: string;
+    declare channel_id: string;
+    declare type: string;
+    declare config: Record<string, unknown>;
+    declare created_at: number;
 
-/** Set by `init_channel_destination` — uses the store Sequelize's Model class. */
-export let ChannelDestination: ModelStatic<ChannelDestinationModel>;
-
-export function init_channel_destination(sequelize: Sequelize): void {
-    ChannelDestination = sequelize.define(
-        'ChannelDestination',
-        {
+    static register(sequelize: Sequelize): void {
+        ChannelDestination.init({
             id: { type: DataTypes.TEXT, primaryKey: true },
             channel_id: { type: DataTypes.TEXT, allowNull: false },
             type: { type: DataTypes.TEXT, allowNull: false },
             config: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
-        },
-        {
+        }, {
+            sequelize,
             schema: 'cliq',
             tableName: 'channel_destinations',
             timestamps: false,
@@ -36,6 +35,6 @@ export function init_channel_destination(sequelize: Sequelize): void {
                 { fields: ['channel_id'], name: 'channel_destinations_channel_id_idx' },
                 { fields: ['type'], name: 'channel_destinations_type_idx' },
             ],
-        },
-    ) as ModelStatic<ChannelDestinationModel>;
+        });
+    }
 }

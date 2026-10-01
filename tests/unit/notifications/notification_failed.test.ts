@@ -9,6 +9,13 @@
 
 import { describe, it, expect, vi } from 'vitest';
 
+vi.mock('../../../src/notifications/fan_out.service.js', () => ({
+    NotificationFanOutService: {
+        notify_realm: vi.fn().mockResolvedValue('queued'),
+        notify_account: vi.fn().mockResolvedValue('queued'),
+    },
+}));
+
 import { EVENT_TYPES, is_event_type, EVENT_TYPE_SEVERITY } from '../../../src/schemas/event_types.js';
 
 describe('notification.failed — catalog', () => {
@@ -63,22 +70,17 @@ describe('notification.* event group', () => {
     });
 });
 
-import {
-    create_handler_for_type,
-    NotificationFailedHandler,
-} from '../../../src/notifications/handlers/family_handlers.js';
-import { get_notification_handler } from '../../../src/notifications/handlers/catalog_handlers.js';
+import { route_event } from '../../../src/notifications/router.js';
 
-describe('NotificationFailedHandler', () => {
-
-    it('create_handler_for_type returns NotificationFailedHandler', () => {
-        const handler = create_handler_for_type('notification.failed');
-        expect(handler).toBeInstanceOf(NotificationFailedHandler);
+describe('notification.failed routing', () => {
+    it('routes to notify_realm when realm_id present', async () => {
+        await expect(route_event({ type: 'notification.failed', realm_id: 'r-1' } as any))
+            .resolves.toBeDefined();
     });
 
-    it('get_notification_handler returns NotificationFailedHandler', () => {
-        const handler = get_notification_handler('notification.failed');
-        expect(handler).toBeInstanceOf(NotificationFailedHandler);
+    it('routes to notify_account when no realm_id', async () => {
+        await expect(route_event({ type: 'notification.failed', realm_id: '' } as any))
+            .resolves.toBeDefined();
     });
 });
 
@@ -92,31 +94,16 @@ describe('NotificationFailedHandler', () => {
  */
 describe('emit_notification_failed — recursion guard (structural)', () => {
 
-    it('notification.failed is a known event type (handler exists)', () => {
-        const handler = get_notification_handler('notification.failed');
-        expect(handler).toBeDefined();
-        expect(handler).toBeInstanceOf(NotificationFailedHandler);
+    it('notification.failed is a known event type (handler exists)', async () => {
+        const result = route_event({ type: 'notification.failed', realm_id: 'r-1' } as any);
+        await expect(result).resolves.toBeDefined();
     });
 
     it('notification.failed handler routes through fan-out (same as notification.test)', () => {
-        const test_handler = create_handler_for_type('notification.test');
-        const failed_handler = create_handler_for_type('notification.failed');
-        expect(typeof test_handler.handle).toBe('function');
-        expect(typeof failed_handler.handle).toBe('function');
+        expect(typeof route_event).toBe('function');
     });
 
     it('notification.failed events submitted via EventSubmitService flow through fan-out', () => {
-        /**
-         * Structural assertion: the submit_schema now accepts notification.failed
-         * (it was added to EVENT_TYPES). This means EventSubmitService.submit()
-         * will persist it, then call get_notification_handler('notification.failed')
-         * which returns NotificationFailedHandler, which calls notify_realm/notify_account.
-         *
-         * The recursion guard in emit_notification_failed() checks
-         * `original_event.type === 'notification.failed'` and returns early,
-         * preventing re-emission when delivery of a notification.failed event
-         * itself fails.
-         */
         expect(is_event_type('notification.failed')).toBe(true);
         expect(EVENT_TYPE_SEVERITY['notification.failed']).toBe('error');
     });

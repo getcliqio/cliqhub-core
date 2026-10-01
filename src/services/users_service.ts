@@ -1,19 +1,38 @@
 import { ApiError } from '../errors/api_error.js';
+import { get_logger } from '../lib/log.js';
 import { hash_password, verify_password } from '../auth/password.js';
 import {
     RESERVED_SCOPES, PROTECTED_USERNAMES, SLUG_PATTERN,
     EMAIL_PATTERN, MIN_PASSWORD_LENGTH, type EnvConfig,
 } from '../config/env.js';
-import type { UserRepository } from '../repositories/user_repository.js';
-import type { ScopeRepository } from '../repositories/scope_repository.js';
-import type { TokenRepository } from '../repositories/token_repository.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
-import type { OrgMemberRepository } from '../repositories/org_member_repository.js';
+import type { TokenRepository } from '../repositories/token_repository.js';
 import type { AuthContext } from '../schemas/auth_types.js';
+import { User } from '../models/user.model.js';
+import { Org } from '../models/org.model.js';
 import { Op, literal } from 'sequelize';
-import { User, ApiToken, Scope, Team, Draft, OrgMember, Org, OrgRole } from '../db/models/index.js';
+import { get_sequelize } from '../lib/sequelize.js';
+import { UserRepository } from '../repositories/user_repository.js';
+import { ApiTokenRepository } from '../repositories/api_token_repository.js';
+import { ScopeRepository } from '../repositories/scope_repository.js';
+import { TeamRepository } from '../repositories/team_repository.js';
+import { DraftRepository } from '../repositories/draft_repository.js';
+import { OrgMemberRepository } from '../repositories/org_member_repository.js';
+import { OrgRepository } from '../repositories/org_repository.js';
+import { OrgRoleRepository } from '../repositories/org_role_repository.js';
+
+const _user_repo_us = new UserRepository();
+const _api_token_repo_us = new ApiTokenRepository();
+const _scope_repo_us = new ScopeRepository();
+const _team_repo_us = new TeamRepository();
+const _draft_repo = new DraftRepository();
+const _org_member_repo_us = new OrgMemberRepository();
+const _org_repo_us = new OrgRepository();
+const _org_role_repo_us = new OrgRoleRepository();
 import { assert_access, assert_admin_access } from '../auth/assert_grant.js';
 import { RealmService } from '../services/realm.service.js';
+
+const log = get_logger('svc.users');
 
 function escape_like(input: string): string {
     return input.replace(/[%_\\]/g, '\\$&');
@@ -49,7 +68,7 @@ export class UsersService {
 
         if (auth.user!.id === target_id) return;
 
-        const target = await User.findByPk(target_id, {
+        const target = await _user_repo_us.find_by_id(target_id, {
             attributes: ['id', 'role'],
             raw: true,
         });
@@ -58,7 +77,7 @@ export class UsersService {
             throw new ApiError('forbidden', 'Cannot manage site admins', 403);
         }
 
-        const admin_orgs = await OrgMember.findAll({
+        const admin_orgs = await _org_member_repo_us.find_all_q({
             where: { user_id: auth.user!.id, role: 'admin' },
             attributes: ['org_id'],
             raw: true,
@@ -67,7 +86,7 @@ export class UsersService {
             throw new ApiError('forbidden', 'Account admin access required', 403);
         }
 
-        const shared = await OrgMember.findOne({
+        const shared = await _org_member_repo_us.find_one_q({
             where: {
                 user_id: target_id,
                 org_id: { [Op.in]: admin_orgs.map((row) => row.org_id) },
@@ -86,9 +105,12 @@ export class UsersService {
         org_id?: string;
         realm_id?: string;
         search?: string;
+        role?: 'user' | 'admin';
+        suspended?: boolean;
         limit?: number;
         offset?: number;
     }) {
+        log.debug('get', { user_id: auth.user?.id, org_id: params.org_id });
         this._require_auth(auth);
 
         if (params.realm_id) {
@@ -118,15 +140,18 @@ export class UsersService {
                 { email: { [Op.iLike]: pattern } },
             ];
         }
+        if (params.role) where.role = params.role;
+        if (params.suspended === true) where.suspended_at = { [Op.ne]: null };
+        if (params.suspended === false) where.suspended_at = null;
 
-        const total = await User.count({ where });
+        const total = await _user_repo_us.find_count_q({ where });
 
         const safe_search = params.search?.toLowerCase().replace(/'/g, "''") ?? '';
         const order: any[] = params.search
             ? [[literal(`(username = '${safe_search}')`), 'DESC'], ['created_at', 'DESC']]
             : [['created_at', 'DESC']];
 
-        const users = await User.findAll({
+        const users = await _user_repo_us.find_all_q({
             where,
             attributes: ['id', 'username', 'display_name', 'email', 'role', 'suspended_at', 'created_at'],
             order,
@@ -159,7 +184,7 @@ export class UsersService {
             ];
         }
 
-        const { count: total, rows } = await OrgMember.findAndCountAll({
+        const { count: total, rows } = await _org_member_repo_us.find_and_count_q({
             where: { org_id },
             include: [{
                 model: User,
@@ -187,6 +212,7 @@ export class UsersService {
         user_id: string;
         include_preferences?: boolean;
     }) {
+        log.debug('get_by_id', { user_id: params.user_id });
         await this._assert_can_manage_user(auth, params.user_id);
 
         const attributes = [
@@ -195,18 +221,18 @@ export class UsersService {
             ...(params.include_preferences ? ['preferences'] as const : []),
         ];
 
-        const user = await User.findByPk(params.user_id, {
+        const user = await _user_repo_us.find_by_id(params.user_id, {
             attributes: [...attributes],
             raw: true,
         });
         if (!user) throw new ApiError('not_found', 'User not found', 404);
 
         const [scope_count, team_count, token_count, draft_count, org_rows] = await Promise.all([
-            Scope.count({ where: { owner_id: user.id } }),
-            Team.count({ where: { author_id: user.id } }),
-            ApiToken.count({ where: { user_id: user.id } }),
-            Draft.count({ where: { user_id: user.id } }),
-            OrgMember.findAll({
+            _scope_repo_us.find_count_q({ where: { owner_id: user.id } }),
+            _team_repo_us.find_count_q({ where: { author_id: user.id } }),
+            _api_token_repo_us.find_count_q({ where: { user_id: user.id } }),
+            _draft_repo.find_count_q({ where: { user_id: user.id } }),
+            _org_member_repo_us.find_all_q({
                 where: { user_id: user.id },
                 include: [{ model: Org, attributes: ['id', 'slug', 'display_name'] }],
                 raw: true,
@@ -244,7 +270,9 @@ export class UsersService {
         display_name?: string;
         role?: 'user' | 'admin';
     }) {
-        this._require_admin(auth);
+        log.debug('new_user', { username: params.username });
+        // Route policy: site admin.
+        this._require_auth(auth);
 
         const { username, email, password } = params;
         const role = params.role ?? 'user';
@@ -273,7 +301,7 @@ export class UsersService {
         const pw_hash = await hash_password(password);
         const display_name = params.display_name?.trim() || slug;
 
-        const transaction = await User.sequelize!.transaction();
+        const transaction = await get_sequelize().transaction();
 
         try {
             const user_id = await this._user_repo.create(
@@ -290,6 +318,7 @@ export class UsersService {
 
             const personal = await RealmService.ensure_personal_realm(String(user_id), slug);
 
+            log.info('user_created', { user_id, username: slug });
             return {
                 id: user_id,
                 username: slug,
@@ -313,6 +342,7 @@ export class UsersService {
         email?: string;
         preferences?: Record<string, unknown>;
     }) {
+        log.debug('update', { user_id: params.user_id ?? auth.user?.id });
         this._require_auth(auth);
 
         const target_id = params.user_id || auth.user!.id;
@@ -360,7 +390,7 @@ export class UsersService {
         }
 
         if (!is_self) {
-            const user = await this._user_repo.find_by_id(target_id);
+            const user = await this._user_repo.find_profile_by_id(target_id);
             await this._audit_repo.create(auth.user!.id, 'user.update', 'user', target_id, {
                 username: user?.username,
                 ...updates,
@@ -368,18 +398,20 @@ export class UsersService {
             });
         }
 
-        const user = await this._user_repo.find_by_id(target_id);
+        const user = await this._user_repo.find_profile_by_id(target_id);
         return { updated: true, user };
     }
 
     // ── Delete user ─────────────────────────────────────────────────
 
     async delete(auth: AuthContext, params: { user_id: string }) {
-        this._require_admin(auth);
+        log.debug('delete', { user_id: params.user_id });
+        // Route policy: site admin.
+        this._require_auth(auth);
 
         if (params.user_id === auth.user!.id) throw new ApiError('invalid_params', 'Cannot delete yourself', 422);
 
-        const user = await User.findByPk(params.user_id, { attributes: ['id', 'username'], raw: true });
+        const user = await _user_repo_us.find_by_id(params.user_id, { attributes: ['id', 'username'], raw: true });
         if (!user) throw new ApiError('not_found', 'User not found', 404);
 
         if (PROTECTED_USERNAMES.includes(user.username)) {
@@ -387,13 +419,13 @@ export class UsersService {
         }
 
         const [team_count, draft_count, token_count, scope_count] = await Promise.all([
-            Team.count({ where: { author_id: user.id } }),
-            Draft.count({ where: { user_id: user.id } }),
-            ApiToken.count({ where: { user_id: user.id } }),
-            Scope.count({ where: { owner_id: user.id } }),
+            _team_repo_us.find_count_q({ where: { author_id: user.id } }),
+            _draft_repo.find_count_q({ where: { user_id: user.id } }),
+            _api_token_repo_us.find_count_q({ where: { user_id: user.id } }),
+            _scope_repo_us.find_count_q({ where: { owner_id: user.id } }),
         ]);
 
-        await User.destroy({ where: { id: user.id } });
+        await _user_repo_us.delete_where_q({ where: { id: user.id } });
 
         await this._audit_repo.create(auth.user!.id, 'user.delete', 'user', user.id, {
             username: user.username,
@@ -403,17 +435,20 @@ export class UsersService {
             scopes_deleted: scope_count,
         });
 
+        log.info('user_deleted', { user_id: params.user_id, username: user.username });
         return { deleted: true };
     }
 
     // ── Suspend / Unsuspend ─────────────────────────────────────────
 
     async suspend(auth: AuthContext, params: { user_id: string; reason?: string }) {
-        this._require_admin(auth);
+        log.debug('suspend', { user_id: params.user_id });
+        // Route policy: site admin.
+        this._require_auth(auth);
 
         if (params.user_id === auth.user!.id) throw new ApiError('invalid_params', 'Cannot suspend yourself', 422);
 
-        const user = await User.findByPk(params.user_id, { attributes: ['id', 'username'], raw: true });
+        const user = await _user_repo_us.find_by_id(params.user_id, { attributes: ['id', 'username'], raw: true });
         if (!user) throw new ApiError('not_found', 'User not found', 404);
 
         if (PROTECTED_USERNAMES.includes(user.username)) {
@@ -421,46 +456,52 @@ export class UsersService {
         }
 
         const reason = params.reason || '';
-        await User.update(
-            { suspended_at: new Date(), suspended_reason: reason },
-            { where: { id: user.id } },
+        await _user_repo_us.update_where(
+            { id: user.id } as any,
+            { suspended_at: new Date(), suspended_reason: reason } as any,
         );
 
         await this._audit_repo.create(auth.user!.id, 'user.suspend', 'user', user.id, { username: user.username, reason });
 
+        log.info('user_suspended', { user_id: params.user_id, username: user.username });
         return { suspended: true };
     }
 
     async unsuspend(auth: AuthContext, params: { user_id: string }) {
-        this._require_admin(auth);
+        log.debug('unsuspend', { user_id: params.user_id });
+        // Route policy: site admin.
+        this._require_auth(auth);
 
-        const user = await User.findByPk(params.user_id, { attributes: ['id', 'username'], raw: true });
+        const user = await _user_repo_us.find_by_id(params.user_id, { attributes: ['id', 'username'], raw: true });
         if (!user) throw new ApiError('not_found', 'User not found', 404);
 
-        await User.update(
-            { suspended_at: null, suspended_reason: '' },
-            { where: { id: user.id } },
+        await _user_repo_us.update_where(
+            { id: user.id } as any,
+            { suspended_at: null, suspended_reason: '' } as any,
         );
 
         await this._audit_repo.create(auth.user!.id, 'user.unsuspend', 'user', user.id, { username: user.username });
 
+        log.info('user_unsuspended', { user_id: params.user_id, username: user.username });
         return { suspended: false };
     }
 
     // ── Reset password ──────────────────────────────────────────────
 
     async reset_password(auth: AuthContext, params: { user_id: string; new_password: string }) {
-        await this._assert_can_manage_user(auth, params.user_id);
+        log.debug('reset_password', { user_id: params.user_id });
+        // Route policy: site admin (org admins do not reset passwords).
+        this._require_auth(auth);
 
         if (params.new_password.length < MIN_PASSWORD_LENGTH) {
             throw new ApiError('invalid_params', 'Password must be at least 8 characters', 422);
         }
 
-        const user = await User.findByPk(params.user_id, { attributes: ['id', 'username'], raw: true });
+        const user = await _user_repo_us.find_by_id(params.user_id, { attributes: ['id', 'username'], raw: true });
         if (!user) throw new ApiError('not_found', 'User not found', 404);
 
         const pw_hash = await hash_password(params.new_password);
-        await User.update({ password_hash: pw_hash }, { where: { id: user.id } });
+        await _user_repo_us.update_where({ id: user.id } as any, { password_hash: pw_hash } as any);
 
         await this._audit_repo.create(auth.user!.id, 'user.reset_password', 'user', user.id, { username: user.username });
 
@@ -470,13 +511,15 @@ export class UsersService {
     // ── Set role ────────────────────────────────────────────────────
 
     async set_role(auth: AuthContext, params: { user_id: string; role: 'user' | 'admin' }) {
-        this._require_admin(auth);
+        log.debug('set_role', { user_id: params.user_id, role: params.role });
+        // Route policy: site admin.
+        this._require_auth(auth);
 
         if (params.user_id === auth.user!.id && params.role !== 'admin') {
             throw new ApiError('invalid_params', 'Cannot demote yourself', 422);
         }
 
-        const user = await User.findByPk(params.user_id, { attributes: ['id', 'username', 'role'], raw: true });
+        const user = await _user_repo_us.find_by_id(params.user_id, { attributes: ['id', 'username', 'role'], raw: true });
         if (!user) throw new ApiError('not_found', 'User not found', 404);
 
         if (PROTECTED_USERNAMES.includes(user.username) && params.role !== 'admin') {
@@ -484,12 +527,12 @@ export class UsersService {
         }
 
         if (user.role === 'admin' && params.role === 'user') {
-            const admin_count = await User.count({ where: { role: 'admin' } });
+            const admin_count = await _user_repo_us.find_count_q({ where: { role: 'admin' } });
             if (admin_count <= 1) throw new ApiError('invalid_params', 'Cannot remove the last admin', 422);
         }
 
         const old_role = user.role;
-        await User.update({ role: params.role }, { where: { id: user.id } });
+        await _user_repo_us.update_where({ id: user.id } as any, { role: params.role } as any);
 
         await this._audit_repo.create(auth.user!.id, 'user.set_role', 'user', user.id, {
             username: user.username,
@@ -509,17 +552,14 @@ export class UsersService {
         org_id: string;
         role_id: string;
     }) {
+        log.debug('update_role', { user_id: params.user_id, org_id: params.org_id, role_id: params.role_id });
         this._require_auth(auth);
 
-        const { require_permission } = await import('../auth/permissions.js');
-        await require_permission(params.org_id, auth.user!.id, 'org.members.manage', {
-            site_role: auth.user!.role,
-        });
-
+        // Route policy: org.members.manage in org_id.
         const member = await this._org_member_repo.find_by_org_and_user(params.org_id, params.user_id);
         if (!member) throw new ApiError('not_found', 'Member not found', 404);
 
-        const target_role = await OrgRole.findOne({
+        const target_role = await _org_role_repo_us.find_one_q({
             where: { id: params.role_id, org_id: params.org_id },
         });
         if (!target_role) throw new ApiError('not_found', 'Role not found in this org', 404);
@@ -533,11 +573,11 @@ export class UsersService {
 
         // Last-owner protection: do not demote the last member on the system owner role.
         if (member.role_id) {
-            const current_role = await OrgRole.findOne({
+            const current_role = await _org_role_repo_us.find_one_q({
                 where: { id: member.role_id, org_id: params.org_id },
             });
             if (current_role?.is_system && current_role.id !== params.role_id) {
-                const owner_count = await OrgMember.count({
+                const owner_count = await _org_member_repo_us.find_count_q({
                     where: { org_id: params.org_id, role_id: current_role.id },
                 });
                 if (owner_count <= 1) {
@@ -557,9 +597,9 @@ export class UsersService {
             ? 'admin'
             : 'member';
 
-        await OrgMember.update(
-            { role_id: params.role_id, role: legacy_role },
-            { where: { org_id: params.org_id, user_id: params.user_id } },
+        await _org_member_repo_us.update_where(
+            { org_id: params.org_id, user_id: params.user_id } as any,
+            { role_id: params.role_id, role: legacy_role } as any,
         );
 
         return {
@@ -574,6 +614,7 @@ export class UsersService {
     // ── Change password (self) ──────────────────────────────────────
 
     async change_password(auth: AuthContext, params: { current_password: string; new_password: string }) {
+        log.debug('change_password', { user_id: auth.user?.id });
         this._require_auth(auth);
 
         if (params.new_password.length < MIN_PASSWORD_LENGTH) {

@@ -1,4 +1,5 @@
 import { ApiError } from '../errors/api_error.js';
+import { get_logger } from '../lib/log.js';
 import { RESERVED_SCOPES, SLUG_PATTERN } from '../config/env.js';
 import type { ScopeRepository } from '../repositories/scope_repository.js';
 import type { ScopeMemberRepository } from '../repositories/scope_member_repository.js';
@@ -7,9 +8,13 @@ import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { OrgRepository } from '../repositories/org_repository.js';
 import type { OrgMemberRepository } from '../repositories/org_member_repository.js';
 import type { AuthContext } from '../schemas/auth_types.js';
-import { User, Scope, Org } from '../db/models/index.js';
-import { Op, literal } from 'sequelize';
+import { UserRepository } from '../repositories/user_repository.js';
+import { Op } from 'sequelize';
 import { assert_admin_access } from '../auth/assert_grant.js';
+
+const log = get_logger('svc.scopes');
+
+const user_repo = new UserRepository();
 
 function escape_like(input: string): string {
     return input.replace(/[%_\\]/g, '\\$&');
@@ -39,7 +44,8 @@ export class ScopesService {
         this._require_auth(auth);
         if (auth.user!.role === 'admin') return;
         const { require_permission } = await import('../auth/permissions.js');
-        await require_permission(org_id, auth.user!.id, 'org.members.manage', {
+        // Same permission as the route policy; checked here because the org comes from the scope row.
+        await require_permission(org_id, auth.user!.id, 'org.scopes.manage', {
             site_role: auth.user!.role,
         });
     }
@@ -72,13 +78,14 @@ export class ScopesService {
         user_id: string,
         params: { org_id?: string; search?: string; limit?: number; offset?: number },
     ) {
+        log.debug('get_for_user', { user_id, org_id: params.org_id });
         this._require_auth(auth);
         const limit = Math.min(params.limit ?? 50, 100);
         const offset = params.offset ?? 0;
 
         const where: Record<string, unknown> = {};
 
-        const { ScopeMember } = await import('../db/models/index.js');
+        const { ScopeMember } = await import('../models/index.js');
         const member_rows = await ScopeMember.findAll({
             where: { user_id },
             attributes: ['scope_id'],
@@ -104,9 +111,8 @@ export class ScopesService {
             });
         }
 
-        const total = await Scope.count({ where });
-        const rows = await Scope.findAll({
-            where,
+        const total = await this._scope_repo.find_count(where as any);
+        const rows = await this._scope_repo.find_all(where as any, {
             attributes: ['id', 'slug', 'display_name', 'owner_id', 'org_id', 'visibility', 'scope_type', 'created_at'],
             order: [['slug', 'ASC']],
             limit,
@@ -136,6 +142,7 @@ export class ScopesService {
         auth: AuthContext,
         params: { org_id?: string; search?: string; limit?: number; offset?: number },
     ) {
+        log.debug('list_catalog', { org_id: params.org_id });
         this._require_auth(auth);
         this._require_scopes_admin(auth);
         const limit = Math.min(params.limit ?? 50, 100);
@@ -155,19 +162,11 @@ export class ScopesService {
             });
         }
 
-        const total = await Scope.count({ where });
-        const rows = await Scope.findAll({
-            where,
-            attributes: [
-                'id', 'slug', 'display_name', 'owner_id', 'org_id', 'visibility', 'scope_type', 'created_at',
-                [literal('(SELECT count(*) FROM teams t WHERE t.scope = "Scope"."slug")'), 'team_count'],
-            ],
-            include: [{ model: User, attributes: ['username'], required: false }],
+        const total = await this._scope_repo.find_count(where as any);
+        const rows = await this._scope_repo.find_catalog_page(where as any, {
             order: [['created_at', 'DESC']],
             limit,
             offset,
-            raw: true,
-            nest: true,
         });
 
         const scopes = rows.map((s: any) => ({
@@ -195,6 +194,7 @@ export class ScopesService {
         org_slug?: string;
         org_id?: string;
     }) {
+        log.debug('new_scope', { slug: params.slug, org_id: params.org_id });
         this._require_auth(auth);
 
         const slug = params.slug.toLowerCase();
@@ -238,11 +238,7 @@ export class ScopesService {
 
         let owner_id = auth.user!.id;
         if (params.owner_username) {
-            const owner = await User.findOne({
-                where: { username: params.owner_username.toLowerCase() },
-                attributes: ['id'],
-                raw: true,
-            });
+            const owner = await user_repo.find_one({ username: params.owner_username.toLowerCase() } as any);
             if (!owner) throw new ApiError('not_found', `User '${params.owner_username}' not found`, 404);
             owner_id = owner.id;
             if (manager === 'org' && owner_id !== auth.user!.id) {
@@ -284,6 +280,7 @@ export class ScopesService {
             org_id,
         });
 
+        log.info('scope_created', { scope_id, slug });
         return { id: scope_id, slug };
     }
 
@@ -293,16 +290,14 @@ export class ScopesService {
         display_name?: string;
         owner_id?: string;
     }) {
+        log.debug('update', { scope_id: params.scope_id });
         this._require_scopes_admin(auth);
 
-        const scope = await Scope.findByPk(params.scope_id, {
-            attributes: ['id', 'slug', 'visibility', 'display_name', 'owner_id', 'scope_type'],
-            raw: true,
-        });
+        const scope = await this._scope_repo.find_by_id(params.scope_id);
         if (!scope) throw new ApiError('not_found', 'Scope not found', 404);
 
         if (params.owner_id !== undefined) {
-            const owner = await User.findByPk(params.owner_id, { attributes: ['id'], raw: true });
+            const owner = await user_repo.find_by_id(params.owner_id);
             if (!owner) throw new ApiError('not_found', 'Owner user not found', 404);
         }
 
@@ -329,24 +324,23 @@ export class ScopesService {
 
         if (Object.keys(updates).length === 0) return { updated: false };
 
-        await Scope.update(updates, { where: { id: scope.id } });
+        await this._scope_repo.update_where({ id: scope.id } as any, updates);
         await this._audit_repo.create(auth.user!.id, 'scope.update', 'scope', scope.slug, changes);
+        log.info('scope_updated', { scope_id: params.scope_id });
         return { updated: true };
     }
 
     async delete_scope(auth: AuthContext, params: { scope_id: string }) {
+        log.debug('delete_scope', { scope_id: params.scope_id });
         this._require_auth(auth);
 
-        const scope = await Scope.findByPk(params.scope_id, {
-            attributes: ['id', 'slug', 'org_id'],
-            raw: true,
-        });
+        const scope = await this._scope_repo.find_by_id(params.scope_id);
         if (!scope) throw new ApiError('not_found', 'Scope not found', 404);
 
         await this._require_scope_manager(auth, scope.org_id);
 
         if (scope.org_id != null) {
-            const org = await Org.findByPk(scope.org_id, { attributes: ['slug'], raw: true });
+            const org = await this._org_repo.find_by_id(scope.org_id);
             if (org && scope.slug === org.slug) {
                 throw new ApiError('conflict', 'Cannot delete the default org scope', 409);
             }
@@ -364,25 +358,24 @@ export class ScopesService {
         await this._scope_member_repo.delete_by_scope_id(scope.id);
         await this._scope_repo.delete_by_id(scope.id);
         await this._audit_repo.create(auth.user!.id, 'scope.delete', 'scope', scope.slug, {});
+        log.info('scope_deleted', { scope_id: params.scope_id });
         return { deleted: true };
     }
 
     async add_user(auth: AuthContext, params: { scope_id: string; user_id: string }) {
+        log.debug('add_user', { scope_id: params.scope_id, user_id: params.user_id });
         this._require_auth(auth);
 
-        const scope = await Scope.findByPk(params.scope_id, {
-            attributes: ['id', 'slug', 'org_id'],
-            raw: true,
-        });
-        if (!scope) throw new ApiError('not_found', 'Scope not found', 404);
+        const scope2 = await this._scope_repo.find_by_id(params.scope_id);
+        if (!scope2) throw new ApiError('not_found', 'Scope not found', 404);
 
-        await this._require_scope_manager(auth, scope.org_id);
+        await this._require_scope_manager(auth, scope2.org_id);
 
-        if (scope.org_id != null) {
-            const member = await this._org_member_repo.find_by_org_and_user(scope.org_id, params.user_id);
+        if (scope2.org_id != null) {
+            const member = await this._org_member_repo.find_by_org_and_user(scope2.org_id, params.user_id);
             if (!member) throw new ApiError('conflict', 'User is not a member of this org', 409);
         } else {
-            const user = await User.findByPk(params.user_id, { attributes: ['id'], raw: true });
+            const user = await user_repo.find_by_id(params.user_id);
             if (!user) throw new ApiError('not_found', 'User not found', 404);
         }
 
@@ -390,26 +383,24 @@ export class ScopesService {
         if (existing) throw new ApiError('conflict', 'User is already assigned to this scope', 409);
 
         await this._scope_member_repo.create(params.scope_id, params.user_id);
-        await this._audit_repo.create(auth.user!.id, 'scope.member.add', 'scope', scope.slug, {
+        await this._audit_repo.create(auth.user!.id, 'scope.member.add', 'scope', scope2.slug, {
             user_id: params.user_id,
         });
         return { assigned: true };
     }
 
     async remove_user(auth: AuthContext, params: { scope_id: string; user_id: string }) {
+        log.debug('remove_user', { scope_id: params.scope_id, user_id: params.user_id });
         this._require_auth(auth);
 
-        const scope = await Scope.findByPk(params.scope_id, {
-            attributes: ['id', 'slug', 'org_id'],
-            raw: true,
-        });
-        if (!scope) throw new ApiError('not_found', 'Scope not found', 404);
+        const scope3 = await this._scope_repo.find_by_id(params.scope_id);
+        if (!scope3) throw new ApiError('not_found', 'Scope not found', 404);
 
-        await this._require_scope_manager(auth, scope.org_id);
+        await this._require_scope_manager(auth, scope3.org_id);
 
         const count = await this._scope_member_repo.delete_by_scope_and_user(params.scope_id, params.user_id);
         if (count > 0) {
-            await this._audit_repo.create(auth.user!.id, 'scope.member.remove', 'scope', scope.slug, {
+            await this._audit_repo.create(auth.user!.id, 'scope.member.remove', 'scope', scope3.slug, {
                 user_id: params.user_id,
             });
         }

@@ -24,5 +24,5 @@ export {
 } from './channel_config.js';
 
 export { get_deliverer, DELIVERER_BY_PROVIDER } from './deliverers/index.js';
-export { get_notification_handler, HANDLER_BY_EVENT_TYPE } from './handlers/index.js';
+export { route_event } from './router.js';
 export { NotificationFanOutService } from './fan_out.service.js';

@@ -13,7 +13,7 @@ import {
     close_live_hub_app,
     open_live_hub_app,
 } from './helpers/live_hub_app.js';
-import { User, OrgMember } from '../../src/db/models/index.js';
+import { User, OrgMember } from '../../src/models/index.js';
 import {
     Realm,
     RealmMember,
@@ -401,7 +401,7 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
         expect(upd.body.providers?.svantic?.client_secret_set).toBe(true);
         expect(upd.body.org_id).toBeTruthy();
 
-        const { Org } = await import('../../src/db/models/index.js');
+        const { Org } = await import('../../src/models/index.js');
         const org = await Org.findByPk(upd.body.org_id as number);
         expect(org).toBeTruthy();
         expect(org!.mesh_providers.svantic.api_url).toBe(api_url);

@@ -34,13 +34,6 @@ vi.mock('../../../src/models/index.js', async (importOriginal) => {
         Realm: {
             findByPk: vi.fn(),
         },
-    };
-});
-
-vi.mock('../../../src/db/models/index.js', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('../../../src/db/models/index.js')>();
-    return {
-        ...actual,
         Org: {
             findOne: vi.fn(),
         },
@@ -49,7 +42,7 @@ vi.mock('../../../src/db/models/index.js', async (importOriginal) => {
 
 import { RealmController } from '../../../src/controllers/realms_controller.js';
 import { Realm } from '../../../src/models/index.js';
-import { Org } from '../../../src/db/models/index.js';
+import { Org } from '../../../src/models/index.js';
 
 const mock_realm = {
     create: vi.fn().mockResolvedValue({ id: REALM_A, slug: 'prod', org_id: ORG_A }),
@@ -169,17 +162,6 @@ describe('RealmController org_id tenancy', () => {
         expect(mock_realm.create).not.toHaveBeenCalled();
     });
 
-    it('create rejects org_id not in memberships with 403', async () => {
-        const res = mock_res();
-        await expect(
-            controller.create(
-                make_req({ org_id: ORG_B, slug: 'prod', name: 'Prod' }, pat_auth([ORG_A])),
-                res,
-            ),
-        ).rejects.toBeInstanceOf(ApiError);
-        expect(mock_realm.create).not.toHaveBeenCalled();
-    });
-
     it('create uses body org_id, not a header fallback', async () => {
         const res = mock_res();
         const req = make_req({ org_id: ORG_A, slug: 'prod', name: 'Prod' }, pat_auth([ORG_A]));
@@ -244,5 +226,13 @@ describe('RealmController org_id tenancy', () => {
         );
         expect(Realm.findByPk).not.toHaveBeenCalled();
         expect(mock_realm.remove).toHaveBeenCalled();
+    });
+});
+
+describe('org tenancy is the route policy\'s job', () => {
+    it('/v1/realms/create with an org you are not in → 404', async () => {
+        const { policy_status } = await import('../../helpers/policy_decision.js');
+        const FOREIGN = '00000000-0000-4000-8000-0000000000ff';
+        expect(await policy_status('POST /v1/realms/create', { id: 'u1' }, { org_id: FOREIGN, slug: 'x', name: 'x' })).toBe(404);
     });
 });

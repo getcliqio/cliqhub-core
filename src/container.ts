@@ -1,9 +1,9 @@
 import type { EnvConfig } from './config/env.js';
 import { init_sequelize } from './db/sequelize.js';
-import { migrate_hub_schema } from './db/hub_schema_migrations.js';
-import { migrate_org_mesh_from_account } from './db/migrate_org_mesh.js';
-import { migrate_org_roles } from './db/migrate_org_roles.js';
-import { init_models } from './db/models/index.js';
+import { migrate_hub_schema, move_registry_to_cliq_schema } from './models/migrations/hub_schema_migrations.js';
+import { migrate_org_mesh_from_account } from './models/migrations/migrate_org_mesh.js';
+import { migrate_org_roles } from './models/migrations/migrate_org_roles.js';
+import { init_models } from './models/index.js';
 import { get_logger } from './lib/log.js';
 import { UserRepository } from './repositories/user_repository.js';
 import { TokenRepository } from './repositories/token_repository.js';
@@ -67,6 +67,7 @@ export interface Container {
 export async function create_container(config: EnvConfig): Promise<Container> {
     const sequelize = init_sequelize(config.database_url);
     init_models(sequelize);
+    await move_registry_to_cliq_schema(sequelize);
     await sequelize.sync();
     await migrate_hub_schema(sequelize);
 
@@ -128,6 +129,7 @@ export async function create_container(config: EnvConfig): Promise<Container> {
 
     const invitations_service = new InvitationsService(
         org_repo, org_member_repo, scope_repo, user_repo, config,
+        (user_id) => auth_service.mint_session_pat(user_id),
     );
     const invitations_controller = new InvitationsController(invitations_service);
 

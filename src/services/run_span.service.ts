@@ -13,8 +13,13 @@ import { EventEmitter } from 'node:events';
 import { QueryTypes } from 'sequelize';
 
 import { get_sequelize } from '../lib/sequelize.js';
-import { RunSpan } from '../models/run_span.model.js';
-import { to_telemetry_span_data } from '../types/mappers.js';
+import { get_logger } from '../lib/log.js';
+import { RunSpanRepository } from '../repositories/run_span_repository.js';
+
+const log = get_logger('svc.run_span');
+
+const _run_span_repo = new RunSpanRepository();
+import { to_telemetry_span_data } from '../lib/telemetry_mapper.js';
 import type { ReportTelemetryInput } from '../schemas/telemetry_types.js';
 import type { TelemetrySpanData } from '../schemas/telemetry_types.js';
 
@@ -44,6 +49,7 @@ export class RunSpanService {
      * count of *newly inserted* rows so the client can log.
      */
     static async ingest(batch: TracesIngestPayload): Promise<number> {
+        log.debug('ingest', { run_id: batch.run_id, span_count: batch.spans.length });
         // Empty batches are a no-op (Zod requires min 1 on the wire; keep guard for callers).
         if (!batch.spans.length) return 0;
 
@@ -93,6 +99,7 @@ export class RunSpanService {
         });
 
         if (inserted.length === 0) return 0;
+        log.info('spans_ingested', { run_id: batch.run_id, count: inserted.length });
 
         // Fan out only the freshly inserted spans (dedup after retries).
         const inserted_ids = new Set(inserted.map((r) => r.span_id));
@@ -128,7 +135,8 @@ export class RunSpanService {
 
     /** List spans for a run as wire DTOs, ordered by start time (oldest first). */
     static async list(run_id: string): Promise<TelemetrySpanData[]> {
-        const rows = await RunSpan.findAll({
+        log.debug('list', { run_id });
+        const rows = await _run_span_repo.find_all_q({
             where: { run_id },
             order: [['start_unix_nano', 'ASC']],
         });
@@ -137,7 +145,10 @@ export class RunSpanService {
 
     /** Delete all spans for a run (used by run purge / delete cascade). */
     static async delete_by_run(run_id: string): Promise<number> {
-        return RunSpan.destroy({ where: { run_id } });
+        log.debug('delete_by_run', { run_id });
+        const count = await _run_span_repo.delete_where({ run_id } as any);
+        if (count > 0) log.info('spans_deleted', { run_id, count });
+        return count;
     }
 
     private static duration_ms(start_nano: string, end_nano: string): number {

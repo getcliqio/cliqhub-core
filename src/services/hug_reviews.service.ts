@@ -4,10 +4,19 @@ import { Op } from 'sequelize';
 
 import { ApiError } from '../lib/api_error.js';
 import { EventSubmitService } from './events_service.js';
-import { Review } from '../models/review.model.js';
-import { ReviewNotification } from '../models/review_notification.model.js';
-import { RealmMember, Run, RunEvent } from '../models/index.js';
-import { User } from '../db/models/index.js';
+import { ReviewRepository } from '../repositories/review_repository.js';
+import { ReviewNotificationRepository } from '../repositories/review_notification_repository.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
+import { RunRepository } from '../repositories/run_repository.js';
+import { RunEventRepository } from '../repositories/run_event_repository.js';
+import { UserRepository } from '../repositories/user_repository.js';
+
+const _review_repo_hr = new ReviewRepository();
+const _review_notif_repo_hr = new ReviewNotificationRepository();
+const _realm_member_repo_hr = new RealmMemberRepository();
+const _run_repo_hr = new RunRepository();
+const _run_event_repo = new RunEventRepository();
+const _user_repo_hr = new UserRepository();
 import { ensure_per_user_channel } from './per_user_channel.service.js';
 import { load_env } from '../config/env.js';
 import {
@@ -24,6 +33,7 @@ import {
 	type ResolvedGroup,
 } from './reviewer_resolution.service.js';
 import { get_logger } from '../lib/log.js';
+import { visible_realm_ids } from '../auth/route_policy/visible.js';
 
 /**
  * When a review was created for `phase.input_required` but the payload
@@ -59,7 +69,7 @@ async function _backfill_inputs_schema(
 	if (!phase || !run_id) return payload;
 
 	try {
-		const rows = await RunEvent.findAll({
+		const rows = await _run_event_repo.find_all_q({
 			where: { run_id, event_type: 'phase.input_required', phase },
 			order: [['id', 'DESC']],
 			limit: 1,
@@ -273,7 +283,7 @@ export class HugReviewsService {
 		 * and policy evaluation works correctly.
 		 */
 		if (resolved_groups.length === 0 && input.realm_id) {
-			const realm_members = await RealmMember.findAll({
+			const realm_members = await _realm_member_repo_hr.find_all_q({
 				where: { realm_id: input.realm_id, member_type: 'user' },
 				attributes: ['member_id'],
 			});
@@ -287,7 +297,7 @@ export class HugReviewsService {
 
 			for (const rm of realm_members) {
 				const user_id = String(rm.member_id);
-				const user = await User.findByPk(user_id, { attributes: ['id', 'username'] });
+				const user = await _user_repo_hr.find_by_id(user_id, { attributes: ['id', 'username'] });
 				if (!user) continue;
 
 				let channel_id: string | null = null;
@@ -334,7 +344,7 @@ export class HugReviewsService {
 			})),
 		};
 
-		await Review.create({
+		await _review_repo_hr.create_one({
 			id,
 			run_id: input.run_id,
 			daemon_id: input.daemon_id,
@@ -373,7 +383,7 @@ export class HugReviewsService {
 			);
 
 			if (notification_rows.length > 0) {
-				await ReviewNotification.bulkCreate(notification_rows);
+				await _review_notif_repo_hr.bulk_create(notification_rows);
 				log.info('review_notifications_created', {
 					review_id: id,
 					count: notification_rows.length,
@@ -438,7 +448,7 @@ export class HugReviewsService {
 	}
 
 	static async get(review_id: string): Promise<ReviewDto> {
-		const review = await Review.findByPk(review_id);
+		const review = await _review_repo_hr.find_by_id(review_id);
 		if (!review) throw ApiError.not_found('Review not found');
 
 		const { ReviewMessage } = await import('../models/review_message.model.js');
@@ -447,7 +457,7 @@ export class HugReviewsService {
 			review.realm_id ? load_realm_info_map([review.realm_id]) : Promise.resolve(new Map()),
 			load_artifacts_for_run(review.run_id),
 			_backfill_inputs_schema(review.payload, review.run_id),
-			ReviewNotification.findAll({
+			_review_notif_repo_hr.find_all_q({
 				where: { review_id },
 				order: [['group_idx', 'ASC'], ['channel_target', 'ASC']],
 			}),
@@ -487,7 +497,7 @@ export class HugReviewsService {
 	}
 
 	static async submit_verdict(input: SubmitVerdictInput): Promise<{ status: string }> {
-		const review = await Review.findByPk(input.review_id);
+		const review = await _review_repo_hr.find_by_id(input.review_id);
 		if (!review) throw ApiError.not_found('Review not found');
 
 		if (review.status !== 'pending') {
@@ -512,14 +522,14 @@ export class HugReviewsService {
 		}
 
 		/** Record response on the notification row (audit trail). */
-		await ReviewNotification.update(
+		await _review_notif_repo_hr.update_where(
+			{ id: input.notification_id, review_id: input.review_id } as any,
 			{
 				responded_by: input.responded_by ?? null,
 				responded_at: new Date(),
 				action: input.action,
 				comment: input.fields?.['comment'] ? String(input.fields['comment']) : null,
-			},
-			{ where: { id: input.notification_id, review_id: input.review_id } },
+			} as any,
 		);
 
 		/** Evaluate policy to decide if the review is fully decided. */
@@ -545,9 +555,9 @@ export class HugReviewsService {
 		};
 		if (input.fields?.['comment']) verdict['comment'] = input.fields['comment'];
 
-		const [updated] = await Review.update(
-			{ verdict, status: 'decided' },
-			{ where: { id: input.review_id, status: 'pending' } },
+		const [updated] = await _review_repo_hr.update_where(
+			{ id: input.review_id, status: 'pending' } as any,
+			{ verdict, status: 'decided' } as any,
 		);
 		if (!updated) throw ApiError.conflict('Review is no longer pending');
 
@@ -555,7 +565,7 @@ export class HugReviewsService {
 		 *  review deliver to the same channels the request was sent to. */
 		let review_channels: string[] = [];
 		try {
-			const notif_rows = await ReviewNotification.findAll({
+			const notif_rows = await _review_notif_repo_hr.find_all_q({
 				where: { review_id: input.review_id },
 				attributes: ['channel_id'],
 			});
@@ -675,19 +685,19 @@ export class HugReviewsService {
 		review_id: string,
 		user_id: string,
 	): Promise<boolean> {
-		const direct = await ReviewNotification.findOne({
+		const direct = await _review_notif_repo_hr.find_one_q({
 			where: { review_id, user_id },
 			attributes: ['id'],
 		});
 		if (direct) return true;
 
-		const shared = await ReviewNotification.findOne({
+		const shared = await _review_notif_repo_hr.find_one_q({
 			where: { review_id, user_id: { [Op.is]: null } },
 			attributes: ['id'],
 		});
 		if (!shared) return false;
 
-		const review = await Review.findByPk(review_id, { attributes: ['realm_id'] });
+		const review = await _review_repo_hr.find_by_id(review_id, { attributes: ['realm_id'] });
 		if (!review?.realm_id) return false;
 
 		return _is_realm_member(review.realm_id, user_id);
@@ -709,7 +719,7 @@ export class HugReviewsService {
 		review_id: string,
 		user_id: string,
 	): Promise<void> {
-		const notif = await ReviewNotification.findOne({
+		const notif = await _review_notif_repo_hr.find_one_q({
 			where: { id: notification_id, review_id },
 		});
 		if (!notif) {
@@ -729,7 +739,7 @@ export class HugReviewsService {
 		}
 
 		/** Shared-channel: require membership in the review's realm. */
-		const review = await Review.findByPk(review_id, { attributes: ['realm_id'] });
+		const review = await _review_repo_hr.find_by_id(review_id, { attributes: ['realm_id'] });
 		if (!review?.realm_id) {
 			throw ApiError.forbidden('Review has no realm scope for broadcast verdict');
 		}
@@ -757,16 +767,16 @@ export class HugReviewsService {
 	}
 
 	static async ack(review_id: string, run_id: string): Promise<{ status: string }> {
-		const review = await Review.findByPk(review_id);
+		const review = await _review_repo_hr.find_by_id(review_id);
 		if (!review) throw ApiError.not_found('Review not found');
 		if (review.run_id !== run_id) throw ApiError.forbidden('Run ID mismatch');
 		if (review.status !== 'decided') {
 			throw ApiError.conflict(`Cannot ack review in status: ${review.status}`);
 		}
 
-		await Review.update(
-			{ status: 'completed', completed_at: new Date() },
-			{ where: { id: review_id, status: 'decided' } },
+		await _review_repo_hr.update_where(
+			{ id: review_id, status: 'decided' } as any,
+			{ status: 'completed', completed_at: new Date() } as any,
 		);
 		return { status: 'completed' };
 	}
@@ -777,13 +787,13 @@ export class HugReviewsService {
 	 * original request — purely informational.
 	 */
 	static async remind(review_id: string): Promise<{ ok: boolean }> {
-		const review = await Review.findByPk(review_id);
+		const review = await _review_repo_hr.find_by_id(review_id);
 		if (!review) throw ApiError.not_found('Review not found');
 		if (review.status !== 'pending') return { ok: false };
 
 		/** Do not remind for terminal runs (cancel/fail left the review pending). */
 		if (review.run_id) {
-			const run = await Run.findByPk(review.run_id, { attributes: ['state'] });
+			const run = await _run_repo_hr.find_by_id(review.run_id, { attributes: ['state'] });
 			const state = run?.get('state') as string | undefined;
 			if (state && !['running', 'awaiting_input'].includes(state)) {
 				return { ok: false };
@@ -791,7 +801,7 @@ export class HugReviewsService {
 		}
 
 		/** Collect channels from the notification rows. */
-		const notif_rows = await ReviewNotification.findAll({
+		const notif_rows = await _review_notif_repo_hr.find_all_q({
 			where: { review_id },
 			attributes: ['channel_id'],
 		});
@@ -804,9 +814,9 @@ export class HugReviewsService {
 		];
 
 		await Promise.all([
-			Review.update(
-				{ last_reminded_at: new Date() },
-				{ where: { id: review_id } },
+			_review_repo_hr.update_where(
+				{ id: review_id } as any,
+				{ last_reminded_at: new Date() } as any,
 			),
 			EventSubmitService.submit({
 				type: 'hug.review_reminded',
@@ -827,21 +837,21 @@ export class HugReviewsService {
 	 * semantics clear; stops further `hug.review_reminded` growth.
 	 */
 	static async expire_pending_for_run(run_id: string): Promise<number> {
-		const pending = await Review.findAll({
+		const pending = await _review_repo_hr.find_all_q({
 			where: { run_id, status: 'pending' },
 			attributes: ['id', 'run_id', 'daemon_id', 'realm_id'],
 		});
 		if (pending.length === 0) return 0;
 
 		const ids = pending.map((r) => r.id);
-		await Review.update(
-			{ status: 'expired', completed_at: new Date() },
-			{ where: { id: { [Op.in]: ids }, status: 'pending' } },
+		await _review_repo_hr.update_where(
+			{ id: { [Op.in]: ids }, status: 'pending' } as any,
+			{ status: 'expired', completed_at: new Date() } as any,
 		);
 
 		for (const row of pending) {
 			try {
-				const notif_rows = await ReviewNotification.findAll({
+				const notif_rows = await _review_notif_repo_hr.find_all_q({
 					where: { review_id: row.id },
 					attributes: ['channel_id'],
 				});
@@ -917,16 +927,9 @@ export class HugReviewsService {
  * shared-channel verdict auth path — a broadcast notification is
  * only actionable by users in the review's realm.
  */
+/** Realm standing by the shared access rules (members + org owners/admins + realm owner). */
 async function _is_realm_member(realm_id: string, user_id: string): Promise<boolean> {
-	const member = await RealmMember.findOne({
-		where: {
-			realm_id,
-			member_type: 'user',
-			member_id: String(user_id),
-		},
-		attributes: ['id'],
-	});
-	return member !== null;
+	return (await visible_realm_ids(String(user_id))).includes(realm_id);
 }
 
 
@@ -977,7 +980,7 @@ async function _evaluate_policy(
 	if (!groups || groups.length === 0) return true;
 
 	/** Load all notification rows for this review. */
-	const notifications = await ReviewNotification.findAll({
+	const notifications = await _review_notif_repo_hr.find_all_q({
 		where: { review_id: review.id },
 		attributes: ['group_idx', 'responded_at', 'action'],
 	});

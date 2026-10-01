@@ -44,7 +44,7 @@ import {
     Realm,
     RealmMember,
 } from '../../src/models/index.js';
-import { ApiToken } from '../../src/db/models/index.js';
+import { ApiToken } from '../../src/models/index.js';
 import { JIRA_LIFECYCLE_EVENTS } from '../../src/services/jira_integration.service.js';
 
 const has_postgres = await postgres_reachable();
@@ -53,7 +53,7 @@ const uid = () => `jira-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
 function mock_user(id: number, role: 'user' | 'admin' = 'user') {
     stub_hub_pat_auth(repos);
-		repos.user_repo.find_by_id.mockResolvedValue({
+		repos.user_repo.find_profile_by_id.mockResolvedValue({
         id: hub_legacy_uuid(id),
         username: `user-${id}`,
         display_name: `User ${id}`,

@@ -8,33 +8,20 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Model, ModelStatic, Sequelize } from 'sequelize';
-import { DataTypes } from 'sequelize';
+import { DataTypes, type Sequelize } from 'sequelize';
+import { BaseModel } from './base_model.js';
 
-export interface CustomEventAttributes {
-    id?: string;
-    /** The full event type string, e.g. `custom.enrichment_stale`. */
-    event_type: string;
-    /** How the event was discovered. */
-    source: 'declared' | 'observed';
-    /** Realm where the event was registered (NULL for account-level). */
-    realm_id: string | null;
-    /** Team slug that declared or emitted the event (NULL if unknown). */
-    team_slug: string | null;
-    /** Human-readable label extracted from manifest (optional). */
-    label: string | null;
-    created_at: number;
-}
+export class CustomEvent extends BaseModel {
+    declare id: string;
+    declare event_type: string;
+    declare source: 'declared' | 'observed';
+    declare realm_id: string | null;
+    declare team_slug: string | null;
+    declare label: string | null;
+    declare created_at: number;
 
-export type CustomEventModel =
-    Model<CustomEventAttributes> & CustomEventAttributes;
-
-export let CustomEvent: ModelStatic<CustomEventModel>;
-
-export function init_custom_event(sequelize: Sequelize): void {
-    CustomEvent = sequelize.define(
-        'CustomEvent',
-        {
+    static register(sequelize: Sequelize): void {
+        CustomEvent.init({
             id: { type: DataTypes.UUID, primaryKey: true, defaultValue: () => randomUUID() },
             event_type: { type: DataTypes.TEXT, allowNull: false },
             source: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'observed' },
@@ -42,8 +29,8 @@ export function init_custom_event(sequelize: Sequelize): void {
             team_slug: { type: DataTypes.TEXT, allowNull: true },
             label: { type: DataTypes.TEXT, allowNull: true },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
-        },
-        {
+        }, {
+            sequelize,
             schema: 'cliq',
             tableName: 'custom_events',
             timestamps: false,
@@ -56,6 +43,16 @@ export function init_custom_event(sequelize: Sequelize): void {
                     name: 'custom_events_type_realm_team_uidx',
                 },
             ],
-        },
-    ) as ModelStatic<CustomEventModel>;
+        });
+    }
 }
+
+export type CustomEventAttributes = {
+    id?: string;
+    event_type: string;
+    source: 'declared' | 'observed';
+    realm_id: string | null;
+    team_slug: string | null;
+    label: string | null;
+    created_at: number;
+};

@@ -18,7 +18,7 @@ import {
     close_live_hub_app,
     open_live_hub_app,
 } from './helpers/live_hub_app.js';
-import { User, Scope, Org, OrgMember, ScopeMember, AuditLog } from '../../src/db/models/index.js';
+import { User, Scope, Org, OrgMember, ScopeMember, AuditLog } from '../../src/models/index.js';
 import {
     Realm,
     RealmMember,
@@ -374,7 +374,8 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
             .post('/v1/realms/get_by_id')
             .set('Authorization', bearer(bob.token))
             .send({ realm_id: realm_a });
-        expect(bob_get_a.status).toBe(403);
+        // Hidden, not just refused: records you cannot see are 404 (decision 4).
+        expect(bob_get_a.status).toBe(404);
 
         const carol_invite = await request(app)
             .post('/v1/realms/add_member')

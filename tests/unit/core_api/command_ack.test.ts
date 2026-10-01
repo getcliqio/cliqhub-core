@@ -9,7 +9,7 @@ import type { Request, Response, NextFunction } from 'express';
 // ── Mocks ────────────────────────────────────────────────────────────
 
 // In-memory command_outbox rows.
-const _outbox = new Map<string, { tx_id: string; acked_at: number | null; ack_status: string | null }>();
+const _outbox = new Map<string, { tx_id: string; daemon_id?: string; acked_at: number | null; ack_status: string | null }>();
 
 vi.mock('../../../src/db/control_plane_store.js', () => ({
     get_control_plane_store: vi.fn(() => ({
@@ -51,6 +51,10 @@ vi.mock('../../../src/lib/log.js', () => ({
     }),
 }));
 
+vi.mock('../../../src/services/realm.service.js', () => ({
+    RealmService: { assert_daemon_in_realm: vi.fn(async () => undefined) },
+}));
+
 import { CommandAckController } from '../../../src/controllers/command_ack_controller.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -73,8 +77,9 @@ function mock_res() {
     return res as unknown as Response & { _status: number; _body: unknown };
 }
 
+/** A daemon token of realm r1 (the route policy admits daemon tokens only). */
 function mock_req(body: Record<string, unknown>) {
-    return { body } as unknown as Request;
+    return { body, auth: { user: { id: 'u1', role: 'user' }, auth_via: 'daemon_token', realm_id: 'r1' } } as unknown as Request;
 }
 
 // ── Setup ────────────────────────────────────────────────────────────
@@ -87,8 +92,18 @@ beforeEach(() => {
 // ── Tests ────────────────────────────────────────────────────────────
 
 describe('CommandAckController.ack_command', () => {
+    it('a command addressed to another daemon → 404, not acked (S26)', async () => {
+        _outbox.set('cmd-x', { tx_id: 'cmd-x', daemon_id: 'd-other', acked_at: null, ack_status: null });
+        const next = vi.fn();
+        await CommandAckController.ack_command(
+            mock_req({ tx_id: 't', command_tx_id: 'cmd-x', daemon_id: 'd-1', status: 'ok' }), mock_res(), next,
+        );
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status_code: 404 }));
+        expect(_outbox.get('cmd-x')!.acked_at).toBeNull();
+    });
+
     it('records ack for an existing unacked command', async () => {
-        _outbox.set('cmd-1', { tx_id: 'cmd-1', acked_at: null, ack_status: null });
+        _outbox.set('cmd-1', { tx_id: 'cmd-1', daemon_id: 'd-1', acked_at: null, ack_status: null });
 
         const req = mock_req({
             tx_id: 'ack-tx-1',
@@ -126,7 +141,7 @@ describe('CommandAckController.ack_command', () => {
     });
 
     it('is idempotent — re-ack returns ok without updating', async () => {
-        _outbox.set('cmd-2', { tx_id: 'cmd-2', acked_at: 12345, ack_status: 'ok' });
+        _outbox.set('cmd-2', { tx_id: 'cmd-2', daemon_id: 'd-1', acked_at: 12345, ack_status: 'ok' });
 
         const req = mock_req({
             tx_id: 'ack-tx-3',
@@ -146,7 +161,7 @@ describe('CommandAckController.ack_command', () => {
     });
 
     it('records error acks', async () => {
-        _outbox.set('cmd-3', { tx_id: 'cmd-3', acked_at: null, ack_status: null });
+        _outbox.set('cmd-3', { tx_id: 'cmd-3', daemon_id: 'd-1', acked_at: null, ack_status: null });
 
         const req = mock_req({
             tx_id: 'ack-tx-4',

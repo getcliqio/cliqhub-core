@@ -2,6 +2,14 @@
  * Hub backend structured logger (stdout NDJSON).
  *
  * Levels gated by `CLIQ_HUB_LOG_LEVEL` or `LOG_LEVEL` (default `info`).
+ *
+ * Which level to use:
+ *   debug — decisions and detail (access_allowed, service entry with ids, timings)
+ *   info  — something changed or someone signed in (run_created, role_changed, token_minted)
+ *   warn  — refused or unexpected but handled (access_denied + reason, deprecated path, retry)
+ *   error — the request failed on our side (5xx, DB / R2 / mesh failure)
+ *   fatal — Core cannot start or continue; log, then exit(1)
+ * Never log tokens, passwords, secrets, setting values or request bodies.
  * Shape aligns with the unified logging contract:
  *   { ts, level, component, msg, ctx? }
  *
@@ -10,13 +18,40 @@
  *   log.info(`human message ${id}`)
  */
 
-export type HubLogLevel = 'debug' | 'info' | 'warn' | 'error';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+/**
+ * Per-request fields added to every log line written while serving that
+ * request (set by `request_logging_middleware`, filled in after the token is
+ * read). Lets service logs be tied to a request without passing ids around.
+ */
+export interface LogContext {
+    request_id?: string;
+    user_id?: string;
+    auth_via?: string;
+}
+
+const _log_context = new AsyncLocalStorage<LogContext>();
+
+/** Run `fn` with `ctx` attached to every log line it (and its async work) writes. */
+export function run_with_log_context<T>(ctx: LogContext, fn: () => T): T {
+    return _log_context.run(ctx, fn);
+}
+
+/** The current request's log context (mutable: later middleware adds user_id). */
+export function current_log_context(): LogContext | undefined {
+    return _log_context.getStore();
+}
+
+export type HubLogLevel = 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
 export interface CoreLogger {
     debug(...args: unknown[]): void;
     info(...args: unknown[]): void;
     warn(...args: unknown[]): void;
     error(...args: unknown[]): void;
+    /** Core cannot start or continue. Log, then the caller exits the process. */
+    fatal(...args: unknown[]): void;
 }
 
 const LEVEL_RANK: Record<HubLogLevel, number> = {
@@ -24,12 +59,13 @@ const LEVEL_RANK: Record<HubLogLevel, number> = {
     info: 20,
     warn: 30,
     error: 40,
+    fatal: 50,
 };
 
 function normalize_level(raw: string | undefined): HubLogLevel {
     if (!raw?.trim()) return 'info';
     const lower = raw.trim().toLowerCase();
-    if (lower === 'debug' || lower === 'info' || lower === 'warn' || lower === 'error') {
+    if (lower === 'debug' || lower === 'info' || lower === 'warn' || lower === 'error' || lower === 'fatal') {
         return lower;
     }
     if (lower === 'warning') return 'warn';
@@ -111,7 +147,17 @@ function split_args(args: unknown[]): { msg: string; ctx?: Record<string, unknow
 function emit(level: HubLogLevel, component: string, args: unknown[]): void {
     if (LEVEL_RANK[level] < LEVEL_RANK[process_level]) return;
 
-    const { msg, ctx } = split_args(args);
+    const { msg, ctx: own_ctx } = split_args(args);
+    // Request context first; the call's own fields win on conflict.
+    const req_ctx = _log_context.getStore();
+    const ctx = req_ctx && (req_ctx.request_id || req_ctx.user_id)
+        ? {
+            ...(req_ctx.request_id ? { request_id: req_ctx.request_id } : {}),
+            ...(req_ctx.user_id ? { user_id: req_ctx.user_id } : {}),
+            ...(req_ctx.auth_via ? { auth_via: req_ctx.auth_via } : {}),
+            ...(own_ctx ?? {}),
+        }
+        : own_ctx;
     const line: Record<string, unknown> = {
         ts: new Date().toISOString(),
         level: level.toUpperCase(),
@@ -123,7 +169,7 @@ function emit(level: HubLogLevel, component: string, args: unknown[]): void {
     }
 
     const serialized = JSON.stringify(line);
-    if (level === 'error') {
+    if (level === 'error' || level === 'fatal') {
         console.error(serialized);
         return;
     }
@@ -144,6 +190,7 @@ export function get_logger(category: string): CoreLogger {
         info: (...args) => emit('info', category, args),
         warn: (...args) => emit('warn', category, args),
         error: (...args) => emit('error', category, args),
+        fatal: (...args) => emit('fatal', category, args),
     };
 }
 

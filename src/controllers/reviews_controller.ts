@@ -9,12 +9,16 @@
 
 import type { Request } from 'express';
 import { BaseController } from './base_controller.js';
+import { get_logger } from '../lib/log.js';
 import { ApiError } from '../lib/api_error.js';
 import { HugReviewsService } from '../services/hug_reviews.service.js';
 import { ReviewMessageService } from '../services/review_message.service.js';
 import { ReviewPendingService } from '../services/review_pending.service.js';
-import { require_permission } from '../auth/permissions.js';
-import { Realm } from '../models/index.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { RealmService } from '../services/realm.service.js';
+import { Run } from '../models/index.js';
+
+const _realm_repo_rvc = new RealmRepository();
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
 import {
     ReviewsGetInput,
@@ -29,6 +33,8 @@ import {
 
 type ReviewsFields = Record<string, unknown>;
 
+const log = get_logger('ctrl.reviews');
+
 export class ReviewsController extends BaseController {
     /**
      * POST /v1/reviews/get — list open HUG reviews for caller's notifications.
@@ -41,17 +47,15 @@ export class ReviewsController extends BaseController {
         req: FlatApiRequest<ReviewsGetInput, ReviewsFields>,
         res: FlatApiOkResponse<ReviewsFields>,
     ): Promise<void> {
+        log.debug('get', { user_id: req.auth?.user?.id });
         // Session user is mandatory for inbox listing.
-        const user_id = req.user?.user_id?.trim();
+        const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
 
         // Zod SoT — org-scoped list requires org_id; never invent from X-Org-Id.
         const body = this.parse_body(ReviewsGetInput, req);
-        let org_id: string | undefined;
-        if (body.org_id) {
-            await this.assert_org_authorized(this.auth_from(req), body.org_id);
-            org_id = body.org_id;
-        }
+        // Route policy: realm view + reviews.view, or org reviews.view.
+        const org_id: string | undefined = body.org_id;
 
         const result = await ReviewPendingService.list_for_user({
             user_id,
@@ -83,14 +87,22 @@ export class ReviewsController extends BaseController {
         req: FlatApiRequest<ReviewsCreateInput, ReviewsFields>,
         res: FlatApiOkResponse<ReviewsFields>,
     ): Promise<void> {
-        const user_id = req.user?.user_id?.trim();
+        log.debug('create', { user_id: req.auth?.user?.id });
+        const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
 
         const body = this.parse_body(ReviewsCreateInput, req);
 
         // Org tenancy follows the review's realm — not invent from headers.
-        const realm = await Realm.findByPk(body.realm_id, { attributes: ['org_id'] });
+        const realm = await _realm_repo_rvc.find_by_id(body.realm_id, { attributes: ['org_id'] });
         const org_id = realm?.org_id ?? null;
+
+        // The run must live in that realm, and a daemon token may only name its own daemons.
+        const run = await Run.findOne({ where: { run_id: body.run_id }, attributes: ['realm_id'], raw: true }) as { realm_id: string | null } | null;
+        if (!run || run.realm_id !== body.realm_id) throw ApiError.not_found('Run not found in this realm');
+        if (req.auth?.auth_via === 'daemon_token') {
+            await RealmService.assert_daemon_in_realm(body.realm_id, body.daemon_id);
+        }
 
         const data = await HugReviewsService.create({
             run_id: body.run_id,
@@ -106,6 +118,7 @@ export class ReviewsController extends BaseController {
             mode: body.mode,
             initial_message: body.initial_message,
         });
+        log.info('review_created', { review_id: (data as Record<string, unknown>).review_id ?? (data as Record<string, unknown>).id });
         res.status(201).json({ ok: true, data });
     }
 
@@ -120,35 +133,11 @@ export class ReviewsController extends BaseController {
         req: FlatApiRequest<ReviewsGetByIdInput, ReviewsFields>,
         res: FlatApiOkResponse<ReviewsFields>,
     ): Promise<void> {
+        log.debug('get_by_id', { user_id: req.auth?.user?.id });
         const body = this.parse_body(ReviewsGetByIdInput, req);
 
-        // Daemon tokens poll without a notification row — skip user/org path.
-        if (req.auth?.auth_via === 'daemon_token') {
-            const data = await HugReviewsService.get(body.review_id);
-            res.json({ ok: true, data });
-            return;
-        }
-
-        const user_id = req.user?.user_id?.trim();
-        if (!user_id) throw ApiError.unauthorized('Authentication required');
-
-        const has_notification = await HugReviewsService.has_notification_for_user(
-            body.review_id, user_id,
-        );
-
-        if (!has_notification) {
-            // No invent from X-Org-Id — body org_id is SoT for permission path.
-            if (!body.org_id) {
-                throw ApiError.forbidden('org_id is required to view a review without a notification');
-            }
-            await this.assert_org_authorized(this.auth_from(req), body.org_id);
-            const hub_user = req.auth?.user;
-            await require_permission(
-                body.org_id, user_id, 'reviews.view',
-                { site_role: hub_user?.role },
-            );
-        }
-
+        // Route policy checked this review: realm view + reviews.view, a named
+        // reviewer (S9), or a daemon of the review's realm.
         const data = await HugReviewsService.get(body.review_id);
         res.json({ ok: true, data });
     }
@@ -163,7 +152,8 @@ export class ReviewsController extends BaseController {
         req: FlatApiRequest<ReviewsVerdictInput, ReviewsFields>,
         res: FlatApiOkResponse<ReviewsFields>,
     ): Promise<void> {
-        const user_id = req.user?.user_id?.trim();
+        log.debug('verdict', { user_id: req.auth?.user?.id });
+        const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
 
         const body = this.parse_body(ReviewsVerdictInput, req);
@@ -182,6 +172,7 @@ export class ReviewsController extends BaseController {
             notification_id: body.notification_id,
             responded_by: user_id,
         });
+        log.info('verdict_submitted', { review_id: body.review_id });
         res.json({ ok: true, data });
     }
 
@@ -195,7 +186,8 @@ export class ReviewsController extends BaseController {
         req: FlatApiRequest<ReviewsAckInput, ReviewsFields>,
         res: FlatApiOkResponse<ReviewsFields>,
     ): Promise<void> {
-        const user_id = req.user?.user_id?.trim();
+        log.debug('ack', { user_id: req.auth?.user?.id });
+        const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
 
         const body = this.parse_body(ReviewsAckInput, req);
@@ -203,6 +195,7 @@ export class ReviewsController extends BaseController {
         const review = await HugReviewsService.get(body.review_id);
         const run_id = body.run_id ?? review.run_id;
         const data = await HugReviewsService.ack(body.review_id, run_id);
+        log.info('review_acked', { review_id: body.review_id });
         res.json({ ok: true, data });
     }
 
@@ -217,12 +210,16 @@ export class ReviewsController extends BaseController {
         req: FlatApiRequest<ReviewsSendMessageInput, ReviewsFields>,
         res: FlatApiOkResponse<ReviewsFields>,
     ): Promise<void> {
+        log.debug('send_message', { user_id: req.auth?.user?.id });
         const body = this.parse_body(ReviewsSendMessageInput, req);
 
         // Daemon path: speaker is the agent (daemon_id required).
         if (req.auth?.auth_via === 'daemon_token') {
             const daemon_id = (body.daemon_id ?? '').trim();
             if (!daemon_id) throw ApiError.bad_request('daemon_id is required');
+            // The speaking daemon must belong to the token's realm (S17).
+            if (!req.auth.realm_id) throw ApiError.forbidden('Daemon token has no realm');
+            await RealmService.assert_daemon_in_realm(req.auth.realm_id, daemon_id);
             const msg = await ReviewMessageService.send_agent_message(
                 body.review_id, daemon_id, body.text,
             );
@@ -230,7 +227,7 @@ export class ReviewsController extends BaseController {
             return;
         }
 
-        const user_id = req.user?.user_id?.trim();
+        const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
 
         const msg = await ReviewMessageService.send_user_message(
@@ -249,7 +246,8 @@ export class ReviewsController extends BaseController {
         req: FlatApiRequest<ReviewsGetMessagesInput, ReviewsFields>,
         res: FlatApiOkResponse<ReviewsFields>,
     ): Promise<void> {
-        const user_id = req.user?.user_id?.trim();
+        log.debug('get_messages', { user_id: req.auth?.user?.id });
+        const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
 
         const body = this.parse_body(ReviewsGetMessagesInput, req);
@@ -270,7 +268,8 @@ export class ReviewsController extends BaseController {
         req: FlatApiRequest<Record<string, never>, ReviewsFields>,
         res: FlatApiOkResponse<ReviewsFields>,
     ): Promise<void> {
-        const user_id = req.user?.user_id?.trim();
+        log.debug('stream_messages', { user_id: req.auth?.user?.id });
+        const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
 
         // Query SoT — not body; parse against the shared Zod schema.

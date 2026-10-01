@@ -22,7 +22,7 @@ import { Op } from 'sequelize';
 
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
 import { Realm, RealmMember } from '../../src/models/index.js';
-import { User } from '../../src/db/models/index.js';
+import { User } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
 
 const has_postgres = await postgres_reachable();

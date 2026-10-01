@@ -2,12 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
 import { Op } from 'sequelize';
 
-import { Daemon } from '../models/index.js';
+import { DaemonRepository } from '../repositories/daemon_repository.js';
+import type { Daemon } from '../models/daemon.model.js';
 import { get_logger } from '../lib/log.js';
 import { default_daemon_grant } from '../auth/grants.js';
 import { RealmService } from './realm.service.js';
 import { RealmDispatchKeyService } from './realm_dispatch_key.service.js';
 import { RealmTeamListService } from './realm_team_list.service.js';
+
+const _daemon_repo_ds = new DaemonRepository();
 
 const log = get_logger('daemon-service');
 
@@ -250,7 +253,7 @@ export class DaemonService {
         // then `adopt_id` on the client would overwrite settings.json,
         // orphaning every historical run keyed to the sticky id.
         if (payload.daemon_id) {
-            const existing = await Daemon.findByPk(payload.daemon_id);
+            const existing = await _daemon_repo_ds.find_by_id(payload.daemon_id);
             if (existing) {
                 const refreshed = await refresh_daemon(existing, key_hash, token_info, {
                     ...payload,
@@ -267,10 +270,7 @@ export class DaemonService {
         // Only when the caller has no sticky id do we coalesce logical
         // runtime pods sharing the same Ingress public_url.
         if (!payload.daemon_id && normalized_url) {
-            const by_url = await Daemon.findOne({
-                where: { public_url: normalized_url },
-                order: [['last_heartbeat', 'DESC']],
-            });
+            const by_url = await _daemon_repo_ds.find_one_q({ where: { public_url: normalized_url }, order: [['last_heartbeat', 'DESC']] });
             if (by_url) {
                 const refreshed = await refresh_daemon(by_url, key_hash, token_info, {
                     ...payload,
@@ -284,7 +284,7 @@ export class DaemonService {
         }
 
         const daemon_id = payload.daemon_id ?? randomUUID();
-        await Daemon.create({
+        await _daemon_repo_ds.create_one({
             id: daemon_id,
             api_key_hash: key_hash,
             user_id: token_info.user_id,
@@ -335,10 +335,7 @@ export class DaemonService {
 
     static async heartbeat(daemon_id: string): Promise<void> {
         const now = Date.now();
-        const [count] = await Daemon.update(
-            { last_heartbeat: now, status: 'online' },
-            { where: { id: daemon_id } },
-        );
+        const [count] = await _daemon_repo_ds.update_where({ id: daemon_id } as any, { last_heartbeat: now, status: 'online' } as any);
         if (count === 0) {
             log.warn('heartbeat_unknown_daemon', { daemon_id });
         }
@@ -350,10 +347,7 @@ export class DaemonService {
      * we know the team roster was actually written to the DB.
      */
     static async deregister(daemon_id: string): Promise<void> {
-        const [count] = await Daemon.update(
-            { status: 'offline' },
-            { where: { id: daemon_id } },
-        );
+        const [count] = await _daemon_repo_ds.update_where({ id: daemon_id } as any, { status: 'offline' } as any);
         if (count === 0) {
             throw new Error(`Daemon '${daemon_id}' not found`);
         }
@@ -372,13 +366,13 @@ export class DaemonService {
         user_email?: string;
     }): Promise<DaemonRegistrationResult> {
         const now = Date.now();
-        const existing = await Daemon.findByPk(input.daemon_id);
+        const existing = await _daemon_repo_ds.find_by_id(input.daemon_id);
         if (existing) {
             await RealmService.bind_daemon_to_realm(input.realm_id, existing.id);
             return to_registration_result(existing);
         }
 
-        await Daemon.create({
+        await _daemon_repo_ds.create_one({
             id: input.daemon_id,
             api_key_hash: hash_key(`pending:${input.daemon_id}`),
             user_id: input.user_id,
@@ -398,7 +392,7 @@ export class DaemonService {
         await RealmService.bind_daemon_to_realm(input.realm_id, input.daemon_id);
         log.info(`daemon ensured: ${input.daemon_id} realm=${input.realm_id}`);
 
-        const created = await Daemon.findByPk(input.daemon_id);
+        const created = await _daemon_repo_ds.find_by_id(input.daemon_id);
         if (!created) throw new Error(`Failed to ensure daemon '${input.daemon_id}'`);
         return to_registration_result(created);
     }
@@ -424,6 +418,10 @@ export class DaemonService {
         let daemon_ids: string[] | undefined;
         if (filters?.realm_id) {
             daemon_ids = await RealmService.list_daemon_ids_in_realm(filters.realm_id);
+            if (daemon_ids.length === 0) return { daemons: [], total: 0 };
+        }
+        if (!filters?.realm_id && filters?.site_admin && filters.org_id) {
+            daemon_ids = await RealmService.list_daemon_ids_in_org(filters.org_id);
             if (daemon_ids.length === 0) return { daemons: [], total: 0 };
         }
         if (!filters?.realm_id && user_id && !filters?.site_admin) {
@@ -460,34 +458,27 @@ export class DaemonService {
             : undefined;
         const offset = Math.max(0, filters?.offset ?? 0);
 
-        const total = await Daemon.count({ where });
-        const rows = await Daemon.findAll({
-            where,
-            order: [['last_registered_at', 'DESC']],
-            ...(limit != null ? { limit, offset } : {}),
-        });
+        const total = await _daemon_repo_ds.find_count_q({ where });
+        const rows = await _daemon_repo_ds.find_all_q({ where, order: [['last_registered_at', 'DESC']], ...(limit != null ? { limit, offset } : {}) });
         return { daemons: await with_realms(rows.map(to_info)), total };
     }
 
     static async list_by_ids(daemon_ids: string[]): Promise<DaemonInfo[]> {
         await DaemonService._mark_stale();
         if (daemon_ids.length === 0) return [];
-        const rows = await Daemon.findAll({
-            where: { id: { [Op.in]: daemon_ids } },
-            order: [['last_registered_at', 'DESC']],
-        });
+        const rows = await _daemon_repo_ds.find_all_q({ where: { id: { [Op.in]: daemon_ids } }, order: [['last_registered_at', 'DESC']] });
         return with_realms(rows.map(to_info));
     }
 
     static async get(daemon_id: string): Promise<DaemonInfo | null> {
-        const row = await Daemon.findByPk(daemon_id);
+        const row = await _daemon_repo_ds.find_by_id(daemon_id);
         if (!row) return null;
         const [info] = await with_realms([to_info(row)]);
         return info;
     }
 
     static async find_online_for_workspace(daemon_id: string): Promise<DaemonInfo | null> {
-        const row = await Daemon.findByPk(daemon_id);
+        const row = await _daemon_repo_ds.find_by_id(daemon_id);
         if (!row) return null;
         if (row.status === 'offline') return null;
         const [info] = await with_realms([to_info(row)]);
@@ -499,7 +490,7 @@ export class DaemonService {
      * daemons or from the auto-deregister sweep.
      */
     static async remove(daemon_id: string): Promise<void> {
-        const row = await Daemon.findByPk(daemon_id);
+        const row = await _daemon_repo_ds.find_by_id(daemon_id);
         if (!row) return;
         await row.destroy();
         log.info(`daemon removed: ${daemon_id}`);
@@ -510,24 +501,12 @@ export class DaemonService {
         const stale_cutoff = now - STALE_THRESHOLD_MS;
         const deregister_cutoff = now - DEREGISTER_THRESHOLD_MS;
 
-        await Daemon.update(
-            { status: 'stale' },
-            {
-                where: {
-                    status: 'online',
-                    last_heartbeat: { [Op.lt]: stale_cutoff },
-                },
-            },
-        );
+        await _daemon_repo_ds.update_where({ status: 'online', last_heartbeat: { [Op.lt]: stale_cutoff } } as any, { status: 'stale' } as any);
 
         try {
-            await Daemon.destroy({
-                where: {
-                    status: { [Op.in]: ['stale', 'offline'] },
-                    last_heartbeat: { [Op.lt]: deregister_cutoff },
-                },
-            });
-        } catch {
+            await _daemon_repo_ds.delete_where_q({ where: { status: { [Op.in]: ['stale', 'offline'] }, last_heartbeat: { [Op.lt]: deregister_cutoff } } });
+        } catch (err) {
+            log.debug('daemon_team_cleanup_conflict', { error: err instanceof Error ? err.message : String(err) });
             // FK cascade on teams may hit unique constraint for orphaned rows;
             // non-fatal — stale daemons stay until data is cleaned up.
         }

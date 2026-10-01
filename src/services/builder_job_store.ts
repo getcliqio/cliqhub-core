@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.builder_store');
 
 export type Builder_job_status = 'queued' | 'running' | 'done' | 'error';
 
@@ -30,6 +33,7 @@ function prune(now = Date.now()): void {
 }
 
 export function create_builder_job(): Builder_job_record {
+	log.debug('create_builder_job', {});
 	prune();
 	const now = Date.now();
 	const job: Builder_job_record = {
@@ -40,10 +44,12 @@ export function create_builder_job(): Builder_job_record {
 		updated_at: now,
 	};
 	jobs.set(job.id, job);
+	log.info('builder_job_created', { id: job.id });
 	return job;
 }
 
 export function get_builder_job(job_id: string): Builder_job_record | null {
+	log.debug('get_builder_job', { job_id });
 	prune();
 	return jobs.get(job_id) ?? null;
 }
@@ -52,6 +58,7 @@ export function update_builder_job(
 	job_id: string,
 	patch: Partial<Pick<Builder_job_record, 'status' | 'stage' | 'result' | 'error'>>,
 ): Builder_job_record | null {
+	log.debug('update_builder_job', { job_id, status: patch.status, stage: patch.stage });
 	const job = jobs.get(job_id);
 	if (!job) return null;
 	Object.assign(job, patch, { updated_at: Date.now() });

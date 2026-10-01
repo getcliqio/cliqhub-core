@@ -4,6 +4,8 @@ import { setup_sequelize_mocks } from '../helpers/mock_sequelize.js';
 setup_sequelize_mocks();
 
 import request from 'supertest';
+import { create_route_policy_middleware } from '../../src/middleware/enforce_route_policy.js';
+import { unit_access_store } from '../helpers/test_container.js';
 import express from 'express';
 import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
 
@@ -18,7 +20,7 @@ import { UsersService } from '../../src/services/users_service.js';
 import { UsersController } from '../../src/controllers/users_controller.js';
 import { TokensController } from '../../src/controllers/tokens_controller.js';
 import { error_handler } from '../../src/middleware/error_handler.js';
-import { User, ApiToken, Scope, Team, Draft, OrgMember, Org } from '../../src/db/models/index.js';
+import { User, ApiToken, Scope, Team, Draft, OrgMember, Org } from '../../src/models/index.js';
 import type { EnvConfig } from '../../src/config/env.js';
 
 const SECRET = 'test-secret';
@@ -49,7 +51,7 @@ const REGULAR_USER = {
 
 const auth_repos = {
     user_repo: {
-        find_by_id: vi.fn().mockResolvedValue(null),
+        find_profile_by_id: vi.fn().mockResolvedValue(null),
     },
     token_repo: {
         find_by_prefix: vi.fn().mockResolvedValue(null),
@@ -59,6 +61,7 @@ const auth_repos = {
         find_owned_by_user: vi.fn().mockResolvedValue([]),
         find_by_org_ids: vi.fn().mockResolvedValue([]),
         find_member_scopes: vi.fn().mockResolvedValue([]),
+        find_default_scopes: vi.fn().mockResolvedValue([]),
     },
     org_member_repo: {
         find_orgs_by_user: vi.fn().mockResolvedValue([]),
@@ -67,7 +70,7 @@ const auth_repos = {
 
 const service_repos = {
     user_repo: {
-        find_by_id: vi.fn().mockResolvedValue(null),
+        find_profile_by_id: vi.fn().mockResolvedValue(null),
         find_by_username_or_email: vi.fn().mockResolvedValue(null),
         find_by_email: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(hub_legacy_uuid(10)),
@@ -127,6 +130,7 @@ app.use(create_auth_middleware({
     scope_repo: auth_repos.scope_repo as any,
     org_member_repo: auth_repos.org_member_repo as any,
 }));
+app.use(create_route_policy_middleware({ store: unit_access_store() }));
 
 app.post('/v1/users/get', users_controller.wrap(users_controller.get));
 app.post('/v1/users/get_by_id', users_controller.wrap(users_controller.get_by_id));
@@ -303,7 +307,7 @@ describe('POST /v1/users/update', () => {
     it('updates own profile without user_id', async () => {
         mock_user_auth();
         service_repos.user_repo.update_profile.mockResolvedValueOnce(undefined);
-        service_repos.user_repo.find_by_id.mockResolvedValueOnce({
+        service_repos.user_repo.find_profile_by_id.mockResolvedValueOnce({
             ...REGULAR_USER, display_name: 'New',
         });
 

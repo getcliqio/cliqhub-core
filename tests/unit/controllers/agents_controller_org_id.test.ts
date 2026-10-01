@@ -18,6 +18,10 @@ vi.mock('../../../src/models/index.js', () => ({
     Realm: {
         findByPk: vi.fn(),
     },
+    AgentCatalog: {},
+    RealmAgentSetting: {},
+    OrgAgentSetting: {},
+    UserRealmAgentSetting: {}, OrgMember: {}, Org: {}, User: {}, OrgRole: {},
 }));
 
 import { Realm } from '../../../src/models/index.js';
@@ -67,7 +71,8 @@ describe('AgentsController AG-1a org_id tenancy', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
-        controller = new AgentsController(mock_service as never);
+        // Tenancy only here — role checks are covered in agents_controller_permissions.test.ts.
+        controller = new AgentsController(mock_service as never, { permission_check: async () => true });
     });
 
     it('get succeeds when body org_id is in PAT memberships', async () => {
@@ -89,35 +94,6 @@ describe('AgentsController AG-1a org_id tenancy', () => {
         // Auth has memberships but body omits org_id (legacy header path removed).
         await expect(controller.get(make_req({ include_manifest: false }, pat_auth([ORG_A])) as never, res as never))
             .rejects.toMatchObject({ status: 422 });
-    });
-
-    it('get forbids org_id outside PAT memberships', async () => {
-        const res = mock_res();
-        await expect(controller.get(make_req({ org_id: ORG_B }, pat_auth([ORG_A])) as never, res as never))
-            .rejects.toBeInstanceOf(ApiError);
-        try {
-            await controller.get(make_req({ org_id: ORG_B }, pat_auth([ORG_A])) as never, res as never);
-        } catch (err) {
-            expect(err).toMatchObject({ status_code: 403 });
-        }
-        expect(mock_service.list).not.toHaveBeenCalled();
-    });
-
-    it('get allows daemon token when realm.org_id matches body org_id', async () => {
-        vi.mocked(Realm.findByPk).mockResolvedValue({ org_id: ORG_A } as never);
-        const res = mock_res();
-        await controller.get(make_req({ org_id: ORG_A }, daemon_auth(REALM_A)) as never, res as never);
-        expect(Realm.findByPk).toHaveBeenCalledWith(REALM_A);
-        expect(mock_service.list).toHaveBeenCalledWith(ORG_A, expect.any(Object), true);
-        expect(res.status).toHaveBeenCalledWith(200);
-    });
-
-    it('get forbids daemon token when realm.org_id mismatches', async () => {
-        vi.mocked(Realm.findByPk).mockResolvedValue({ org_id: ORG_A } as never);
-        const res = mock_res();
-        await expect(controller.get(make_req({ org_id: ORG_B }, daemon_auth(REALM_A)) as never, res as never))
-            .rejects.toMatchObject({ status_code: 403 });
-        expect(mock_service.list).not.toHaveBeenCalled();
     });
 
     it('get_settings forbids realm_id belonging to another org', async () => {
@@ -190,18 +166,15 @@ describe('AgentsController AG-1a org_id tenancy', () => {
         expect(res.status).toHaveBeenCalledWith(200);
     });
 
-    it('rejects missing auth context', async () => {
-        const res = mock_res();
-        await expect(controller.get(make_req({ org_id: ORG_A }) as never, res as never))
-            .rejects.toMatchObject({ status_code: 401 });
-    });
+});
 
-    it('rejects daemon token without realm_id', async () => {
-        const res = mock_res();
-        const auth = daemon_auth(REALM_A);
-        delete auth.realm_id;
-        await expect(controller.get(make_req({ org_id: ORG_A }, auth) as never, res as never))
-            .rejects.toMatchObject({ status_code: 403 });
+describe('agents tenancy is the route policy\'s job (AG-1a)', () => {
+    it('another org → 404, no token → 401, daemon tokens → 403', async () => {
+        const { policy_status } = await import('../../helpers/policy_decision.js');
+        const other_org = '00000000-0000-4000-8000-0000000000ff';
+        expect(await policy_status('POST /v1/agents/get', { id: 'u1' }, { org_id: other_org })).toBe(404);
+        expect(await policy_status('POST /v1/agents/get', null, { org_id: other_org })).toBe(401);
+        expect(await policy_status('POST /v1/agents/get', { id: 'u1', daemon: { realm_id: 'r1' } }, { org_id: other_org })).toBe(403);
     });
 });
 

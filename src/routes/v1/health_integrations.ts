@@ -1,3 +1,12 @@
+/**
+ * Health integrations routes — unauthenticated health check and Jira Forge workspace management.
+ *
+ * GET    /v1/health
+ * POST   /v1/integrations/jira/register_workspace
+ * POST   /v1/integrations/jira/rotate_secret
+ * POST   /v1/integrations/jira/get_workspaces
+ * POST   /v1/integrations/jira/disconnect_workspace
+ */
 import type { Router } from 'express';
 import { SystemController } from '../../controllers/system_controller.js';
 import {

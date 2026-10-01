@@ -11,16 +11,12 @@
  */
 
 import { BaseController } from './base_controller.js';
+import { get_logger } from '../lib/log.js';
 import { NotificationService } from '../services/notification.service.js';
 import { InAppNotificationService } from '../services/in_app_notification.service.js';
-import { ApiError } from '../lib/api_error.js';
 import type { ApiOkResponse, ApiRequest, BooleanData, PagedData } from '../types/api_response.js';
-import type { Request } from 'express';
 import {
-    require_account_notification_admin,
     require_authenticated_user_id,
-    require_realm_notification_admin,
-    require_realm_notification_member,
 } from '../notifications/notification_authz.js';
 import type {
     NotificationChannelData,
@@ -40,6 +36,8 @@ import {
     NotificationsGetInput,
 } from '../schemas/notification_types.js';
 
+const log = get_logger('ctrl.notifications');
+
 export class NotificationsController extends BaseController {
 
     /**
@@ -50,14 +48,17 @@ export class NotificationsController extends BaseController {
      */
     async channels_get(req: ApiRequest<NotificationChannelsGetInput, NotificationChannelData[]>, res: ApiOkResponse<NotificationChannelData[]>): Promise<void> {
         const user_id = require_authenticated_user_id(req);
+        log.debug('channels_get', { user_id });
         // Zod SoT — account mode requires org_id; never invent from X-Org-Id.
         const body = this.parse_body(NotificationChannelsGetInput, req);
         const realm_id = body.realm_id?.trim();
         const want_account = body.account === true || !realm_id;
 
         if (want_account) {
-            // Account list: body.org_id bounds which org's channels appear.
-            await this.assert_org_authorized(this.auth_from(req), body.org_id!);
+            // Account list: body.org_id bounds which org's channels appear. The route
+            // policy checked org membership, unless realm_id was also sent (it then
+            // checked the realm) — only that case needs the org check here.
+            if (realm_id) await this.assert_org_authorized(this.auth_from(req), body.org_id!);
             const channels = await NotificationService.list_channels({
                 account: true,
                 org_id: body.org_id,
@@ -67,8 +68,7 @@ export class NotificationsController extends BaseController {
             return;
         }
 
-        // Realm path — any realm member may read channels.
-        await require_realm_notification_member(realm_id!, user_id);
+        // Realm path — route policy: realm view.
         if (body.enabled === true && body.ids?.length) {
             const channels = await NotificationService.find_enabled_channels(body.ids);
             this.ok(res, channels.filter((ch) => ch.realm_id === realm_id));
@@ -86,6 +86,7 @@ export class NotificationsController extends BaseController {
      */
     async channels_create(req: ApiRequest<NotificationChannelsCreateInput, NotificationChannelData>, res: ApiOkResponse<NotificationChannelData>): Promise<void> {
         const user_id = require_authenticated_user_id(req);
+        log.debug('channels_create', { user_id });
         // Zod SoT — account mode requires org_id; never invent from X-Org-Id.
         const data = this.parse_body(NotificationChannelsCreateInput, req);
         const realm_id = data.realm_id?.trim();
@@ -96,8 +97,7 @@ export class NotificationsController extends BaseController {
         }
 
         if (realm_id) {
-            // Realm create: realm admin; org_id on row stays null.
-            await require_realm_notification_admin(realm_id, user_id, req);
+            // Realm create (policy: operate + channels.manage.realm); org_id on row stays null.
             const channel = await NotificationService.create_channel({
                 realm_id,
                 org_id: null,
@@ -105,13 +105,12 @@ export class NotificationsController extends BaseController {
                 destinations: data.destinations,
                 enabled: data.enabled,
             });
+            log.info('channel_created', { id: channel.id });
             this.ok(res, channel);
             return;
         }
 
-        // Account create: body.org_id is invent SoT.
-        await this.assert_org_authorized(this.auth_from(req), data.org_id!);
-        await require_account_notification_admin(req, data.org_id!);
+        // Account create (policy: org channels.manage): body.org_id is invent SoT.
         const channel = await NotificationService.create_channel({
             realm_id: null,
             org_id: data.org_id!,
@@ -119,6 +118,7 @@ export class NotificationsController extends BaseController {
             destinations: data.destinations,
             enabled: data.enabled,
         });
+        log.info('channel_created', { id: channel.id });
         this.ok(res, channel);
     }
 
@@ -129,16 +129,18 @@ export class NotificationsController extends BaseController {
      */
     async channels_update(req: ApiRequest<NotificationChannelsUpdateInput, NotificationChannelData>, res: ApiOkResponse<NotificationChannelData>): Promise<void> {
         const user_id = require_authenticated_user_id(req);
+        log.debug('channels_update', { user_id });
         const data = this.parse_body(NotificationChannelsUpdateInput, req);
-        // Load first so authz inspects owning realm/org (never session header).
+        // Route policy checked the channel's realm / org / personal owner.
         const existing = await NotificationService.get_channel(data.id);
-        await this.require_channel_write_auth(existing, user_id, req);
 
         if (data.destinations) {
             await NotificationService.detect_channel_ref_cycles(data.name ?? existing.name, data.destinations, existing.realm_id);
         }
 
-        this.ok(res, await NotificationService.update_channel(data));
+        const updated = await NotificationService.update_channel(data);
+        log.info('channel_updated', { id: data.id });
+        this.ok(res, updated);
     }
 
     /**
@@ -148,10 +150,12 @@ export class NotificationsController extends BaseController {
      */
     async channels_remove(req: ApiRequest<NotificationChannelsRemoveInput, BooleanData>, res: ApiOkResponse<BooleanData>): Promise<void> {
         const user_id = require_authenticated_user_id(req);
+        log.debug('channels_remove', { user_id });
         const { id } = this.parse_body(NotificationChannelsRemoveInput, req);
-        const existing = await NotificationService.get_channel(id);
-        await this.require_channel_write_auth(existing, user_id, req);
-        this.ok(res, await NotificationService.remove_channel(id));
+        // Route policy checked the channel's realm / org / personal owner.
+        const result = await NotificationService.remove_channel(id);
+        log.info('channel_removed', { id });
+        this.ok(res, result);
     }
 
     /**
@@ -161,10 +165,9 @@ export class NotificationsController extends BaseController {
      */
     async channels_test(req: ApiRequest<NotificationChannelsTestInput, NotificationChannelTestData>, res: ApiOkResponse<NotificationChannelTestData>): Promise<void> {
         const user_id = require_authenticated_user_id(req);
+        log.debug('channels_test', { user_id });
         const { id, destination_index } = this.parse_body(NotificationChannelsTestInput, req);
-        const channel = await NotificationService.get_channel(id);
-        await this.require_channel_write_auth(channel, user_id, req);
-
+        // Route policy: channels.test on the channel's realm / org, or its personal owner.
         const { delivered, errors } = await NotificationService.test_channel(id, destination_index);
         this.ok(res, { delivered, errors });
     }
@@ -177,11 +180,12 @@ export class NotificationsController extends BaseController {
      */
     async rules_list(req: ApiRequest<NotificationRulesListInput, NotificationRuleData[]>, res: ApiOkResponse<NotificationRuleData[]>): Promise<void> {
         const user_id = require_authenticated_user_id(req);
+        log.debug('rules_list', { user_id });
         const body = this.parse_body(NotificationRulesListInput, req);
         const realm_id = body.realm_id?.trim();
 
+        // Route policy: realm view when realm_id is set, else org membership.
         if (realm_id) {
-            await require_realm_notification_member(realm_id, user_id);
             if (body.effective) {
                 this.ok(res, await NotificationService.list_effective_rules(realm_id));
                 return;
@@ -191,7 +195,6 @@ export class NotificationsController extends BaseController {
         }
 
         // Org-global rules: body.org_id is SoT.
-        await this.assert_org_authorized(this.auth_from(req), body.org_id!);
         this.ok(res, await NotificationService.list_rules({ org_id: body.org_id }));
     }
 
@@ -203,33 +206,36 @@ export class NotificationsController extends BaseController {
      */
     async rules_set(req: ApiRequest<NotificationRulesSetInput, NotificationRuleData>, res: ApiOkResponse<NotificationRuleData>): Promise<void> {
         const user_id = require_authenticated_user_id(req);
+        log.debug('rules_set', { user_id });
         const data = this.parse_body(NotificationRulesSetInput, req);
         const realm_id = data.realm_id?.trim();
 
+        // Route policy: operate + rules.manage.realm when realm_id is set, else org rules.manage.
         if (realm_id) {
-            await require_realm_notification_admin(realm_id, user_id, req);
-            this.ok(res, await NotificationService.set_rule({
+            const rule = await NotificationService.set_rule({
                 realm_id,
                 org_id: null,
                 team_slug: data.team_slug || null,
                 event: data.event,
                 channel_id: data.channel_id,
                 priority: data.priority,
-            }));
+            });
+            log.info('rule_set', { id: rule.id });
+            this.ok(res, rule);
             return;
         }
 
         // Org-global rule: body.org_id invent SoT.
-        await this.assert_org_authorized(this.auth_from(req), data.org_id!);
-        await require_account_notification_admin(req, data.org_id!);
-        this.ok(res, await NotificationService.set_rule({
+        const rule = await NotificationService.set_rule({
             realm_id: null,
             org_id: data.org_id!,
             team_slug: data.team_slug || null,
             event: data.event,
             channel_id: data.channel_id,
             priority: data.priority,
-        }));
+        });
+        log.info('rule_set', { id: rule.id });
+        this.ok(res, rule);
     }
 
     /**
@@ -239,27 +245,13 @@ export class NotificationsController extends BaseController {
      */
     async rules_remove(req: ApiRequest<NotificationRulesRemoveInput, BooleanData>, res: ApiOkResponse<BooleanData>): Promise<void> {
         const user_id = require_authenticated_user_id(req);
+        log.debug('rules_remove', { user_id });
         const { id } = this.parse_body(NotificationRulesRemoveInput, req);
-        const rule = await NotificationService.get_rule(id);
-        if (!rule) {
-            this.ok(res, false);
-            return;
-        }
-
-        if (rule.realm_id) {
-            await require_realm_notification_admin(rule.realm_id, user_id, req);
-            this.ok(res, await NotificationService.remove_rule(id));
-            return;
-        }
-
-        // Org-global rule: authorize against the rule's org_id.
-        const rule_org = rule.org_id ? String(rule.org_id) : null;
-        if (!rule_org) {
-            throw ApiError.forbidden('Cannot remove rule without org or realm scope');
-        }
-        await this.assert_org_authorized(this.auth_from(req), rule_org);
-        await require_account_notification_admin(req, rule_org);
-        this.ok(res, await NotificationService.remove_rule(id));
+        // Route policy loaded the rule: realm operate + rules.manage.realm, or org
+        // rules.manage (org-global rule); a missing rule is already a 404.
+        const removed = await NotificationService.remove_rule(id);
+        log.info('rule_removed', { id });
+        this.ok(res, removed);
     }
 
     /**
@@ -269,9 +261,10 @@ export class NotificationsController extends BaseController {
      */
     async inbox_get(req: ApiRequest<NotificationsGetInput, PagedData<NotificationData>>, res: ApiOkResponse<PagedData<NotificationData>>): Promise<void> {
         const user_id = require_authenticated_user_id(req);
+        log.debug('inbox_get', { user_id });
         // Zod SoT — org_id required; never invent from X-Org-Id.
         const body = this.parse_body(NotificationsGetInput, req);
-        await this.assert_org_authorized(this.auth_from(req), body.org_id);
+        // Route policy: member of body.org_id.
 
         const offset = body.offset ?? 0;
         const limit = body.limit ?? 50;
@@ -287,28 +280,4 @@ export class NotificationsController extends BaseController {
         });
         this.ok(res, { items: result.notifications, total: result.total, offset, limit });
     }
-
-    /** Realm admin, channel owner, or account notification admin for the channel's org. */
-    private async require_channel_write_auth(
-        channel: { realm_id: string | null; org_id?: string | null; user_id?: string | null },
-        user_id: string,
-        req: Request,
-    ): Promise<void> {
-        if (channel.realm_id) {
-            await require_realm_notification_admin(channel.realm_id, user_id, req);
-            return;
-        }
-        // Personal account channel — owner may mutate without account-admin role.
-        if (channel.user_id && String(channel.user_id) === user_id) return;
-
-        const channel_org = channel.org_id ? String(channel.org_id) : null;
-        if (!channel_org) {
-            throw ApiError.forbidden('Account channel has no org_id');
-        }
-        await this.assert_org_authorized(this.auth_from(req), channel_org);
-        await require_account_notification_admin(req, channel_org);
-    }
 }
-
-/** @deprecated Use NotificationsController. */
-export const NotificationController = NotificationsController;

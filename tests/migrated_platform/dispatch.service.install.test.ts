@@ -1,14 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
+import { randomUUID } from 'node:crypto';
 
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
 import {
     Daemon,
     Realm,
     RealmMember,
-    Scope,
-    Team,
+    DaemonTeam,
 } from '../../src/models/index.js';
+import { Scope } from '../../src/models/index.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { ApiError } from '../../src/lib/api_error.js';
@@ -39,18 +40,20 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
         vi.spyOn(outbox, 'command_outbox_enqueue').mockImplementation(mock_enqueue);
 
         const scope = await Scope.create({
-            id: uid(),
+            id: randomUUID(),
             slug: `inst-${uid()}`.slice(0, 40),
-            name: 'install-scope',
-            org_id,
-            scope_type: 'org',
+            display_name: 'install-scope',
+            owner_id: null,
+            org_id: null,
+            visibility: 'public',
+            scope_type: 'platform',
             is_default: 0,
-            created_at: Date.now(),
+            created_at: new Date(),
         });
         scope_id = scope.id;
 
-        const team = await Team.create({
-            id: uid(),
+        const team = await DaemonTeam.create({
+            id: randomUUID(),
             scope_id,
             slug: `t-${uid()}`,
             version: '1.0.0',
@@ -100,7 +103,7 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
         await Realm.destroy({ where: { id: realm_id } });
         await Daemon.destroy({ where: { id: d1 } });
         await Daemon.destroy({ where: { id: d2 } });
-        await Team.destroy({ where: { id: team_id } });
+        await DaemonTeam.destroy({ where: { id: team_id } });
         await Scope.destroy({ where: { id: scope_id } });
         await close_test_control_plane_store();
     });

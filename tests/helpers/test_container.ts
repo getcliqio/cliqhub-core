@@ -11,8 +11,17 @@ import { ScopesService } from '../../src/services/scopes_service.js';
 import { register_control_plane_routes } from '../../src/routes/index.js';
 import { error_handler } from '../../src/middleware/error_handler.js';
 import { create_auth_middleware } from '../../src/middleware/auth_middleware.js';
-import { deny_daemon_token_outside_allowlist } from '../../src/middleware/daemon_token_gate.js';
-import { require_internal, require_internal_network } from '../../src/middleware/internal_only.js';
+import { create_route_policy_middleware } from '../../src/middleware/enforce_route_policy.js';
+import type { AccessStore } from '../../src/auth/route_policy/engine.js';
+import { org_role_store } from './policy_decision.js';
+import type { Request, Response, NextFunction } from 'express';
+
+/** Stand-in for the route policy's `site_admin` rule when a test app runs without the policy. */
+export function test_site_admin_only(req: Request, res: Response, next: NextFunction): void {
+    if (!req.auth?.user) { res.status(401).json({ ok: false, error: { code: 'unauthorized', message: 'Authentication required' } }); return; }
+    if (req.auth.user.role !== 'admin' || req.auth.auth_via === 'daemon_token') { res.status(403).json({ ok: false, error: { code: 'forbidden', message: 'You do not have access to do this' } }); return; }
+    next();
+}
 import type { EnvConfig } from '../../src/config/env.js';
 
 export function test_config(): EnvConfig {
@@ -33,7 +42,7 @@ export function test_config(): EnvConfig {
 export function make_mock_repos() {
     return {
         user_repo: {
-            find_by_id: vi.fn().mockResolvedValue(null),
+            find_profile_by_id: vi.fn().mockResolvedValue(null),
             find_by_username: vi.fn().mockResolvedValue(null),
             find_by_username_or_email: vi.fn().mockResolvedValue(null),
             find_by_email: vi.fn().mockResolvedValue(null),
@@ -56,10 +65,18 @@ export function make_mock_repos() {
             find_owned_by_user: vi.fn().mockResolvedValue([]),
             find_by_org_ids: vi.fn().mockResolvedValue([]),
             find_member_scopes: vi.fn().mockResolvedValue([]),
+            find_default_scopes: vi.fn().mockResolvedValue([]),
             find_by_slug: vi.fn().mockResolvedValue(null),
             find_by_slug_with_transaction: vi.fn().mockResolvedValue(null),
+            find_by_id: vi.fn().mockResolvedValue(null),
+            find_count: vi.fn().mockResolvedValue(0),
+            find_all: vi.fn().mockResolvedValue([]),
+            find_all_q: vi.fn().mockResolvedValue([]),
+            find_catalog_page: vi.fn().mockResolvedValue([]),
+            update_where: vi.fn().mockResolvedValue([1]),
             create: vi.fn().mockResolvedValue(1),
             delete_by_id: vi.fn(),
+            delete_where_q: vi.fn().mockResolvedValue(0),
         },
         org_member_repo: {
             find_orgs_by_user: vi.fn().mockResolvedValue([]),
@@ -71,6 +88,7 @@ export function make_mock_repos() {
         team_repo: {
             find_by_id: vi.fn().mockResolvedValue(null),
             find_by_name_and_scope: vi.fn().mockResolvedValue(null),
+            find_all_q: vi.fn().mockResolvedValue([]),
             list_filtered: vi.fn().mockResolvedValue([]),
             count_filtered: vi.fn().mockResolvedValue(0),
             find_author_username: vi.fn().mockResolvedValue(null),
@@ -120,7 +138,24 @@ export function make_mock_repos() {
     };
 }
 
-export function create_test_app() {
+/**
+ * Store for test apps built on mocked repos: no orgs or realms are known, and
+ * team records read as public so the teams service's own visibility rule decides.
+ */
+export function unit_access_store(): AccessStore {
+    return {
+        ...org_role_store(),
+        record: async (kind) => (kind === 'team' ? { team: { visibility: 'public', author_id: null, scope: null } } : null),
+    };
+}
+
+/**
+ * The production route policy is always mounted (it is the only access check
+ * for realm, org and site-admin rules).
+ * @param opts.route_policy - store for the policy: `SequelizeAccessStore` for
+ *   DB-backed tests; defaults to {@link unit_access_store}.
+ */
+export function create_test_app(opts: { route_policy?: AccessStore } = {}) {
     const app = express();
     app.use(express.json());
 
@@ -133,7 +168,7 @@ export function create_test_app() {
         scope_repo: repos.scope_repo as any,
         org_member_repo: repos.org_member_repo as any,
     }));
-    app.use(deny_daemon_token_outside_allowlist);
+    app.use(create_route_policy_middleware({ store: opts.route_policy ?? unit_access_store() }));
 
     const auth_service = new AuthService(
         repos.user_repo as any,
@@ -145,10 +180,10 @@ export function create_test_app() {
     );
     const auth_controller = new AuthController(auth_service);
 
-    app.post('/internal/auth/signup', require_internal_network, auth_controller.wrap(auth_controller.signup));
-    app.post('/internal/auth/authenticate_user', require_internal_network, auth_controller.wrap(auth_controller.authenticate_user));
-    app.post('/internal/auth/issue_session_token', require_internal, auth_controller.wrap(auth_controller.issue_session_token));
-    app.post('/internal/auth/revoke_session_token', require_internal_network, auth_controller.wrap(auth_controller.revoke_session_token));
+    app.post('/internal/auth/signup', auth_controller.wrap(auth_controller.signup));
+    app.post('/internal/auth/authenticate_user', auth_controller.wrap(auth_controller.authenticate_user));
+    app.post('/internal/auth/issue_session_token', test_site_admin_only, auth_controller.wrap(auth_controller.issue_session_token));
+    app.post('/internal/auth/revoke_session_token', auth_controller.wrap(auth_controller.revoke_session_token));
 
     const teams_service = new TeamsService(
         repos.team_repo as any, repos.version_repo as any,

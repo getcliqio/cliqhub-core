@@ -13,6 +13,7 @@ export const SettingDef = z.object({
 	description: z.string().optional().describe('Human-readable help for the key'),
 	default: z.unknown().optional().describe('Default value when unset'),
 	when: z.record(z.string(), z.string()).optional().describe('Conditional visibility map (key → required value)'),
+	secret: z.boolean().optional().describe('True for credentials (API keys, tokens). Values are masked in get_settings without agents.reveal'),
 });
 export type SettingDef = z.infer<typeof SettingDef>;
 

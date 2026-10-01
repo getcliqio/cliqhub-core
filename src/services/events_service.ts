@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
-import { get_notification_handler } from '../notifications/handlers/index.js';
+import { route_event } from '../notifications/router.js';
+import type { HubEvent } from '../models/hub_event.model.js';
 import { CustomEventService } from './custom_event.service.js';
 import type { NotificationDispatchStatus } from '../notifications/types.js';
 import {
@@ -11,7 +12,11 @@ import {
 	type EventType,
 } from '../schemas/event_types.js';
 import { event_submit_schema } from '../schemas/event_types.js';
-import { HubEvent } from '../models/hub_event.model.js';
+import { HubEventRepository } from '../repositories/hub_event_repository.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+
+const _hub_event_repo = new HubEventRepository();
+const _realm_repo_ev = new RealmRepository();
 
 const log = get_logger('events');
 
@@ -129,13 +134,12 @@ export class EventSubmitService {
 		let resolved_org_id = body.org_id?.trim() || null;
 		if (!resolved_org_id && body.realm_id?.trim()) {
 			try {
-				const { Realm } = await import('../models/index.js');
-				const realm = await Realm.findByPk(body.realm_id.trim(), { attributes: ['org_id'] });
+				const realm = await _realm_repo_ev.find_by_id(body.realm_id.trim(), { attributes: ['org_id'] });
 				if (realm?.org_id) resolved_org_id = String(realm.org_id);
-			} catch { /* best-effort */ }
+			} catch (err) { log.warn('event_org_lookup_failed', { error: err instanceof Error ? err.message : String(err) }); /* best-effort */ }
 		}
 
-		const row = await HubEvent.create({
+		const row = await _hub_event_repo.create_one({
 			id,
 			type,
 			occurred_at,
@@ -164,10 +168,9 @@ export class EventSubmitService {
 		const dto = to_dto(row, 'deferred');
 		let notifications: NotificationDispatchStatus = 'skipped';
 
-		/** Rule-based routing via the event handler. */
+		/** Rule-based routing via the event router. */
 		try {
-			const handler = get_notification_handler(type as string);
-			notifications = await handler.handle(dto);
+			notifications = await route_event(dto);
 		} catch (err) {
 			notifications = 'failed';
 			log.error(
@@ -197,7 +200,7 @@ export class EventSubmitService {
 	}
 
 	static async get(id: string): Promise<SubmittedEvent> {
-		const row = await HubEvent.findByPk(id);
+		const row = await _hub_event_repo.find_by_id(id);
 		if (!row) throw ApiError.not_found(`event '${id}' not found`);
 		return to_dto(row, 'deferred');
 	}

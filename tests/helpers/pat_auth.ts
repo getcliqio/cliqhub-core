@@ -29,7 +29,7 @@ export type Pat_auth_user = {
 
 type Stub_repos = {
     user_repo: {
-        find_by_id: { mockResolvedValueOnce: (v: unknown) => unknown; mockResolvedValue: (v: unknown) => unknown };
+        find_profile_by_id: { mockResolvedValueOnce: (v: unknown) => unknown; mockResolvedValue: (v: unknown) => unknown };
     };
     token_repo: {
         find_by_prefix: { mockResolvedValueOnce: (v: unknown) => unknown; mockResolvedValue: (v: unknown) => unknown };
@@ -39,6 +39,7 @@ type Stub_repos = {
         find_owned_by_user: { mockResolvedValueOnce: (v: unknown) => unknown; mockResolvedValue: (v: unknown) => unknown };
         find_by_org_ids: { mockResolvedValueOnce: (v: unknown) => unknown; mockResolvedValue: (v: unknown) => unknown };
         find_member_scopes: { mockResolvedValueOnce: (v: unknown) => unknown; mockResolvedValue: (v: unknown) => unknown };
+        find_default_scopes: { mockResolvedValueOnce: (v: unknown) => unknown; mockResolvedValue: (v: unknown) => unknown };
     };
     org_member_repo: {
         find_orgs_by_user: { mockResolvedValueOnce: (v: unknown) => unknown; mockResolvedValue: (v: unknown) => unknown };
@@ -75,7 +76,7 @@ export function stub_pat_auth(
 
     if (once) {
         repos.token_repo.find_by_prefix.mockResolvedValueOnce(row);
-        repos.user_repo.find_by_id.mockResolvedValueOnce({
+        repos.user_repo.find_profile_by_id.mockResolvedValueOnce({
             display_name: user.username,
             email: `${user.username}@test.com`,
             suspended_at: null,
@@ -86,9 +87,10 @@ export function stub_pat_auth(
         repos.scope_repo.find_owned_by_user.mockResolvedValueOnce([]);
         repos.org_member_repo.find_orgs_by_user.mockResolvedValueOnce([]);
         repos.scope_repo.find_member_scopes.mockResolvedValueOnce([]);
+        repos.scope_repo.find_default_scopes.mockResolvedValueOnce([]);
     } else {
         repos.token_repo.find_by_prefix.mockResolvedValue(row);
-        repos.user_repo.find_by_id.mockResolvedValue({
+        repos.user_repo.find_profile_by_id.mockResolvedValue({
             display_name: user.username,
             email: `${user.username}@test.com`,
             suspended_at: null,
@@ -99,6 +101,7 @@ export function stub_pat_auth(
         repos.scope_repo.find_owned_by_user.mockResolvedValue([]);
         repos.org_member_repo.find_orgs_by_user.mockResolvedValue([]);
         repos.scope_repo.find_member_scopes.mockResolvedValue([]);
+        repos.scope_repo.find_default_scopes.mockResolvedValue([]);
     }
 
     return `Bearer ${plaintext}`;

@@ -1,3 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { DataTypes, type Sequelize } from 'sequelize';
+import { BaseModel } from './base_model.js';
+
 /**
  * AgentCatalog model — Hub-owned SoT for platform agents (`cliq.agent_catalog`).
  *
@@ -10,26 +14,7 @@
  * Soft-delete via `deleted` / `deleted_at`.
  * Do not confuse with store `cliq.agents` (daemon-local DaemonAgent registry).
  */
-
-import { randomUUID } from 'node:crypto';
-import { DataTypes, Model, Sequelize } from 'sequelize';
-
-export interface AgentCatalogAttributes {
-    id: string;
-    name: string;
-    version: string | null;
-    description: string | null;
-    agent_type: string;
-    manifest: Record<string, unknown>;
-    org_id: string | null;
-    is_system: boolean;
-    deleted: boolean;
-    deleted_at: number | null;
-    created_at: Date;
-    updated_at: Date;
-}
-
-export class AgentCatalog extends Model<AgentCatalogAttributes> implements AgentCatalogAttributes {
+export class AgentCatalog extends BaseModel {
     declare id: string;
     declare name: string;
     declare version: string | null;
@@ -42,12 +27,9 @@ export class AgentCatalog extends Model<AgentCatalogAttributes> implements Agent
     declare deleted_at: number | null;
     declare created_at: Date;
     declare updated_at: Date;
-}
 
-/** Initialize the AgentCatalog Sequelize model on the given connection. */
-export function init_agent_catalog(sequelize: Sequelize): void {
-    AgentCatalog.init(
-        {
+    static register(sequelize: Sequelize): void {
+        AgentCatalog.init({
             id: { type: DataTypes.UUID, primaryKey: true, defaultValue: () => randomUUID() },
             name: { type: DataTypes.STRING(128), allowNull: false },
             version: { type: DataTypes.STRING(32), allowNull: true },
@@ -60,13 +42,27 @@ export function init_agent_catalog(sequelize: Sequelize): void {
             deleted_at: { type: DataTypes.BIGINT, allowNull: true },
             created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
             updated_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
-        },
-        {
+        }, {
             sequelize,
             schema: 'cliq',
             tableName: 'agent_catalog',
             timestamps: false,
             underscored: true,
-        },
-    );
+        });
+    }
 }
+
+export type AgentCatalogAttributes = {
+    id: string;
+    name: string;
+    version: string | null;
+    description: string | null;
+    agent_type: string;
+    manifest: Record<string, unknown>;
+    org_id: string | null;
+    is_system: boolean;
+    deleted: boolean;
+    deleted_at: number | null;
+    created_at: Date;
+    updated_at: Date;
+};

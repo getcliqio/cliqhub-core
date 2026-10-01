@@ -83,71 +83,20 @@ export function setup_sequelize_mocks() {
     vi.mock('../../src/db/control_plane_store.js', () => ({
         connect_control_plane: vi.fn(),
         close_control_plane: vi.fn(),
+        get_control_plane_store: vi.fn().mockReturnValue({
+            sequelize: {
+                transaction: vi.fn().mockImplementation(async (fn?: any) => {
+                    if (typeof fn === 'function') return fn({});
+                    return { commit: vi.fn(), rollback: vi.fn() };
+                }),
+                query: vi.fn().mockResolvedValue([[], {}]),
+                escape: vi.fn().mockImplementation((v: unknown) => `'${String(v)}'`),
+                close: vi.fn(),
+            },
+        }),
     }));
 
     vi.mock('../../src/models/index.js', () => {
-        const make_model = () => ({
-            findOne: vi.fn().mockResolvedValue(null),
-            findAll: vi.fn().mockResolvedValue([]),
-            findByPk: vi.fn().mockResolvedValue(null),
-            create: vi.fn().mockResolvedValue({ id: 'mock-id' }),
-            update: vi.fn().mockResolvedValue([1]),
-            destroy: vi.fn().mockResolvedValue(1),
-            count: vi.fn().mockResolvedValue(0),
-        });
-        return {
-            Realm: make_model(),
-            RealmMember: make_model(),
-            RealmDispatchKey: make_model(),
-            Daemon: make_model(),
-            DaemonConfig: make_model(),
-            Scope: make_model(),
-            Agent: make_model(),
-            Container: make_model(),
-            Workspace: make_model(),
-            WorkspaceTeam: make_model(),
-            Run: make_model(),
-            RunEvent: make_model(),
-            RunLog: make_model(),
-            RunLogChunk: make_model(),
-            RunPhase: make_model(),
-            RunArtifact: make_model(),
-            Setting: make_model(),
-            Team: make_model(),
-            NotificationChannel: make_model(),
-            InAppNotification: make_model(),
-            Secret: make_model(),
-            DispatchMailbox: make_model(),
-            HubEvent: make_model(),
-            Event: make_model(),
-            EventType: make_model(),
-            init_control_plane_models: vi.fn(),
-            init_core_api_models: vi.fn(),
-            reset_core_api_models: vi.fn(),
-        };
-    });
-
-    vi.mock('../../src/db/sequelize.js', () => ({
-        init_sequelize: vi.fn().mockReturnValue({
-            transaction: vi.fn().mockImplementation(async (fn?: any) => {
-                if (typeof fn === 'function') return fn({});
-                return { commit: vi.fn(), rollback: vi.fn() };
-            }),
-            query: vi.fn().mockResolvedValue([[], {}]),
-            close: vi.fn(),
-        }),
-        get_sequelize: vi.fn().mockReturnValue({
-            transaction: vi.fn().mockImplementation(async (fn?: any) => {
-                if (typeof fn === 'function') return fn({});
-                return { commit: vi.fn(), rollback: vi.fn() };
-            }),
-            query: vi.fn().mockResolvedValue([[], {}]),
-            close: vi.fn(),
-        }),
-        close_sequelize: vi.fn(),
-    }));
-
-    vi.mock('../../src/db/models/index.js', () => {
         const make_model = () => ({
             findOne: vi.fn().mockResolvedValue(null),
             findAll: vi.fn().mockResolvedValue([]),
@@ -173,22 +122,87 @@ export function setup_sequelize_mocks() {
         });
 
         return {
+            // Registry models
             User: make_model(),
             Org: make_model(),
             OrgMember: make_model(),
             OrgRole: make_model(),
             OrgAgentSetting: make_model(),
             ApiToken: make_model(),
-            Scope: make_model(),
             ScopeMember: make_model(),
-            Team: make_model(),
-            TeamVersion: make_model(),
             TeamTag: make_model(),
             Draft: make_model(),
             AuditLog: make_model(),
             DownloadLog: make_model(),
+            AccountAgentSetting: make_model(),
+            AccountInvite: make_model(),
+            RealmInvite: make_model(),
+            UserRealmAgentSetting: make_model(),
+            // Store models
+            Realm: make_model(),
+            RealmMember: make_model(),
+            RealmDispatchKey: make_model(),
+            Daemon: make_model(),
+            DaemonConfig: make_model(),
+            Scope: make_model(),
+            Agent: make_model(),
+            Container: make_model(),
+            Workspace: make_model(),
+            WorkspaceTeam: make_model(),
+            WorkspaceSecret: make_model(),
+            Run: make_model(),
+            RunEvent: make_model(),
+            RunLog: make_model(),
+            RunLogLine: make_model(),
+            RunLogChunk: make_model(),
+            RunPhase: make_model(),
+            RunArtifact: make_model(),
+            RunSpan: make_model(),
             Setting: make_model(),
+            DaemonTeam: make_model(),
+            Team: make_model(),
+            TeamVersion: make_model(),
+            NotificationChannel: make_model(),
+            NotificationRule: make_model(),
+            NotificationSubscription: make_model(),
+            InAppNotification: make_model(),
+            HubEvent: make_model(),
+            CustomEvent: make_model(),
+            ChannelDestination: make_model(),
+            WebhookDelivery: make_model(),
+            Review: make_model(),
+            ReviewMessage: make_model(),
+            ReviewNotification: make_model(),
+            StoredArtifact: make_model(),
+            RealmA2aSetting: make_model(),
+            RealmAgentSetting: make_model(),
+            RealmDispatchQueue: make_model(),
+            AgentCatalog: make_model(),
+            AccountMeshSetting: make_model(),
+            // Functions
             init_models: vi.fn(),
+            init_core_api_models: vi.fn(),
+            reset_core_api_models: vi.fn(),
         };
     });
+
+    vi.mock('../../src/db/sequelize.js', () => ({
+        init_sequelize: vi.fn().mockReturnValue({
+            transaction: vi.fn().mockImplementation(async (fn?: any) => {
+                if (typeof fn === 'function') return fn({});
+                return { commit: vi.fn(), rollback: vi.fn() };
+            }),
+            query: vi.fn().mockResolvedValue([[], {}]),
+            close: vi.fn(),
+        }),
+        get_sequelize: vi.fn().mockReturnValue({
+            transaction: vi.fn().mockImplementation(async (fn?: any) => {
+                if (typeof fn === 'function') return fn({});
+                return { commit: vi.fn(), rollback: vi.fn() };
+            }),
+            query: vi.fn().mockResolvedValue([[], {}]),
+            close: vi.fn(),
+        }),
+        close_sequelize: vi.fn(),
+    }));
 }

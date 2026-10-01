@@ -37,6 +37,7 @@ export const RealmGetInput = z.object({
     sort_by: z.enum(['slug', 'name', 'created_at', 'updated_at', 'created_by']).optional()
         .describe('Sort column'),
     sort_dir: z.enum(['asc', 'desc']).optional().describe('Sort direction'),
+    all: z.boolean().optional().describe('Site admins only: every record on the hub, not just the caller\'s realm memberships (ignored for everyone else). org_id still narrows.'),
 });
 export type RealmGetInput = z.infer<typeof RealmGetInput>;
 

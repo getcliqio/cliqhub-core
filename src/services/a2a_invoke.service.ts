@@ -1,6 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { Realm, RealmMember, Run } from '../models/index.js';
-import { Team as HubTeam, TeamVersion } from '../db/models/index.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
+import { RunRepository } from '../repositories/run_repository.js';
+import { TeamRepository } from '../repositories/team_repository.js';
+import { TeamVersionRepository } from '../repositories/team_version_repository.js';
+
+const _realm_repo_a2ai = new RealmRepository();
+const _realm_member_repo_a2ai = new RealmMemberRepository();
+const _run_repo_a2ai = new RunRepository();
+const _team_repo_a2ai = new TeamRepository();
+const _tv_repo_a2ai = new TeamVersionRepository();
 import { ApiError } from '../lib/api_error.js';
 import { RealmA2aService } from './realm_a2a.service.js';
 import { DispatchService } from './dispatch.service.js';
@@ -8,6 +17,9 @@ import { QueueService } from './queue.service.js';
 import type { Queue_item_dto } from './queue.service.js';
 import { InAppNotificationService } from './in_app_notification.service.js';
 import { EventSubmitService } from './events_service.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.a2a_invoke');
 
 export type A2a_task_state =
     | 'submitted'
@@ -118,10 +130,11 @@ export class A2aInvokeService {
         inputs?: Record<string, unknown>;
         context_id?: string;
     }): Promise<A2a_task> {
+        log.debug('invoke_skill', { realm_id: input.realm_id, skill_id: input.skill_id });
         const enabled = await RealmA2aService.is_enabled(input.realm_id);
         if (!enabled) throw ApiError.forbidden('A2A is disabled for this realm');
 
-        const realm = await Realm.findByPk(input.realm_id);
+        const realm = await _realm_repo_a2ai.find_by_id(input.realm_id);
         if (!realm || realm.deleted) throw ApiError.not_found('Realm not found');
 
         const skill_id = input.skill_id.trim();
@@ -141,10 +154,10 @@ export class A2aInvokeService {
             throw ApiError.not_found(`Skill '${skill_id}' is not installed on this realm`);
         }
 
-        const hub_team = await HubTeam.findOne({ where: { scope, name: slug } });
+        const hub_team = await _team_repo_a2ai.find_one_q({ where: { scope, name: slug } });
         if (!hub_team) throw ApiError.not_found(`Team '${skill_id}' not found`);
 
-        const latest = await TeamVersion.findOne({
+        const latest = await _tv_repo_a2ai.find_one_q({
             where: { team_id: hub_team.id },
             order: [['published_at', 'DESC']],
         });
@@ -165,6 +178,7 @@ export class A2aInvokeService {
                 a2a_request_id: randomUUID(),
             },
         });
+        log.info('skill_invoked', { queue_item_id: item.id, realm_id: realm.id, skill_id });
 
         return task_from_queue(item, skill_id);
     }
@@ -173,6 +187,7 @@ export class A2aInvokeService {
         realm: { id: string; owner_user_id: string },
         inputs: Record<string, unknown>,
     ): Promise<A2a_task> {
+        log.debug('_invoke_notify_member', { realm_id: realm.id });
         const member_id = String(inputs.member_id ?? inputs.user_id ?? '').trim();
         const message = String(inputs.message ?? '').trim();
         const title = String(inputs.title ?? 'A2A notification').trim() || 'A2A notification';
@@ -180,7 +195,7 @@ export class A2aInvokeService {
         if (!member_id) throw ApiError.bad_request("Missing required input 'member_id'");
         if (!message) throw ApiError.bad_request("Missing required input 'message'");
 
-        const member = await RealmMember.findOne({
+        const member = await _realm_member_repo_a2ai.find_one_q({
             where: {
                 realm_id: realm.id,
                 member_type: 'user',
@@ -213,7 +228,8 @@ export class A2aInvokeService {
                     notification_id: notification.id,
                 },
             });
-        } catch {
+        } catch (err) {
+            log.warn('a2a_channel_fanout_failed', { error: err instanceof Error ? err.message : String(err) });
             // In-app already persisted; channel fan-out is best-effort.
         }
 
@@ -243,6 +259,7 @@ export class A2aInvokeService {
     }
 
     static async get_task(task_id: string, realm_id?: string): Promise<A2a_task> {
+        log.debug('get_task', { task_id, realm_id });
         const item = await QueueService.get(task_id);
         if (realm_id && item.realm_id !== realm_id) {
             throw ApiError.not_found('Task not found');
@@ -258,7 +275,7 @@ export class A2aInvokeService {
         const task = task_from_queue(item, skill_id);
 
         if (item.run_id) {
-            const run = await Run.findByPk(item.run_id);
+            const run = await _run_repo_a2ai.find_by_id(item.run_id);
             if (run) {
                 const run_status = String((run as { status?: string }).status ?? '');
                 if (run_status === 'completed' || run_status === 'failed' || run_status === 'cancelled') {

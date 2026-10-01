@@ -3,6 +3,14 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { TeamsService } from '../../../src/services/teams_service.js';
 import { ALICE, BOB, UNAUTHED, SITE_ADMIN } from '../../helpers/fixtures.js';
 
+vi.mock('../../../src/lib/sequelize.js', () => ({
+    get_sequelize: vi.fn().mockReturnValue({
+        transaction: vi.fn().mockImplementation(async (fn: any) => fn({})),
+        query: vi.fn().mockResolvedValue([[{ total: 0 }], []]),
+        escape: vi.fn().mockImplementation((v: string) => `'${v}'`),
+    }),
+}));
+
 /* ─── Module mocks ────────────────────────────────────────────── */
 
 vi.mock('../../../src/db/sequelize.js', () => ({
@@ -30,7 +38,7 @@ const mock_team_find_by_pk = vi.fn();
 const mock_team_update = vi.fn();
 const mock_user_find_by_pk = vi.fn();
 
-vi.mock('../../../src/db/models/index.js', () => ({
+vi.mock('../../../src/models/index.js', () => ({
     Team: {
         findByPk: (...args: any[]) => mock_team_find_by_pk(...args),
         update: (...args: any[]) => mock_team_update(...args),
@@ -49,6 +57,59 @@ vi.mock('../../../src/db/models/index.js', () => ({
         findOne: vi.fn().mockResolvedValue(null),
     },
     User: { findByPk: (...args: any[]) => mock_user_find_by_pk(...args) },
+    ApiToken: { findOne: vi.fn(), findByPk: vi.fn(), create: vi.fn() },
+    AgentCatalog: { findAll: vi.fn(), findOne: vi.fn() },
+    Daemon: { findByPk: vi.fn(), findAll: vi.fn() },
+    Realm: { findOne: vi.fn(), findAll: vi.fn(), findByPk: vi.fn(), create: vi.fn() },
+    RealmMember: { findOne: vi.fn(), findAll: vi.fn(), create: vi.fn() },
+    RealmDispatchQueue: { findOne: vi.fn(), findAll: vi.fn() },
+    Run: { findByPk: vi.fn(), findAll: vi.fn() },
+    DaemonTeam: { findOne: vi.fn(), findAll: vi.fn() },
+    RealmAgentSetting: {},
+    UserRealmAgentSetting: { findAll: vi.fn(), findOrCreate: vi.fn(), bulkCreate: vi.fn(), destroy: vi.fn() },
+    OrgAgentSetting: { findAll: vi.fn(), findOne: vi.fn() },
+    RealmInvite: { findOne: vi.fn(), create: vi.fn() },
+    TeamVersion: {},
+    WorkspaceTeam: {},
+    Workspace: {},
+    ScopeMember: {},
+    NotificationChannel: {},
+    NotificationRule: {},
+    NotificationSubscription: {},
+    Org: {},
+    OrgMember: {},
+    OrgRole: {},
+    RealmDispatchKey: {},
+    RealmDispatchQueue: {},
+    RealmA2aSetting: {},
+    AccountMeshSetting: {},
+    AccountAgentSetting: {},
+    AccountInvite: {},
+    DaemonConfig: {},
+    Draft: {},
+    AuditLog: {},
+    DownloadLog: {},
+    Setting: {},
+    TeamTag: {},
+    Agent: {},
+    Container: {},
+    RunEvent: {},
+    RunLog: {},
+    RunLogLine: {},
+    RunLogChunk: {},
+    RunPhase: {},
+    RunArtifact: {},
+    RunSpan: {},
+    WorkspaceSecret: {},
+    InAppNotification: {},
+    WebhookDelivery: {},
+    ChannelDestination: {},
+    HubEvent: {},
+    CustomEvent: {},
+    Review: {},
+    ReviewMessage: {},
+    ReviewNotification: {},
+    StoredArtifact: {},
 }));
 
 /* ─── Repo factories ─────────────────────────────────────────── */
@@ -57,6 +118,7 @@ function make_team_repo() {
     return {
         find_by_id: vi.fn(),
         find_by_name_and_scope: vi.fn(),
+        find_all_q: vi.fn().mockResolvedValue([]),
         list_filtered: vi.fn().mockResolvedValue([]),
         count_filtered: vi.fn().mockResolvedValue(0),
         find_author_username: vi.fn().mockResolvedValue('alice'),

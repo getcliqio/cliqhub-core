@@ -4,7 +4,21 @@
 
 import { Op } from 'sequelize';
 
-import { Realm, Run, RunArtifact, Scope, Team } from '../models/index.js';
+import { get_logger } from '../lib/log.js';
+import type { DaemonTeam } from '../models/daemon_team.model.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { RunRepository } from '../repositories/run_repository.js';
+import { RunArtifactRepository } from '../repositories/run_artifact_repository.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+import { ScopeRepository } from '../repositories/scope_repository.js';
+
+const log = get_logger('svc.review_enrichment');
+
+const _realm_repo_re = new RealmRepository();
+const _run_repo_re = new RunRepository();
+const _run_artifact_repo = new RunArtifactRepository();
+const _dt_repo_re = new DaemonTeamRepository();
+const _scope_repo_re = new ScopeRepository();
 import { org_slug_by_ids } from './realm.service.js';
 
 export interface ReviewRealmInfo {
@@ -33,8 +47,7 @@ export interface ReviewArtifactInfo {
 
 const PREVIEW_CHARS = 4_000;
 
-function team_label(team: Team & { scope?: { slug?: string } }): string {
-	const scope_slug = team.scope?.slug;
+function team_label(team: DaemonTeam, scope_slug: string | undefined): string {
 	if (scope_slug) return `@${scope_slug}/${team.slug}`;
 	return team.slug || String(team.id);
 }
@@ -48,11 +61,12 @@ function payload_team(payload: Record<string, unknown> | null | undefined): stri
 export async function load_realm_info_map(
 	realm_ids: string[],
 ): Promise<Map<string, ReviewRealmInfo>> {
+	log.debug('load_realm_info_map', {});
 	const unique = [...new Set(realm_ids.filter(Boolean))];
 	const map = new Map<string, ReviewRealmInfo>();
 	if (unique.length === 0) return map;
 
-	const rows = await Realm.findAll({
+	const rows = await _realm_repo_re.find_all_q({
 		where: { id: { [Op.in]: unique } },
 		attributes: ['id', 'name', 'slug', 'org_id'],
 	});
@@ -75,23 +89,30 @@ export async function load_realm_info_map(
 }
 
 export async function load_run_info_map(run_ids: string[]): Promise<Map<string, ReviewRunInfo>> {
+	log.debug('load_run_info_map', {});
 	const unique = [...new Set(run_ids.filter(Boolean))];
 	const map = new Map<string, ReviewRunInfo>();
 	if (unique.length === 0) return map;
 
-	const runs = await Run.findAll({
+	const runs = await _run_repo_re.find_all_q({
 		where: { run_id: { [Op.in]: unique } },
 		attributes: ['run_id', 'run_name', 'team_id'],
 	});
 	const team_ids = [...new Set(runs.map((r) => r.team_id).filter(Boolean))];
 	const teams = team_ids.length === 0
 		? []
-		: await Team.findAll({
+		: await _dt_repo_re.find_all_q({
 			where: { id: { [Op.in]: team_ids } },
-			include: [{ model: Scope, as: 'scope', attributes: ['slug'] }],
 		});
+
+	const scope_ids = [...new Set(teams.map((t) => t.scope_id).filter(Boolean))];
+	const scopes = scope_ids.length === 0
+		? []
+		: await _scope_repo_re.find_all_q({ where: { id: { [Op.in]: scope_ids } }, attributes: ['id', 'slug'] });
+	const scope_slug_by_id = new Map(scopes.map((s) => [s.id, s.slug]));
+
 	const team_by_id = new Map(
-		teams.map((t) => [String(t.id), team_label(t as Team & { scope?: { slug?: string } })]),
+		teams.map((t) => [String(t.id), team_label(t, scope_slug_by_id.get(t.scope_id))]),
 	);
 
 	for (const run of runs) {
@@ -105,11 +126,12 @@ export async function load_run_info_map(run_ids: string[]): Promise<Map<string, 
 }
 
 export async function load_artifact_counts(run_ids: string[]): Promise<Map<string, number>> {
+	log.debug('load_artifact_counts', {});
 	const unique = [...new Set(run_ids.filter(Boolean))];
 	const map = new Map<string, number>();
 	if (unique.length === 0) return map;
 
-	const rows = await RunArtifact.findAll({
+	const rows = await _run_artifact_repo.find_all_q({
 		where: { run_id: { [Op.in]: unique } },
 		attributes: ['run_id'],
 	});
@@ -120,8 +142,9 @@ export async function load_artifact_counts(run_ids: string[]): Promise<Map<strin
 }
 
 export async function load_artifacts_for_run(run_id: string): Promise<ReviewArtifactInfo[]> {
+	log.debug('load_artifacts_for_run', { run_id });
 	if (!run_id) return [];
-	const rows = await RunArtifact.findAll({
+	const rows = await _run_artifact_repo.find_all_q({
 		where: { run_id },
 		order: [['id', 'ASC']],
 	});

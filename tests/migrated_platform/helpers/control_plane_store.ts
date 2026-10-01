@@ -4,8 +4,8 @@ import {
     close_control_plane_store,
     init_control_plane_store,
 } from '../../../src/db/control_plane_store.js';
-import { migrate_hub_schema } from '../../../src/db/hub_schema_migrations.js';
-import { init_models } from '../../../src/db/models/index.js';
+import { migrate_hub_schema, move_registry_to_cliq_schema } from '../../../src/models/migrations/hub_schema_migrations.js';
+import { init_models } from '../../../src/models/index.js';
 import {
     close_sequelize,
     init_sequelize,
@@ -68,6 +68,7 @@ export async function open_test_control_plane_store(): Promise<void> {
     assert_test_database_url(database_url);
     const sequelize = init_sequelize(database_url);
     init_models(sequelize);
+    await move_registry_to_cliq_schema(sequelize);
     await sequelize.sync();
     await migrate_hub_schema(sequelize);
     // Shared local DB may already have BFF e2e fixtures on hub_legacy_uuid(1..3)

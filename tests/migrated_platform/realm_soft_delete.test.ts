@@ -21,8 +21,8 @@ import { ScopeService } from '../../src/services/control_scope_service.js';
 import { TeamService } from '../../src/services/teams_install_service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
 import { TokenRepository } from '../../src/repositories/token_repository.js';
-import { User } from '../../src/db/models/user.js';
-import { ApiToken } from '../../src/db/models/index.js';
+import { User } from '../../src/models/user.model.js';
+import { ApiToken } from '../../src/models/index.js';
 
 const has_postgres = await postgres_reachable();
 
@@ -329,15 +329,8 @@ describe.skipIf(!has_postgres)('RealmService.remove soft-delete', () => {
 		expect(events[0]?.payload_json).toContain('"reason":"manual"');
 	});
 
-	it('forbids non-admin from deleting', async () => {
-		const realm = await RealmService.create(user_a, 'soft-noadmin', 'No Admin');
-		await RealmService.add_member(realm.id, user_a, {
-			member_type: 'user',
-			member_id: user_b,
-			role: 'operator',
-		});
-		await expect(RealmService.remove(realm.id, user_b)).rejects.toBeInstanceOf(ApiError);
-	});
+	// Who may delete a realm is the route policy's rule (realms/delete: admin + realms.delete),
+	// covered by the authz matrix; RealmService.remove no longer repeats it.
 
 	it('second delete fails after membership was cleared', async () => {
 		const realm = await RealmService.create(user_a, 'soft-twice', 'Twice');

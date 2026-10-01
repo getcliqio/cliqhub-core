@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { resolve_enroll_realm_and_grant } from '../../../src/lib/enroll_grant.js';
+import { EnrollGrant } from '../../../src/lib/enroll_grant.js';
+const resolve_enroll_realm_and_grant = EnrollGrant.resolve.bind(EnrollGrant);
 import { default_daemon_grant } from '../../../src/auth/grants.js';
 
 describe('resolve_enroll_realm_and_grant', () => {

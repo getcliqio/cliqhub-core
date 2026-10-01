@@ -1,7 +1,8 @@
 import { get_logger } from '../lib/log.js';
 import type { SubmittedEvent } from '../services/events_service.js';
 import { EventSubmitService } from '../services/events_service.js';
-import { Daemon, Run } from '../models/index.js';
+import { DaemonRepository } from '../repositories/daemon_repository.js';
+import { RunRepository } from '../repositories/run_repository.js';
 import { NotificationService } from '../services/notification.service.js';
 import { get_deliverer } from './deliverers/index.js';
 import {
@@ -14,6 +15,8 @@ import type { DeliveryContext } from './deliverers/abstract_channel_deliverer.js
 import { plan_fan_out, read_notify_channels_intent } from './notify_intent.js';
 
 const log = get_logger('notify.fanout');
+const _fan_out_daemon_repo = new DaemonRepository();
+const _fan_out_run_repo = new RunRepository();
 
 export class NotificationFanOutService {
 	/**
@@ -336,17 +339,17 @@ async function resolve_display_names(event: SubmittedEvent): Promise<{
 	const run_id = event.run_id?.trim();
 	if (!run_name && run_id) {
 		try {
-			const run = await Run.findByPk(run_id, { attributes: ['run_name'] });
+			const run = await _fan_out_run_repo.find_by_id(run_id);
 			run_name = String(run?.get('run_name') ?? '').trim();
-		} catch { /* ignore lookup errors */ }
+		} catch (err) { log.debug('fanout_lookup_failed', { error: err instanceof Error ? err.message : String(err) }); /* ignore lookup errors */ }
 	}
 
 	const daemon_id = event.daemon_id?.trim();
 	if (!daemon_name && daemon_id) {
 		try {
-			const daemon = await Daemon.findByPk(daemon_id, { attributes: ['name', 'hostname'] });
+			const daemon = await _fan_out_daemon_repo.find_by_id(daemon_id);
 			daemon_name = String(daemon?.get('name') ?? daemon?.get('hostname') ?? '').trim();
-		} catch { /* ignore */ }
+		} catch (err) { log.debug('fanout_lookup_failed', { error: err instanceof Error ? err.message : String(err) }); /* ignore */ }
 	}
 
 	return {

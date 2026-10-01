@@ -12,6 +12,7 @@
 
 import type { Request } from 'express';
 import { BaseController } from './base_controller.js';
+import { get_logger } from '../lib/log.js';
 import { RunService } from '../services/run.service.js';
 import { RealmService } from '../services/realm.service.js';
 import { RunSpanService } from '../services/run_span.service.js';
@@ -33,6 +34,8 @@ import type {
     TelemetryUsageData,
 } from '../schemas/telemetry_types.js';
 
+const log = get_logger('ctrl.telemetry');
+
 export class TelemetryController extends BaseController {
     /**
      * POST /v1/runs/report_telemetry — daemon usage snapshot or OTEL spans.
@@ -47,6 +50,7 @@ export class TelemetryController extends BaseController {
         req: ApiRequest<ReportTelemetryInput, ReportTelemetryData>,
         res: ApiOkResponse<ReportTelemetryData>,
     ): Promise<void> {
+        log.debug('report_telemetry', { run_id: req.body?.run_id, kind: req.body?.kind });
         // Zod SoT — reject unknown / invalid daemon payloads before services.
         const body = this.parse_body(ReportTelemetryInput, req);
 
@@ -86,6 +90,7 @@ export class TelemetryController extends BaseController {
         req: ApiRequest<GetTelemetryInput, GetTelemetryData>,
         res: ApiOkResponse<GetTelemetryData>,
     ): Promise<void> {
+        log.debug('get_telemetry', { user_id: req.auth?.user?.id, kind: req.body?.kind });
         // Zod SoT — discriminant drives which DTO the service must return.
         const body = this.parse_body(GetTelemetryInput, req);
 
@@ -104,7 +109,7 @@ export class TelemetryController extends BaseController {
         }
 
         // kind: summary — invent SoT is body.org_id (TEL-ORG); never X-Org-Id.
-        const user_id = req.user?.user_id;
+        const user_id = req.auth?.user?.id;
         if (!user_id) throw ApiError.unauthorized('login required');
         await this.assert_org_authorized(this.auth_from(req), body.org_id);
         // Visible realms for this org only — service does not re-authorize.

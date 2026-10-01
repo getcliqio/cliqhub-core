@@ -1,6 +1,7 @@
-import { Draft } from '../db/models/index.js';
+import { Draft } from '../models/index.js';
 import { fn } from 'sequelize';
 import type { DraftVO, DraftListItemVO } from '../schemas/draft_types.js';
+import { BaseRepository } from './base_repository.js';
 
 // Coerce a possibly-Date Sequelize column into the ISO-string form expected
 // by the VO contracts. Same shape as user_repository's helper; kept private
@@ -27,7 +28,8 @@ interface RawDraftListRow {
     updated_at: Date | string;
 }
 
-export class DraftRepository {
+export class DraftRepository extends BaseRepository<Draft> {
+    protected readonly model = Draft;
     async list_by_user_id(user_id: string): Promise<DraftListItemVO[]> {
         const rows = await Draft.findAll({
             where: { user_id },
@@ -71,8 +73,8 @@ export class DraftRepository {
         await Draft.update(fields, { where: { id } });
     }
 
-    async delete_by_id(id: string): Promise<void> {
-        await Draft.destroy({ where: { id } });
+    async delete_by_id(id: string): Promise<number> {
+        return Draft.destroy({ where: { id } });
     }
 
     async count_by_user_id(user_id: string): Promise<number> {

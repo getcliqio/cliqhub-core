@@ -34,6 +34,7 @@ export function init_sequelize(database_url: string): Sequelize {
             timestamps: false,
             underscored: true,
             freezeTableName: true,
+            schema: 'cliq',
         },
         // Managed Postgres (Railway et al.) silently drops idle TCP
         // connections after ~5 min. Without these guards the pool re-hands
@@ -61,6 +62,10 @@ export function init_sequelize(database_url: string): Sequelize {
             keepAliveInitialDelayMillis: 10_000,
             statement_timeout: 30_000,
             query_timeout: 30_000,
+            // All registry tables now live in the `cliq` schema. Unqualified
+            // references in raw migration SQL resolve to `cliq` first, with
+            // `public` as fallback (covers pg_catalog builtins).
+            options: '-c search_path=cliq,public',
         },
     });
     return _sequelize;

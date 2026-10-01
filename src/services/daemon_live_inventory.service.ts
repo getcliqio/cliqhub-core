@@ -5,13 +5,19 @@
 
 import { DispatchService } from './dispatch.service.js';
 import { WorkspaceService } from './workspace.service.js';
-import { Workspace } from '../models/index.js';
+import { WorkspaceRepository } from '../repositories/workspace_repository.js';
 import { DaemonTeamCacheService, type HeartbeatTeamEntry } from './daemon_team_cache.service.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.daemon_inventory');
+
+const workspace_repo = new WorkspaceRepository();
 
 export async function live_teams_from_daemon(
     daemon_id: string,
     user_id: string,
 ): Promise<Record<string, unknown> | null> {
+    log.debug('live_teams_from_daemon', { daemon_id, user_id });
     const result = await DispatchService.query_daemon(
         daemon_id,
         '/v1/teams/get',
@@ -43,6 +49,7 @@ export async function live_workspaces_from_daemon(
     daemon_id: string,
     user_id: string,
 ): Promise<Record<string, unknown> | null> {
+    log.debug('live_workspaces_from_daemon', { daemon_id, user_id });
     const result = await DispatchService.query_daemon(
         daemon_id,
         '/v1/workspaces/get',
@@ -90,7 +97,7 @@ async function _cache_workspaces(daemon_id: string, result: unknown): Promise<vo
         });
     }
 
-    const all_backend = await Workspace.findAll({ where: { daemon_id } });
+    const all_backend = await workspace_repo.find_all({ daemon_id });
     for (const row of all_backend) {
         if (!live_ids.has(row.id)) {
             await row.destroy();

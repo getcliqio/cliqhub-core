@@ -1,7 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import { Op } from 'sequelize';
 
-import { Workspace, WorkspaceTeam, Team, Scope, Run } from '../models/index.js';
+import { get_logger } from '../lib/log.js';
+import type { Workspace } from '../models/workspace.model.js';
+import { WorkspaceTeam, DaemonTeam } from '../models/index.js';
+import { WorkspaceRepository } from '../repositories/workspace_repository.js';
+import { WorkspaceTeamRepository } from '../repositories/workspace_team_repository.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+import { RunRepository } from '../repositories/run_repository.js';
+import { ScopeRepository } from '../repositories/scope_repository.js';
+
+const log = get_logger('svc.workspace');
+
+const _ws_repo_w = new WorkspaceRepository();
+const _wst_repo = new WorkspaceTeamRepository();
+const _dt_repo_w = new DaemonTeamRepository();
+const _run_repo_w = new RunRepository();
+const _scope_repo_w = new ScopeRepository();
 import { ApiError } from '../lib/api_error.js';
 
 
@@ -10,9 +25,12 @@ export class WorkspaceService {
     static async list(opts?: {
         daemon_id?: string;
         realm_id?: string;
+        /** Only workspaces on these daemons (tenancy filter from the controller). */
+        daemon_ids?: string[];
         limit?: number;
         offset?: number;
     }) {
+        log.debug('list', { daemon_id: opts?.daemon_id, realm_id: opts?.realm_id });
         const daemon_id = opts?.daemon_id;
         const realm_id = opts?.realm_id?.trim();
         const limit = opts?.limit != null
@@ -22,6 +40,12 @@ export class WorkspaceService {
 
         const where: Record<string, unknown> = {};
         if (daemon_id) where.daemon_id = daemon_id;
+        if (opts?.daemon_ids) {
+            if (opts.daemon_ids.length === 0) return { workspaces: [], total: 0 };
+            where.daemon_id = daemon_id
+                ? (opts.daemon_ids.includes(daemon_id) ? daemon_id : '__none__')
+                : { [Op.in]: opts.daemon_ids };
+        }
         if (realm_id) {
             const { RealmService } = await import('./realm.service.js');
             const daemon_ids = await RealmService.list_daemon_ids_in_realm(realm_id);
@@ -29,17 +53,16 @@ export class WorkspaceService {
             where.daemon_id = { [Op.in]: daemon_ids };
         }
 
-        const total = await Workspace.count({ where });
-        const workspaces = await Workspace.findAll({
+        const total = await _ws_repo_w.find_count(where as any);
+        const workspaces = await _ws_repo_w.find_all_q({
             where,
             include: [{
                 model: WorkspaceTeam,
                 as: 'workspace_teams',
                 include: [{
-                    model: Team,
+                    model: DaemonTeam,
                     as: 'team',
                     attributes: ['id', 'slug', 'scope_id'],
-                    include: [{ model: Scope, as: 'scope', attributes: ['id', 'slug'] }],
                 }],
             }],
             order: [['created_at', 'ASC']],
@@ -49,12 +72,25 @@ export class WorkspaceService {
         const ws_ids = workspaces.map(w => w.id);
         if (ws_ids.length === 0) return { workspaces: [], total };
 
+        // Collect scope_ids from nested teams for a single bulk lookup.
+        const nested_scope_ids = [...new Set(
+            workspaces.flatMap(ws =>
+                ((ws as any).workspace_teams ?? [])
+                    .map((wt: any) => wt.team?.scope_id as string | undefined)
+                    .filter((id: string | undefined): id is string => Boolean(id)),
+            ),
+        )];
+        const ws_scopes = nested_scope_ids.length === 0
+            ? []
+            : await _scope_repo_w.find_all_q({ where: { id: { [Op.in]: nested_scope_ids } }, attributes: ['id', 'slug'] });
+        const scope_slug_by_id = new Map(ws_scopes.map(s => [s.id, s.slug]));
+
         const [active_runs, latest_runs] = await Promise.all([
-            Run.findAll({
+            _run_repo_w.find_all_q({
                 where: { workspace_id: { [Op.in]: ws_ids }, state: { [Op.in]: ['running', 'awaiting_input'] } },
                 attributes: ['workspace_id', 'run_id', 'state', 'started_at'],
             }),
-            Run.findAll({
+            _run_repo_w.find_all_q({
                 where: { workspace_id: { [Op.in]: ws_ids } },
                 order: [['started_at', 'DESC']],
                 attributes: ['workspace_id', 'run_id', 'state', 'started_at'],
@@ -81,7 +117,7 @@ export class WorkspaceService {
                     .map((wt: any) => ({
                         team_id: wt.team.id,
                         slug: wt.team.slug,
-                        scope: wt.team.scope?.slug ?? 'default',
+                        scope: scope_slug_by_id.get(wt.team.scope_id) ?? 'default',
                     }));
 
                 const active = active_by_ws.get(ws.id) ?? [];
@@ -111,51 +147,63 @@ export class WorkspaceService {
     }
 
     static async get(id: string) {
-        const ws = await Workspace.findByPk(id);
+        log.debug('get', { id });
+        const ws = await _ws_repo_w.find_by_id(id);
         if (!ws) throw ApiError.not_found(`workspace '${id}' not found`);
         return WorkspaceService._enrich_single(ws);
     }
 
     static async get_by_path(path: string) {
-        const ws = await Workspace.findOne({ where: { path } });
+        log.debug('get_by_path', { path });
+        const ws = await _ws_repo_w.find_one_q({ where: { path } });
         if (!ws) throw ApiError.not_found(`workspace at '${path}' not found`);
         return WorkspaceService._enrich_single(ws);
     }
 
     static async find_by_path(path: string) {
-        const ws = await Workspace.findOne({ where: { path } });
+        log.debug('find_by_path', { path });
+        const ws = await _ws_repo_w.find_one_q({ where: { path } });
         if (!ws) return null;
         return WorkspaceService._enrich_single(ws);
     }
 
     private static async _enrich_single(ws: Workspace) {
         const [wt_rows, active_runs_rows, latest_run_row] = await Promise.all([
-            WorkspaceTeam.findAll({
+            _wst_repo.find_all_q({
                 where: { workspace_id: ws.id },
                 include: [{
-                    model: Team,
+                    model: DaemonTeam,
                     as: 'team',
                     attributes: ['id', 'slug', 'scope_id'],
-                    include: [{ model: Scope, as: 'scope', attributes: ['id', 'slug'] }],
                 }],
             }),
-            Run.findAll({
+            _run_repo_w.find_all_q({
                 where: { workspace_id: ws.id, state: { [Op.in]: ['running', 'awaiting_input'] } },
                 attributes: ['run_id', 'state', 'started_at'],
             }),
-            Run.findOne({
+            _run_repo_w.find_one_q({
                 where: { workspace_id: ws.id },
                 order: [['started_at', 'DESC']],
                 attributes: ['run_id', 'state', 'started_at'],
             }),
         ]);
 
+        const detail_scope_ids = [...new Set(
+            wt_rows
+                .map((wt: any) => wt.team?.scope_id as string | undefined)
+                .filter((id): id is string => Boolean(id)),
+        )];
+        const detail_scopes = detail_scope_ids.length === 0
+            ? []
+            : await _scope_repo_w.find_all_q({ where: { id: { [Op.in]: detail_scope_ids } }, attributes: ['id', 'slug'] });
+        const detail_scope_slug_by_id = new Map(detail_scopes.map(s => [s.id, s.slug]));
+
         const teams = wt_rows
             .filter((wt: any) => wt.team)
             .map((wt: any) => ({
                 team_id: wt.team.id as string,
                 slug: wt.team.slug as string,
-                scope: wt.team.scope?.slug as string ?? 'default',
+                scope: detail_scope_slug_by_id.get(wt.team.scope_id) ?? 'default',
             }));
 
         return {
@@ -184,11 +232,12 @@ export class WorkspaceService {
         daemon_id?: string | null,
         id?: string | null,
     ) {
+        log.debug('upsert_by_path', { path, daemon_id });
         const now = Date.now();
         const requested_id = id?.trim() || '';
 
         if (requested_id) {
-            const by_id = await Workspace.findByPk(requested_id);
+            const by_id = await _ws_repo_w.find_by_id(requested_id);
             if (by_id) {
                 const name_next = name ?? by_id.get('name');
                 const updates: Record<string, unknown> = {
@@ -203,7 +252,7 @@ export class WorkspaceService {
             }
         }
 
-        const existing = await Workspace.findOne({ where: { path } });
+        const existing = await _ws_repo_w.find_one_q({ where: { path } });
         if (existing) {
             const name_next = name ?? existing.get('name');
             const updates: Record<string, unknown> = { name: name_next, updated_at: now };
@@ -213,7 +262,7 @@ export class WorkspaceService {
             return { record: enriched, created: false };
         }
 
-        const ws = await Workspace.create({
+        const ws = await _ws_repo_w.create_one({
             id: requested_id || randomUUID(),
             path,
             name: name ?? null,
@@ -237,12 +286,13 @@ export class WorkspaceService {
         daemon_id: string;
         created_at?: number;
     }): Promise<void> {
+        log.debug('mirror_from_daemon', { id: input.id, daemon_id: input.daemon_id });
         const now = Date.now();
         const id = input.id.trim();
         const path = input.path.trim();
         if (!id || !path) return;
 
-        const by_id = await Workspace.findByPk(id);
+        const by_id = await _ws_repo_w.find_by_id(id);
         if (by_id) {
             await by_id.update({
                 path,
@@ -253,24 +303,24 @@ export class WorkspaceService {
             return;
         }
 
-        const by_daemon_path = await Workspace.findOne({
+        const by_daemon_path = await _ws_repo_w.find_one_q({
             where: { daemon_id: input.daemon_id, path },
         });
-        const by_path = by_daemon_path ?? await Workspace.findOne({ where: { path } });
+        const by_path = by_daemon_path ?? await _ws_repo_w.find_one_q({ where: { path } });
 
         if (by_path && by_path.id !== id) {
-            await WorkspaceTeam.update(
-                { workspace_id: id },
-                { where: { workspace_id: by_path.id } },
+            await _wst_repo.update_where(
+                { workspace_id: by_path.id } as any,
+                { workspace_id: id } as any,
             );
-            await Run.update(
-                { workspace_id: id },
-                { where: { workspace_id: by_path.id } },
+            await _run_repo_w.update_where(
+                { workspace_id: by_path.id } as any,
+                { workspace_id: id } as any,
             );
             const preserved_name = input.name ?? by_path.get('name');
             const preserved_created = by_path.get('created_at') as number;
             await by_path.destroy();
-            await Workspace.create({
+            await _ws_repo_w.create_one({
                 id,
                 path,
                 name: preserved_name ?? null,
@@ -292,7 +342,7 @@ export class WorkspaceService {
         }
 
         try {
-            await Workspace.create({
+            await _ws_repo_w.create_one({
                 id,
                 path,
                 name: input.name ?? null,
@@ -301,29 +351,35 @@ export class WorkspaceService {
                 created_at: input.created_at ?? now,
                 updated_at: now,
             });
-        } catch {
+        } catch (err) {
+            log.debug('workspace_insert_race', { error: err instanceof Error ? err.message : String(err) });
             // Unique constraint race — ignore; next sync will converge
         }
     }
 
     static async remove(id: string): Promise<boolean> {
-        const deleted = await Workspace.destroy({ where: { id } });
+        log.debug('remove', { id });
+        const deleted = await _ws_repo_w.delete_where({ id } as any);
+        if (deleted > 0) log.info('workspace_removed', { id });
         return deleted > 0;
     }
 
     static async remove_by_path(path: string): Promise<boolean> {
-        const deleted = await Workspace.destroy({ where: { path } });
+        log.debug('remove_by_path', { path });
+        const deleted = await _ws_repo_w.delete_where({ path } as any);
+        if (deleted > 0) log.info('workspace_removed_by_path', { path });
         return deleted > 0;
     }
 
     static async add_team(workspace_id: string, team_id: string): Promise<boolean> {
+        log.debug('add_team', { workspace_id, team_id });
         const now = Date.now();
-        const [, created] = await WorkspaceTeam.findOrCreate({
+        const [, created] = await _wst_repo.find_or_create({
             where: { workspace_id, team_id },
             defaults: { workspace_id, team_id, assembled_at: now },
-        });
+        } as any);
 
-        const ws = await Workspace.findByPk(workspace_id);
+        const ws = await _ws_repo_w.find_by_id(workspace_id);
         if (ws && !ws.get('team_id')) {
             await ws.update({ team_id, updated_at: now });
         }
@@ -331,27 +387,28 @@ export class WorkspaceService {
     }
 
     static async remove_team(workspace_id: string, team_id: string): Promise<boolean> {
-        const deleted = await WorkspaceTeam.destroy({ where: { workspace_id, team_id } });
+        log.debug('remove_team', { workspace_id, team_id });
+        const deleted = await _wst_repo.delete_where({ workspace_id, team_id } as any);
         if (deleted === 0) return false;
 
         const remaining = await WorkspaceService.list_teams(workspace_id);
         const next_team = remaining.length > 0 ? remaining[0].get('team_id') as string : null;
-        await Workspace.update(
-            { team_id: next_team, updated_at: Date.now() },
-            { where: { id: workspace_id } },
+        await _ws_repo_w.update_where(
+            { id: workspace_id } as any,
+            { team_id: next_team, updated_at: Date.now() } as any,
         );
         return true;
     }
 
     static async list_teams(workspace_id: string) {
-        return WorkspaceTeam.findAll({
+        return _wst_repo.find_all_q({
             where: { workspace_id },
             order: [['assembled_at', 'ASC']],
         });
     }
 
     static async count_by_team(team_id: string): Promise<number> {
-        const count = await WorkspaceTeam.count({ where: { team_id } });
+        const count = await _wst_repo.find_count({ team_id } as any);
         return Number(count);
     }
 }

@@ -83,7 +83,7 @@ export function assert_access(
     );
 }
 
-/** Site-admin role OR entity admin on grant (for internal ops already gated by require_internal). */
+/** Site-admin role OR entity admin on grant (internal ops are site-admin routes in the route policy). */
 export function assert_admin_access(auth: AuthContext, entity: Grant_entity = 'users'): Token_grant {
     if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
     if (auth.user.role === 'admin') {

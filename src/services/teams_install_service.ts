@@ -1,7 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { Op } from 'sequelize';
 
-import { Team, WorkspaceTeam, Run, Scope } from '../models/index.js';
+import { get_logger } from '../lib/log.js';
+import type { Scope } from '../models/scope.model.js';
+import type { DaemonTeam } from '../models/daemon_team.model.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+import { WorkspaceTeamRepository } from '../repositories/workspace_team_repository.js';
+import { RunRepository } from '../repositories/run_repository.js';
+import { ScopeRepository } from '../repositories/scope_repository.js';
+
+const log = get_logger('svc.teams_install');
+
+const _dt_repo_ti = new DaemonTeamRepository();
+const _wst_repo_ti = new WorkspaceTeamRepository();
+const _run_repo_ti = new RunRepository();
+const _scope_repo_ti = new ScopeRepository();
 import { ApiError } from '../lib/api_error.js';
 import { get_sequelize } from '../lib/sequelize.js';
 
@@ -51,6 +64,7 @@ export class TeamService {
         scope_ids?: string | string[],
         filter: { daemon_id?: string } = {},
     ) {
+        log.debug('list', { daemon_id: filter.daemon_id });
         const where: Record<string, unknown> = {};
         if (scope_ids) {
             const ids = Array.isArray(scope_ids) ? scope_ids : [scope_ids];
@@ -62,21 +76,26 @@ export class TeamService {
             where.daemon_id = filter.daemon_id;
         }
 
-        const teams = await Team.findAll({
+        const teams = await _dt_repo_ti.find_all_q({
             where,
-            include: [{ model: Scope, as: 'scope', attributes: ['slug'] }],
             order: [['slug', 'ASC']],
         });
+
+        const team_scope_ids = [...new Set(teams.map(t => t.scope_id).filter(Boolean))];
+        const scopes = team_scope_ids.length === 0
+            ? []
+            : await _scope_repo_ti.find_all_q({ where: { id: { [Op.in]: team_scope_ids } }, attributes: ['id', 'slug'] });
+        const scope_slug_by_id = new Map(scopes.map(s => [s.id, s.slug]));
 
         const team_ids = teams.map(t => t.id);
         if (team_ids.length === 0) return [];
 
         const [ws_counts, active_counts] = await Promise.all([
-            WorkspaceTeam.findAll({
+            _wst_repo_ti.find_all_q({
                 where: { team_id: { [Op.in]: team_ids } },
                 attributes: ['team_id'],
             }),
-            Run.findAll({
+            _run_repo_ti.find_all_q({
                 where: { team_id: { [Op.in]: team_ids }, state: { [Op.in]: ['running', 'awaiting_input'] } },
                 attributes: ['team_id'],
             }),
@@ -95,7 +114,7 @@ export class TeamService {
             const plain = t.toJSON() as any;
             return {
                 ...plain,
-                scope: plain.scope?.slug ?? 'default',
+                scope: scope_slug_by_id.get(t.scope_id) ?? 'default',
                 workspace_count: ws_map.get(t.id) ?? 0,
                 active_run_count: run_map.get(t.id) ?? 0,
             };
@@ -103,7 +122,8 @@ export class TeamService {
     }
 
     static async get(scope_id: string, slug: string) {
-        const team = await Team.findOne({ where: { scope_id, slug } });
+        log.debug('get', { scope_id, slug });
+        const team = await _dt_repo_ti.find_one_q({ where: { scope_id, slug } });
         if (!team) throw ApiError.not_found(`team '${slug}' not found in scope '${scope_id}'`);
         return team;
     }
@@ -117,15 +137,17 @@ export class TeamService {
      * duplicate-check pattern.
      */
     static async find(scope_id: string, slug: string, opts: { daemon_id?: string } = {}) {
+        log.debug('find', { scope_id, slug, daemon_id: opts.daemon_id });
         const where: Record<string, unknown> = { scope_id, slug };
         if (opts.daemon_id) {
             where.daemon_id = opts.daemon_id;
         }
-        return Team.findOne({ where });
+        return _dt_repo_ti.find_one_q({ where });
     }
 
     static async get_by_id(id: string) {
-        const team = await Team.findByPk(id);
+        log.debug('get_by_id', { id });
+        const team = await _dt_repo_ti.find_by_id(id);
         if (!team) throw ApiError.not_found(`team '${id}' not found`);
         return team;
     }
@@ -149,8 +171,9 @@ export class TeamService {
             id?: string;
         },
     ) {
+        log.debug('create', { scope_id, slug, daemon_id: deps?.daemon_id });
         const now = Date.now();
-        return Team.create({
+        return _dt_repo_ti.create_one({
             id: deps?.id?.trim() || randomUUID(),
             daemon_id: deps?.daemon_id ?? null,
             scope_id,
@@ -176,12 +199,14 @@ export class TeamService {
             dependencies?: string | null;
         },
     ) {
+        log.debug('update', { scope_id, slug });
         const team = await TeamService.get(scope_id, slug);
         return team.update({ ...data, updated_at: Date.now() });
     }
 
     static async remove(scope_id: string, slug: string) {
-        const team = await Team.findOne({ where: { scope_id, slug } });
+        log.debug('remove', { scope_id, slug });
+        const team = await _dt_repo_ti.find_one_q({ where: { scope_id, slug } });
         if (!team) return false;
 
         const team_id = team.get('id') as string;
@@ -189,8 +214,8 @@ export class TeamService {
         const tx = await sequelize.transaction();
 
         try {
-            await WorkspaceTeam.destroy({ where: { team_id }, transaction: tx });
-            await Run.destroy({ where: { team_id }, transaction: tx });
+            await _wst_repo_ti.delete_where_q({ where: { team_id }, transaction: tx } as any);
+            await _run_repo_ti.delete_where_q({ where: { team_id }, transaction: tx } as any);
             await team.destroy({ transaction: tx });
             await tx.commit();
             return true;
@@ -201,7 +226,7 @@ export class TeamService {
     }
 
     static async count_by_scope(scope_id: string): Promise<number> {
-        return Team.count({ where: { scope_id } });
+        return _dt_repo_ti.find_count({ scope_id } as any);
     }
 
     /**
@@ -215,17 +240,18 @@ export class TeamService {
      * two catalogs in step without a separate scope-sync round trip.
      */
     private static async _resolve_scope_by_slug(scope_slug: string): Promise<Scope> {
-        let scope = await Scope.findOne({ where: { slug: scope_slug } });
+        let scope = await _scope_repo_ti.find_one_q({ where: { slug: scope_slug } });
         if (scope) return scope;
 
-        scope = await Scope.create({
+        scope = await _scope_repo_ti.create_one({
             id: randomUUID(),
             slug: scope_slug,
-            name: scope_slug === 'cliq' ? 'Cliq' : scope_slug,
+            display_name: scope_slug === 'cliq' ? 'Cliq' : scope_slug,
+            owner_id: null,
             org_id: null,
-            scope_type: null,
+            scope_type: 'platform',
+            visibility: 'public',
             is_default: 0,
-            created_at: Date.now(),
         });
         return scope;
     }
@@ -241,13 +267,14 @@ export class TeamService {
      */
     static async upsert_from_daemon(
         payload: TeamUpsertFromDaemonPayload,
-    ): Promise<{ team: Team; created: boolean }> {
+    ): Promise<{ team: DaemonTeam; created: boolean }> {
+        log.debug('upsert_from_daemon', { scope_slug: payload.scope_slug, slug: payload.slug, daemon_id: payload.daemon_id });
         const scope = await TeamService._resolve_scope_by_slug(payload.scope_slug);
         const now = Date.now();
 
         /** Check for an existing row by natural key (daemon + scope + slug). */
         if (payload.daemon_id) {
-            const by_natural_key = await Team.findOne({
+            const by_natural_key = await _dt_repo_ti.find_one_q({
                 where: {
                     daemon_id: payload.daemon_id,
                     scope_id: scope.id,
@@ -269,8 +296,8 @@ export class TeamService {
         }
 
         /** No existing row by natural key — PK-based upsert (daemon-minted id). */
-        const existing = await Team.findByPk(payload.id);
-        const [team, created] = await Team.upsert({
+        const existing = await _dt_repo_ti.find_by_id(payload.id);
+        const [team, created] = await _dt_repo_ti.upsert_one({
             id: payload.id,
             daemon_id: payload.daemon_id ?? null,
             scope_id: scope.id,
@@ -283,6 +310,9 @@ export class TeamService {
             created_at: existing?.get('created_at') as number | undefined ?? now,
             updated_at: now,
         });
+        if (created ?? !existing) {
+            log.info('team_upserted_from_daemon', { team_id: team.id, scope_slug: payload.scope_slug, slug: payload.slug });
+        }
         return { team, created: created ?? !existing };
     }
 
@@ -292,14 +322,15 @@ export class TeamService {
      * both so Hub can locate the row even if the id mapping drifted.
      */
     static async remove_from_daemon(payload: TeamRemoveFromDaemonPayload): Promise<boolean> {
-        let team: Team | null = null;
+        log.debug('remove_from_daemon', { scope_slug: payload.scope_slug, slug: payload.slug, team_id: payload.team_id });
+        let team: DaemonTeam | null = null;
         if (payload.team_id) {
-            team = await Team.findByPk(payload.team_id);
+            team = await _dt_repo_ti.find_by_id(payload.team_id);
         }
         if (!team) {
-            const scope = await Scope.findOne({ where: { slug: payload.scope_slug } });
+            const scope = await _scope_repo_ti.find_one_q({ where: { slug: payload.scope_slug } });
             if (!scope) return false;
-            team = await Team.findOne({ where: { scope_id: scope.id, slug: payload.slug } });
+            team = await _dt_repo_ti.find_one_q({ where: { scope_id: scope.id, slug: payload.slug } });
         }
         if (!team) return false;
 
@@ -307,8 +338,8 @@ export class TeamService {
         const sequelize = get_sequelize();
         const tx = await sequelize.transaction();
         try {
-            await WorkspaceTeam.destroy({ where: { team_id }, transaction: tx });
-            await Run.destroy({ where: { team_id }, transaction: tx });
+            await _wst_repo_ti.delete_where_q({ where: { team_id }, transaction: tx } as any);
+            await _run_repo_ti.delete_where_q({ where: { team_id }, transaction: tx } as any);
             await team.destroy({ transaction: tx });
             await tx.commit();
             return true;

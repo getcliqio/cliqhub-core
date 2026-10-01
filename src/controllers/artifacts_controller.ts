@@ -27,6 +27,9 @@ import {
     ArtifactsGetByIdInput,
     ArtifactsDeleteInput,
 } from '../schemas/artifacts_schemas.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('ctrl.artifacts');
 
 export class ArtifactsController extends BaseController {
     private readonly _storage: ArtifactStorageService;
@@ -50,6 +53,7 @@ export class ArtifactsController extends BaseController {
         req: ApiRequest<ArtifactsSubmitInput, ArtifactsSubmitOutput>,
         res: ApiOkResponse<ArtifactsSubmitOutput>,
     ): Promise<void> {
+        log.debug('submit', { user_id: req.auth?.user?.id });
         const content_type = req.headers['content-type'] ?? '';
 
         let body: ArtifactsSubmitInput;
@@ -60,8 +64,9 @@ export class ArtifactsController extends BaseController {
             body = this.parse_body(ArtifactsSubmitInput, req);
         }
 
-        const uploaded_by = req.user?.user_id ?? undefined;
+        const uploaded_by = req.auth?.user?.id ?? undefined;
         const result = await this._storage.submit(body, uploaded_by);
+        log.info('artifact_submitted', { run_id: body.run_id });
         this.ok(res, result, 201);
     }
 
@@ -76,6 +81,7 @@ export class ArtifactsController extends BaseController {
         res: ApiOkResponse<ArtifactData[]>,
     ): Promise<void> {
         const body = this.parse_body(ArtifactsGetInput, req);
+        log.debug('get', { run_id: body.run_id });
         const artifacts = await this._storage.get(body.run_id, body.phase);
         this.ok(res, artifacts);
     }
@@ -91,6 +97,7 @@ export class ArtifactsController extends BaseController {
         res: ApiOkResponse<ArtifactData>,
     ): Promise<void> {
         const body = this.parse_body(ArtifactsGetByIdInput, req);
+        log.debug('get_by_id', { artifact_id: body.artifact_id });
         const artifact = await this._storage.get_by_id(body.artifact_id);
         this.ok(res, artifact);
     }
@@ -106,7 +113,9 @@ export class ArtifactsController extends BaseController {
         res: ApiOkResponse<BooleanData>,
     ): Promise<void> {
         const body = this.parse_body(ArtifactsDeleteInput, req);
+        log.debug('delete', { artifact_id: body.artifact_id });
         const deleted = await this._storage.delete(body.artifact_id);
+        log.info('artifact_deleted', { artifact_id: body.artifact_id });
         this.ok(res, deleted);
     }
 }

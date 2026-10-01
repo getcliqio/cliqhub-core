@@ -82,13 +82,6 @@ describe('DaemonController.get org_id tenancy', () => {
         );
     });
 
-    it('foreign org_id → 403', async () => {
-        await expect(
-            daemons.get(make_req({ org_id: ORG_B }, pat_auth([ORG_A])) as never, mock_res() as never),
-        ).rejects.toMatchObject({ status_code: 403 });
-        expect(DaemonService.list).not.toHaveBeenCalled();
-    });
-
     it('realm_id path does not require org_id', async () => {
         const res = mock_res();
         await daemons.get(make_req({ realm_id: REALM_A }, pat_auth([ORG_A])) as never, res as never);
@@ -96,5 +89,13 @@ describe('DaemonController.get org_id tenancy', () => {
             String(USER_A),
             expect.objectContaining({ realm_id: REALM_A, org_id: undefined }),
         );
+    });
+});
+
+describe('org tenancy is the route policy\'s job', () => {
+    it('/v1/daemons/get with an org you are not in → 404', async () => {
+        const { policy_status } = await import('../../helpers/policy_decision.js');
+        const FOREIGN = '00000000-0000-4000-8000-0000000000ff';
+        expect(await policy_status('POST /v1/daemons/get', { id: 'u1' }, { org_id: FOREIGN })).toBe(404);
     });
 });

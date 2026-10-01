@@ -76,7 +76,7 @@ async function resolve_api_token(token: string, deps: AuthDeps): Promise<AuthCon
     const valid = await verify_password(token, row.token_hash);
     if (!valid) return UNAUTHED;
 
-    const user = await deps.user_repo.find_by_id(row.user_id);
+    const user = await deps.user_repo.find_profile_by_id(row.user_id);
     if (!user) return UNAUTHED;
     if (user.suspended_at) return UNAUTHED;
 
@@ -121,11 +121,14 @@ async function resolve_daemon_token(token: string, deps: AuthDeps): Promise<Auth
     const created_by_id = String(resolved.created_by);
     if (!created_by_id) return UNAUTHED;
 
-    const user = await deps.user_repo.find_by_id(created_by_id);
+    const user = await deps.user_repo.find_profile_by_id(created_by_id);
     if (!user) return UNAUTHED;
     if (user.suspended_at) return UNAUTHED;
 
-    const context = await build_auth_context(user.id, deps, user);
+    // A daemon token acts for its realm, never with its creator's site role:
+    // an admin-minted daemon token must not pass `role === 'admin'` checks
+    // anywhere (S18). The creator stays the `user` for attribution.
+    const context = await build_auth_context(user.id, deps, { ...user, role: 'user' });
     context.auth_via = 'daemon_token';
     if (resolved.realm_id) context.realm_id = resolved.realm_id;
     if (resolved.permissions && Object.keys(resolved.permissions).length > 0) {
@@ -139,10 +142,11 @@ async function build_auth_context(
     deps: AuthDeps,
     user: NonNullable<AuthContext['user']>,
 ): Promise<AuthContext> {
-    const [user_scopes, org_memberships, member_scopes] = await Promise.all([
+    const [user_scopes, org_memberships, member_scopes, default_scopes] = await Promise.all([
         deps.scope_repo.find_owned_by_user(user_id),
         deps.org_member_repo.find_orgs_by_user(user_id),
         deps.scope_repo.find_member_scopes(user_id),
+        deps.scope_repo.find_default_scopes(),
     ]);
 
     const org_ids = org_memberships.map(o => o.org_id);
@@ -151,7 +155,7 @@ async function build_auth_context(
         : [];
 
     const scope_map = new Map<string, typeof user_scopes[0]>();
-    for (const s of [...user_scopes, ...org_scopes, ...member_scopes]) {
+    for (const s of [...default_scopes, ...user_scopes, ...org_scopes, ...member_scopes]) {
         scope_map.set(s.id, s);
     }
 

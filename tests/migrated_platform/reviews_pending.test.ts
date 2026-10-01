@@ -35,7 +35,7 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		process.env.CLIQ_BFF_LOG_LEVEL = 'error';
 		await open_test_control_plane_store();
 		stub_hub_pat_auth(repos);
-		repos.user_repo.find_by_id.mockResolvedValue({
+		repos.user_repo.find_profile_by_id.mockResolvedValue({
 			id: hub_legacy_uuid(1),
 			username: 'migrated-platform-user',
 			display_name: 'Migrated Platform User',

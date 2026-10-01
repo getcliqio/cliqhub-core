@@ -1,15 +1,46 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
+import { setup_sequelize_mocks } from '../helpers/mock_sequelize.js';
+setup_sequelize_mocks();
+
+vi.mock('../../src/auth/password.js', () => ({
+    hash_password: vi.fn().mockResolvedValue('hashed'),
+    verify_password: vi.fn().mockResolvedValue(true),
+}));
+
 import express from 'express';
 import request from 'supertest';
-import { sign_token } from '../../src/auth/jwt.js';
 import { BuilderService } from '../../src/services/builder_service.js';
 import { TeamsController } from '../../src/controllers/teams_controller.js';
-import { create_builder_auth } from '../../src/middleware/builder_auth.js';
+import { create_auth_middleware } from '../../src/middleware/auth_middleware.js';
+import { create_route_policy_middleware } from '../../src/middleware/enforce_route_policy.js';
+import type { AccessStore } from '../../src/auth/route_policy/engine.js';
+import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
 import { error_handler } from '../../src/middleware/error_handler.js';
+import * as pw from '../../src/auth/password.js';
 
-const SECRET = 'test-secret';
-const ALLOWED_ORIGINS = ['http://localhost:3000'];
+const ALICE_USER = {
+    id: hub_legacy_uuid(1),
+    username: 'alice',
+    role: 'user',
+    email: 'alice@test.com',
+    display_name: 'Alice',
+    suspended_at: null,
+    suspended_reason: '',
+    created_at: '2025-01-01',
+};
+
+const auth_repos = {
+    user_repo: { find_profile_by_id: vi.fn() },
+    token_repo: { find_by_prefix: vi.fn(), update_last_used: vi.fn() },
+    scope_repo: {
+        find_owned_by_user: vi.fn().mockResolvedValue([]),
+        find_by_org_ids: vi.fn().mockResolvedValue([]),
+        find_member_scopes: vi.fn().mockResolvedValue([]),
+        find_default_scopes: vi.fn().mockResolvedValue([]),
+    },
+    org_member_repo: { find_orgs_by_user: vi.fn().mockResolvedValue([]) },
+};
 
 function make_mock_llm() {
     return { complete: vi.fn().mockResolvedValue({ text: '{}', usage: { prompt_tokens: 1, completion_tokens: 1 } }) };
@@ -18,33 +49,22 @@ function make_mock_llm() {
 const mock_llm = make_mock_llm();
 const builder_service = new BuilderService(mock_llm as any);
 const teams_controller = new TeamsController({} as any, builder_service);
-const builder_auth = create_builder_auth(SECRET, ALLOWED_ORIGINS);
 
 const app = express();
 app.use(express.json());
-app.use((req, _res, next) => {
-    const header = req.headers.authorization;
-    if (header?.startsWith('Bearer ')) {
-        try {
-            const payload = require('../../src/auth/jwt.js').verify_token(header.slice(7), SECRET);
-            (req as any).auth = {
-                user: { id: payload.user_id, username: payload.username, role: payload.role, display_name: '', email: '' },
-                org_slugs: [],
-                org_ids: [],
-                scopes: [],
-            };
-        } catch { /* invalid token — skip */ }
-    }
-    if (!(req as any).auth) {
-        (req as any).auth = { user: null, org_slugs: [], org_ids: [], scopes: [] };
-    }
-    next();
-});
-app.post('/v1/teams/build', builder_auth, teams_controller.wrap(teams_controller.build));
+app.use(create_auth_middleware({
+    user_repo: auth_repos.user_repo as any,
+    token_repo: auth_repos.token_repo as any,
+    scope_repo: auth_repos.scope_repo as any,
+    org_member_repo: auth_repos.org_member_repo as any,
+}));
+app.use(create_route_policy_middleware({ store: {} as AccessStore })); // teams/build: signed_in
+app.post('/v1/teams/build', teams_controller.wrap(teams_controller.build));
 app.use(error_handler);
 
-function auth_header() {
-    return `Bearer ${sign_token({ user_id: hub_legacy_uuid(1), username: 'alice', role: 'user' }, SECRET)}`;
+function auth_header(): string {
+    vi.mocked(pw.verify_password).mockResolvedValueOnce(true);
+    return stub_pat_auth(auth_repos as any, ALICE_USER);
 }
 
 const valid_team_response = JSON.stringify({
@@ -112,20 +132,10 @@ describe('POST /v1/teams/build', () => {
         expect(res.status).toBe(422);
     });
 
-    it('returns 401 for no auth and wrong origin', async () => {
+    it('returns 401 for unauthenticated request', async () => {
         const res = await request(app).post('/v1/teams/build')
-            .set('Origin', 'http://evil.com')
             .send({ action: 'generate', intent: 'test' });
         expect(res.status).toBe(401);
-    });
-
-    it('returns 200 for allowed origin without JWT', async () => {
-        mock_llm.complete.mockResolvedValueOnce({ text: valid_team_response, usage: { prompt_tokens: 10, completion_tokens: 20 } });
-        const res = await request(app).post('/v1/teams/build')
-            .set('Origin', 'http://localhost:3000')
-            .send({ action: 'generate', intent: 'build a team' });
-        expect(res.status).toBe(200);
-        expect(res.body.ok).toBe(true);
     });
 
     it('improve_role returns 200 with improved role', async () => {

@@ -93,11 +93,6 @@ describe('ReportsService', () => {
             expect(result.limit).toBe(50);
         });
 
-        it('rejects non-admin with 403', async () => {
-            await expect(service.audit(ALICE, {}))
-                .rejects.toThrow('Admin access required');
-        });
-
         it('rejects unauthenticated with 401', async () => {
             await expect(service.audit(UNAUTHED, {}))
                 .rejects.toThrow('Authentication required');

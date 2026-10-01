@@ -1,6 +1,9 @@
 import type { LlmAdapter, LlmMessage } from './llm/hosted_adapter.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 import { ApiError } from '../errors/api_error.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.builder');
 import {
 	create_builder_job,
 	get_builder_job,
@@ -940,6 +943,7 @@ export class BuilderService {
 		params: { intent: string },
 		opts: { on_progress?: (stage: 'designing' | 'filling_roles' | 'validating') => void } = {},
 	) {
+		log.debug('generate', {});
 		if (!params.intent?.trim()) {
 			throw new ApiError('invalid_params', 'intent is required', 422);
 		}
@@ -1057,6 +1061,7 @@ ${OUTPUT_FORMAT}`,
 
 	/** Start generate in the background; poll via get_generate_job. */
 	start_generate(auth: AuthContext, params: { intent: string }) {
+		log.debug('start_generate', {});
 		if (!params.intent?.trim()) {
 			throw new ApiError('invalid_params', 'intent is required', 422);
 		}
@@ -1095,6 +1100,7 @@ ${OUTPUT_FORMAT}`,
 	}
 
 	get_generate_job(job_id: string) {
+		log.debug('get_generate_job', { job_id });
 		const job = get_builder_job(job_id);
 		if (!job) {
 			throw new ApiError('not_found', `Generate job '${job_id}' not found or expired`, 404);
@@ -1137,6 +1143,7 @@ ${OUTPUT_FORMAT}`,
 			instruction?: string;
 		},
 	) {
+		log.debug('improve_role', { role_name: params.role_name, team_name: params.team_name });
 		if (!params.role_name || !params.role_content) {
 			throw new ApiError('invalid_params', 'role_name and role_content are required', 422);
 		}
@@ -1201,6 +1208,7 @@ Return ONLY a JSON object (no markdown fences, no commentary):
 		_auth: AuthContext,
 		params: { team_name: string; description: string; phases: GeneratedPhase[]; roles: GeneratedRole[] },
 	) {
+		log.debug('suggest', { team_name: params.team_name });
 		if (!params.team_name) {
 			throw new ApiError('invalid_params', 'team_name is required', 422);
 		}
@@ -1262,6 +1270,7 @@ Return an empty array [] if the team is already well-structured.`,
 
 
 	validate(_auth: AuthContext, params: { team: GeneratedTeam }) {
+		log.debug('validate', {});
 		if (!params.team) {
 			throw new ApiError('invalid_params', 'team is required', 422);
 		}
@@ -1278,6 +1287,7 @@ Return an empty array [] if the team is already well-structured.`,
 			history?: ChatMessage[];
 		},
 	) {
+		log.debug('chat', { team_name: params.team?.name });
 		if (!params.team) {
 			throw new ApiError('invalid_params', 'team is required', 422);
 		}

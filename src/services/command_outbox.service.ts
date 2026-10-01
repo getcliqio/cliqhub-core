@@ -15,9 +15,12 @@ import { QueryTypes } from 'sequelize';
 
 import { get_sequelize } from '../lib/sequelize.js';
 import { get_logger } from '../lib/log.js';
-import { Daemon, RealmMember } from '../models/index.js';
+import type { Daemon } from '../models/daemon.model.js';
+import { DaemonRepository } from '../repositories/daemon_repository.js';
 import { DispatchAuthService } from './dispatch_auth.service.js';
 import { RealmService } from './realm.service.js';
+
+const _daemon_repo = new DaemonRepository();
 
 const log = get_logger('command-outbox');
 
@@ -164,7 +167,7 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
     }
 
     try {
-        const daemon = await Daemon.findByPk(entry.daemon_id);
+        const daemon = await _daemon_repo.find_by_id(entry.daemon_id);
         if (!daemon?.public_url) {
             // Daemon has no public URL (offline, deregistered, or never
             // registered a URL). Increment attempts so the entry eventually
@@ -366,7 +369,8 @@ async function _emit_run_log_delivery(entry: PendingEntry): Promise<void> {
         // explorer can bucket delivery breadcrumbs separately from
         // run-execution lines.
         await RunService.append_log(run_id, line, { concern: 'command' });
-    } catch {
+    } catch (err) {
+        log.warn('run_log_append_failed', { error: err instanceof Error ? err.message : String(err) });
         /* log append is best-effort — never break the delivery worker */
     }
 }
@@ -518,7 +522,8 @@ async function _handle_daemon_run_not_found(entry: PendingEntry): Promise<void> 
                 + 'run state was lost on daemon restart. '
                 + 'Marked as crashed. Use Run again to dispatch a fresh run.\n';
             await RunService.append_log(run_id, line);
-        } catch {
+        } catch (err) {
+            log.warn('run_log_append_failed', { error: err instanceof Error ? err.message : String(err) });
             /* log append is best-effort */
         }
     } catch (err) {

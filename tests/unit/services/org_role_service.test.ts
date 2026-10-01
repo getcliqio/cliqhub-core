@@ -38,7 +38,7 @@ vi.mock('../../../src/auth/permissions.js', async (importOriginal) => {
 const mock_role_rows: any[] = [];
 const mock_member_rows: any[] = [];
 
-vi.mock('../../../src/db/models/index.js', () => ({
+vi.mock('../../../src/models/index.js', () => ({
     OrgRole: {
         findAll: vi.fn().mockImplementation(() => Promise.resolve(mock_role_rows)),
         findOne: vi.fn().mockImplementation(({ where }: any) => {
@@ -142,15 +142,6 @@ describe('OrgRoleService.create', () => {
         ).rejects.toThrow("Unknown permission 'nonexistent.perm'");
     });
 
-    it('rejects non-admin callers', async () => {
-        await expect(
-            OrgRoleService.create(ORG_ID, NON_ADMIN_USER, {
-                slug: 'deployer',
-                name: 'Deployer',
-                permissions: ['teams.run'],
-            }),
-        ).rejects.toThrow("Permission 'org.members.manage' is required");
-    });
 });
 
 describe('OrgRoleService.update', () => {

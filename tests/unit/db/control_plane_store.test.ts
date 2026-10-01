@@ -15,12 +15,15 @@ const seed_control_plane = vi.fn(async () => ({
     settings_inserted: 0,
 }));
 
-vi.mock('@getcliqio/cliq-store', () => ({
+vi.mock('../../../src/store/connect.js', () => ({
     connect_store: (...args: unknown[]) => connect_store(...args),
+}));
+
+vi.mock('../../../src/store/migrate.js', () => ({
     migrate_store: (...args: unknown[]) => migrate_store(...args),
 }));
 
-vi.mock('../../../src/db/control_plane_seed.js', () => ({
+vi.mock('../../../src/models/migrations/control_plane_seed.js', () => ({
     seed_control_plane: (...args: unknown[]) => seed_control_plane(...args),
 }));
 
@@ -29,7 +32,7 @@ vi.mock('../../../src/models/index.js', () => ({
     reset_core_api_models: vi.fn(),
 }));
 
-vi.mock('../../../src/db/control_plane_schema_migrations.js', () => ({
+vi.mock('../../../src/models/migrations/control_plane_schema_migrations.js', () => ({
     run_core_api_schema_migrations: vi.fn(async () => undefined),
 }));
 

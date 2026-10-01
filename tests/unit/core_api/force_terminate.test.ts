@@ -34,10 +34,14 @@ vi.mock('../../../src/models/index.js', () => ({
     Run: { findByPk: mocks.run_find_by_pk },
     Daemon: { findByPk: mocks.daemon_find_by_pk },
     Workspace: {},
+    DaemonTeam: {},
     Team: {},
+    TeamVersion: {},
     Scope: {},
     RealmMember: {},
     RealmAgentSetting: {},
+    UserRealmAgentSetting: {},
+    OrgAgentSetting: {},
     Realm: {},
 }));
 
@@ -71,7 +75,6 @@ vi.mock('../../../src/lib/api_error.js', () => ({
         conflict: (msg: string, code?: string) => Object.assign(new Error(msg), { status: 409, status_code: 409, code }),
     },
 }));
-vi.mock('../../../src/db/models/index.js', () => ({ Team: {}, TeamVersion: {} }));
 vi.mock('../../../src/lib/semver.js', () => ({ sort_semver_desc: () => [] }));
 
 import { DispatchService } from '../../../src/services/dispatch.service.js';

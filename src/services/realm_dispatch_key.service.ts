@@ -1,11 +1,12 @@
-import { RealmDispatchKey } from '../models/index.js';
+import { RealmDispatchKeyRepository } from '../repositories/realm_dispatch_key_repository.js';
 import type { RealmDispatchKeyModel } from '../models/realm_dispatch_key.model.js';
 import { ApiError } from '../lib/api_error.js';
-import { generate_dispatch_key_pair } from '../lib/dispatch_keys.js';
+import { DispatchAuth } from '../lib/dispatch_auth.js';
 import { get_logger } from '../lib/log.js';
 import { RealmService } from './realm.service.js';
 
 const log = get_logger('realm-dispatch-key');
+const key_repo = new RealmDispatchKeyRepository();
 
 export interface PublicKeyResult {
     realm_id: string;
@@ -46,14 +47,14 @@ export class RealmDispatchKeyService {
     }
 
     static async get_or_create_public_key(realm_id: string): Promise<PublicKeyResult> {
-        const existing = await RealmDispatchKey.findByPk(realm_id);
+        const existing = await key_repo.find_by_id(realm_id);
         if (existing) return to_public(existing);
 
-        const pair = await generate_dispatch_key_pair();
+        const pair = await DispatchAuth.generate_key_pair();
         const now = Date.now();
 
         try {
-            const created = await RealmDispatchKey.create({
+            const created = await key_repo.create_one({
                 realm_id,
                 public_key_pem: pair.public_key_pem,
                 private_key_pem: pair.private_key_pem,
@@ -63,19 +64,19 @@ export class RealmDispatchKeyService {
             log.info(`dispatch key created for realm ${realm_id}`);
             return to_public(created);
         } catch (err) {
-            const raced = await RealmDispatchKey.findByPk(realm_id);
+            const raced = await key_repo.find_by_id(realm_id);
             if (raced) return to_public(raced);
             throw err;
         }
     }
 
     static async regenerate(realm_id: string): Promise<PublicKeyResult> {
-        const pair = await generate_dispatch_key_pair();
+        const pair = await DispatchAuth.generate_key_pair();
         const now = Date.now();
-        const existing = await RealmDispatchKey.findByPk(realm_id);
+        const existing = await key_repo.find_by_id(realm_id);
 
         if (!existing) {
-            const created = await RealmDispatchKey.create({
+            const created = await key_repo.create_one({
                 realm_id,
                 public_key_pem: pair.public_key_pem,
                 private_key_pem: pair.private_key_pem,
@@ -96,7 +97,7 @@ export class RealmDispatchKeyService {
 
     static async get_private_key_pem(realm_id: string): Promise<string> {
         await RealmDispatchKeyService.get_or_create_public_key(realm_id);
-        const row = await RealmDispatchKey.findByPk(realm_id);
+        const row = await key_repo.find_by_id(realm_id);
         if (!row) throw ApiError.internal(`Dispatch key missing for realm '${realm_id}'`);
         return row.private_key_pem;
     }

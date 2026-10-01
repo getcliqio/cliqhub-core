@@ -1,9 +1,31 @@
-import { Scope, ScopeMember } from '../db/models/index.js';
-import { Op, type Transaction } from 'sequelize';
+import { Scope, ScopeMember, User } from '../models/index.js';
+import { Op, literal, type Transaction, type WhereOptions } from 'sequelize';
+import { BaseRepository } from './base_repository.js';
 
 const SCOPE_ATTRS = ['id', 'slug', 'display_name', 'visibility', 'scope_type', 'owner_id', 'org_id'] as const;
 
-export class ScopeRepository {
+export class ScopeRepository extends BaseRepository<Scope> {
+    protected readonly model = Scope;
+
+    /** Admin catalog page with team count and owner username. */
+    async find_catalog_page(
+        where: WhereOptions<any>,
+        opts: { order?: any; limit?: number; offset?: number },
+    ): Promise<any[]> {
+        return Scope.findAll({
+            where,
+            attributes: [
+                'id', 'slug', 'display_name', 'owner_id', 'org_id', 'visibility', 'scope_type', 'created_at',
+                [literal('(SELECT count(*) FROM teams t WHERE t.scope = "Scope"."slug")'), 'team_count'],
+            ],
+            include: [{ model: User, attributes: ['username'], required: false }],
+            order: opts.order ?? [['created_at', 'DESC']],
+            limit: opts.limit,
+            offset: opts.offset,
+            raw: true,
+            nest: true,
+        });
+    }
     async find_owned_by_user(user_id: string) {
         return Scope.findAll({
             where: { owner_id: user_id, scope_type: 'user' },
@@ -36,6 +58,15 @@ export class ScopeRepository {
         });
     }
 
+    /** Return all system-default scopes (every authenticated user can access these). */
+    async find_default_scopes() {
+        return Scope.findAll({
+            where: { is_default: 1 },
+            attributes: [...SCOPE_ATTRS],
+            raw: true,
+        });
+    }
+
     async find_by_slug(slug: string) {
         return Scope.findOne({ where: { slug }, attributes: ['id'], raw: true });
     }
@@ -44,8 +75,8 @@ export class ScopeRepository {
         return Scope.findOne({ where: { slug }, attributes: ['id'], raw: true, transaction });
     }
 
-    async delete_by_id(id: string): Promise<void> {
-        await Scope.destroy({ where: { id } });
+    async delete_by_id(id: string): Promise<number> {
+        return Scope.destroy({ where: { id } });
     }
 
     async create(

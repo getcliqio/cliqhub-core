@@ -7,16 +7,21 @@
  */
 
 import { Op } from 'sequelize';
-import { OrgRole, OrgMember } from '../db/models/index.js';
+import { OrgRoleRepository } from '../repositories/org_role_repository.js';
+import { OrgMemberRepository } from '../repositories/org_member_repository.js';
 import { ApiError } from '../errors/api_error.js';
+import { get_logger } from '../lib/log.js';
 import {
     PERMISSION_SET,
     OWNER_ONLY_PERMISSIONS,
-    require_permission,
 } from '../auth/permissions.js';
+
+const log = get_logger('svc.org_role');
 
 const SLUG_PATTERN = /^[a-z][a-z0-9_-]{0,48}$/;
 const OWNER_ONLY_SET = new Set<string>(OWNER_ONLY_PERMISSIONS);
+const role_repo = new OrgRoleRepository();
+const member_repo = new OrgMemberRepository();
 
 export interface RoleDTO {
     id: string;
@@ -34,20 +39,18 @@ export class OrgRoleService {
 
     /** List all roles for an org, with member counts. */
     static async list(org_id: string): Promise<RoleDTO[]> {
-        const roles = await OrgRole.findAll({
-            where: { org_id },
-            order: [['is_system', 'DESC'], ['is_default', 'DESC'], ['name', 'ASC']],
-        });
+        log.debug('list', { org_id });
+        const roles = await role_repo.find_all(
+            { org_id },
+            { order: [['is_system', 'DESC'], ['is_default', 'DESC'], ['name', 'ASC']] },
+        );
 
-        const member_counts = await OrgMember.findAll({
-            where: {
-                org_id,
-                role_id: { [Op.in]: roles.map(r => r.id) },
-            },
-            attributes: ['role_id'],
-        });
+        const members = await member_repo.find_all(
+            { org_id, role_id: { [Op.in]: roles.map(r => r.id) } },
+            { attributes: ['role_id'] },
+        );
         const count_map = new Map<string, number>();
-        for (const m of member_counts) {
+        for (const m of members) {
             const rid = (m as any).role_id as string;
             count_map.set(rid, (count_map.get(rid) ?? 0) + 1);
         }
@@ -67,10 +70,11 @@ export class OrgRoleService {
 
     /** Get a single role by id within an org. */
     static async get(org_id: string, role_id: string): Promise<RoleDTO> {
-        const role = await OrgRole.findOne({ where: { id: role_id, org_id } });
+        log.debug('get', { org_id, role_id });
+        const role = await role_repo.find_one({ id: role_id, org_id });
         if (!role) throw new ApiError('not_found', 'Role not found', 404);
 
-        const member_count = await OrgMember.count({ where: { org_id, role_id } });
+        const member_count = await member_repo.find_count({ org_id, role_id });
         return {
             id: role.id,
             org_id: role.org_id,
@@ -94,7 +98,8 @@ export class OrgRoleService {
         data: { slug: string; name: string; permissions: string[] },
         opts?: { site_role?: string },
     ): Promise<RoleDTO> {
-        await require_permission(org_id, user_id, 'org.members.manage', opts);
+        log.debug('create', { org_id, user_id, slug: data.slug });
+        // Route policy: org.members.manage in org_id.
 
         const slug = data.slug.trim().toLowerCase();
         if (!SLUG_PATTERN.test(slug)) {
@@ -105,12 +110,12 @@ export class OrgRoleService {
 
         const perms = validate_permissions(data.permissions);
 
-        const existing = await OrgRole.findOne({ where: { org_id, slug } });
+        const existing = await role_repo.find_one({ org_id, slug });
         if (existing) {
             throw new ApiError('conflict', `A role with slug '${slug}' already exists in this org`, 409);
         }
 
-        const role = await OrgRole.create({
+        const role = await role_repo.create_one({
             org_id,
             slug,
             name,
@@ -118,6 +123,7 @@ export class OrgRoleService {
             is_system: false,
             is_default: false,
         });
+        log.info('role_created', { role_id: role.id, org_id, slug });
 
         return {
             id: role.id,
@@ -143,9 +149,10 @@ export class OrgRoleService {
         data: { name?: string; permissions?: string[] },
         opts?: { site_role?: string },
     ): Promise<RoleDTO> {
-        await require_permission(org_id, user_id, 'org.members.manage', opts);
+        log.debug('update', { org_id, user_id, role_id });
+        // Route policy: org.members.manage in org_id.
 
-        const role = await OrgRole.findOne({ where: { id: role_id, org_id } });
+        const role = await role_repo.find_one({ id: role_id, org_id });
         if (!role) throw new ApiError('not_found', 'Role not found', 404);
         if (role.is_system) {
             throw new ApiError('forbidden', 'System roles cannot be edited', 403);
@@ -162,8 +169,9 @@ export class OrgRoleService {
         }
 
         await role.update(updates);
+        log.info('role_updated', { role_id });
 
-        const member_count = await OrgMember.count({ where: { org_id, role_id } });
+        const member_count = await member_repo.find_count({ org_id, role_id });
         return {
             id: role.id,
             org_id: role.org_id,
@@ -187,9 +195,10 @@ export class OrgRoleService {
         role_id: string,
         opts?: { site_role?: string },
     ): Promise<{ deleted: boolean }> {
-        await require_permission(org_id, user_id, 'org.members.manage', opts);
+        log.debug('delete', { org_id, user_id, role_id });
+        // Route policy: org.members.manage in org_id.
 
-        const role = await OrgRole.findOne({ where: { id: role_id, org_id } });
+        const role = await role_repo.find_one({ id: role_id, org_id });
         if (!role) throw new ApiError('not_found', 'Role not found', 404);
         if (role.is_system) {
             throw new ApiError('forbidden', 'System roles cannot be deleted', 403);
@@ -198,7 +207,7 @@ export class OrgRoleService {
             throw new ApiError('forbidden', 'Default roles cannot be deleted', 403);
         }
 
-        const assigned = await OrgMember.count({ where: { org_id, role_id } });
+        const assigned = await member_repo.find_count({ org_id, role_id });
         if (assigned > 0) {
             throw new ApiError(
                 'conflict',
@@ -208,6 +217,7 @@ export class OrgRoleService {
         }
 
         await role.destroy();
+        log.info('role_deleted', { role_id, org_id });
         return { deleted: true };
     }
 }

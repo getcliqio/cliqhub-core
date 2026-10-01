@@ -26,7 +26,7 @@ import {
     parse_agent_ref,
     validate_agents_for_dispatch,
     extract_agents_from_workflow,
-} from '../../../src/lib/agent_catalog_usage.js';
+} from '../../../src/lib/agent_workflow.js';
 
 
 // ---------------------------------------------------------------------------

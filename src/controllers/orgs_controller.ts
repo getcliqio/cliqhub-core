@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { BaseController } from './base_controller.js';
+import { get_logger } from '../lib/log.js';
 import type { OrgsService } from '../services/orgs_service.js';
 import type { ScopesService } from '../services/scopes_service.js';
 import { OrgRoleService } from '../services/org_role_service.js';
@@ -17,6 +18,8 @@ import type { OrgData, OrgMemberData } from '../schemas/org_types.js';
 import type { RoleData } from '../schemas/role_types.js';
 import type { ScopeData } from '../schemas/scope_types.js';
 
+const log = get_logger('ctrl.orgs');
+
 export class OrgsController extends BaseController {
     constructor(
         private readonly _orgs_service: OrgsService,
@@ -30,6 +33,7 @@ export class OrgsController extends BaseController {
      * List orgs — caller's orgs (mine:true or no admin) or full catalog (site admin).
      */
     async get(req: Request, res: Response): Promise<void> {
+        log.debug('get', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgsGetInput, req);
         const result = await this._orgs_service.get(req.auth, {
             search: body.query,
@@ -46,6 +50,7 @@ export class OrgsController extends BaseController {
      * Fetch a single org with members, roles, and scopes populated.
      */
     async get_by_id(req: Request, res: Response): Promise<void> {
+        log.debug('get_by_id', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgIdInput, req);
         const result = await this._orgs_service.get_by_id(req.auth, body);
         this.ok(res, result);
@@ -57,6 +62,7 @@ export class OrgsController extends BaseController {
      * Both use OrgInput; controller branches on org_id presence.
      */
     async new_org(req: Request, res: Response): Promise<void> {
+        log.debug('new_org', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgInput, req);
         if (!body.slug) {
             throw ApiError.unprocessable('slug is required to create an org');
@@ -72,10 +78,12 @@ export class OrgsController extends BaseController {
             admin_password: body.admin_password,
             admin_display_name: body.admin_display_name,
         });
+        log.info('org_created', { slug: body.slug });
         this.ok(res, result);
     }
 
     async update(req: Request, res: Response): Promise<void> {
+        log.debug('update', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgInput, req);
         if (!body.org_id) {
             throw ApiError.unprocessable('org_id is required to update an org');
@@ -87,6 +95,7 @@ export class OrgsController extends BaseController {
             org_id: body.org_id,
             display_name: body.display_name,
         });
+        log.info('org_updated', { org_id: body.org_id });
         this.ok(res, result);
     }
 
@@ -94,8 +103,10 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/delete — permanently delete an org (site admin only).
      */
     async delete_org(req: Request, res: Response): Promise<void> {
+        log.debug('delete_org', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgIdInput, req);
         const result = await this._orgs_service.delete_org(req.auth, body);
+        log.info('org_deleted', { org_id: body.org_id });
         this.ok(res, result);
     }
 
@@ -103,8 +114,10 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/leave — caller leaves an org.
      */
     async leave(req: Request, res: Response): Promise<void> {
+        log.debug('leave', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgIdInput, req);
         const result = await this._orgs_service.leave(req.auth, body);
+        log.info('org_left', { org_id: body.org_id });
         this.ok(res, result);
     }
 
@@ -112,8 +125,10 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/add_member — add a user to an org by username, email, or user_id.
      */
     async add_member(req: Request, res: Response): Promise<void> {
+        log.debug('add_member', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgsAddMemberInput, req);
         const result = await this._orgs_service.add_member(req.auth, body);
+        log.info('org_member_added', { org_id: body.org_id, target_user_id: (result as { user_id?: string }).user_id });
         this.ok(res, result);
     }
 
@@ -121,8 +136,10 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/remove_member — remove a member from an org.
      */
     async remove_member(req: Request, res: Response): Promise<void> {
+        log.debug('remove_member', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgsRemoveMemberInput, req);
         const result = await this._orgs_service.remove_member(req.auth, body);
+        log.info('org_member_removed', { org_id: body.org_id, target_user_id: body.user_id });
         this.ok(res, result);
     }
 
@@ -130,8 +147,9 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/list_roles — list all custom roles in an org.
      */
     async list_roles(req: Request, res: Response): Promise<void> {
+        log.debug('list_roles', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgIdInput, req);
-        await this._orgs_service.assert_org_member_or_admin(req.auth, body.org_id);
+        // Route policy: member of body.org_id.
         const roles = await OrgRoleService.list(body.org_id);
         this.ok(res, { roles });
     }
@@ -140,8 +158,9 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/get_role — fetch a single custom role.
      */
     async get_role(req: Request, res: Response): Promise<void> {
+        log.debug('get_role', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgRoleIdInput, req);
-        await this._orgs_service.assert_org_member_or_admin(req.auth, body.org_id);
+        // Route policy: member of body.org_id.
         const role = await OrgRoleService.get(body.org_id, body.role_id);
         this.ok(res, { role });
     }
@@ -152,6 +171,7 @@ export class OrgsController extends BaseController {
      * Both use OrgRoleInput; controller branches on role_id presence.
      */
     async create_role(req: Request, res: Response): Promise<void> {
+        log.debug('create_role', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgRoleInput, req);
         if (!body.slug) {
             throw ApiError.unprocessable('slug is required to create a role');
@@ -167,10 +187,12 @@ export class OrgsController extends BaseController {
             { slug: body.slug, name: body.name, permissions: body.permissions ?? [] },
             { site_role: user.role },
         );
+        log.info('role_created', { id: role.id });
         this.ok(res, { role });
     }
 
     async update_role(req: Request, res: Response): Promise<void> {
+        log.debug('update_role', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgRoleInput, req);
         if (!body.role_id) {
             throw ApiError.unprocessable('role_id is required to update a role');
@@ -187,6 +209,7 @@ export class OrgsController extends BaseController {
             { name: body.name, permissions: body.permissions },
             { site_role: user.role },
         );
+        log.info('role_updated', { id: role.id });
         this.ok(res, { role });
     }
 
@@ -194,6 +217,7 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/delete_role — remove a custom role.
      */
     async delete_role(req: Request, res: Response): Promise<void> {
+        log.debug('delete_role', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgRoleIdInput, req);
         const user = req.auth?.user;
         if (!user) throw ApiError.unauthorized('Authentication required');
@@ -203,6 +227,7 @@ export class OrgsController extends BaseController {
             body.role_id,
             { site_role: user.role },
         );
+        log.info('role_deleted', { role_id: body.role_id });
         this.ok(res, result);
     }
 
@@ -220,6 +245,7 @@ export class OrgsController extends BaseController {
      * reviewers or dispatch targets.
      */
     async get_reviewable_targets(req: Request, res: Response): Promise<void> {
+        log.debug('get_reviewable_targets', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgsGetReviewableTargetsInput, req);
         const result = await this._orgs_service.get_reviewable_targets(req.auth, body);
         this.ok(res, result);
@@ -231,6 +257,7 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/new_scope — create a scope under an org.
      */
     async new_scope(req: Request, res: Response): Promise<void> {
+        log.debug('new_scope', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgScopeInput, req);
         if (!body.slug) {
             throw ApiError.unprocessable('slug is required to create a scope');
@@ -241,6 +268,7 @@ export class OrgsController extends BaseController {
             display_name: body.display_name,
             visibility: body.visibility,
         });
+        log.info('scope_created', { slug: body.slug });
         this.ok(res, result);
     }
 
@@ -248,6 +276,7 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/update_scope — rename, change visibility, or transfer ownership of a scope.
      */
     async update_scope(req: Request, res: Response): Promise<void> {
+        log.debug('update_scope', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgScopeInput, req);
         if (!body.scope_id) {
             throw ApiError.unprocessable('scope_id is required to update a scope');
@@ -261,6 +290,7 @@ export class OrgsController extends BaseController {
             visibility: body.visibility,
             owner_id: body.owner_id,
         });
+        log.info('scope_updated', { scope_id: body.scope_id });
         this.ok(res, result);
     }
 
@@ -268,6 +298,7 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/delete_scope — permanently remove a scope from an org.
      */
     async delete_scope(req: Request, res: Response): Promise<void> {
+        log.debug('delete_scope', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgScopeInput, req);
         if (!body.scope_id) {
             throw ApiError.unprocessable('scope_id is required to delete a scope');
@@ -276,6 +307,7 @@ export class OrgsController extends BaseController {
             org_id: body.org_id,
             scope_id: body.scope_id,
         });
+        log.info('scope_deleted', { scope_id: body.scope_id });
         this.ok(res, result);
     }
 
@@ -283,8 +315,10 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/assign_scope_member — grant a user publish access to a scope.
      */
     async assign_scope_member(req: Request, res: Response): Promise<void> {
+        log.debug('assign_scope_member', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgScopeMemberInput, req);
         const result = await this._orgs_service.assign_scope_member(req.auth, body);
+        log.info('scope_member_assigned', { org_id: body.org_id, scope_id: body.scope_id, target_user_id: body.user_id });
         this.ok(res, result);
     }
 
@@ -292,8 +326,10 @@ export class OrgsController extends BaseController {
      * POST /v1/orgs/unassign_scope_member — revoke a user's publish access to a scope.
      */
     async unassign_scope_member(req: Request, res: Response): Promise<void> {
+        log.debug('unassign_scope_member', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgScopeMemberInput, req);
         const result = await this._orgs_service.unassign_scope_member(req.auth, body);
+        log.info('scope_member_unassigned', { org_id: body.org_id, scope_id: body.scope_id, target_user_id: body.user_id });
         this.ok(res, result);
     }
 
@@ -306,17 +342,15 @@ export class OrgsController extends BaseController {
      * - user_id absent           → site admin only; returns full scope catalog
      */
     async get_scopes(req: Request, res: Response): Promise<void> {
+        log.debug('get_scopes', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgsGetScopesInput, req);
         const user = req.auth?.user;
         if (!user) throw ApiError.unauthorized('Authentication required');
 
         if (body.user_id) {
-            if (body.user_id !== user.id) {
-                if (body.org_id) {
-                    await this._orgs_service.assert_org_member_or_admin(req.auth!, body.org_id);
-                } else if (user.role !== 'admin') {
-                    throw ApiError.forbidden('Viewing another user\'s scopes requires org admin or site admin');
-                }
+            // Another user's scopes: within an org (route policy: member of org_id), or site admin.
+            if (body.user_id !== user.id && !body.org_id && user.role !== 'admin') {
+                throw ApiError.forbidden('Viewing another user\'s scopes requires org_id or site admin');
             }
             const result = await this._scopes_service.get_for_user(req.auth!, body.user_id, {
                 org_id: body.org_id,

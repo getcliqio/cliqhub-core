@@ -29,7 +29,6 @@ const mock_service = {
     delete_org: vi.fn().mockResolvedValue({ deleted: true }),
     add_member: vi.fn().mockResolvedValue({ user_id: hub_legacy_uuid(5), username: 'charlie', role: 'member' }),
     remove_member: vi.fn().mockResolvedValue({ removed: true }),
-    assert_org_member_or_admin: vi.fn().mockResolvedValue(undefined),
     leave: vi.fn().mockResolvedValue({ left: true }),
     new_scope: vi.fn().mockResolvedValue({ id: hub_legacy_uuid(10), slug: 'acme-dev' }),
     delete_scope: vi.fn().mockResolvedValue({ deleted: true }),
@@ -184,7 +183,6 @@ describe('OrgsController', () => {
     it('list_roles passes with valid org_id', async () => {
         const res = mock_res();
         await call(controller.list_roles, make_req({ org_id: hub_legacy_uuid(1) }), res);
-        expect(mock_service.assert_org_member_or_admin).toHaveBeenCalled();
         expect(OrgRoleService.list).toHaveBeenCalledWith(hub_legacy_uuid(1));
         expect(res.status).toHaveBeenCalledWith(200);
     });

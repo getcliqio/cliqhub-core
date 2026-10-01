@@ -101,4 +101,35 @@ describe('require_token_scope', () => {
         expect(JSON.stringify(body)).toMatch(/missing required scope 'dispatch'/);
         expect(next).not.toHaveBeenCalled();
     });
+
+    it('passes with an arbitrary scope name when token holds it', () => {
+        const guard = require_token_scope('custom:read');
+        const req = make_req({
+            user: { id: hub_legacy_uuid(1) },
+            auth_via: 'pat',
+            token_scopes: ['custom:read', 'other'],
+        });
+        const res = make_res();
+        const next = vi.fn();
+        guard(req, res, next);
+        expect(next).toHaveBeenCalledOnce();
+    });
+
+    it('403 error body has ok:false and correct error code', () => {
+        const guard = require_token_scope('dispatch');
+        const req = make_req({
+            user: { id: hub_legacy_uuid(1) },
+            auth_via: 'pat',
+            token_scopes: ['read:realms'],
+        });
+        const res = make_res();
+        const next = vi.fn();
+        guard(req, res, next);
+        const body = (res.json as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
+            ok: boolean;
+            error: string;
+        };
+        expect(body.ok).toBe(false);
+        expect(body.error).toMatch(/dispatch/);
+    });
 });

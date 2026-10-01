@@ -1,15 +1,21 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Op } from 'sequelize';
 
-import {
-	NotificationChannel,
-	NotificationRule,
-	Realm,
-} from '../models/index.js';
-import { Org } from '../db/models/index.js';
+import { get_logger } from '../lib/log.js';
+import { NotificationChannelRepository } from '../repositories/notification_channel_repository.js';
+import { NotificationRuleRepository } from '../repositories/notification_rule_repository.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { OrgRepository } from '../repositories/org_repository.js';
 import { ApiError } from '../lib/api_error.js';
 import type { Destination } from '../notifications/channel_config.js';
 import type { NotificationRuleData } from '../schemas/notification_types.js';
+
+const log = get_logger('svc.notification');
+
+const channel_repo = new NotificationChannelRepository();
+const rule_repo = new NotificationRuleRepository();
+const realm_repo = new RealmRepository();
+const org_repo = new OrgRepository();
 
 /** Wire-compatible channel row (matches SDK NotificationChannelRecord). */
 export type ChannelRecord = {
@@ -85,6 +91,7 @@ export class NotificationService {
 	 * Reject `channel_ref` destination graphs that cycle back to `channel_name`.
 	 */
 	static async detect_channel_ref_cycles(channel_name: string, destinations: Destination[], realm_id: string | null): Promise<void> {
+		log.debug('detect_channel_ref_cycles', { channel_name, realm_id });
 		// Only channel_ref destinations can form a graph; others are leaves.
 		const refs = destinations
 			.filter((d): d is Destination & { type: 'channel_ref' } => d.type === 'channel_ref')
@@ -136,11 +143,11 @@ export class NotificationService {
 			same_scope_where.realm_id = { [Op.is]: null };
 			if (org_id) same_scope_where.org_id = org_id;
 		}
-		const same_scope_clash = await NotificationChannel.findOne({ where: same_scope_where });
+		const same_scope_clash = await channel_repo.find_one(same_scope_where as any);
 		if (same_scope_clash) {
 			let scope_label = 'in your global settings';
 			if (same_scope_clash.realm_id) {
-				const owner_realm = await Realm.findByPk(same_scope_clash.realm_id, { attributes: ['slug', 'name'] });
+				const owner_realm = await realm_repo.find_by_id(same_scope_clash.realm_id);
 				const realm_label = owner_realm?.name || owner_realm?.slug || same_scope_clash.realm_id;
 				scope_label = `in realm "${realm_label}"`;
 			}
@@ -152,13 +159,13 @@ export class NotificationService {
 		// 2. Cross-scope check: org-level channel names are reserved across the entire org.
 		if (realm_id) {
 			// Creating a realm channel — check if the org already has an org-level channel with this name.
-			const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'] });
+			const realm = await realm_repo.find_by_id(realm_id);
 			if (realm?.org_id) {
-				const org_clash = await NotificationChannel.findOne({
-					where: { name, org_id: realm.org_id, realm_id: { [Op.is]: null } },
-				});
+				const org_clash = await channel_repo.find_one({
+					name, org_id: realm.org_id, realm_id: { [Op.is]: null },
+				} as any);
 				if (org_clash) {
-					const org = await Org.findByPk(realm.org_id, { attributes: ['display_name', 'slug'] });
+					const org = await org_repo.find_by_id(realm.org_id);
 					const org_label = org?.display_name || org?.slug || realm.org_id;
 					throw ApiError.conflict(
 						`A channel named '${name}' already exists at the organization level in ${org_label}. Use the organization channel or choose a different name.`,
@@ -167,12 +174,12 @@ export class NotificationService {
 			}
 		} else if (org_id) {
 			// Creating an org-level channel — check if any realm in this org already has a channel with this name.
-			const org_realms = await Realm.findAll({ where: { org_id }, attributes: ['id', 'name', 'slug'] });
+			const org_realms = await realm_repo.find_all({ org_id } as any, { attributes: ['id', 'name', 'slug'] });
 			if (org_realms.length > 0) {
 				const realm_ids = org_realms.map((r) => r.id);
-				const realm_clash = await NotificationChannel.findOne({
-					where: { name, realm_id: { [Op.in]: realm_ids } },
-				});
+				const realm_clash = await channel_repo.find_one({
+					name, realm_id: { [Op.in]: realm_ids },
+				} as any);
 				if (realm_clash) {
 					const owner = org_realms.find((r) => r.id === realm_clash.realm_id);
 					const realm_label = owner?.name || owner?.slug || realm_clash.realm_id;
@@ -194,6 +201,7 @@ export class NotificationService {
 		org_id?: string;
 		query?: string;
 	}): Promise<ChannelRecord[]> {
+		log.debug('list_channels', { realm_id: filters?.realm_id, org_id: filters?.org_id });
 		// Build scope filter: account (realm null) vs a concrete realm.
 		const where: Record<string, unknown> = {};
 		if (filters?.account || filters?.org_id) {
@@ -210,8 +218,7 @@ export class NotificationService {
 		}
 
 		const { ChannelDestination } = await import('../models/index.js');
-		const rows = await NotificationChannel.findAll({
-			where,
+		const rows = await channel_repo.find_all(where as any, {
 			order: [['name', 'ASC']],
 			include: [{ model: ChannelDestination, as: 'destinations_rows' }],
 		});
@@ -220,10 +227,10 @@ export class NotificationService {
 		// Attach rule_count so the UI can show "used by N rules" without N+1.
 		const channel_ids = records.map((r) => r.id);
 		if (channel_ids.length > 0) {
-			const rule_rows = await NotificationRule.findAll({
-				where: { channel_id: { [Op.in]: channel_ids } },
-				attributes: ['channel_id'],
-			});
+			const rule_rows = await rule_repo.find_all(
+				{ channel_id: { [Op.in]: channel_ids } } as any,
+				{ attributes: ['channel_id'] },
+			);
 			const counts = new Map<string, number>();
 			for (const r of rule_rows) {
 				const cid = (r as unknown as { channel_id: string }).channel_id;
@@ -238,24 +245,29 @@ export class NotificationService {
 	}
 
 	static async get_channel(id: string): Promise<ChannelRecord> {
+		log.debug('get_channel', { id });
 		// Include destinations so the DTO has a populated destinations JSON string.
 		const { ChannelDestination } = await import('../models/index.js');
-		const ch = await NotificationChannel.findByPk(id, {
+		const ch = await channel_repo.find_by_id(id);
+		if (!ch) throw ApiError.not_found(`notification channel '${id}' not found`);
+		const ch_with_dest = await channel_repo.find_one({ id } as any, {
 			include: [{ model: ChannelDestination, as: 'destinations_rows' }],
 		});
-		if (!ch) throw ApiError.not_found(`notification channel '${id}' not found`);
-		return NotificationService.to_channel_record(ch);
+		if (!ch_with_dest) throw ApiError.not_found(`notification channel '${id}' not found`);
+		return NotificationService.to_channel_record(ch_with_dest);
 	}
 
 	/** Raw model row (unmasked config) for delivery. */
 	static async get_channel_record(id: string) {
+		log.debug('get_channel_record', { id });
 		// Delivery path needs the Sequelize row (secret column), not the wire DTO.
-		const ch = await NotificationChannel.findByPk(id);
+		const ch = await channel_repo.find_by_id(id);
 		if (!ch) throw ApiError.not_found(`notification channel '${id}' not found`);
 		return ch;
 	}
 
 	static async find_channel_by_name(name: string, realm_id?: string): Promise<ChannelRecord | null> {
+		log.debug('find_channel_by_name', { name, realm_id });
 		// Name lookup is scope-aware: realm channels vs account (realm_id null).
 		const where: Record<string, unknown> = { name };
 		if (realm_id) {
@@ -265,8 +277,7 @@ export class NotificationService {
 			where.realm_id = { [Op.is]: null };
 		}
 		const { ChannelDestination } = await import('../models/index.js');
-		const ch = await NotificationChannel.findOne({
-			where,
+		const ch = await channel_repo.find_one(where as any, {
 			include: [{ model: ChannelDestination, as: 'destinations_rows' }],
 		});
 		if (!ch) return null;
@@ -281,6 +292,7 @@ export class NotificationService {
 		destinations: unknown[];
 		enabled?: boolean;
 	}): Promise<ChannelRecord> {
+		log.debug('create_channel', { name: data.name, realm_id: data.realm_id });
 		const realm_id = data.realm_id?.trim() || null;
 		const org_id = realm_id ? null : (data.org_id ?? null);
 		const name = data.name.trim();
@@ -290,7 +302,7 @@ export class NotificationService {
 		}
 
 		if (realm_id) {
-			const realm = await Realm.findByPk(realm_id);
+			const realm = await realm_repo.find_by_id(realm_id);
 			if (!realm) throw ApiError.not_found(`realm '${realm_id}' not found`);
 		}
 
@@ -314,7 +326,7 @@ export class NotificationService {
 			}
 		}
 
-		const row = await NotificationChannel.create({
+		const row = await channel_repo.create_one({
 			id: channel_id,
 			realm_id,
 			org_id,
@@ -341,9 +353,11 @@ export class NotificationService {
 		}
 
 		/** Re-fetch with eager-loaded destinations for the response. */
-		const created = await NotificationChannel.findByPk(channel_id, {
-			include: [{ model: ChannelDestination, as: 'destinations_rows' }],
+		const { ChannelDestination: CD_create } = await import('../models/index.js');
+		const created = await channel_repo.find_one({ id: channel_id } as any, {
+			include: [{ model: CD_create, as: 'destinations_rows' }],
 		});
+		log.info('channel_created', { channel_id, realm_id });
 		return NotificationService.to_channel_record(created!);
 	}
 
@@ -353,6 +367,7 @@ export class NotificationService {
 		destinations?: unknown[];
 		enabled?: boolean;
 	}): Promise<ChannelRecord> {
+		log.debug('update_channel', { id: data.id });
 		const existing = await NotificationService.get_channel_record(data.id);
 		const updates: Record<string, unknown> = { updated_at: Date.now() };
 
@@ -389,18 +404,21 @@ export class NotificationService {
 		}
 
 		await existing.update(updates);
+		log.info('channel_updated', { id: data.id });
 
 		/** Re-fetch with eager-loaded destinations. */
-		const { ChannelDestination } = await import('../models/index.js');
-		const refreshed = await NotificationChannel.findByPk(data.id, {
-			include: [{ model: ChannelDestination, as: 'destinations_rows' }],
+		const { ChannelDestination: CD2 } = await import('../models/index.js');
+		const refreshed = await channel_repo.find_one({ id: data.id } as any, {
+			include: [{ model: CD2, as: 'destinations_rows' }],
 		});
 		return NotificationService.to_channel_record(refreshed!);
 	}
 
 	static async remove_channel(id: string): Promise<boolean> {
+		log.debug('remove_channel', { id });
 		// Hard delete; destination rows cascade via FK / destroy hooks elsewhere.
-		const deleted = await NotificationChannel.destroy({ where: { id } });
+		const deleted = await channel_repo.delete_where({ id } as any);
+		if (deleted > 0) log.info('channel_removed', { id });
 		return deleted > 0;
 	}
 
@@ -419,14 +437,14 @@ export class NotificationService {
 	 * catch accidentally committed values.
 	 */
 	static async rotate_channel_secret(id: string): Promise<{ secret: string }> {
+		log.debug('rotate_channel_secret', { id });
 		const existing = await NotificationService.get_channel_record(id);
 
 		/** Only channels with a webhook destination support HMAC signing. */
 		const { ChannelDestination } = await import('../models/index.js');
 		const webhook_dest = await ChannelDestination.findOne({
 			where: { channel_id: id, type: 'webhook' },
-		});
-		if (!webhook_dest) {
+		});		if (!webhook_dest) {
 			throw ApiError.bad_request(
 				`Channel '${id}' has no webhook destination — only webhook channels support HMAC secret rotation.`,
 			);
@@ -434,6 +452,7 @@ export class NotificationService {
 
 		const secret = `whsec_${randomBytes(24).toString('hex')}`;
 		await existing.update({ secret, updated_at: Date.now() });
+		log.info('channel_secret_rotated', { id });
 		return { secret };
 	}
 
@@ -442,6 +461,7 @@ export class NotificationService {
 	 * If `destination_index` is provided, only that single destination is tested.
 	 */
 	static async test_channel(id: string, destination_index?: number): Promise<{ delivered: number; errors: string[] }> {
+		log.debug('test_channel', { id, destination_index });
 		const ch = await NotificationService.get_channel_record(id);
 
 		/** Read destinations from the normalized table. */
@@ -499,13 +519,14 @@ export class NotificationService {
 	}
 
 	static async find_enabled_channels(ids: string[]) {
+		log.debug('find_enabled_channels', {});
 		if (ids.length === 0) return [];
 		// Used by the UI when refreshing a known id set (enabled-only).
 		const { ChannelDestination } = await import('../models/index.js');
-		return NotificationChannel.findAll({
-			where: { id: { [Op.in]: ids }, enabled: 1 },
-			include: [{ model: ChannelDestination, as: 'destinations_rows' }],
-		});
+		return channel_repo.find_all(
+			{ id: { [Op.in]: ids }, enabled: 1 } as any,
+			{ include: [{ model: ChannelDestination, as: 'destinations_rows' }] },
+		);
 	}
 
 	// ── Rules ─────────────────────────────────────────────────────
@@ -526,31 +547,28 @@ export class NotificationService {
 		/** Org context for global-tier rule resolution. */
 		org_id?: string;
 	}): Promise<string[]> {
+		log.debug('resolve_rules', { event: opts.event, realm_id: opts.realm_id });
 		const { event, realm_id, team_slug } = opts;
 
 		const event_selectors = NotificationService.build_matching_selectors(event);
 
 		if (realm_id && team_slug) {
-			const team_rules = await NotificationRule.findAll({
-				where: {
-					realm_id,
-					team_slug,
-					event: { [Op.in]: event_selectors },
-				},
-			});
+			const team_rules = await rule_repo.find_all({
+				realm_id,
+				team_slug,
+				event: { [Op.in]: event_selectors },
+			} as any);
 			if (team_rules.length > 0) {
 				return [...new Set(team_rules.map((r) => r.channel_id))];
 			}
 		}
 
 		if (realm_id) {
-			const realm_rules = await NotificationRule.findAll({
-				where: {
-					realm_id,
-					team_slug: { [Op.is]: null },
-					event: { [Op.in]: event_selectors },
-				},
-			});
+			const realm_rules = await rule_repo.find_all({
+				realm_id,
+				team_slug: { [Op.is]: null },
+				event: { [Op.in]: event_selectors },
+			} as any);
 			if (realm_rules.length > 0) {
 				return [...new Set(realm_rules.map((r) => r.channel_id))];
 			}
@@ -564,9 +582,7 @@ export class NotificationService {
 		if (opts.org_id) {
 			global_where.org_id = opts.org_id;
 		}
-		const global_rules = await NotificationRule.findAll({
-			where: global_where,
-		});
+		const global_rules = await rule_repo.find_all(global_where as any);
 		if (global_rules.length > 0) {
 			return [...new Set(global_rules.map((r) => r.channel_id))];
 		}
@@ -581,6 +597,7 @@ export class NotificationService {
 		/** Org context — filters org-level rules (realm_id IS NULL) to this org. */
 		org_id?: string;
 	} = {}): Promise<NotificationRuleData[]> {
+		log.debug('list_rules', { realm_id: opts?.realm_id });
 		const where: Record<string, unknown> = {};
 		if (opts.realm_id) {
 			where.realm_id = opts.realm_id;
@@ -595,7 +612,7 @@ export class NotificationService {
 				where.org_id = opts.org_id;
 			}
 		}
-		const rows = await NotificationRule.findAll({ where, order: [['event', 'ASC'], ['priority', 'DESC']] });
+		const rows = await rule_repo.find_all(where as any, { order: [['event', 'ASC'], ['priority', 'DESC']] });
 		return rows.map((r) => ({
 			id: r.id!,
 			realm_id: r.realm_id,
@@ -611,7 +628,9 @@ export class NotificationService {
 
 	/** List effective rules for a realm (org-level + realm overrides). */
 	static async list_effective_rules(realm_id: string, org_id?: string): Promise<Array<NotificationRuleData & { tier: 'global' | 'realm' }>> {
-		const resolved_org_id = org_id ?? (await Realm.findByPk(realm_id, { attributes: ['org_id'] }))?.org_id ?? undefined;
+		log.debug('list_effective_rules', { realm_id });
+		const realm = org_id ? null : await realm_repo.find_by_id(realm_id);
+		const resolved_org_id = org_id ?? realm?.org_id ?? undefined;
 		const global_rules = await NotificationService.list_rules({ org_id: resolved_org_id });
 		const realm_rules = await NotificationService.list_rules({ realm_id });
 
@@ -640,6 +659,7 @@ export class NotificationService {
 		channel_id: string;
 		priority?: number;
 	}): Promise<NotificationRuleData> {
+		log.debug('set_rule', { event: data.event, channel_id: data.channel_id, realm_id: data.realm_id });
 		const realm_id = data.realm_id?.trim() || null;
 		const org_id = realm_id ? null : (data.org_id ?? null);
 		const team_slug = data.team_slug?.trim() || null;
@@ -648,7 +668,7 @@ export class NotificationService {
 		if (!event || !channel_id) throw ApiError.bad_request('event and channel_id are required');
 
 		// Validate that the channel belongs to the same org as this rule.
-		const channel = await NotificationChannel.findByPk(channel_id, { attributes: ['id', 'realm_id', 'org_id'] });
+		const channel = await channel_repo.find_by_id(channel_id);
 		if (!channel) throw ApiError.not_found(`notification channel '${channel_id}' not found`);
 
 		if (realm_id) {
@@ -658,7 +678,7 @@ export class NotificationService {
 			}
 			if (channel.realm_id === null) {
 				// Org-level channel — verify it belongs to the realm's org.
-				const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'] });
+				const realm = await realm_repo.find_by_id(realm_id);
 				const channel_org = channel.org_id ? String(channel.org_id) : null;
 				if (!realm || channel_org !== realm.org_id) {
 					throw ApiError.forbidden(`Channel '${channel_id}' does not belong to this organization`);
@@ -676,14 +696,12 @@ export class NotificationService {
 		}
 
 		const now = Date.now();
-		const existing = await NotificationRule.findOne({
-			where: {
-				realm_id: realm_id ? realm_id : { [Op.is]: null },
-				team_slug: team_slug ? team_slug : { [Op.is]: null },
-				event,
-				channel_id,
-			},
-		});
+		const existing = await rule_repo.find_one({
+			realm_id: realm_id ? realm_id : { [Op.is]: null },
+			team_slug: team_slug ? team_slug : { [Op.is]: null },
+			event,
+			channel_id,
+		} as any);
 
 		if (existing) {
 			await existing.update({ priority: data.priority ?? 0, updated_at: now });
@@ -700,7 +718,7 @@ export class NotificationService {
 			};
 		}
 
-		const row = await NotificationRule.create({
+		const row = await rule_repo.create_one({
 			realm_id,
 			org_id,
 			team_slug,
@@ -710,6 +728,7 @@ export class NotificationService {
 			created_at: now,
 			updated_at: now,
 		} as any);
+		log.info('rule_created', { rule_id: row.id!, realm_id, event, channel_id });
 		return {
 			id: row.id!,
 			realm_id: row.realm_id,
@@ -724,7 +743,8 @@ export class NotificationService {
 	}
 
 	static async get_rule(id: string): Promise<NotificationRuleData | null> {
-		const rule = await NotificationRule.findByPk(id);
+		log.debug('get_rule', { id });
+		const rule = await rule_repo.find_by_id(id);
 		if (!rule) return null;
 		return {
 			id: rule.id!,
@@ -740,36 +760,39 @@ export class NotificationService {
 	}
 
 	static async remove_rule(id: string): Promise<boolean> {
+		log.debug('remove_rule', { id });
 		// Rules are hard-deleted; missing id returns false (idempotent).
-		const deleted = await NotificationRule.destroy({ where: { id } });
+		const deleted = await rule_repo.delete_where({ id } as any);
+		if (deleted > 0) log.info('rule_removed', { id });
 		return deleted > 0;
 	}
 
 	/** Per-realm in-app channel (`cliqhub`). Ensures enabled. */
 	static async ensure_realm_cliqhub_channel(realm_id: string): Promise<ChannelRecord> {
+		log.debug('ensure_realm_cliqhub_channel', { realm_id });
 		const trimmed = realm_id.trim();
 		if (!trimmed) throw ApiError.bad_request('realm_id is required');
 
-		const realm = await Realm.findByPk(trimmed);
+		const realm = await realm_repo.find_by_id(trimmed);
 		if (!realm) throw ApiError.not_found(`realm '${trimmed}' not found`);
 
 		const channel_id = `cliqhub-${trimmed}`;
-		let row = await NotificationChannel.findByPk(channel_id);
+		let row = await channel_repo.find_by_id(channel_id);
 		if (!row) {
-			row = await NotificationChannel.findOne({
-				where: { realm_id: trimmed, name: 'cliqhub' },
-			});
+			row = await channel_repo.find_one({
+				realm_id: trimmed, name: 'cliqhub',
+			} as any);
 		}
 		if (!row) {
 			const now = Date.now();
-			row = await NotificationChannel.create({
+			row = await channel_repo.create_one({
 				id: channel_id,
 				realm_id: trimmed,
 				name: 'cliqhub',
 				enabled: 1,
 				created_at: now,
 				updated_at: now,
-			});
+			} as any);
 			/** Create the default in-app destination row. */
 			const { ChannelDestination } = await import('../models/index.js');
 			await ChannelDestination.findOrCreate({
@@ -795,31 +818,32 @@ export class NotificationService {
 	 * Hub-only — daemon never resolves or sends this id (Yamazaki H3.2).
 	 */
 	static async ensure_realm_all_users_channel(realm_id: string): Promise<ChannelRecord> {
+		log.debug('ensure_realm_all_users_channel', { realm_id });
 		const trimmed = realm_id.trim();
 		if (!trimmed) throw ApiError.bad_request('realm_id is required');
 
-		const realm = await Realm.findByPk(trimmed);
-		if (!realm) throw ApiError.not_found(`realm '${trimmed}' not found`);
+		const realm2 = await realm_repo.find_by_id(trimmed);
+		if (!realm2) throw ApiError.not_found(`realm '${trimmed}' not found`);
 
 		// Stable synthetic id so re-ensure is idempotent across restarts.
 		const channel_id = `all_users-${trimmed}`;
-		let row = await NotificationChannel.findByPk(channel_id);
+		let row = await channel_repo.find_by_id(channel_id);
 		// Legacy rows may use the name without the synthetic id — fall back to name lookup.
 		if (!row) {
-			row = await NotificationChannel.findOne({
-				where: { realm_id: trimmed, name: 'realm:all_users' },
-			});
+			row = await channel_repo.find_one({
+				realm_id: trimmed, name: 'realm:all_users',
+			} as any);
 		}
 		if (!row) {
 			const now = Date.now();
-			row = await NotificationChannel.create({
+			row = await channel_repo.create_one({
 				id: channel_id,
 				realm_id: trimmed,
 				name: 'realm:all_users',
 				enabled: 1,
 				created_at: now,
 				updated_at: now,
-			});
+			} as any);
 			// Default destination is in-app (cliqhub) — fan-out to all realm members.
 			const { ChannelDestination } = await import('../models/index.js');
 			await ChannelDestination.findOrCreate({

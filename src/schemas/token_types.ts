@@ -41,7 +41,8 @@ export const grant_access_schema = z.object({
 /** Org domain: `*` or a list of org ids (optionally including `*`). */
 export const domain_orgs_schema = z.union([
     z.literal('*'),
-    z.array(z.union([z.number().int(), z.literal('*')])).min(1),
+    // Org ids are UUIDs; integers kept for legacy clients (B6).
+    z.array(z.union([z.string().min(1), z.number().int(), z.literal('*')])).min(1),
 ]);
 
 /** Realm domain: `*` or a list of realm ids. */

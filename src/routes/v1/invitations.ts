@@ -1,3 +1,13 @@
+/**
+ * Invitations routes — create, look up, revoke, and accept org/team invitations.
+ *
+ * POST   /v1/invitations/create
+ * POST   /v1/invitations/get
+ * POST   /v1/invitations/get_by_id
+ * POST   /v1/invitations/revoke
+ * POST   /v1/invitations/get_by_token
+ * POST   /v1/invitations/accept
+ */
 import type { Router } from 'express';
 import type { Container } from '../../container.js';
 

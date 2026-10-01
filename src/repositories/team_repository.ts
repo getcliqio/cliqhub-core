@@ -1,5 +1,6 @@
-import { Team, User } from '../db/models/index.js';
+import { Team, User } from '../models/index.js';
 import { fn, literal, Op, type Transaction, type WhereOptions } from 'sequelize';
+import { BaseRepository } from './base_repository.js';
 
 // "Latest" = highest semver, NOT most recently published. Splits the
 // version on '.', casts to int[], and orders natural-numerically so
@@ -16,7 +17,8 @@ const LATEST_VERSION_SUBQUERY = `(
     LIMIT 1
 )`;
 
-export class TeamRepository {
+export class TeamRepository extends BaseRepository<Team> {
+    protected readonly model = Team;
     async find_by_name_and_scope(name: string, scope: string | null) {
         const where: any = { name };
         if (scope) { where.scope = scope; }
@@ -102,8 +104,8 @@ export class TeamRepository {
         await Team.increment('install_count', { by: 1, where: { id } });
     }
 
-    async delete_by_id(id: string, transaction?: Transaction): Promise<void> {
-        await Team.destroy({ where: { id }, transaction });
+    async delete_by_id(id: string, transaction?: Transaction): Promise<number> {
+        return Team.destroy({ where: { id }, transaction });
     }
 
     async list_by_scope(scope: string) {

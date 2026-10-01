@@ -1,8 +1,13 @@
 import { QueryTypes } from 'sequelize';
 
 import { get_sequelize } from '../db/sequelize.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.review_expiry');
 import { EventSubmitService } from './events_service.js';
-import { ReviewNotification } from '../models/review_notification.model.js';
+import { ReviewNotificationRepository } from '../repositories/review_notification_repository.js';
+
+const _review_notif_repo = new ReviewNotificationRepository();
 import { HugReviewsService } from './hug_reviews.service.js';
 
 const SWEEP_INTERVAL_MS = parseInt(
@@ -48,7 +53,7 @@ async function sweep(): Promise<void> {
     if (expired && expired.length > 0) {
         for (const row of expired) {
             try {
-                const notif_rows = await ReviewNotification.findAll({
+                const notif_rows = await _review_notif_repo.find_all_q({
                     where: { review_id: row.id },
                     attributes: ['channel_id'],
                 });
@@ -78,7 +83,7 @@ async function sweep(): Promise<void> {
                     target_channels: channels,
                 });
             } catch (err) {
-                console.error(`[ReviewExpirySweep] event emit failed for ${row.id}:`, err);
+                log.error('review_expired_emit_failed', { review_id: row.id, error: err instanceof Error ? err.message : String(err) });
             }
         }
     }
@@ -108,22 +113,23 @@ async function sweep_reminders(sq: ReturnType<typeof get_sequelize>): Promise<vo
         try {
             await HugReviewsService.remind(row.id);
         } catch (err) {
-            console.error(`[ReviewExpirySweep] remind failed for ${row.id}:`, err);
+            log.error('review_remind_failed', { review_id: row.id, error: err instanceof Error ? err.message : String(err) });
         }
     }
 }
 
 /** Start the periodic review expiry + remind sweep. */
 export function start_review_expiry_sweep(): void {
+    log.debug('start_review_expiry_sweep', {});
     if (_timer) return;
 
     sweep().catch((err) => {
-        console.error('[ReviewExpirySweep] initial sweep failed:', err);
+        log.error('sweep_failed', { error: err instanceof Error ? err.message : String(err) });
     });
 
     _timer = setInterval(() => {
         sweep().catch((err) => {
-            console.error('[ReviewExpirySweep] sweep failed:', err);
+            log.error('sweep_failed', { error: err instanceof Error ? err.message : String(err) });
         });
     }, SWEEP_INTERVAL_MS);
     _timer.unref();
@@ -131,6 +137,7 @@ export function start_review_expiry_sweep(): void {
 
 /** Stop the sweep (for graceful shutdown). */
 export function stop_review_expiry_sweep(): void {
+    log.debug('stop_review_expiry_sweep', {});
     if (_timer) {
         clearInterval(_timer);
         _timer = null;
@@ -139,5 +146,6 @@ export function stop_review_expiry_sweep(): void {
 
 /** Test hook — run one sweep cycle. */
 export async function run_review_sweep_once(): Promise<void> {
+    log.debug('run_review_sweep_once', {});
     await sweep();
 }

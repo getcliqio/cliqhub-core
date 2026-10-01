@@ -66,7 +66,7 @@ function jwt_bearer(): string {
 
 function mock_users(): void {
     stub_pat_auth(repos, ALICE, { once: false });
-    repos.user_repo.find_by_id.mockImplementation(
+    repos.user_repo.find_profile_by_id.mockImplementation(
         async (id: number) => (id === ALICE.id ? ALICE : null),
     );
     repos.scope_repo.find_owned_by_user.mockResolvedValue([
@@ -82,6 +82,7 @@ function mock_users(): void {
     ]);
     repos.org_member_repo.find_orgs_by_user.mockResolvedValue([]);
     repos.scope_repo.find_member_scopes.mockResolvedValue([]);
+    repos.scope_repo.find_default_scopes.mockResolvedValue([]);
     repos.scope_repo.find_by_org_ids.mockResolvedValue([]);
 }
 
@@ -112,8 +113,8 @@ const ready = await postgres_reachable();
 describe.skipIf(!ready)('token capability scopes (slice 1.6)', () => {
     beforeAll(async () => {
         const { init_sequelize, close_sequelize } = await import('../../src/db/sequelize.js');
-        const { init_models } = await import('../../src/db/models/index.js');
-        const { migrate_hub_schema } = await import('../../src/db/hub_schema_migrations.js');
+        const { init_models } = await import('../../src/models/index.js');
+        const { migrate_hub_schema } = await import('../../src/models/migrations/hub_schema_migrations.js');
         const { close_control_plane_store, init_control_plane_store } = await import(
             '../../src/db/control_plane_store.js'
         );

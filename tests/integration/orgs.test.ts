@@ -34,8 +34,11 @@ import { UsersController } from '../../src/controllers/users_controller.js';
 import { make_mock_repos, test_config } from '../helpers/test_container.js';
 import { create_auth_middleware } from '../../src/middleware/auth_middleware.js';
 import { error_handler } from '../../src/middleware/error_handler.js';
+import { create_route_policy_middleware } from '../../src/middleware/enforce_route_policy.js';
+import { ALL_PERMISSIONS } from '../../src/auth/permissions.js';
+import { org_role_store } from '../helpers/policy_decision.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
-import { User, Org, OrgMember, OrgRole, Scope, ScopeMember, Team } from '../../src/db/models/index.js';
+import { User, Org, OrgMember, OrgRole, Scope, ScopeMember, Team } from '../../src/models/index.js';
 
 const org_repo = {
     find_by_id: vi.fn().mockResolvedValue(null),
@@ -64,6 +67,20 @@ app.use(create_auth_middleware({
     token_repo: repos.token_repo as any,
     scope_repo: repos.scope_repo as any,
     org_member_repo: repos.org_member_repo as any,
+}));
+// Production route policy; the caller's org permissions come from the same
+// `_perm_gate` the tests use to play an org admin or a plain member.
+app.use(create_route_policy_middleware({
+    store: {
+        ...org_role_store(),
+        org_role: async (org_id: string, user_id: string) => {
+            const permissions: string[] = [];
+            for (const p of ALL_PERMISSIONS) {
+                try { await _perm_gate(org_id, user_id, p); permissions.push(p); } catch { /* not held */ }
+            }
+            return { slug: 'test', is_system: false, permissions };
+        },
+    },
 }));
 
 const orgs_service = new OrgsService(

@@ -2,14 +2,14 @@
  * HTTP request logging + `x-request-id` correlation.
  *
  * 2xx/3xx → debug (quiet at default info)
- * 4xx → warn
+ * 4xx → info  (access refusals are logged once, at warn, as `access_denied`)
  * 5xx → error
  */
 
 import { randomUUID } from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 
-import { get_logger } from '../lib/log.js';
+import { current_log_context, get_logger, run_with_log_context } from '../lib/log.js';
 
 declare global {
     namespace Express {
@@ -46,6 +46,7 @@ export function request_logging_middleware(
         const status = res.statusCode;
         const ctx = {
             request_id,
+            user_id: req.auth?.user?.id,
             method: req.method,
             path,
             status,
@@ -57,11 +58,25 @@ export function request_logging_middleware(
             return;
         }
         if (status >= 400) {
-            log.warn('request', ctx);
+            log.info('request', ctx);
             return;
         }
         log.debug('request', ctx);
     });
 
+    // Every log line written while serving this request carries its id.
+    run_with_log_context({ request_id }, () => next());
+}
+
+/**
+ * After the token is read: add the caller to the request's log context so
+ * service logs show who acted. Mounted right after the auth middleware.
+ */
+export function bind_caller_to_log_context(req: Request, _res: Response, next: NextFunction): void {
+    const ctx = current_log_context();
+    if (ctx && req.auth?.user?.id) {
+        ctx.user_id = String(req.auth.user.id);
+        if (req.auth.auth_via) ctx.auth_via = req.auth.auth_via;
+    }
     next();
 }

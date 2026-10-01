@@ -11,8 +11,11 @@ import { QueryTypes } from 'sequelize';
 
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
-import { Review } from '../models/review.model.js';
-import { ReviewMessage } from '../models/review_message.model.js';
+import { ReviewRepository } from '../repositories/review_repository.js';
+import { ReviewMessageRepository } from '../repositories/review_message_repository.js';
+
+const _review_repo_rm = new ReviewRepository();
+const _review_msg_repo = new ReviewMessageRepository();
 import { get_sequelize } from '../lib/sequelize.js';
 
 const log = get_logger('review_messages');
@@ -49,7 +52,7 @@ export class ReviewMessageService {
         user_id: string,
         text: string,
     ): Promise<ReviewMessageDto> {
-        const review = await Review.findByPk(review_id);
+        const review = await _review_repo_rm.find_by_id(review_id);
         if (!review) throw ApiError.not_found('Review not found');
         if (review.status !== 'pending') {
             throw ApiError.conflict(`Cannot send message to ${review.status} review`);
@@ -62,9 +65,9 @@ export class ReviewMessageService {
 
         /** Auto-claim on first message if unclaimed. */
         if (review.claimed_by === null) {
-            const [affected] = await Review.update(
-                { claimed_by: user_id, claimed_at: new Date() },
-                { where: { id: review_id, claimed_by: null } },
+            const [affected] = await _review_repo_rm.update_where(
+                { id: review_id, claimed_by: null } as any,
+                { claimed_by: user_id, claimed_at: new Date() } as any,
             );
             if (affected === 0) {
                 throw ApiError.conflict('Review was just claimed by another reviewer');
@@ -72,7 +75,7 @@ export class ReviewMessageService {
         }
 
         const id = randomUUID();
-        const msg = await ReviewMessage.create({
+        const msg = await _review_msg_repo.create_one({
             id,
             review_id,
             role: 'user',
@@ -115,7 +118,7 @@ export class ReviewMessageService {
         daemon_id: string,
         text: string,
     ): Promise<ReviewMessageDto> {
-        const review = await Review.findByPk(review_id);
+        const review = await _review_repo_rm.find_by_id(review_id);
         if (!review) throw ApiError.not_found('Review not found');
         if (review.daemon_id !== daemon_id) {
             log.warn('agent_message_daemon_mismatch', {
@@ -150,7 +153,7 @@ export class ReviewMessageService {
         }
 
         const id = randomUUID();
-        const msg = await ReviewMessage.create({
+        const msg = await _review_msg_repo.create_one({
             id,
             review_id,
             role: 'assistant',
@@ -177,7 +180,7 @@ export class ReviewMessageService {
         let after_created_at: Date | null = null;
 
         if (after_id) {
-            const cursor_msg = await ReviewMessage.findByPk(after_id, {
+            const cursor_msg = await _review_msg_repo.find_by_id(after_id, {
                 attributes: ['created_at'],
             });
             if (cursor_msg) {
@@ -191,7 +194,7 @@ export class ReviewMessageService {
             where['created_at'] = { [Op.gt]: after_created_at };
         }
 
-        const rows = await ReviewMessage.findAll({
+        const rows = await _review_msg_repo.find_all_q({
             where,
             order: [['created_at', 'ASC']],
             limit: 200,
@@ -211,7 +214,7 @@ export class ReviewMessageService {
         review_id: string,
         user_id: string,
     ): Promise<ClaimResult> {
-        const review = await Review.findByPk(review_id);
+        const review = await _review_repo_rm.find_by_id(review_id);
         if (!review) throw ApiError.not_found('Review not found');
         if (review.status !== 'pending') {
             throw ApiError.conflict(`Cannot claim a ${review.status} review`);
@@ -241,7 +244,7 @@ export class ReviewMessageService {
 
         if (!results) {
             /** CAS failed — someone else claimed between our check and update. */
-            const fresh = await Review.findByPk(review_id, { attributes: ['claimed_by'] });
+            const fresh = await _review_repo_rm.find_by_id(review_id, { attributes: ['claimed_by'] });
             return { ok: false, claimed_by: fresh?.claimed_by ?? '' };
         }
 
@@ -258,7 +261,7 @@ export class ReviewMessageService {
         review_id: string,
         user_id: string,
     ): Promise<{ ok: boolean }> {
-        const review = await Review.findByPk(review_id);
+        const review = await _review_repo_rm.find_by_id(review_id);
         if (!review) throw ApiError.not_found('Review not found');
 
         if (review.claimed_by === null) {
@@ -268,9 +271,9 @@ export class ReviewMessageService {
             throw ApiError.forbidden('Only the current claimer can unclaim');
         }
 
-        await Review.update(
-            { claimed_by: null, claimed_at: null },
-            { where: { id: review_id, claimed_by: user_id } },
+        await _review_repo_rm.update_where(
+            { id: review_id, claimed_by: user_id } as any,
+            { claimed_by: null, claimed_at: null } as any,
         );
 
         log.info('review_unclaimed', { review_id, user_id });

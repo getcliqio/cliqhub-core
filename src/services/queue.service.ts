@@ -4,12 +4,15 @@ import { QueryTypes } from 'sequelize';
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import {
-    RealmDispatchQueue,
     type Realm_dispatch_kind,
     type Realm_dispatch_queue_attributes,
     type Realm_dispatch_queue_model,
     type Realm_dispatch_status,
 } from '../models/realm_dispatch_queue.model.js';
+import { RealmDispatchQueueRepository } from '../repositories/realm_dispatch_queue_repository.js';
+import { get_sequelize } from '../lib/sequelize.js';
+
+const _queue_repo = new RealmDispatchQueueRepository();
 
 const log = get_logger('queue');
 
@@ -53,7 +56,7 @@ export class QueueService {
         if (!input.kind) throw ApiError.bad_request('kind is required');
 
         const now = now_ms();
-        const row = await RealmDispatchQueue.create({
+        const row = await _queue_repo.create_one({
             id: randomUUID(),
             realm_id: input.realm_id.trim(),
             kind: input.kind,
@@ -74,7 +77,7 @@ export class QueueService {
     }
 
     static async get(queue_item_id: string): Promise<Queue_item_dto> {
-        const row = await RealmDispatchQueue.findByPk(queue_item_id);
+        const row = await _queue_repo.find_by_id(queue_item_id);
         if (!row) throw ApiError.not_found(`Queue item '${queue_item_id}' not found`);
         return to_dto(row);
     }
@@ -85,7 +88,7 @@ export class QueueService {
     ): Promise<Queue_item_dto[]> {
         const where: Record<string, unknown> = { realm_id };
         if (opts?.status) where.status = opts.status;
-        const rows = await RealmDispatchQueue.findAll({
+        const rows = await _queue_repo.find_all_q({
             where,
             order: [
                 ['priority', 'DESC'],
@@ -106,8 +109,7 @@ export class QueueService {
         if (!id) throw ApiError.bad_request('queue_item_id is required');
         if (!daemon) throw ApiError.bad_request('daemon_id is required');
 
-        const sequelize = RealmDispatchQueue.sequelize;
-        if (!sequelize) throw ApiError.internal('Queue model is not initialized');
+        const sequelize = get_sequelize();
 
         const now = now_ms();
         const rows = await sequelize.query<Realm_dispatch_queue_attributes>(
@@ -131,7 +133,7 @@ export class QueueService {
 
         const won = rows[0];
         if (!won) {
-            const existing = await RealmDispatchQueue.findByPk(id);
+            const existing = await _queue_repo.find_by_id(id);
             if (!existing) throw ApiError.not_found(`Queue item '${id}' not found`);
             log.info('claim_lost', {
                 queue_item_id: id,
@@ -173,7 +175,7 @@ export class QueueService {
     }
 
     static async mark_offered(queue_item_id: string): Promise<Queue_item_dto> {
-        const row = await RealmDispatchQueue.findByPk(queue_item_id);
+        const row = await _queue_repo.find_by_id(queue_item_id);
         if (!row) throw ApiError.not_found(`Queue item '${queue_item_id}' not found`);
         if (row.status !== 'queued' && row.status !== 'offered') {
             throw ApiError.conflict(`Queue item '${queue_item_id}' is '${row.status}', cannot offer`);
@@ -200,7 +202,7 @@ export class QueueService {
             run_id?: string | null;
         },
     ): Promise<Queue_item_dto> {
-        const row = await RealmDispatchQueue.findByPk(queue_item_id);
+        const row = await _queue_repo.find_by_id(queue_item_id);
         if (!row) throw ApiError.not_found(`Queue item '${queue_item_id}' not found`);
         const now = now_ms();
         row.status = input.status;

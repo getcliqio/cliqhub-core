@@ -6,11 +6,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { extract_agents_from_workflow } from '../../../src/lib/agent_catalog_usage.js';
+import { extract_agents_from_workflow } from '../../../src/lib/agent_workflow.js';
 import { ApiError } from '../../../src/lib/api_error.js';
 
-vi.mock('../../../src/lib/agent_catalog_usage.js', async (import_original) => {
-    const actual = await import_original<typeof import('../../../src/lib/agent_catalog_usage.js')>();
+vi.mock('../../../src/lib/agent_workflow.js', async (import_original) => {
+    const actual = await import_original<typeof import('../../../src/lib/agent_workflow.js')>();
     return {
         ...actual,
         find_teams_using_agent: vi.fn(),
@@ -23,9 +23,12 @@ vi.mock('../../../src/models/index.js', () => ({
         findAll: vi.fn(),
         create: vi.fn(),
     },
+    RealmAgentSetting: {},
+    OrgAgentSetting: {},
+    UserRealmAgentSetting: {},
 }));
 
-import { find_teams_using_agent } from '../../../src/lib/agent_catalog_usage.js';
+import { find_teams_using_agent } from '../../../src/lib/agent_workflow.js';
 import { AgentCatalog } from '../../../src/models/index.js';
 import { AgentService } from '../../../src/services/agent.service.js';
 

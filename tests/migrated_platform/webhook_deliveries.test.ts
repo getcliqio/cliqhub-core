@@ -56,7 +56,7 @@ const webhook_dest = (url = 'https://receiver.example.com/hook') => [{ type: 'we
 
 function mock_user(id: number, role: 'user' | 'admin' = 'admin') {
     stub_hub_pat_auth(repos);
-		repos.user_repo.find_by_id.mockResolvedValue({
+		repos.user_repo.find_profile_by_id.mockResolvedValue({
         id: hub_legacy_uuid(id),
         username: `user-${id}`,
         display_name: `User ${id}`,

@@ -5,11 +5,12 @@
  */
 
 import { Op } from 'sequelize';
-import { CustomEvent } from '../models/index.js';
+import { CustomEventRepository } from '../repositories/custom_event_repository.js';
 import { get_logger } from '../lib/log.js';
 import { ApiError } from '../lib/api_error.js';
 
 const log = get_logger('custom-events');
+const repo = new CustomEventRepository();
 
 export interface CustomEventRecord {
     id: string;
@@ -38,9 +39,7 @@ export class CustomEventService {
         for (const event_type of event_types) {
             if (!event_type.startsWith('custom.')) continue;
 
-            const existing = await CustomEvent.findOne({
-                where: { event_type, realm_id, team_slug },
-            });
+            const existing = await repo.find_one({ event_type, realm_id, team_slug });
 
             if (existing) {
                 if (existing.source !== 'declared') {
@@ -50,7 +49,7 @@ export class CustomEventService {
             }
 
             try {
-                await CustomEvent.create({
+                await repo.create_one({
                     event_type,
                     source: 'declared',
                     realm_id,
@@ -77,13 +76,15 @@ export class CustomEventService {
         const { event_type, realm_id = null, team_slug = null } = opts;
         if (!event_type.startsWith('custom.')) return;
 
-        const existing = await CustomEvent.findOne({
-            where: { event_type, realm_id: realm_id ?? null, team_slug: team_slug ?? null },
+        const existing = await repo.find_one({
+            event_type,
+            realm_id: realm_id ?? null,
+            team_slug: team_slug ?? null,
         });
         if (existing) return;
 
         try {
-            await CustomEvent.create({
+            await repo.create_one({
                 event_type,
                 source: 'observed',
                 realm_id: realm_id ?? null,
@@ -113,10 +114,7 @@ export class CustomEventService {
             where.team_slug = opts.team_slug;
         }
 
-        const rows = await CustomEvent.findAll({
-            where,
-            order: [['event_type', 'ASC']],
-        });
+        const rows = await repo.find_all(where, { order: [['event_type', 'ASC']] });
 
         return rows.map((r) => ({
             id: r.id!,
@@ -137,18 +135,16 @@ export class CustomEventService {
         realm_id: string;
         team_slug: string;
     }): Promise<void> {
-        await CustomEvent.destroy({
-            where: {
-                source: 'declared',
-                realm_id: opts.realm_id,
-                team_slug: opts.team_slug,
-            },
+        await repo.delete_where({
+            source: 'declared',
+            realm_id: opts.realm_id,
+            team_slug: opts.team_slug,
         });
     }
 
     /** Get a single custom event by ID. */
     static async get(id: string): Promise<CustomEventRecord | null> {
-        const row = await CustomEvent.findByPk(id);
+        const row = await repo.find_by_id(id);
         if (!row) return null;
         return {
             id: row.id!,
@@ -176,16 +172,14 @@ export class CustomEventService {
             throw ApiError.bad_request('Event type must start with "custom."');
         }
 
-        const existing = await CustomEvent.findOne({
-            where: { event_type, realm_id },
-        });
+        const existing = await repo.find_one({ event_type, realm_id });
         if (existing) {
             throw ApiError.conflict(
                 `Event '${event_type}' already exists in this realm.`,
             );
         }
 
-        const row = await CustomEvent.create({
+        const row = await repo.create_one({
             event_type,
             source: 'declared',
             realm_id,
@@ -207,7 +201,7 @@ export class CustomEventService {
 
     /** Remove a custom event by ID. */
     static async remove(id: string): Promise<void> {
-        const row = await CustomEvent.findByPk(id);
+        const row = await repo.find_by_id(id);
         if (!row) throw ApiError.not_found('Custom event not found');
         await row.destroy();
     }

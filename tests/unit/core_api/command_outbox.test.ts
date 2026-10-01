@@ -20,8 +20,16 @@ vi.mock('../../../src/lib/log.js', () => ({
 }));
 
 vi.mock('../../../src/models/index.js', () => ({
+    DaemonTeam: {},
     Daemon: { findByPk: vi.fn() },
     RealmMember: { findAll: vi.fn() },
+}));
+
+vi.mock('../../../src/services/run.service.js', () => ({
+    RunService: {
+        append_log: vi.fn(async () => undefined),
+        log_size: vi.fn(async () => 0),
+    },
 }));
 
 vi.mock('../../../src/services/realm.service.js', () => ({

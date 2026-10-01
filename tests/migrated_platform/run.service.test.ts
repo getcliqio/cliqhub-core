@@ -198,7 +198,7 @@ describe.skipIf(!has_postgres)('RunService — Core CRUD', () => {
 
     describe.skipIf(!has_postgres)('list_recent', () => {
         it('returns paginated runs + total', async () => {
-            const result = await RunService.list_recent();
+            const result = await RunService.list_recent(20, undefined, { site_admin: true });
             expect(Array.isArray(result.runs)).toBe(true);
             expect(typeof result.total).toBe('number');
         });
@@ -207,7 +207,7 @@ describe.skipIf(!has_postgres)('RunService — Core CRUD', () => {
             await create_run({ run_name: 'first' });
             await create_run({ run_name: 'second' });
 
-            const result = await RunService.list_recent();
+            const result = await RunService.list_recent(20, undefined, { site_admin: true });
             expect(result.runs.length).toBeGreaterThanOrEqual(2);
             const times = result.runs.map((r: any) => Number(r.started_at ?? r.get?.('started_at')));
             expect(times[0]).toBeGreaterThanOrEqual(times[1]);
@@ -215,7 +215,7 @@ describe.skipIf(!has_postgres)('RunService — Core CRUD', () => {
 
         it('filters by daemon_id when provided', async () => {
             await create_run({ daemon_id });
-            const result = await RunService.list_recent(20, daemon_id);
+            const result = await RunService.list_recent(20, daemon_id, { site_admin: true });
             expect(result.runs.every((r: any) => r.daemon_id === daemon_id)).toBe(true);
         });
 
@@ -230,12 +230,12 @@ describe.skipIf(!has_postgres)('RunService — Core CRUD', () => {
             const in_a = await create_run({ daemon_id, realm_id: realm_a });
             const in_b = await create_run({ daemon_id, realm_id: realm_b });
 
-            const list_a = await RunService.list_recent(50, undefined, { realm_id: realm_a });
+            const list_a = await RunService.list_recent(50, undefined, { site_admin: true, realm_id: realm_a });
             const ids_a = list_a.runs.map((r: any) => r.run_id);
             expect(ids_a).toContain(in_a);
             expect(ids_a).not.toContain(in_b);
 
-            const list_b = await RunService.list_recent(50, undefined, { realm_id: realm_b });
+            const list_b = await RunService.list_recent(50, undefined, { site_admin: true, realm_id: realm_b });
             const ids_b = list_b.runs.map((r: any) => r.run_id);
             expect(ids_b).toContain(in_b);
             expect(ids_b).not.toContain(in_a);
@@ -251,8 +251,26 @@ describe.skipIf(!has_postgres)('RunService — Core CRUD', () => {
             // Force realm_id NULL to simulate a pre-migration row.
             await Run.update({ realm_id: null }, { where: { run_id: legacy_run } });
 
-            const listed = await RunService.list_recent(50, undefined, { realm_id });
+            const listed = await RunService.list_recent(50, undefined, { site_admin: true, realm_id });
             expect(listed.runs.map((r: any) => r.run_id)).not.toContain(legacy_run);
+        });
+    });
+
+    describe.skipIf(!has_postgres)('list_recent — team_id filter', () => {
+        it('returns only runs of that team and still honours the realm gate', async () => {
+            const realm_a = `test-realm-team-a-${uid()}`;
+            const realm_b = `test-realm-team-b-${uid()}`;
+            const in_a = await create_run({ daemon_id, realm_id: realm_a });
+            const in_b = await create_run({ daemon_id, realm_id: realm_b });
+
+            const mine = await RunService.list_recent(50, undefined, { site_admin: true, team_id, realm_id: realm_a });
+            const ids = mine.runs.map((r: any) => r.run_id);
+            expect(ids).toContain(in_a);
+            expect(ids).not.toContain(in_b);
+            expect(mine.runs.every((r: any) => r.team_id === team_id)).toBe(true);
+
+            const other = await RunService.list_recent(50, undefined, { site_admin: true, team_id: randomUUID(), realm_id: realm_a });
+            expect(other.runs.map((r: any) => r.run_id)).not.toContain(in_a);
         });
     });
 
@@ -260,7 +278,7 @@ describe.skipIf(!has_postgres)('RunService — Core CRUD', () => {
         it('returns runs for specific workspace', async () => {
             await create_run();
 
-            const result = await RunService.list_recent(50, undefined, { workspace_id });
+            const result = await RunService.list_recent(50, undefined, { site_admin: true, workspace_id });
             result.runs.forEach((r: any) => expect(r.workspace_id).toBe(workspace_id));
         });
     });
@@ -366,7 +384,7 @@ describe.skipIf(!has_postgres)('RunService — State transitions', () => {
             const count = await RunService.crash_stale();
             expect(count).toBeGreaterThanOrEqual(2);
 
-            const result = await RunService.list_recent(50, undefined, { workspace_id, active_only: true });
+            const result = await RunService.list_recent(50, undefined, { site_admin: true, workspace_id, active_only: true });
             expect(result.runs).toHaveLength(0);
         });
     });
@@ -377,7 +395,7 @@ describe.skipIf(!has_postgres)('RunService — State transitions', () => {
             await create_run({ parent_run_id: parent_id, parent_phase: 'build' });
             await create_run({ parent_run_id: parent_id, parent_phase: 'test' });
 
-            const result = await RunService.list_recent(50, undefined, { parent_run_id: parent_id });
+            const result = await RunService.list_recent(50, undefined, { site_admin: true, parent_run_id: parent_id });
             expect(result.runs).toHaveLength(2);
         });
     });
@@ -390,7 +408,7 @@ describe.skipIf(!has_postgres)('RunService — State transitions', () => {
             const count = await RunService.delete_by_workspace(workspace_id);
             expect(count).toBeGreaterThanOrEqual(2);
 
-            const remaining = await RunService.list_recent(50, undefined, { workspace_id });
+            const remaining = await RunService.list_recent(50, undefined, { site_admin: true, workspace_id });
             expect(remaining.runs).toHaveLength(0);
         });
     });

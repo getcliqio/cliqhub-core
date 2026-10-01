@@ -3,7 +3,7 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { setup_sequelize_mocks } from '../../helpers/mock_sequelize.js';
 setup_sequelize_mocks();
 
-import { User, Scope } from '../../../src/db/models/index.js';
+import { User, Scope } from '../../../src/models/index.js';
 import { UserRepository } from '../../../src/repositories/user_repository.js';
 
 describe('UserRepository', () => {
@@ -14,7 +14,7 @@ describe('UserRepository', () => {
         repo = new UserRepository();
     });
 
-    it('find_by_id returns user when found', async () => {
+    it('find_profile_by_id returns user when found', async () => {
         const row = {
             id: hub_legacy_uuid(1), username: 'alice', display_name: 'Alice',
             email: 'alice@example.com', role: 'user',
@@ -22,7 +22,7 @@ describe('UserRepository', () => {
             created_at: '2026-01-01T00:00:00.000Z',
         };
         vi.mocked(User.findByPk).mockResolvedValueOnce(row as any);
-        const result = await repo.find_by_id(hub_legacy_uuid(1));
+        const result = await repo.find_profile_by_id(hub_legacy_uuid(1));
         expect(result).toEqual({
             id: hub_legacy_uuid(1), username: 'alice', display_name: 'Alice',
             email: 'alice@example.com', role: 'user',
@@ -32,9 +32,9 @@ describe('UserRepository', () => {
         });
     });
 
-    it('find_by_id returns null when not found', async () => {
+    it('find_profile_by_id returns null when not found', async () => {
         vi.mocked(User.findByPk).mockResolvedValueOnce(null);
-        const result = await repo.find_by_id(hub_legacy_uuid(999));
+        const result = await repo.find_profile_by_id(hub_legacy_uuid(999));
         expect(result).toBeNull();
     });
 

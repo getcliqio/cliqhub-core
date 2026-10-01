@@ -14,8 +14,21 @@ import { randomUUID } from 'node:crypto';
 import { Op, QueryTypes } from 'sequelize';
 
 import { get_sequelize } from '../lib/sequelize.js';
-import { Workspace, Run, Team, Daemon, Scope, RealmMember, RealmAgentSetting, Realm } from '../models/index.js';
-import { Team as HubTeam, TeamVersion } from '../db/models/index.js';
+import { WorkspaceRepository } from '../repositories/workspace_repository.js';
+import { RunRepository } from '../repositories/run_repository.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+import { DaemonRepository } from '../repositories/daemon_repository.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
+import { RealmAgentSettingRepository } from '../repositories/realm_agent_setting_repository.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { ScopeRepository } from '../repositories/scope_repository.js';
+import { TeamRepository } from '../repositories/team_repository.js';
+import { TeamVersionRepository } from '../repositories/team_version_repository.js';
+import type { Daemon } from '../models/daemon.model.js';
+import type { Run } from '../models/run.model.js';
+import type { DaemonTeam } from '../models/daemon_team.model.js';
+import type { Team } from '../models/team.model.js';
+import type { TeamVersion } from '../models/team_version.model.js';
 import { RunService } from './run.service.js';
 import { TeamService } from './teams_install_service.js';
 import { AccessService } from './access.service.js';
@@ -23,10 +36,21 @@ import { RealmService } from './realm.service.js';
 import { QueueService, type Queue_item_dto } from './queue.service.js';
 import { DispatchAuthService } from './dispatch_auth.service.js';
 import { command_outbox_enqueue } from './command_outbox.service.js';
+
+const _ws_repo = new WorkspaceRepository();
+const _run_repo = new RunRepository();
+const _dt_repo = new DaemonTeamRepository();
+const _daemon_repo = new DaemonRepository();
+const _realm_member_repo = new RealmMemberRepository();
+const _realm_agent_setting_repo = new RealmAgentSettingRepository();
+const _realm_repo = new RealmRepository();
+const _scope_repo = new ScopeRepository();
+const _team_repo = new TeamRepository();
+const _team_version_repo = new TeamVersionRepository();
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import { CustomEventService } from './custom_event.service.js';
-import { sort_semver_desc } from '../lib/semver.js';
+import { SemVer } from '../lib/semver.js';
 
 const log = get_logger('dispatch');
 
@@ -141,7 +165,7 @@ export class DispatchService {
             throw ApiError.forbidden('Not authenticated');
         }
 
-        const daemon = await Daemon.findByPk(input.daemon_id);
+        const daemon = await _daemon_repo.find_by_id(input.daemon_id);
         if (!daemon) {
             throw ApiError.not_found(`Daemon '${input.daemon_id}' not found`);
         }
@@ -152,11 +176,11 @@ export class DispatchService {
         // Look up in backend DB for path/manifest if available, but don't require it.
         // Ephemeral workspaces have relative placeholder paths — send empty so
         // the daemon provisions a real directory.
-        const workspace = await Workspace.findByPk(input.workspace_id);
+        const workspace = await _ws_repo.find_by_id(input.workspace_id);
         const stored_path = workspace?.path ?? input.workspace_path ?? '';
         const workspace_path = stored_path.startsWith('/') ? stored_path : '';
 
-        const team = await Team.findByPk(input.team_id);
+        const team = await _dt_repo.find_by_id(input.team_id);
         const manifest_yaml = input.manifest_yaml ?? team?.manifest;
 
         if (team) {
@@ -176,10 +200,10 @@ export class DispatchService {
         // agent_catalog. System agents always pass. Version pins are
         // checked against exact versions.
         if (manifest_yaml && team) {
-            const scope = await Scope.findByPk(team.scope_id);
+            const scope = await _scope_repo.find_by_id(team.scope_id);
             if (scope?.org_id) {
-                const { validate_agents_for_dispatch } = await import('../lib/agent_catalog_usage.js');
-                const agent_check = await validate_agents_for_dispatch(scope.org_id, manifest_yaml);
+                const { AgentWorkflow } = await import('../lib/agent_workflow.js');
+                const agent_check = await AgentWorkflow.validate_for_dispatch(scope.org_id, manifest_yaml);
                 if (!agent_check.ok) {
                     const details = agent_check.missing
                         .map((m) => m.required_version
@@ -204,7 +228,7 @@ export class DispatchService {
         });
 
         const team_scope_slug = team
-            ? (await Scope.findByPk(team.scope_id))?.slug
+            ? (await _scope_repo.find_by_id(team.scope_id))?.slug
             : undefined;
 
         // Enqueue the execute command for durable delivery via the outbox.
@@ -249,15 +273,12 @@ export class DispatchService {
     ): Promise<{ cancelled: boolean; mode: 'queued' | 'hub_terminated' | 'already_terminal' }> {
         if (!user_id) throw ApiError.forbidden('Not authenticated');
 
-        const run = await Run.findByPk(run_id);
+        const run = await _run_repo.find_by_id(run_id);
         if (!run) throw ApiError.not_found(`Run '${run_id}' not found`);
         await DispatchService._ensure_daemon_assignment(run);
 
-        // Assert observer access BEFORE reachability so callers can't probe
-        // daemon liveness via cancel error codes.
-        if (run.daemon_id) {
-            await AccessService.assert_can_observe_daemon(user_id, run.daemon_id);
-        }
+        // Route policy checked operate + teams.cancel on the run's realm before
+        // anything here runs, so error codes cannot be used to probe daemons.
 
         const state = run.state;
         if (state && !['running', 'awaiting_input'].includes(state)) {
@@ -321,14 +342,11 @@ export class DispatchService {
     ): Promise<{ resumed: boolean; from_phase: string }> {
         if (!user_id) throw ApiError.forbidden('Not authenticated');
 
-        const run = await Run.findByPk(run_id);
+        const run = await _run_repo.find_by_id(run_id);
         if (!run) throw ApiError.not_found(`Run '${run_id}' not found`);
         await DispatchService._ensure_daemon_assignment(run);
 
-        if (run.daemon_id) {
-            await AccessService.assert_can_observe_daemon(user_id, run.daemon_id);
-        }
-
+        // Route policy: operate + teams.run on the run's realm.
         const daemon = await DispatchService._check_daemon_reachable(run);
 
         await command_outbox_enqueue(daemon.id, '/v1/resume', { run_id, from_phase });
@@ -345,7 +363,7 @@ export class DispatchService {
      * Does NOT kill the process on the daemon machine.
      */
     private static async _hub_side_cancel(
-        run: InstanceType<typeof Run>,
+        run: Run,
         user_id: string,
         reason: string | undefined,
         trigger: 'stale_cancel' | 'daemon_offline' | 'lease_expired',
@@ -404,7 +422,7 @@ export class DispatchService {
      * Hub cancelled immediately (used by cancel escalation + SPA status).
      */
     private static async _force_terminate_eligibility(
-        run: InstanceType<typeof Run>,
+        run: Run,
     ): Promise<
         | { eligible: true; trigger: 'stale_cancel' | 'daemon_offline' | 'lease_expired' }
         | { eligible: false; blocker: string }
@@ -435,7 +453,7 @@ export class DispatchService {
 
         const daemon_stale_ms = 90 * 1000;
         if (run.daemon_id) {
-            const daemon = await Daemon.findByPk(run.daemon_id);
+            const daemon = await _daemon_repo.find_by_id(run.daemon_id);
             const last_hb = daemon?.last_heartbeat ?? 0;
             if (!daemon || last_hb === 0 || (now - last_hb) >= daemon_stale_ms) {
                 return { eligible: true, trigger: 'daemon_offline' };
@@ -464,14 +482,12 @@ export class DispatchService {
             throw ApiError.bad_request('inputs must not be empty');
         }
 
-        const run = await Run.findByPk(input.run_id);
+        const run = await _run_repo.find_by_id(input.run_id);
         if (!run) throw ApiError.not_found(`Run '${input.run_id}' not found`);
         await DispatchService._ensure_daemon_assignment(run);
 
-        if (run.daemon_id) {
-            await AccessService.assert_can_observe_daemon(input.user_id, run.daemon_id);
-        }
-
+        // Callers authorized this: the supply_inputs route (operate + teams.inputs)
+        // or a review verdict (the reviewer may act on the review).
         const daemon = await DispatchService._check_daemon_reachable(run);
 
         await command_outbox_enqueue(daemon.id, '/v1/runs/supply_inputs', {
@@ -482,7 +498,8 @@ export class DispatchService {
         try {
             await RunService.set_inputs(input.run_id, input.inputs);
             await RunService.resume(input.run_id);
-        } catch {
+        } catch (err) {
+            log.warn('hub_input_mirror_failed', { error: err instanceof Error ? err.message : String(err) });
             /* daemon is source of truth; Hub mirror is best-effort */
         }
 
@@ -514,9 +531,9 @@ export class DispatchService {
             /** Use the requested version if specified, otherwise latest. */
             let target_version = resolved.version;
             if (input.version && input.version !== resolved.version.version) {
-                const specific = await TeamVersion.findOne({
-                    where: { team_id: resolved.team.id, version: input.version },
-                });
+                const specific = await _team_version_repo.find_one(
+                    { team_id: resolved.team.id, version: input.version } as any,
+                );
                 if (!specific) {
                     throw ApiError.not_found(`Version ${input.version} not found for team '${input.team_id}'`);
                 }
@@ -583,12 +600,12 @@ export class DispatchService {
             return { team_id: last_team_id || String(hub_team.id), results };
         }
 
-        const team = await Team.findByPk(input.team_id);
+        const team = await _dt_repo.find_by_id(input.team_id);
         if (!team) throw ApiError.not_found(`Team '${input.team_id}' not found`);
 
         AccessService.assert_scope_access(input.scope_ids ?? [], team.scope_id);
 
-        const scope = await Scope.findByPk(team.scope_id);
+        const scope = await _scope_repo.find_by_id(team.scope_id);
         if (!scope) throw ApiError.not_found(`Scope for team '${input.team_id}' not found`);
 
         const targets = await DispatchService._resolve_install_targets({
@@ -672,8 +689,8 @@ export class DispatchService {
         const realm_id = input.realm_id.trim();
         if (!realm_id) throw ApiError.bad_request('realm_id is required');
 
-        await RealmService.assert_member(realm_id, input.user_id);
-
+        // Callers authorized this: runs/enqueue (operate + teams.run) or an A2A
+        // dispatch key (queued as the realm owner).
         const payload = input.payload ?? {};
         const fan_out = input.kind === 'install' || input.kind === 'uninstall';
         const item = await QueueService.create({
@@ -1034,9 +1051,9 @@ export class DispatchService {
             // If no daemon has the team cached, fall through to offer all (backward compat).
         }
 
-        const daemons = await Daemon.findAll({
-            where: { id: { [Op.in]: daemon_ids }, status: 'online' },
-        });
+        const daemons = await _daemon_repo.find_all(
+            { id: { [Op.in]: daemon_ids }, status: 'online' } as any,
+        );
         if (daemons.length === 0) {
             log.warn('offer_skipped_no_daemons', {
                 queue_item_id: item.id,
@@ -1237,7 +1254,7 @@ export class DispatchService {
     ): Promise<unknown> {
         if (!user_id) throw ApiError.forbidden('Not authenticated');
 
-        const daemon = await Daemon.findByPk(daemon_id);
+        const daemon = await _daemon_repo.find_by_id(daemon_id);
         if (!daemon) throw ApiError.not_found(`Daemon '${daemon_id}' not found`);
 
         await AccessService.assert_can_observe_daemon(user_id, daemon.id);
@@ -1265,7 +1282,7 @@ export class DispatchService {
     static async dispatch_uninstall(input: DispatchUninstallInput): Promise<{ dispatched: boolean }> {
         if (!input.user_id) throw ApiError.forbidden('Not authenticated');
 
-        const daemon = await Daemon.findByPk(input.daemon_id);
+        const daemon = await _daemon_repo.find_by_id(input.daemon_id);
         if (!daemon) throw ApiError.not_found(`Daemon '${input.daemon_id}' not found`);
 
         await AccessService.assert_can_observe_daemon(input.user_id, daemon.id);
@@ -1303,7 +1320,7 @@ export class DispatchService {
     ): Promise<{ status: number; body: unknown; tx_id: string }> {
         if (!user_id) throw ApiError.forbidden('Not authenticated');
 
-        const daemon = await Daemon.findByPk(daemon_id);
+        const daemon = await _daemon_repo.find_by_id(daemon_id);
         if (!daemon) throw ApiError.not_found(`Daemon '${daemon_id}' not found`);
 
         await AccessService.assert_can_observe_daemon(user_id, daemon.id);
@@ -1416,19 +1433,19 @@ export class DispatchService {
         const ref = team_ref.trim().replace(/^@/, '');
         if (!ref) throw ApiError.bad_request('run payload requires team_id');
 
-        const by_pk = await Team.findByPk(ref);
+        const by_pk = await _dt_repo.find_by_id(ref);
         if (by_pk) {
             if (by_pk.daemon_id === daemon_id) {
                 return { team_id: by_pk.id, manifest: by_pk.manifest ?? undefined };
             }
 
-            const on_daemon = await Team.findOne({
-                where: {
+            const on_daemon = await _dt_repo.find_one(
+                {
                     daemon_id,
                     scope_id: by_pk.scope_id,
                     slug: by_pk.slug,
-                },
-            });
+                } as any,
+            );
             if (on_daemon) {
                 return { team_id: on_daemon.id, manifest: on_daemon.manifest ?? undefined };
             }
@@ -1455,12 +1472,12 @@ export class DispatchService {
             throw ApiError.bad_request(`Invalid team_id '${team_ref}' — expected scope/slug or UUID`);
         }
 
-        const scope = await Scope.findOne({ where: { slug: scope_slug } });
+        const scope = await _scope_repo.find_one({ slug: scope_slug } as any);
         if (!scope) throw ApiError.not_found(`Scope '${scope_slug}' not found`);
 
-        const on_daemon = await Team.findOne({
-            where: { daemon_id, scope_id: scope.id, slug },
-        });
+        const on_daemon = await _dt_repo.find_one(
+            { daemon_id, scope_id: scope.id, slug } as any,
+        );
         if (on_daemon) {
             return { team_id: on_daemon.id, manifest: on_daemon.manifest ?? undefined };
         }
@@ -1481,7 +1498,7 @@ export class DispatchService {
         workspace_path: string,
     ): Promise<{ workspace_id: string; workspace_path: string }> {
         if (workspace_id) {
-            const existing = await Workspace.findByPk(workspace_id);
+            const existing = await _ws_repo.find_by_id(workspace_id);
             if (existing) {
                 const path = (existing.path ?? '').startsWith('/')
                     ? existing.path!
@@ -1491,16 +1508,16 @@ export class DispatchService {
         }
 
         if (workspace_path) {
-			const by_path = await Workspace.findOne({
-				where: {
+			const by_path = await _ws_repo.find_one(
+				{
 					path: workspace_path,
 					[Op.or]: [
 						{ daemon_id },
 						{ daemon_id: { [Op.is]: null } },
 					],
-				},
-				order: [['updated_at', 'DESC']],
-			});
+				} as any,
+				{ order: [['updated_at', 'DESC']] },
+			);
             if (by_path) {
                 if (by_path.daemon_id && by_path.daemon_id !== daemon_id) {
                     throw ApiError.bad_request(
@@ -1513,7 +1530,7 @@ export class DispatchService {
 
             const id = randomUUID();
             try {
-                await Workspace.create({
+                await _ws_repo.create_one({
                     id,
                     path: workspace_path,
                     name: null,
@@ -1523,7 +1540,7 @@ export class DispatchService {
                     updated_at: Date.now(),
                 });
             } catch (err) {
-                const raced = await Workspace.findOne({ where: { path: workspace_path } });
+                const raced = await _ws_repo.find_one({ path: workspace_path } as any);
                 if (raced) {
                     const abs = raced.path.startsWith('/') ? raced.path : workspace_path;
                     return { workspace_id: raced.id, workspace_path: abs };
@@ -1538,7 +1555,7 @@ export class DispatchService {
         }
 
         const id = randomUUID();
-        await Workspace.create({
+        await _ws_repo.create_one({
             id,
             path: `ephemeral/${id}`,
             name: null,
@@ -1564,34 +1581,34 @@ export class DispatchService {
             const slash = ref.indexOf('/');
             const scope_slug = ref.slice(0, slash);
             const slug = ref.slice(slash + 1);
-            const scope = await Scope.findOne({ where: { slug: scope_slug } });
+            const scope = await _scope_repo.find_one({ slug: scope_slug } as any);
             if (!scope) return [];
-            const rows = await Team.findAll({
-                where: {
+            const rows = await _dt_repo.find_all(
+                {
                     scope_id: scope.id,
                     slug,
                     daemon_id: { [Op.in]: daemon_ids },
-                },
-                attributes: ['daemon_id'],
-            });
+                } as any,
+                { attributes: ['daemon_id'] },
+            );
             return [...new Set(rows.map((r) => r.daemon_id).filter(Boolean) as string[])];
         }
 
-        const by_id = await Team.findByPk(ref);
+        const by_id = await _dt_repo.find_by_id(ref);
         if (!by_id) return [];
 
         if (by_id.daemon_id && daemon_ids.includes(by_id.daemon_id)) {
             return [by_id.daemon_id];
         }
 
-        const rows = await Team.findAll({
-            where: {
+        const rows = await _dt_repo.find_all(
+            {
                 scope_id: by_id.scope_id,
                 slug: by_id.slug,
                 daemon_id: { [Op.in]: daemon_ids },
-            },
-            attributes: ['daemon_id'],
-        });
+            } as any,
+            { attributes: ['daemon_id'] },
+        );
         return [...new Set(rows.map((r) => r.daemon_id).filter(Boolean) as string[])];
     }
 
@@ -1628,7 +1645,7 @@ export class DispatchService {
      * Silently returns on failure — caller still throws
      * bad_request("no daemon assignment") if we can't recover.
      */
-    private static async _ensure_daemon_assignment(run: InstanceType<typeof Run>): Promise<void> {
+    private static async _ensure_daemon_assignment(run: Run): Promise<void> {
         if (run.daemon_id) return;
         const run_id = run.run_id;
         if (!run_id) return;
@@ -1659,7 +1676,8 @@ export class DispatchService {
                 await DispatchService._backfill_daemon(run, claimed);
                 return;
             }
-        } catch {
+        } catch (err) {
+            log.debug('queue_lookup_unavailable', { error: err instanceof Error ? err.message : String(err) });
             /* queue schema may be missing in older test DBs */
         }
 
@@ -1679,7 +1697,8 @@ export class DispatchService {
                 await DispatchService._backfill_daemon(run, daemon_from_outbox);
                 return;
             }
-        } catch {
+        } catch (err) {
+            log.warn('daemon_backfill_failed', { error: err instanceof Error ? err.message : String(err) });
             /* best-effort */
         }
     }
@@ -1697,7 +1716,7 @@ export class DispatchService {
      * backfill just means the next resume/cancel re-derives.
      */
     private static async _backfill_daemon(
-        run: InstanceType<typeof Run>,
+        run: Run,
         daemon_id: string,
     ): Promise<void> {
         // Mutate in-memory first so the caller sees it even if the
@@ -1763,7 +1782,7 @@ export class DispatchService {
      * and AFTER the AccessService authz check.
      */
     private static async _check_daemon_reachable(
-        run: InstanceType<typeof Run>,
+        run: Run,
     ): Promise<InstanceType<typeof Daemon>> {
         if (!run.daemon_id) {
             throw ApiError.conflict(
@@ -1773,7 +1792,7 @@ export class DispatchService {
             );
         }
 
-        const daemon = await Daemon.findByPk(run.daemon_id);
+        const daemon = await _daemon_repo.find_by_id(run.daemon_id);
         if (!daemon) {
             throw ApiError.conflict(
                 `Daemon '${run.daemon_id}' that owned this run no longer exists. `
@@ -1806,25 +1825,24 @@ export class DispatchService {
     }
 
     private static async _validate_required_inputs(
-        cp_team: Team | null,
+        cp_team: DaemonTeam | null,
         provided_inputs: Record<string, unknown>,
     ): Promise<void> {
         if (!cp_team) return;
 
         /** Map from control-plane scope_id → registry scope slug. */
-        const scope_row = await Scope.findByPk(cp_team.scope_id);
+        const scope_row = await _scope_repo.find_by_id(cp_team.scope_id);
         if (!scope_row) return;
 
-        const hub_team = await HubTeam.findOne({
-            where: { scope: scope_row.slug, name: cp_team.slug },
-        });
+        const hub_team = await _team_repo.find_one(
+            { scope: scope_row.slug, name: cp_team.slug } as any,
+        );
         if (!hub_team) return;
 
-        const latest_ver = await TeamVersion.findOne({
-            where: { team_id: hub_team.id },
-            order: [['published_at', 'DESC']],
-            attributes: ['capability_json'],
-        });
+        const latest_ver = await _team_version_repo.find_one(
+            { team_id: hub_team.id } as any,
+            { order: [['published_at', 'DESC']], attributes: ['capability_json'] },
+        );
         if (!latest_ver?.capability_json) return;
 
         let capability: { inputs?: Array<{ name: string; type?: string; required?: boolean }> };
@@ -1875,16 +1893,16 @@ export class DispatchService {
      *   - "scope/name" string (e.g. "cliq/hello-world")
      *   - numeric Hub registry ID (as string)
      */
-    private static async _resolve_hub_team(team_id: string): Promise<{ team: HubTeam; version: TeamVersion } | null> {
-        let hub_team: HubTeam | null = null;
+    private static async _resolve_hub_team(team_id: string): Promise<{ team: Team; version: TeamVersion } | null> {
+        let hub_team: Team | null = null;
 
         if (team_id.includes('/')) {
             const [scope_slug, name] = team_id.split('/');
-            hub_team = await HubTeam.findOne({ where: { scope: scope_slug, name } });
+            hub_team = await _team_repo.find_one({ scope: scope_slug, name } as any);
         }
 
         if (!hub_team && /^\d+$/.test(team_id)) {
-            hub_team = await HubTeam.findByPk(Number(team_id));
+            hub_team = await _team_repo.find_by_id(String(team_id));
         }
 
         if (!hub_team) return null;
@@ -1893,11 +1911,11 @@ export class DispatchService {
         // Fetching all rows and picking in Node keeps the semver logic in
         // one place (lib/semver.ts) — the version count per team is tiny
         // (unbounded but effectively O(10s)).
-        const all_versions = await TeamVersion.findAll({
-            where: { team_id: hub_team.id },
-        });
+        const all_versions = await _team_version_repo.find_all(
+            { team_id: hub_team.id } as any,
+        );
         if (all_versions.length === 0) return null;
-        const latest_version = sort_semver_desc(
+        const latest_version = SemVer.sort_desc(
             all_versions.map((v) => ({ version: v.version, row: v })),
         )[0].row;
 
@@ -1910,7 +1928,7 @@ export class DispatchService {
             const daemons: Daemon[] = [];
             for (const daemon_id of unique_ids) {
                 await AccessService.assert_realm_access(input.user_id, daemon_id);
-                const pinned = await Daemon.findByPk(daemon_id);
+                const pinned = await _daemon_repo.find_by_id(daemon_id);
                 if (!pinned) {
                     throw ApiError.not_found(`Daemon '${daemon_id}' is not registered`);
                 }
@@ -1924,10 +1942,10 @@ export class DispatchService {
             input.user_id,
         );
         if (ids.length === 0) return [];
-        return Daemon.findAll({
-            where: { id: { [Op.in]: ids }, status: 'online' },
-            order: [['last_heartbeat', 'DESC']],
-        });
+        return _daemon_repo.find_all(
+            { id: { [Op.in]: ids }, status: 'online' } as any,
+            { order: [['last_heartbeat', 'DESC']] },
+        );
     }
 
 
@@ -1948,7 +1966,7 @@ export class DispatchService {
         /** Prefer this id when claiming an existing unbound/same-daemon row. */
         preferred_id?: string;
     }): Promise<{ id: string }> {
-        const scope = await Scope.findOne({ where: { slug: input.scope_slug } });
+        const scope = await _scope_repo.find_one({ slug: input.scope_slug } as any);
         if (!scope) {
             throw ApiError.not_found(`Scope '${input.scope_slug}' not found`);
         }
@@ -1969,7 +1987,7 @@ export class DispatchService {
         }
 
         if (input.preferred_id) {
-            const preferred = await Team.findByPk(input.preferred_id);
+            const preferred = await _dt_repo.find_by_id(input.preferred_id);
             if (
                 preferred
                 && preferred.scope_id === scope.id
@@ -2002,31 +2020,6 @@ export class DispatchService {
             },
         );
         return { id: created.id };
-    }
-
-    /**
-     * Upsert the installed team into the core_api teams table for each
-     * daemon that successfully installed it. This makes the team visible
-     * in the daemon detail page without waiting for a daemon sync.
-     * @deprecated Prefer `_ensure_daemon_team_row` before install.
-     */
-    private static async _upsert_installed_team(
-        scope_slug: string,
-        team_name: string,
-        version: TeamVersion,
-        hub_team: HubTeam,
-        daemon_ids: string[],
-    ): Promise<void> {
-        for (const daemon_id of daemon_ids) {
-            await DispatchService._ensure_daemon_team_row({
-                daemon_id,
-                scope_slug,
-                slug: team_name,
-                version: version.version,
-                description: hub_team.description ?? null,
-                manifest: version.workflow_json,
-            });
-        }
     }
 
     /**
@@ -2070,16 +2063,15 @@ export class DispatchService {
     }
 
     private static async _get_online_daemons_for_realm(realm_id: string): Promise<Daemon[]> {
-        const ids = await RealmMember.findAll({
-            where: { realm_id, member_type: 'daemon' },
-            attributes: ['member_id'],
-            raw: true,
-        });
+        const ids = await _realm_member_repo.find_all(
+            { realm_id, member_type: 'daemon' } as any,
+            { attributes: ['member_id'], raw: true },
+        );
         if (ids.length === 0) return [];
         const daemon_ids = ids.map((r) => r.member_id);
-        return Daemon.findAll({
-            where: { id: { [Op.in]: daemon_ids }, status: 'online' },
-        });
+        return _daemon_repo.find_all(
+            { id: { [Op.in]: daemon_ids }, status: 'online' } as any,
+        );
     }
 
     /**
@@ -2087,18 +2079,17 @@ export class DispatchService {
      * team in the realm. Best-effort — called after team uninstall.
      */
     private static async _cleanup_orphaned_realm_settings(realm_id: string): Promise<void> {
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await _realm_repo.find_by_id(realm_id);
         const team_list = (realm as any)?.team_list ?? [];
         if (team_list.length === 0) {
-            await RealmAgentSetting.destroy({ where: { realm_id } });
+            await _realm_agent_setting_repo.delete_where({ realm_id } as any);
             return;
         }
 
-        const settings_rows = await RealmAgentSetting.findAll({
-            where: { realm_id },
-            attributes: ['agent_name'],
-            raw: true,
-        });
+        const settings_rows = await _realm_agent_setting_repo.find_all(
+            { realm_id } as any,
+            { attributes: ['agent_name'], raw: true },
+        );
         const configured_agents = new Set(settings_rows.map((r: any) => r.agent_name));
         if (configured_agents.size === 0) return;
 
@@ -2106,17 +2097,16 @@ export class DispatchService {
         const still_needed = new Set<string>();
         for (const entry of team_list) {
             const scope_slug = entry.scope.replace(/^@/, '');
-            const hub_team = await HubTeam.findOne({
-                where: { scope: scope_slug, name: entry.slug },
-                attributes: ['id'],
-            });
+            const hub_team = await _team_repo.find_one(
+                { scope: scope_slug, name: entry.slug } as any,
+                { attributes: ['id'] },
+            );
             if (!hub_team) continue;
 
-            const latest_version = await TeamVersion.findOne({
-                where: { team_id: hub_team.id },
-                order: [['published_at', 'DESC']],
-                attributes: ['workflow_json'],
-            });
+            const latest_version = await _team_version_repo.find_one(
+                { team_id: hub_team.id } as any,
+                { order: [['published_at', 'DESC']], attributes: ['workflow_json'] },
+            );
             if (!latest_version?.workflow_json) continue;
 
             try {
@@ -2131,7 +2121,7 @@ export class DispatchService {
 
         for (const agent_name of configured_agents) {
             if (still_needed.has(agent_name)) continue;
-            await RealmAgentSetting.destroy({ where: { realm_id, agent_name } });
+            await _realm_agent_setting_repo.delete_where({ realm_id, agent_name } as any);
         }
     }
 

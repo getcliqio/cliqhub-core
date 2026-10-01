@@ -90,8 +90,8 @@ export type ScopeVo = {
     slug: string;
     display_name: string | null;
     visibility: 'public' | 'private';
-    scope_type: 'user' | 'org';
-    owner_id: string;
+    scope_type: 'user' | 'org' | 'platform';
+    owner_id: string | null;
     org_id: string | null;
 };
 

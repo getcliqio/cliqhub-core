@@ -1,6 +1,9 @@
 import { ApiError } from '../errors/api_error.js';
 import type { DraftRepository } from '../repositories/draft_repository.js';
 import type { AuthContext } from '../schemas/auth_types.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.drafts');
 
 export class DraftsService {
     constructor(private _draft_repo: DraftRepository) {}
@@ -10,12 +13,14 @@ export class DraftsService {
     }
 
     async get(auth: AuthContext) {
+        log.debug('get', { user_id: auth.user?.id });
         this._require_auth(auth);
         const drafts = await this._draft_repo.list_by_user_id(auth.user!.id);
         return { drafts };
     }
 
     async get_by_id(auth: AuthContext, params: { id: string }) {
+        log.debug('get_by_id', { id: params.id, user_id: auth.user?.id });
         this._require_auth(auth);
         const draft = await this._draft_repo.find_by_id_and_user(params.id, auth.user!.id);
         if (!draft) throw new ApiError('not_found', 'Draft not found', 404);
@@ -23,13 +28,16 @@ export class DraftsService {
     }
 
     async new_draft(auth: AuthContext, params: { title?: string; team_json: string }) {
+        log.debug('new_draft', { user_id: auth.user?.id });
         this._require_auth(auth);
         const title = params.title || 'Untitled Team';
         const id = await this._draft_repo.create(auth.user!.id, title, params.team_json);
+        log.info('draft_created', { id });
         return { id };
     }
 
     async update(auth: AuthContext, params: { id: string; title?: string; team_json: string }) {
+        log.debug('update', { id: params.id, user_id: auth.user?.id });
         this._require_auth(auth);
         const existing = await this._draft_repo.find_by_id_and_user(params.id, auth.user!.id);
         if (!existing) throw new ApiError('not_found', 'Draft not found', 404);
@@ -38,10 +46,12 @@ export class DraftsService {
     }
 
     async delete_draft(auth: AuthContext, params: { id: string }) {
+        log.debug('delete_draft', { id: params.id, user_id: auth.user?.id });
         this._require_auth(auth);
         const existing = await this._draft_repo.find_by_id_and_user(params.id, auth.user!.id);
         if (!existing) throw new ApiError('not_found', 'Draft not found', 404);
         await this._draft_repo.delete_by_id(params.id);
+        log.info('draft_deleted', { id: params.id });
         return { deleted: true };
     }
 }

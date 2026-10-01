@@ -1,0 +1,220 @@
+/**
+ * THE route policy table — every Core route, one line each.
+ *
+ * Adding a route without a line here stops Core from starting (`fatal`) and
+ * fails `route_policy_coverage.test.ts`. Keep it grouped by resource.
+ *
+ * `handler:` notes are rules the handler still enforces on top of the policy
+ * (ownership, last-owner protection, notification holder, …).
+ *
+ * Level choice: realm settings that the default Operator role holds a
+ * permission for (rules, channels, agents, team installs) need `operate` plus
+ * that permission; the permission is the gate, the realm role is the ceiling.
+ */
+
+import {
+    type Policy,
+    public_, bff_only, a2a_dispatch, signed_in, site_admin, daemon_self, daemon_only,
+    org, realm, record, scope, daemon_realm,
+} from './policy.js';
+
+const REALM = 'body.realm_id' as const;
+const ORG = 'body.org_id' as const;
+const RUN = 'body.run_id' as const;
+
+export const ROUTE_POLICY: Record<string, Policy> = {
+    // ── Public and BFF-only ─────────────────────────────────────────
+    'GET /v1/health': public_(),
+    'GET /a2a/o/:org/r/:slug/.well-known/agent-card.json': public_('card only for realms with A2A enabled'),
+    'POST /a2a/o/:org/r/:slug/send': a2a_dispatch(),
+    'POST /internal/auth/authenticate_user': bff_only(),
+    'POST /internal/auth/signup': bff_only(),
+    'POST /internal/auth/revoke_session_token': bff_only('caller holds the token'),
+    'POST /internal/auth/issue_session_token': site_admin({ handler: 'self / suspended / missing target rules' }),
+    'POST /v1/invitations/get_by_token': public_('token is the secret'),
+    'POST /v1/teams/get': public_('anonymous: listed public teams; signed-in: + teams you can_view_team'),
+    'POST /v1/teams/get_by_id': record('team', ['body.team_id', 'body.name'], 'view', { handler: 'without sign-in: listed public teams only' }),
+
+    // ── Site admin ──────────────────────────────────────────────────
+    'POST /v1/settings/set': site_admin(),
+    'POST /v1/settings/remove': site_admin(),
+    'POST /v1/settings/get': site_admin({ daemon: 'read', handler: 'daemon: global + own-realm daemons' }),
+    'POST /v1/settings/get_by_key': site_admin({ daemon: 'read' }),
+    'POST /v1/system/seed': site_admin(),
+    'POST /internal/users/new': site_admin(),
+    'POST /internal/users/delete': site_admin(),
+    'POST /internal/users/suspend': site_admin(),
+    'POST /internal/users/unsuspend': site_admin(),
+    'POST /internal/users/reset_password': site_admin(),
+    'POST /internal/users/set_role': site_admin({ handler: 'last admin / self-demote' }),
+    'POST /internal/orgs/new': site_admin(),
+    'POST /internal/orgs/delete': site_admin(),
+
+    // ── Signed in (service scopes to the caller) ────────────────────
+    'POST /v1/account/mesh/get': signed_in(),
+    'POST /v1/account/mesh/update': signed_in(),
+    'POST /v1/auth/generate_token': signed_in({ handler: 'cannot mint wider than the calling token' }),
+    'POST /v1/auth/get_tokens': signed_in(),
+    'POST /v1/auth/validate_token': signed_in(),
+    'POST /v1/auth/revoke_token': signed_in({ handler: 'own tokens only' }),
+    'POST /v1/auth/rotate_token': signed_in({ handler: 'own tokens only' }),
+    'POST /v1/users/get': signed_in({ handler: 'site admin: all; org admin: members; else self' }),
+    'POST /v1/users/get_by_id': signed_in({ handler: 'self, or org.members.manage over a non-admin' }),
+    'POST /v1/users/update': signed_in({ handler: 'self, or org.members.manage over a non-admin' }),
+    'POST /internal/users/change_password': signed_in({ handler: 'self' }),
+    'POST /v1/notifications/get': org(ORG, 'member'),
+    'POST /v1/permissions/list': signed_in(),
+    'POST /v1/mesh/adapters/list': signed_in(),
+    'POST /v1/events/types/list': signed_in(),
+    'POST /v1/orgs/get': signed_in(),
+    'POST /v1/orgs/new': site_admin(),
+    'POST /v1/invitations/accept': public_('token is the secret; new users sign up here; signed-in email must match'),
+    'POST /internal/dashboard/summary': scope({ org: { from: ORG, perm: 'member' }, otherwise: 'none' }),
+    'POST /internal/dashboard/realms': scope({ org: { from: ORG, perm: 'member' }, otherwise: 'none' }),
+    'POST /v1/integrations/jira/get_workspaces': public_('handler: session or body.api_token (Forge)'),
+    'POST /v1/integrations/jira/register_workspace': public_('handler: session or body.api_token (Forge); realm admin'),
+    'POST /v1/integrations/jira/rotate_secret': public_('handler: session or body.api_token (Forge); realm admin'),
+    'POST /v1/integrations/jira/disconnect_workspace': public_('handler: session or body.api_token (Forge); realm admin'),
+
+    // ── Lists: realm or org filter checked here, rest scoped in the service ──
+    'POST /v1/realms/get': scope({ org: { from: ORG, perm: 'member' }, otherwise: 'none' }),
+    'POST /v1/daemons/get': scope({ realm: { from: REALM, level: 'view', perm: 'daemons.view' }, org: { from: ORG, perm: 'daemons.view' }, otherwise: 'none' }),
+    'POST /v1/reviews/get': scope({ realm: { from: REALM, level: 'view', perm: 'reviews.view' }, org: { from: ORG, perm: 'reviews.view' }, otherwise: 'none' }),
+    'POST /v1/runs/get': scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, org: { from: ORG, perm: 'runs.view' }, otherwise: 'none', handler: 'other filters stay inside visible realms (S5)' }),
+    'POST /v1/runs/get_logs': scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, otherwise: 'none', handler: 'run_ids / daemon_ids filtered to visible realms' }),
+    'POST /v1/workspaces/get': scope({ realm: { from: REALM, level: 'view' }, otherwise: 'none' }),
+    'POST /v1/notification_channels/get': scope({ realm: { from: REALM, level: 'view' }, org: { from: ORG, perm: 'member' }, otherwise: 'none', handler: 'account list with realm_id also set: org check' }),
+    'POST /v1/events/custom/list': scope({ realm: { from: REALM, level: 'view' }, otherwise: 'none', handler: 'no realm: site admin only (S19)' }),
+    'POST /v1/agents/get': org(ORG, 'agents.view'),
+
+    // ── Org ─────────────────────────────────────────────────────────
+    'POST /v1/orgs/get_by_id': org([ORG, 'body.slug'], 'member'),
+    'POST /v1/orgs/get_reviewable_targets': org(ORG, 'member'),
+    'POST /v1/orgs/list_roles': org(ORG, 'member'),
+    'POST /v1/orgs/get_role': org(ORG, 'member'),
+    'POST /v1/orgs/get_scopes': org(ORG, 'member'),
+    'POST /v1/orgs/leave': org(ORG, 'member', 'last owner cannot leave'),
+    'POST /v1/orgs/update': org(ORG, 'org.settings'),
+    'POST /v1/orgs/mesh/get': org(ORG, 'member'),
+    'POST /v1/orgs/mesh/update': org(ORG, 'org.settings'),
+    'POST /v1/orgs/delete': org(ORG, 'org.delete'),
+    'POST /v1/orgs/add_member': org(ORG, 'org.members.manage'),
+    'POST /v1/orgs/remove_member': org(ORG, 'org.members.manage', 'last owner protection'),
+    'POST /v1/orgs/create_role': org(ORG, 'org.members.manage'),
+    'POST /v1/orgs/update_role': org(ORG, 'org.members.manage'),
+    'POST /v1/orgs/delete_role': org(ORG, 'org.members.manage'),
+    'POST /v1/orgs/new_scope': org(ORG, 'org.scopes.manage'),
+    'POST /v1/orgs/update_scope': org(ORG, 'org.scopes.manage'),
+    'POST /v1/orgs/delete_scope': org(ORG, 'org.scopes.manage'),
+    'POST /v1/orgs/assign_scope_member': org(ORG, 'org.scopes.manage'),
+    'POST /v1/orgs/unassign_scope_member': org(ORG, 'org.scopes.manage'),
+    'POST /v1/orgs/get_notification_rules': scope({ realm: { from: REALM, level: 'view' }, org: { from: ORG, perm: 'member' }, otherwise: 'required' }),
+    'POST /v1/orgs/set_notification_rules': scope({ realm: { from: REALM, level: 'operate', perm: 'rules.manage.realm' }, org: { from: ORG, perm: 'rules.manage' }, otherwise: 'required' }),
+    'POST /v1/orgs/remove_notification_rules': record('rule', 'body.id', 'operate', { perm: 'rules.manage.realm', org_perm: 'rules.manage' }),
+    'POST /v1/invitations/create': scope({ realm: { from: REALM, level: 'admin', perm: 'realms.members.manage' }, org: { from: ORG, perm: 'org.members.manage' }, otherwise: 'required', handler: 'target_type org: org check (policy may have judged realm_id)' }),
+    'POST /v1/invitations/get': scope({ realm: { from: REALM, level: 'admin', perm: 'realms.members.manage' }, org: { from: ORG, perm: 'org.members.manage' }, otherwise: 'required', handler: 'target_type org: org check (policy may have judged realm_id)' }),
+    'POST /v1/invitations/get_by_id': record('invitation', 'body.invite_id', 'admin', { perm: 'realms.members.manage', org_perm: 'org.members.manage' }),
+    'POST /v1/invitations/revoke': record('invitation', 'body.invite_id', 'admin', { perm: 'realms.members.manage', org_perm: 'org.members.manage' }),
+    'POST /internal/orgs/update': org(ORG, 'org.settings'),
+    'POST /internal/orgs/add_member': org(ORG, 'org.members.manage'),
+    'POST /internal/orgs/remove_member': org(ORG, 'org.members.manage', 'last owner protection'),
+    'POST /internal/orgs/get_role': org(ORG, 'member'),
+    'POST /internal/orgs/create_role': org(ORG, 'org.members.manage'),
+    'POST /internal/orgs/update_role': org(ORG, 'org.members.manage'),
+    'POST /internal/orgs/delete_role': org(ORG, 'org.members.manage'),
+    'POST /internal/orgs/leave': org(ORG, 'member', 'last owner cannot leave'),
+    'POST /internal/orgs/new_scope': org(ORG, 'org.scopes.manage'),
+    'POST /internal/orgs/update_scope': org(ORG, 'org.scopes.manage'),
+    'POST /internal/orgs/delete_scope': org(ORG, 'org.scopes.manage'),
+    'POST /internal/orgs/assign_scope_member': org(ORG, 'org.scopes.manage'),
+    'POST /internal/orgs/unassign_scope_member': org(ORG, 'org.scopes.manage'),
+    'POST /internal/users/update_role': org(ORG, 'org.members.manage', 'last owner / cannot touch site admin'),
+    'POST /internal/reports/audit': site_admin(),
+    'POST /v1/realms/create': org(ORG, 'realms.create'),
+
+    // ── Realm ───────────────────────────────────────────────────────
+    'POST /v1/realms/get_by_id': record('realm', [REALM, 'body.slug'], 'view'),
+    'POST /v1/realms/get_members': record('realm', REALM, 'view'),
+    'POST /v1/realms/get_notification_rules': scope({ realm: { from: REALM, level: 'view' }, org: { from: ORG, perm: 'member' }, otherwise: 'required' }),
+    'POST /v1/realms/a2a': record('realm', REALM, 'admin', { perm: 'realms.update' }),
+    'POST /v1/realms/update': record('realm', REALM, 'admin', { perm: 'realms.update' }),
+    'POST /v1/realms/delete': record('realm', REALM, 'admin', { perm: 'realms.delete' }),
+    'POST /v1/realms/add_member': record('realm', REALM, 'admin', { perm: 'realms.members.manage' }),
+    'POST /v1/realms/remove_member': record('realm', REALM, 'admin', { perm: 'realms.members.manage' }),
+    'POST /v1/realms/add_team': record('realm', REALM, 'operate', { perm: 'realms.teams.manage' }),
+    'POST /v1/realms/remove_team': record('realm', REALM, 'operate', { perm: 'realms.teams.manage' }),
+    'POST /v1/realms/set_notification_rules': scope({ realm: { from: REALM, level: 'operate', perm: 'rules.manage.realm' }, org: { from: ORG, perm: 'rules.manage' }, otherwise: 'required' }),
+    'POST /v1/realms/remove_notification_rules': record('rule', 'body.id', 'operate', { perm: 'rules.manage.realm', org_perm: 'rules.manage' }),
+    'POST /v1/notification_channels/create': scope({ realm: { from: REALM, level: 'operate', perm: 'channels.manage.realm' }, org: { from: ORG, perm: 'channels.manage' }, otherwise: 'required' }),
+    'POST /v1/notification_channels/update': record('channel', 'body.id', 'operate', { perm: 'channels.manage.realm', org_perm: 'channels.manage' }),
+    'POST /v1/notification_channels/remove': record('channel', 'body.id', 'operate', { perm: 'channels.manage.realm', org_perm: 'channels.manage' }),
+    'POST /v1/notification_channels/test': record('channel', 'body.id', 'operate', { perm: 'channels.test', org_perm: 'channels.test' }),
+    'POST /v1/agents/get_details': org(ORG, 'agents.view'),
+    'POST /v1/agents/get_settings': scope({ realm: { from: REALM, level: 'view', perm: 'agents.view' }, org: { from: ORG, perm: 'agents.view' }, otherwise: 'none', handler: 'realm must belong to org_id; secret values need agents.reveal' }),
+    'POST /v1/agents/update_settings': scope({ realm: { from: REALM, level: 'operate', perm: 'agents.manage.realm' }, org: { from: ORG, perm: 'agents.manage' }, otherwise: 'required', handler: 'realm must belong to org_id; masked values refused' }),
+    'POST /v1/agents/register': org(ORG, 'agents.manage'),
+    'POST /v1/agents/deregister': org(ORG, 'agents.manage'),
+    'POST /v1/workspaces/get_by_id': record('workspace', ['body.workspace_id', 'body.id'], 'view'),
+    'POST /v1/workspaces/remove': record('workspace', 'body.id', 'admin', { handler: 'by path: handler checks realm admin' }),
+    'POST /v1/events/custom/create': realm(REALM, 'operate', { perm: 'rules.manage.realm' }),
+    'POST /v1/events/custom/remove': record('custom_event', 'body.id', 'operate', { perm: 'rules.manage.realm' }), // no realm: site admin only (S20, engine)
+    'POST /v1/events/get_by_id': record('event', 'body.id', 'view'),
+    'POST /v1/events/submit': scope({ realm: { from: REALM, level: 'operate' }, org: { from: ORG, perm: 'member' }, otherwise: 'required', daemon: 'write', handler: 'run in realm; daemon: own daemons, own org' }),
+    'POST /v1/auth/get_dispatch_public_key': realm(REALM, 'view'),
+    'POST /v1/auth/rotate_dispatch_key': realm(REALM, 'admin', { perm: 'dispatch_keys.manage' }),
+
+    // ── Daemons ─────────────────────────────────────────────────────
+    'POST /v1/daemons/register': daemon_only(),
+    'POST /v1/daemons/heartbeat': daemon_only('daemon must be in the token realm'),
+    'POST /v1/daemons/deregister': daemon_only('daemon must be in the token realm'),
+    'POST /v1/daemons/ack_command': daemon_only('daemon in the token realm; command addressed to it'),
+    'POST /v1/auth/acl': daemon_only(),
+    'POST /v1/runs/claim': daemon_self('queue item must be in the token realm'),
+    'POST /v1/daemons/get_by_id': record('daemon', 'body.daemon_id', 'view', { perm: 'daemons.view' }),
+    'POST /v1/daemons/remove': record('daemon', 'body.daemon_id', 'admin', { perm: 'daemons.remove', handler: 'admin in every realm the daemon serves' }),
+
+    // ── Runs ────────────────────────────────────────────────────────
+    'POST /v1/runs/get_by_id': record('run', RUN, 'view', { perm: 'runs.view' }),
+    'POST /v1/runs/get_status': record('run', RUN, 'view', { perm: 'runs.view' }),
+    'POST /v1/runs/get_telemetry': record('run', RUN, 'view', { perm: 'runs.view' }),
+    'GET /v1/runs/stream': record('run', 'query.run_id', 'view', { perm: 'runs.view' }),
+    'POST /v1/runs/create': daemon_realm('operate', 'daemon_id must be in the token realm'),
+    'POST /v1/runs/complete': record('run', RUN, null, { daemon: 'write' }),
+    'POST /v1/runs/resume': record('run', RUN, 'operate', { perm: 'teams.run', daemon: 'write' }),
+    'POST /v1/runs/update_status': record('run', RUN, null, { daemon: 'write' }),
+    'POST /v1/runs/report_activity': record('run', RUN, null, { daemon: 'write' }),
+    'POST /v1/runs/append_logs': record('run', RUN, null, { daemon: 'write' }),
+    'POST /v1/runs/report_telemetry': record('run', RUN, null, { daemon: 'write' }),
+    'POST /v1/runs/cancel': record('run', RUN, 'operate', { perm: 'teams.cancel' }),
+    'POST /v1/runs/supply_inputs': record('run', RUN, 'operate', { perm: 'teams.inputs' }),
+    'POST /v1/runs/enqueue': realm(REALM, 'operate', { perm: 'teams.run', handler: 'token scope dispatch' }),
+    'POST /v1/runs/create_rdr': record('run', RUN, 'operate'),
+    'POST /v1/artifacts/get': record('run', RUN, 'view', { perm: 'runs.view' }),
+    'POST /v1/artifacts/get_by_id': record('artifact', 'body.artifact_id', 'view', { perm: 'runs.view' }),
+    'POST /v1/artifacts/submit': record('run', RUN, null, { daemon: 'write' }),
+    'POST /v1/artifacts/delete': record('artifact', 'body.artifact_id', 'admin'),
+
+    // ── Reviews ─────────────────────────────────────────────────────
+    'POST /v1/reviews/create': realm(REALM, null, { daemon: 'write' }),
+    'POST /v1/reviews/get_by_id': record('review', 'body.review_id', 'view', { perm: 'reviews.view', daemon: 'read', handler: 'notification holder may view' }),
+    'POST /v1/reviews/get_messages': record('review', 'body.review_id', 'view', { perm: 'reviews.view' }),
+    'GET /v1/reviews/stream_messages': record('review', 'query.review_id', 'view', { perm: 'reviews.view' }),
+    'POST /v1/reviews/verdict': record('review', 'body.review_id', 'operate', { perm: 'reviews.verdict', handler: 'notification holder' }),
+    'POST /v1/reviews/send_message': record('review', 'body.review_id', 'operate', { daemon: 'write' }),
+    'POST /v1/reviews/ack': record('review', 'body.review_id', null, { daemon: 'write' }),
+
+    // ── Teams ───────────────────────────────────────────────────────
+    'POST /v1/teams/get_phases': record('team', 'body.team_id', 'view'),
+    'POST /v1/teams/get_versions': record('team', ['body.team_id', 'body.name'], 'view'),
+    'POST /v1/teams/download': record('team', ['body.team_id', 'body.name'], 'view'),
+    'POST /v1/teams/create': signed_in({ handler: 'org scope needs teams.publish' }),
+    'POST /v1/teams/build': signed_in(),
+    'POST /v1/teams/update': record('team', ['body.team_id', 'body.name'], 'view', { handler: 'author or teams.publish' }),
+    'POST /v1/teams/rename': record('team', ['body.team_id', 'body.name'], 'view', { handler: 'author or teams.publish' }),
+    'POST /v1/teams/publish': signed_in({ handler: 'author or teams.publish; new teams have no record yet' }),
+    'POST /v1/teams/unpublish': record('team', ['body.team_id', 'body.name'], 'view', { handler: 'author or teams.publish.delete' }),
+    'POST /v1/teams/delete': record('team', ['body.team_id', 'body.name'], 'view', { handler: 'author or teams.publish.delete' }),
+    'POST /v1/teams/delete_version': record('team', ['body.team_id', 'body.name'], 'view', { handler: 'author or teams.publish.delete' }),
+    'POST /v1/teams/install': realm(REALM, 'operate', { perm: 'teams.install' }),
+    'POST /v1/teams/uninstall': realm(REALM, 'operate', { perm: 'teams.install' }),
+};

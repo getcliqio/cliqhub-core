@@ -1,8 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { ApiError } from '../errors/api_error.js';
-import { get_logger } from '../lib/log.js';
-
-const log = get_logger('errors');
+import { log_request_error, public_error_message } from './error_logging.js';
 
 export function error_handler(
     err: unknown,
@@ -10,9 +8,8 @@ export function error_handler(
     res: Response,
     _next: NextFunction,
 ): void {
-    const request_id = req.request_id;
-
     if (err instanceof ApiError) {
+        log_request_error(req, err.status, err);
         res.status(err.status).json({
             ok: false,
             error: { code: err.code, message: err.message },
@@ -27,6 +24,7 @@ export function error_handler(
         && typeof (err as { status_code?: unknown }).status_code === 'number'
     ) {
         const status = (err as unknown as { status_code: number }).status_code;
+        log_request_error(req, status, err);
         res.status(status).json({
             ok: false,
             error: { code: 'error', message: err.message },
@@ -34,21 +32,9 @@ export function error_handler(
         return;
     }
 
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    log.error('unhandled_error', {
-        request_id: request_id ?? null,
-        path: req.originalUrl || req.url,
-        method: req.method,
-        error: message,
-    });
-
+    log_request_error(req, 500, err);
     res.status(500).json({
         ok: false,
-        error: {
-            code: 'internal_error',
-            message: process.env.NODE_ENV === 'production'
-                ? 'Internal server error'
-                : message,
-        },
+        error: { code: 'internal_error', message: public_error_message(err) },
     });
 }

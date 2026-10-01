@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
-import { NotificationChannel, ChannelDestination } from '../models/index.js';
+import { NotificationChannelRepository } from '../repositories/notification_channel_repository.js';
+import { ChannelDestinationRepository } from '../repositories/channel_destination_repository.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('per_user_channel');
+const channel_repo = new NotificationChannelRepository();
+const destination_repo = new ChannelDestinationRepository();
 
 /**
  * Ensure a per-user in-app notification channel exists for the given
@@ -20,7 +23,7 @@ export async function ensure_per_user_channel(
     const now = Date.now();
 
     /** Look up by the proper columns, not a mangled ID. */
-    const [channel, created] = await NotificationChannel.findOrCreate({
+    const [channel, created] = await channel_repo.find_or_create({
         where: { user_id, org_id },
         defaults: {
             id: randomUUID(),
@@ -35,8 +38,7 @@ export async function ensure_per_user_channel(
     });
 
     if (created) {
-        /** Write the default in-app destination row. */
-        await ChannelDestination.findOrCreate({
+        await destination_repo.find_or_create({
             where: { channel_id: channel.id, type: 'cliqhub' },
             defaults: {
                 id: randomUUID(),

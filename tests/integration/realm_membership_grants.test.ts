@@ -15,6 +15,7 @@ import request from 'supertest';
 import { Sequelize } from 'sequelize';
 
 import { create_test_app } from '../helpers/test_container.js';
+import { SequelizeAccessStore } from '../../src/auth/route_policy/store.js';
 import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
 
 vi.mock('../../src/auth/password.js', async (importOriginal) => {
@@ -25,7 +26,8 @@ vi.mock('../../src/auth/password.js', async (importOriginal) => {
     };
 });
 
-const { app, repos } = create_test_app();
+// Production route policy on: daemon tokens reach only daemon-callable routes.
+const { app, repos } = create_test_app({ route_policy: new SequelizeAccessStore() });
 const SECRET = 'test-secret';
 
 let alice_org_id = hub_legacy_uuid(100);
@@ -99,7 +101,7 @@ function bearer_for(user: typeof ALICE): string {
 
 function mock_users(): void {
     stub_pat_auth(repos, ALICE, { once: false });
-    repos.user_repo.find_by_id.mockImplementation(async (id: string) => USERS.get(id) ?? null);
+    repos.user_repo.find_profile_by_id.mockImplementation(async (id: string) => USERS.get(id) ?? null);
     repos.scope_repo.find_owned_by_user.mockResolvedValue([
         {
             id: hub_legacy_uuid(1),
@@ -115,6 +117,7 @@ function mock_users(): void {
         { org_id: alice_org_id, slug: 'alice', role: 'owner' },
     ]);
     repos.scope_repo.find_member_scopes.mockResolvedValue([]);
+    repos.scope_repo.find_default_scopes.mockResolvedValue([]);
     repos.scope_repo.find_by_org_ids.mockResolvedValue([]);
 }
 
@@ -133,8 +136,8 @@ const ready = await postgres_reachable();
 describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
     beforeAll(async () => {
         const { init_sequelize, close_sequelize } = await import('../../src/db/sequelize.js');
-        const { init_models } = await import('../../src/db/models/index.js');
-        const { migrate_hub_schema } = await import('../../src/db/hub_schema_migrations.js');
+        const { init_models } = await import('../../src/models/index.js');
+        const { migrate_hub_schema, move_registry_to_cliq_schema } = await import('../../src/models/migrations/hub_schema_migrations.js');
         const { close_control_plane_store, init_control_plane_store } = await import(
             '../../src/db/control_plane_store.js'
         );
@@ -142,6 +145,7 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
         await close_sequelize();
         const sequelize = init_sequelize(DATABASE_URL);
         init_models(sequelize);
+        await move_registry_to_cliq_schema(sequelize);
         await sequelize.sync();
         await migrate_hub_schema(sequelize);
         await sequelize.query(`
@@ -152,7 +156,7 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
                 ('00000000-0000-4000-8000-000000000003', 'carol', 'carol', 'carol@test.com', 'x', 'user', NOW())
             ON CONFLICT (id) DO NOTHING
         `);
-        const { ensure_personal_org_for_user } = await import('../../src/db/migrate_ensure_user_orgs.js');
+        const { ensure_personal_org_for_user } = await import('../../src/models/migrations/migrate_ensure_user_orgs.js');
         const alice_org = await ensure_personal_org_for_user(ALICE.id, ALICE.username);
         alice_org_id = alice_org.id;
         await init_control_plane_store(DATABASE_URL);
@@ -364,7 +368,8 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
             .post('/v1/realms/get_members')
             .set('Authorization', bearer_for(BOB))
             .send({ realm_id });
-        expect(bob_denied.status).toBe(403);
+        // Removed from the realm: it is hidden, not just refused (404).
+        expect(bob_denied.status).toBe(404);
     });
 
     it('multiple daemons in one realm — shared realm token enroll (no add_member)', async () => {

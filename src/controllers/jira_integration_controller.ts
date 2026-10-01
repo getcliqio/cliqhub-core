@@ -25,12 +25,15 @@ import {
     JiraRotateSecretInput,
 } from '../schemas/jira_integration_types.js';
 import type { Request, Response, NextFunction } from 'express';
+import { get_logger } from '../lib/log.js';
 
 /**
  * Returns 404 when `ENABLE_JIRA_INTEGRATION` is unset.
  * Mount before every Jira route so a disabled deploy is indistinguishable
  * from a deploy that never mounted these routes.
  */
+const log = get_logger('ctrl.jira');
+
 export function require_jira_enabled(_req: Request, _res: Response, next: NextFunction): void {
     if (!JiraIntegrationService.is_enabled()) {
         next(ApiError.not_found('Unknown API route'));
@@ -66,9 +69,11 @@ export class JiraIntegrationController extends BaseController {
      * @param res - `{ ok: true, data: { subscription_id, webhook_secret?, realm_id, workspace_id, cliq_user } }`
      */
     async register_workspace(req: ApiRequest<JiraRegisterWorkspaceInput>, res: ApiOkResponse<unknown>): Promise<void> {
+        log.debug('register_workspace', { user_id: req.auth?.user?.id });
         const body = this.parse_body(JiraRegisterWorkspaceInput, req);
         const user_id = await this.resolve_caller(req, body);
         const result = await JiraIntegrationService.register(user_id, body);
+        log.info('workspace_registered', { user_id });
         this.ok(res, result);
     }
 
@@ -80,9 +85,11 @@ export class JiraIntegrationController extends BaseController {
      * @param res - `{ ok: true, data: { secret: string } }`
      */
     async rotate_secret(req: ApiRequest<JiraRotateSecretInput>, res: ApiOkResponse<{ secret: string }>): Promise<void> {
+        log.debug('rotate_secret', { user_id: req.auth?.user?.id });
         const body = this.parse_body(JiraRotateSecretInput, req);
         const user_id = await this.resolve_caller(req, body);
         const result = await JiraIntegrationService.rotate_secret(user_id, body);
+        log.info('secret_rotated', { user_id });
         this.ok(res, { secret: result.secret });
     }
 
@@ -95,6 +102,7 @@ export class JiraIntegrationController extends BaseController {
      * @param res - `{ ok: true, data: { workspaces: JiraBinding[] } }`
      */
     async get_workspaces(req: ApiRequest<JiraGetWorkspacesInput>, res: ApiOkResponse<unknown>): Promise<void> {
+        log.debug('get_workspaces', { user_id: req.auth?.user?.id });
         const body = this.parse_body(JiraGetWorkspacesInput, req);
         const user_id = await this.resolve_caller(req, body);
         const workspaces = await JiraIntegrationService.list_channels(user_id);
@@ -109,9 +117,11 @@ export class JiraIntegrationController extends BaseController {
      * @param res - `{ ok: true, data: { removed: boolean } }`
      */
     async disconnect_workspace(req: ApiRequest<JiraDisconnectWorkspaceInput>, res: ApiOkResponse<unknown>): Promise<void> {
+        log.debug('disconnect_workspace', { user_id: req.auth?.user?.id });
         const body = this.parse_body(JiraDisconnectWorkspaceInput, req);
         const user_id = await this.resolve_caller(req, body);
         const result = await JiraIntegrationService.disconnect(user_id, body);
+        log.info('workspace_disconnected', { user_id });
         this.ok(res, result);
     }
 }

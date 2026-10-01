@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { parse_log_level, split_log_chunk } from '../../../src/lib/log_line_parse.js';
+import { LogLineParser } from '../../../src/lib/log_line_parse.js';
+const parse_log_level = LogLineParser.parse_level.bind(LogLineParser);
+const split_log_chunk = LogLineParser.split_chunk.bind(LogLineParser);
 
 describe('log_line_parse', () => {
 	it('splits chunk into non-empty lines', () => {

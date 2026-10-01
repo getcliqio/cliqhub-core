@@ -13,6 +13,7 @@ vi.mock('../../src/auth/password.js', () => ({
     verify_password: vi.fn().mockResolvedValue(true),
 }));
 import request from 'supertest';
+import { randomUUID } from 'node:crypto';
 
 import { create_migrated_test_app } from './helpers/test_app.js';
 import {
@@ -63,7 +64,7 @@ describe.skipIf(!has_postgres)('Review Messages + Claim/Unclaim', () => {
         await open_test_control_plane_store();
 
         /** Mock returns different users depending on the ID requested. */
-        repos.user_repo.find_by_id.mockImplementation((id: string | number) => {
+        repos.user_repo.find_profile_by_id.mockImplementation((id: string | number) => {
             const key = String(id);
             const user_1 = {
                 id: hub_legacy_uuid(1),
@@ -305,7 +306,10 @@ describe.skipIf(!has_postgres)('Review Messages + Claim/Unclaim', () => {
     });
 
     it('send_message blocked when review claimed by another user', async () => {
-        const { review_id } = await seed_review({ mode: 'chat' });
+        const { review_id, realm_id } = await seed_review({ mode: 'chat' });
+        /** User 2 may operate in the realm; the claim is what blocks them. */
+        const { RealmMember } = await import('../../src/models/index.js');
+        await RealmMember.create({ id: randomUUID(), realm_id, member_type: 'user', member_id: hub_legacy_uuid(2), role: 'operator', created_at: Date.now() } as never);
 
         /** User 1 claims. */
         await ReviewMessageService.claim_review(review_id, hub_legacy_uuid(1));

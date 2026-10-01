@@ -1,9 +1,10 @@
 import { Op } from 'sequelize';
 
-import { NotificationChannel } from '../models/index.js';
+import { NotificationChannelRepository } from '../repositories/notification_channel_repository.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('reviewer_resolution');
+const channel_repo = new NotificationChannelRepository();
 
 /**
  * A single reviewer group as declared in the team YAML or supplied at
@@ -107,15 +108,15 @@ async function _resolve_channel_names(
 ): Promise<Map<string, ResolvedChannel>> {
     if (targets.length === 0) return new Map();
 
-    const channels = await NotificationChannel.findAll({
-        where: {
+    const channels = await channel_repo.find_all(
+        {
             org_id,
             realm_id: { [Op.is]: null },
             name: { [Op.in]: targets },
             enabled: 1,
         },
-        attributes: ['id', 'name', 'user_id'],
-    });
+        { attributes: ['id', 'name', 'user_id'] },
+    );
 
     const result = new Map<string, ResolvedChannel>();
     for (const ch of channels) {

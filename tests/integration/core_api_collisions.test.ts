@@ -8,6 +8,7 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import request from 'supertest';
 import { Sequelize } from 'sequelize';
 
+import { SequelizeAccessStore } from '../../src/auth/route_policy/store.js';
 import { create_test_app } from '../helpers/test_container.js';
 import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
 
@@ -16,7 +17,7 @@ vi.mock('../../src/auth/password.js', () => ({
     verify_password: vi.fn().mockResolvedValue(true),
 }));
 
-const { app, repos } = create_test_app();
+const { app, repos } = create_test_app({ route_policy: new SequelizeAccessStore() });
 const SECRET = 'test-secret';
 
 let alice_org_id = hub_legacy_uuid(100);
@@ -55,7 +56,7 @@ function hub_bearer(_overrides: Record<string, unknown> = {}): string {
 
 function mock_hub_user(): void {
     stub_pat_auth(repos, ALICE, { once: false });
-    repos.user_repo.find_by_id.mockResolvedValue(ALICE);
+    repos.user_repo.find_profile_by_id.mockResolvedValue(ALICE);
     repos.scope_repo.find_owned_by_user.mockResolvedValue([
         { id: hub_legacy_uuid(1), slug: 'cliq', display_name: 'Cliq', visibility: 'public', scope_type: 'user', owner_id: hub_legacy_uuid(1), org_id: null },
     ]);
@@ -63,6 +64,7 @@ function mock_hub_user(): void {
         { org_id: alice_org_id, slug: 'alice', role: 'owner' },
     ]);
     repos.scope_repo.find_member_scopes.mockResolvedValue([]);
+    repos.scope_repo.find_default_scopes.mockResolvedValue([]);
     repos.scope_repo.find_by_org_ids.mockResolvedValue([]);
 }
 
@@ -112,7 +114,8 @@ describe.skipIf(!ready)('core_api control + dispatch paths (postgres)', () => {
         const { close_sequelize, init_sequelize } = await import(
             '../../src/db/sequelize.js'
         );
-        const { init_models } = await import('../../src/db/models/index.js');
+        const { init_models } = await import('../../src/models/index.js');
+        const { move_registry_to_cliq_schema } = await import('../../src/models/migrations/hub_schema_migrations.js');
 
         await close_control_plane_store();
         await close_sequelize();
@@ -123,6 +126,7 @@ describe.skipIf(!ready)('core_api control + dispatch paths (postgres)', () => {
          *  a personal org for the NOT NULL realms.org_id. */
         const sequelize = init_sequelize(DATABASE_URL);
         init_models(sequelize);
+        await move_registry_to_cliq_schema(sequelize);
         await sequelize.sync();
 
         await init_control_plane_store(DATABASE_URL);
@@ -134,7 +138,7 @@ describe.skipIf(!ready)('core_api control + dispatch paths (postgres)', () => {
             VALUES ('00000000-0000-4000-8000-000000000001', 'alice', 'Alice', 'alice@test.com', 'x', 'user', NOW())
             ON CONFLICT (id) DO NOTHING
         `);
-        const { ensure_personal_org_for_user } = await import('../../src/db/migrate_ensure_user_orgs.js');
+        const { ensure_personal_org_for_user } = await import('../../src/models/migrations/migrate_ensure_user_orgs.js');
         const alice_org = await ensure_personal_org_for_user(ALICE.id, ALICE.username);
         alice_org_id = alice_org.id;
     });

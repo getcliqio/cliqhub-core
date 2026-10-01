@@ -3,7 +3,7 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { setup_sequelize_mocks } from '../../helpers/mock_sequelize.js';
 setup_sequelize_mocks();
 
-import { Team, User } from '../../../src/db/models/index.js';
+import { Team, User } from '../../../src/models/index.js';
 import { TeamRepository } from '../../../src/repositories/team_repository.js';
 
 describe('TeamRepository — reads', () => {

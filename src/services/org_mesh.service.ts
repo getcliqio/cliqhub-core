@@ -1,5 +1,13 @@
-import { Org, OrgMember } from '../db/models/index.js';
+import type { Org } from '../models/index.js';
+import { OrgRepository } from '../repositories/org_repository.js';
+import { OrgMemberRepository } from '../repositories/org_member_repository.js';
+
+const _org_repo_m = new OrgRepository();
+const _org_member_repo_m = new OrgMemberRepository();
 import { ApiError } from '../lib/api_error.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.org_mesh');
 import { get_mesh_adapter, list_mesh_adapters } from '../mesh/registry.js';
 import {
     mask_provider_settings,
@@ -37,9 +45,9 @@ function to_dto(org: Org): Org_mesh_settings_dto {
 }
 
 async function require_org_admin(org_id: string, user_id: string): Promise<Org> {
-    const org = await Org.findByPk(org_id);
+    const org = await _org_repo_m.find_one_q({ where: { id: org_id } });
     if (!org) throw ApiError.not_found('Org not found');
-    const membership = await OrgMember.findOne({
+    const membership = await _org_member_repo_m.find_one_q({
         where: { org_id, user_id },
     });
     if (!membership || membership.role !== 'admin') {
@@ -50,6 +58,7 @@ async function require_org_admin(org_id: string, user_id: string): Promise<Org> 
 
 export class OrgMeshService {
     static async get_for_admin(org_id: string, user_id: string): Promise<Org_mesh_settings_dto> {
+        log.debug('get_for_admin', { org_id, user_id });
         const org = await require_org_admin(org_id, user_id);
         return to_dto(org);
     }
@@ -64,6 +73,7 @@ export class OrgMeshService {
             provider_settings?: Record<string, unknown>;
         },
     ): Promise<Org_mesh_settings_dto> {
+        log.debug('update_for_admin', { org_id, user_id });
         const org = await require_org_admin(org_id, user_id);
 
         if (patch.active_provider_id !== undefined) {
@@ -86,6 +96,7 @@ export class OrgMeshService {
         }
 
         await org.save();
+        log.info('org_mesh_updated', { org_id });
         return to_dto(org);
     }
 
@@ -95,7 +106,8 @@ export class OrgMeshService {
         providers: Record<string, Record<string, unknown>>;
         auto_enable_a2a_on_realm_create: boolean;
     } | null> {
-        const org = await Org.findByPk(org_id);
+        log.debug('get_raw', { org_id });
+        const org = await _org_repo_m.find_one_q({ where: { id: org_id } });
         if (!org) return null;
         return {
             active_provider_id: org.mesh_active_provider_id ?? null,

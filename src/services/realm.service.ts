@@ -1,30 +1,46 @@
-import { ApiToken } from '../db/models/index.js';
-import { User } from '../db/models/user.js';
-import { RealmInvite } from '../db/models/realm_invite.js';
+import { org_standing, visible_realm_ids } from '../auth/route_policy/visible.js';
 import { default_daemon_grant, type Token_grant } from '../auth/grants.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Op, fn, col, type WhereOptions } from 'sequelize';
 
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
-import { AgentCatalog, Daemon, Realm, RealmMember, RealmDispatchQueue, Run, Team, Scope } from '../models/index.js';
-import { Team as RegistryTeam } from '../db/models/team.js';
-import { TeamVersion } from '../db/models/team_version.js';
-import { extract_agents_from_workflow, parse_agent_ref } from '../lib/agent_catalog_usage.js';
-import { max_semver } from '../lib/semver.js';
+import { get_sequelize } from '../lib/sequelize.js';
+import { AgentWorkflow } from '../lib/agent_workflow.js';
+import { SemVer } from '../lib/semver.js';
 import type { RealmModel } from '../models/realm.model.js';
 import type { RealmMemberModel, Realm_member_role, Realm_member_type } from '../models/realm_member.model.js';
+import { ApiTokenRepository } from '../repositories/api_token_repository.js';
+import { UserRepository } from '../repositories/user_repository.js';
+import { RealmInviteRepository } from '../repositories/realm_invite_repository.js';
+import { AgentCatalogRepository } from '../repositories/agent_catalog_repository.js';
+import { DaemonRepository } from '../repositories/daemon_repository.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
+import { RealmDispatchQueueRepository } from '../repositories/realm_dispatch_queue_repository.js';
+import { RunRepository } from '../repositories/run_repository.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+import { TeamRepository } from '../repositories/team_repository.js';
+import { ScopeRepository } from '../repositories/scope_repository.js';
+import { TeamVersionRepository } from '../repositories/team_version_repository.js';
 import { TokenRepository } from '../repositories/token_repository.js';
 import { RealmAgentSettingRepository } from '../repositories/realm_agent_setting_repository.js';
 import { NotificationService } from './notification.service.js';
 import { RealmDispatchKeyService } from './realm_dispatch_key.service.js';
 import { EventSubmitService } from './events_service.js';
-import { legacy_personal_realm_slugs } from '../lib/personal_realm.js';
-import {
-    account_default_realm_slug,
-    account_default_realm_name,
-    primary_account_slug_for_user,
-} from '../lib/account_realm.js';
+const _api_token_repo = new ApiTokenRepository();
+const _user_repo = new UserRepository();
+const _realm_invite_repo = new RealmInviteRepository();
+const _agent_catalog_repo = new AgentCatalogRepository();
+const _daemon_repo_r = new DaemonRepository();
+const _realm_repo = new RealmRepository();
+const _realm_member_repo = new RealmMemberRepository();
+const _rdq_repo = new RealmDispatchQueueRepository();
+const _run_repo = new RunRepository();
+const _dt_repo = new DaemonTeamRepository();
+const _team_repo = new TeamRepository();
+const _scope_repo = new ScopeRepository();
+const _tv_repo = new TeamVersionRepository();
 
 const log = get_logger('realm');
 
@@ -176,10 +192,11 @@ async function username_by_user_ids(user_ids: string[]): Promise<Map<string, str
             .filter((id) => id.length > 0),
     )];
     if (ids.length === 0) return new Map();
-    if (!User.sequelize) return new Map();
+    // If sequelize not yet connected, return empty map rather than throwing
+    try { get_sequelize(); } catch { return new Map(); }
 
     try {
-        const rows = await User.findAll({
+        const rows = await _user_repo.find_all_q({
             where: { id: { [Op.in]: ids } },
             attributes: ['id', 'username'],
         });
@@ -199,7 +216,7 @@ export async function org_slug_by_ids(org_ids: string[]): Promise<Map<string, st
     if (ids.length === 0) return new Map();
 
     try {
-        const { Org } = await import('../db/models/index.js');
+        const { Org } = await import('../models/index.js');
         const rows = await Org.findAll({
             where: { id: { [Op.in]: ids } },
             attributes: ['id', 'slug'],
@@ -293,11 +310,11 @@ export class RealmService {
         // Resolve org_id before the duplicate check so we can scope it.
         let org_id: string | undefined = opts?.org_id ?? undefined;
         if (org_id == null) {
-            const { User } = await import('../db/models/index.js');
+            const { User } = await import('../models/index.js');
             const {
                 ensure_personal_org_for_user,
-            } = await import('../db/migrate_ensure_user_orgs.js');
-            const user = await User.findByPk(user_id, { attributes: ['id', 'username'] });
+            } = await import('../models/migrations/migrate_ensure_user_orgs.js');
+            const user = await _user_repo.find_by_id(user_id, { attributes: ['id', 'username'] });
             if (!user?.username) {
                 throw ApiError.bad_request('Cannot create realm: user not found for org resolution');
             }
@@ -311,11 +328,11 @@ export class RealmService {
         // Duplicate check scoped to the org (UNIQUE(org_id, slug)).
         const dup_where: Record<string, unknown> = { slug, ...ALIVE };
         if (org_id) dup_where.org_id = org_id;
-        const dup = await Realm.findOne({ where: dup_where });
+        const dup = await _realm_repo.find_one_q({ where: dup_where });
         if (dup) throw ApiError.conflict(`Realm slug '${slug}' already exists in this org`);
 
         const ts = now_ms();
-        const realm = await Realm.create({
+        const realm = await _realm_repo.create_one({
             id: randomUUID(),
             slug,
             name: trimmed_name,
@@ -327,7 +344,7 @@ export class RealmService {
             created_at: ts,
             updated_at: ts,
         });
-        await RealmMember.create({
+        await _realm_member_repo.create_one({
             id: randomUUID(),
             realm_id: realm.id,
             member_type: 'user',
@@ -389,7 +406,7 @@ export class RealmService {
         user_id: string,
         username: string,
     ): Promise<Personal_realm_result> {
-        const account_slug = await primary_account_slug_for_user(String(user_id), username);
+        const account_slug = username.trim().toLowerCase();
         return RealmService.ensure_account_default_realm(user_id, account_slug);
     }
 
@@ -410,26 +427,26 @@ export class RealmService {
         user_id: string,
         account_slug: string,
     ): Promise<Personal_realm_result> {
-        const preferred_slug = account_default_realm_slug(account_slug);
-        const display_name = account_default_realm_name(account_slug);
+        const preferred_slug = 'default';
+        const display_name = 'default';
         assert_slug(preferred_slug);
 
-        const user = await User.findByPk(user_id);
+        const user = await _user_repo.find_by_id(user_id);
         if (!user) throw ApiError.not_found(`User '${user_id}' not found`);
 
         // Resolve the personal org — needed for org-scoped slug lookups.
         let personal_org_id: string | undefined;
         try {
-            const { ensure_personal_org_for_user } = await import('../db/migrate_ensure_user_orgs.js');
+            const { ensure_personal_org_for_user } = await import('../models/migrations/migrate_ensure_user_orgs.js');
             const org = await ensure_personal_org_for_user(String(user_id), account_slug);
             personal_org_id = org.id;
-        } catch { /* best-effort */ }
+        } catch (err) { log.warn('personal_org_ensure_failed', { error: err instanceof Error ? err.message : String(err) }); /* best-effort */ }
 
         // 1. Owned realm at user.default_realm_id? Use it as-is.
         //    Never touch slug/name/owner even if drifted.
         let realm_row: RealmModel | null = null;
         if (user.default_realm_id) {
-            const current = await Realm.findByPk(user.default_realm_id);
+            const current = await _realm_repo.find_by_id(user.default_realm_id);
             if (current && !current.deleted && String(current.owner_user_id) === user_id) {
                 realm_row = current;
             } else if (current && (current.deleted || String(current.owner_user_id) !== user_id)) {
@@ -443,19 +460,19 @@ export class RealmService {
         //    slug within the personal org, else any 'default' we own,
         //    else legacy *.default we own.
         if (!realm_row && personal_org_id) {
-            realm_row = await Realm.findOne({
+            realm_row = await _realm_repo.find_one_q({
                 where: { owner_user_id: user_id, slug: preferred_slug, org_id: personal_org_id, ...ALIVE },
             });
         }
         if (!realm_row) {
-            realm_row = await Realm.findOne({
+            realm_row = await _realm_repo.find_one_q({
                 where: { owner_user_id: user_id, slug: 'default', ...ALIVE },
                 order: [['created_at', 'ASC']],
             });
         }
         if (!realm_row) {
             // Legacy fallback: old {account}.default slugs that haven't been renamed yet.
-            realm_row = await Realm.findOne({
+            realm_row = await _realm_repo.find_one_q({
                 where: {
                     owner_user_id: user_id,
                     slug: { [Op.like]: '%-default' },
@@ -470,13 +487,13 @@ export class RealmService {
         //     orphans only — never steal from a living user (see regression
         //     ensure_account_default_realm.regression.test.ts).
         if (!realm_row && personal_org_id) {
-            const existing = await Realm.findOne({
+            const existing = await _realm_repo.find_one_q({
                 where: { slug: preferred_slug, org_id: personal_org_id, ...ALIVE },
             });
             if (existing) {
                 const owner_id = String(existing.owner_user_id);
                 const owner_alive = UUID_RE.test(owner_id)
-                    ? await User.findByPk(owner_id, { attributes: ['id'] })
+                    ? await _user_repo.find_by_id(owner_id, { attributes: ['id'] })
                     : null;
                 if (!owner_alive) {
                     existing.owner_user_id = user_id;
@@ -497,7 +514,7 @@ export class RealmService {
                 user_id, preferred_slug, display_name,
                 { org_id: personal_org_id },
             );
-            const loaded = await Realm.findByPk(created.id);
+            const loaded = await _realm_repo.find_by_id(created.id);
             if (!loaded) throw ApiError.internal('Failed to load account default realm after create');
             realm_row = loaded;
         }
@@ -547,30 +564,30 @@ export class RealmService {
         actor_user_id: string,
         member_user_id?: string,
     ): Promise<Realm_dto> {
-        const preferred_slug = account_default_realm_slug(org_slug);
-        const display_name = account_default_realm_name(org_slug);
+        const preferred_slug = 'default';
+        const display_name = 'default';
         assert_slug(preferred_slug);
 
         // Resolve org for org-scoped slug lookup.
         let org_id: string | null = null;
         try {
-            const { Org } = await import('../db/models/index.js');
+            const { Org } = await import('../models/index.js');
             const org = await Org.findOne({ where: { slug: org_slug.trim().toLowerCase() } });
             org_id = org?.id ?? null;
-        } catch { /* ignore */ }
+        } catch (err) { log.warn('org_lookup_failed', { error: err instanceof Error ? err.message : String(err) }); /* ignore */ }
 
         // Look up by org-scoped slug first, then fall back to legacy
         // {org}.default slug for in-flight migrations.
         let realm_row: RealmModel | null = null;
         if (org_id) {
-            realm_row = await Realm.findOne({
+            realm_row = await _realm_repo.find_one_q({
                 where: { slug: preferred_slug, org_id, ...ALIVE },
             });
         }
         if (!realm_row) {
             // Legacy fallback: old {org_slug}.default slug.
             const legacy_slug = `${org_slug.trim().toLowerCase()}.default`.slice(0, 63);
-            realm_row = await Realm.findOne({ where: { slug: legacy_slug, ...ALIVE } });
+            realm_row = await _realm_repo.find_one_q({ where: { slug: legacy_slug, ...ALIVE } });
         }
 
         if (!realm_row) {
@@ -580,7 +597,7 @@ export class RealmService {
                 display_name,
                 { org_id },
             );
-            const loaded = await Realm.findByPk(created.id);
+            const loaded = await _realm_repo.find_by_id(created.id);
             if (!loaded) {
                 throw ApiError.internal('Failed to load org default realm after create');
             }
@@ -607,7 +624,7 @@ export class RealmService {
 
     /** True when an active `type=realm` enroll token grants this realm. */
     static async realm_has_active_enroll_token(realm_id: string): Promise<boolean> {
-        const rows = await ApiToken.findAll({
+        const rows = await _api_token_repo.find_all_q({
             where: { type: 'realm', revoked_at: null },
         });
         return rows.some((row) => {
@@ -653,9 +670,16 @@ export class RealmService {
             offset?: number;
             sort_by?: 'slug' | 'name' | 'created_at' | 'updated_at' | 'created_by';
             sort_dir?: 'asc' | 'desc';
+            /** Site admins (`all: true`): every realm, not only the caller's memberships. */
+            site_admin?: boolean;
         },
     ): Promise<{ realms: Realm_dto[]; total: number }> {
-        const opts = typeof filters === 'string' ? { slug: filters } : (filters ?? {});
+        const opts: {
+            slug?: string; query?: string; owned?: 'me' | 'default'; org_id?: string;
+            limit?: number; offset?: number;
+            sort_by?: 'slug' | 'name' | 'created_at' | 'updated_at' | 'created_by';
+            sort_dir?: 'asc' | 'desc'; site_admin?: boolean;
+        } = typeof filters === 'string' ? { slug: filters } : (filters ?? {});
         const query = opts.query?.trim();
         const pattern = query ? `%${escape_like(query)}%` : null;
         const query_clause = pattern
@@ -670,20 +694,20 @@ export class RealmService {
         const owned_clause = await RealmService._owned_where(user_id, opts.owned);
         if (owned_clause === false) return { realms: [], total: 0 };
 
-        const memberships = await RealmMember.findAll({
-            where: { member_type: 'user', member_id: user_id },
-        });
-        if (memberships.length === 0) return { realms: [], total: 0 };
-
-        const realm_ids = memberships.map((m) => m.realm_id);
+        let realm_ids: string[] | null = null;
+        if (!opts.site_admin) {
+            // Memberships + org owner/admin realms + owned realms.
+            realm_ids = await visible_realm_ids(user_id, { org_id: opts.org_id });
+            if (realm_ids.length === 0) return { realms: [], total: 0 };
+        }
         const sort_by = opts.sort_by ?? 'slug';
         const sort_dir = (opts.sort_dir ?? 'asc').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
         const limit = opts.limit;
         const offset = opts.offset ?? 0;
 
-        const { rows, count } = await Realm.findAndCountAll({
+        const { rows, count } = await _realm_repo.find_and_count_q({
             where: {
-                id: { [Op.in]: realm_ids },
+                ...(realm_ids ? { id: { [Op.in]: realm_ids } } : {}),
                 ...ALIVE,
                 ...(opts.slug ? { slug: opts.slug } : {}),
                 ...(opts.org_id ? { org_id: opts.org_id } : {}),
@@ -715,25 +739,17 @@ export class RealmService {
             };
         }
 
-        const user = await User.findByPk(user_id, { attributes: ['id', 'username', 'default_realm_id'] });
+        const user = await _user_repo.find_by_id(user_id, { attributes: ['id', 'default_realm_id'] });
 
         if (user?.default_realm_id) {
             return { id: user.default_realm_id };
         }
 
-        const username = (user?.username ?? '').trim().toLowerCase().replace(/^@/, '');
-        if (!username) return false;
-
-        const slugs = [
-            account_default_realm_slug(username),
-            username,
-            ...legacy_personal_realm_slugs(username),
-        ];
-        return { slug: { [Op.in]: [...new Set(slugs)] } };
+        return false;
     }
 
     static async list_daemon_ids_in_realm(realm_id: string): Promise<string[]> {
-        const rows = await RealmMember.findAll({
+        const rows = await _realm_member_repo.find_all_q({
             where: { realm_id, member_type: 'daemon' },
             attributes: ['member_id'],
         });
@@ -766,7 +782,7 @@ export class RealmService {
         }>>();
         if (daemon_ids.length === 0) return result;
 
-        const members = await RealmMember.findAll({
+        const members = await _realm_member_repo.find_all_q({
             where: {
                 member_type: 'daemon',
                 member_id: { [Op.in]: daemon_ids },
@@ -775,7 +791,7 @@ export class RealmService {
         if (members.length === 0) return result;
 
         const realm_ids = [...new Set(members.map((m) => m.realm_id))];
-        const realms = await Realm.findAll({
+        const realms = await _realm_repo.find_all_q({
             where: { id: { [Op.in]: realm_ids }, ...ALIVE },
         });
         const realm_by_id = new Map(realms.map((r) => [r.id, r]));
@@ -797,7 +813,7 @@ export class RealmService {
 
     static async get(realm_id: string, user_id: string, opts?: { site_admin?: boolean }): Promise<Realm_dto> {
         if (opts?.site_admin) {
-            const realm = await Realm.findByPk(realm_id);
+            const realm = await _realm_repo.find_by_id(realm_id);
             if (!realm || realm.deleted) throw ApiError.not_found(`Realm '${realm_id}' not found`);
             return to_realm_dto_enriched(realm);
         }
@@ -814,15 +830,13 @@ export class RealmService {
         const where: Record<string, unknown> = { slug, ...ALIVE };
         if (opts?.org_id) where.org_id = opts.org_id;
 
-        let realm = await Realm.findOne({ where });
+        let realm = await _realm_repo.find_one_q({ where });
         if (!realm && UUID_RE.test(slug)) {
-            realm = await Realm.findByPk(slug);
+            realm = await _realm_repo.find_by_id(slug);
             if (realm?.deleted) realm = null;
         }
         if (!realm) throw ApiError.not_found(`Realm '${slug}' not found`);
-        if (!opts?.site_admin) {
-            await RealmService.require_member_row(realm.id, user_id);
-        }
+        // Callers authorized this: realms/get_by_id (route policy: realm view).
         return to_realm_dto_enriched(realm);
     }
 
@@ -831,8 +845,8 @@ export class RealmService {
         user_id: string,
         patch: { name?: string },
     ): Promise<Realm_dto> {
-        await RealmService.require_admin(realm_id, user_id);
-        const realm = await Realm.findByPk(realm_id);
+        // Callers authorized this: realms/update (route policy: admin + realms.update).
+        const realm = await _realm_repo.find_by_id(realm_id);
         if (!realm || realm.deleted) throw ApiError.not_found(`Realm '${realm_id}' not found`);
 
         if (patch.name !== undefined) {
@@ -851,14 +865,14 @@ export class RealmService {
      * events, clears memberships so daemon heartbeats fail auth.
      */
     static async remove(realm_id: string, user_id: string): Promise<void> {
-        await RealmService.require_admin(realm_id, user_id);
-        const realm = await Realm.findByPk(realm_id);
+        // Callers authorized this: realms/delete (route policy: admin + realms.delete).
+        const realm = await _realm_repo.find_by_id(realm_id);
         if (!realm || realm.deleted) throw ApiError.not_found(`Realm '${realm_id}' not found`);
 
         // Personal default realm cannot be deleted.
         const owner_id = realm.owner_user_id ? String(realm.owner_user_id) : '';
         if (owner_id) {
-            const owner = await User.findByPk(owner_id, {
+            const owner = await _user_repo.find_by_id(owner_id, {
                 attributes: ['id', 'username', 'default_realm_id'],
             });
             if (owner?.default_realm_id === realm_id) {
@@ -867,19 +881,17 @@ export class RealmService {
                 );
             }
             const username = (owner?.username ?? '').trim().toLowerCase().replace(/^@/, '');
-            if (username && realm.slug === account_default_realm_slug(username)) {
+            if (username && realm.slug === 'default') {
                 throw ApiError.conflict(
                     'Cannot delete your personal default realm. Create another realm for day-to-day work instead.',
                 );
             }
         }
 
-        const active_runs = await Run.count({
-            where: {
-                realm_id,
-                state: { [Op.in]: ['running', 'awaiting_input'] },
-            },
-        });
+        const active_runs = await _run_repo.find_count({
+            realm_id,
+            state: { [Op.in]: ['running', 'awaiting_input'] },
+        } as any);
         if (active_runs > 0) {
             throw ApiError.conflict(
                 `Cannot delete realm while ${active_runs} run(s) are still in progress `
@@ -887,12 +899,10 @@ export class RealmService {
             );
         }
 
-        const active_dispatch = await RealmDispatchQueue.count({
-            where: {
-                realm_id,
-                status: { [Op.in]: ['queued', 'offered', 'claimed', 'running', 'dispatching'] },
-            },
-        });
+        const active_dispatch = await _rdq_repo.find_count({
+            realm_id,
+            status: { [Op.in]: ['queued', 'offered', 'claimed', 'running', 'dispatching'] },
+        } as any);
         if (active_dispatch > 0) {
             throw ApiError.conflict(
                 `Cannot delete realm while ${active_dispatch} dispatch job(s) are still active. `
@@ -910,7 +920,7 @@ export class RealmService {
             });
         }
 
-        const members = await RealmMember.findAll({ where: { realm_id } });
+        const members = await _realm_member_repo.find_all_q({ where: { realm_id } });
         const original_slug = realm.slug;
         const ts = now_ms();
 
@@ -934,9 +944,9 @@ export class RealmService {
             .map((m) => m.member_id);
         if (daemon_ids.length > 0) {
             try {
-                await Daemon.update(
-                    { status: 'offline' },
-                    { where: { id: { [Op.in]: daemon_ids } } },
+                await _daemon_repo_r.update_where(
+                    { id: { [Op.in]: daemon_ids } } as any,
+                    { status: 'offline' } as any,
                 );
             } catch (err) {
                 log.warn('realm_remove_daemon_offline_failed', {
@@ -946,7 +956,7 @@ export class RealmService {
             }
         }
 
-        await RealmMember.destroy({ where: { realm_id } });
+        await _realm_member_repo.delete_where({ realm_id } as any);
 
         try {
             await new RealmAgentSettingRepository().remove_all_for_realm(realm_id);
@@ -967,9 +977,9 @@ export class RealmService {
 
         // Clear default pointer if any user still pointed here.
         try {
-            await User.update(
-                { default_realm_id: null },
-                { where: { default_realm_id: realm_id } },
+            await _user_repo.update_where(
+                { default_realm_id: realm_id } as any,
+                { default_realm_id: null } as any,
             );
         } catch (err) {
             log.warn('realm_remove_clear_default_failed', {
@@ -1013,7 +1023,7 @@ export class RealmService {
         user_id: string,
         role: Realm_member_role = 'operator',
     ): Promise<void> {
-        const existing = await RealmMember.findOne({
+        const existing = await _realm_member_repo.find_one_q({
             where: { realm_id, member_type: 'user', member_id: user_id },
         });
         if (existing) {
@@ -1022,7 +1032,7 @@ export class RealmService {
             await existing.save();
             return;
         }
-        await RealmMember.create({
+        await _realm_member_repo.create_one({
             id: randomUUID(),
             realm_id,
             member_type: 'user',
@@ -1038,7 +1048,7 @@ export class RealmService {
         member_type: Realm_member_type,
         member_id: string,
     ): Promise<void> {
-        await RealmMember.destroy({ where: { realm_id, member_type, member_id } });
+        await _realm_member_repo.delete_where({ realm_id, member_type, member_id } as any);
     }
 
     static async list_members(
@@ -1046,7 +1056,7 @@ export class RealmService {
         user_id: string,
         member_type?: Realm_member_type,
     ): Promise<Realm_member_dto[]> {
-        await RealmService.require_member_row(realm_id, user_id);
+        // Callers authorized this: realms/get_members (route policy: realm view).
         return RealmService.list_members_unscoped(realm_id, member_type);
     }
 
@@ -1057,7 +1067,7 @@ export class RealmService {
     ): Promise<Realm_member_dto[]> {
         const where: Record<string, unknown> = { realm_id };
         if (member_type) where.member_type = member_type;
-        const rows = await RealmMember.findAll({
+        const rows = await _realm_member_repo.find_all_q({
             where,
             order: [['created_at', 'ASC']],
         });
@@ -1068,7 +1078,7 @@ export class RealmService {
 
         const username_map = new Map<string, string>();
         if (user_ids.length > 0) {
-            const users = await User.findAll({
+            const users = await _user_repo.find_all_q({
                 where: { id: user_ids },
                 attributes: ['id', 'username'],
                 raw: true,
@@ -1090,7 +1100,7 @@ export class RealmService {
             role?: Realm_member_role;
         },
     ): Promise<Realm_member_dto> {
-        await RealmService.require_admin(realm_id, actor_user_id);
+        // Callers authorized this: realms/add_member (route policy: admin + realms.members.manage).
         if (input.member_type !== 'user' && input.member_type !== 'daemon' && input.member_type !== 'group') {
             throw ApiError.bad_request(`Invalid member_type '${input.member_type}'`);
         }
@@ -1103,12 +1113,12 @@ export class RealmService {
         /** Resolve username for user members so the returned DTO is display-ready. */
         let username: string | null = null;
         if (input.member_type === 'user' && /^\d+$/.test(member_id)) {
-            const u = await User.findByPk(member_id, { attributes: ['username'], raw: true });
+            const u = await _user_repo.find_by_id(member_id, { attributes: ['username'], raw: true });
             if (u) username = u.username;
         }
 
         const role: Realm_member_role = input.role ?? (input.member_type === 'user' ? 'operator' : 'member');
-        const existing = await RealmMember.findOne({
+        const existing = await _realm_member_repo.find_one_q({
             where: {
                 realm_id,
                 member_type: input.member_type,
@@ -1122,7 +1132,7 @@ export class RealmService {
             return to_member_dto(existing, username);
         }
 
-        const row = await RealmMember.create({
+        const row = await _realm_member_repo.create_one({
             id: randomUUID(),
             realm_id,
             member_type: input.member_type,
@@ -1146,12 +1156,12 @@ export class RealmService {
             const lookup_id = /^\d+$/.test(trimmed)
                 ? (await import('../lib/hub_legacy_uuid.js')).hub_legacy_uuid(Number(trimmed))
                 : trimmed;
-            const by_id = await User.findByPk(lookup_id);
+            const by_id = await _user_repo.find_by_id(lookup_id);
             if (!by_id) throw ApiError.not_found(`User '${trimmed}' not found`);
             return String(by_id.id);
         }
 
-        const by_name = await User.findOne({
+        const by_name = await _user_repo.find_one_q({
             where: { username: trimmed.toLowerCase() },
         });
         if (!by_name) throw ApiError.not_found(`User '@${trimmed.toLowerCase()}' not found`);
@@ -1164,20 +1174,20 @@ export class RealmService {
         member_type: Realm_member_type,
         member_id: string,
     ): Promise<void> {
-        await RealmService.require_admin(realm_id, actor_user_id);
+        // Callers authorized this: realms/remove_member (route policy: admin + realms.members.manage).
         const resolved_id = member_type === 'user'
             ? await RealmService.resolve_user_member_id(member_id)
             : member_id.trim();
         if (member_type === 'user' && resolved_id === actor_user_id) {
-            const admins = await RealmMember.count({
-                where: { realm_id, member_type: 'user', role: 'admin' },
-            });
+            const admins = await _realm_member_repo.find_count(
+                { realm_id, member_type: 'user', role: 'admin' } as any,
+            );
             if (admins <= 1) {
                 throw ApiError.bad_request('Cannot remove the last admin from a realm');
             }
         }
 
-        const row = await RealmMember.findOne({
+        const row = await _realm_member_repo.find_one_q({
             where: { realm_id, member_type, member_id: resolved_id },
         });
         if (!row) throw ApiError.not_found('Member not found');
@@ -1235,7 +1245,7 @@ export class RealmService {
             permissions.auto_enrolled = true;
         }
         const token_hash = hash_token(plaintext);
-        const row = await ApiToken.create({
+        const row = await _api_token_repo.create_one({
             id: randomUUID(),
             type: 'realm',
             user_id,
@@ -1253,7 +1263,7 @@ export class RealmService {
 
     static async list_tokens(realm_id: string, user_id: string): Promise<Realm_token_dto[]> {
         await RealmService.require_admin(realm_id, user_id);
-        const rows = await ApiToken.findAll({
+        const rows = await _api_token_repo.find_all_q({
             where: { type: 'realm' },
             order: [['created_at', 'DESC']],
         });
@@ -1268,7 +1278,7 @@ export class RealmService {
 
     static async revoke_token(realm_id: string, user_id: string, token_id: string): Promise<void> {
         await RealmService.require_admin(realm_id, user_id);
-        const row = await ApiToken.findOne({ where: { id: token_id, type: 'realm' } });
+        const row = await _api_token_repo.find_one_q({ where: { id: token_id, type: 'realm' } });
         if (!row) throw ApiError.not_found('Token not found');
         const grant = row.permissions as Token_grant;
         const realms = grant?.domains?.realms;
@@ -1291,7 +1301,7 @@ export class RealmService {
             throw ApiError.unauthorized('Invalid realm token');
         }
         const token_hash = hash_token(plaintext);
-        const row = await ApiToken.findOne({
+        const row = await _api_token_repo.find_one_q({
             where: {
                 token_hash,
                 type: { [Op.in]: ['realm', 'daemon'] },
@@ -1315,11 +1325,11 @@ export class RealmService {
 
     /** Bind a daemon into a realm (idempotent). */
     static async upsert_daemon_member(realm_id: string, daemon_id: string): Promise<void> {
-        const existing = await RealmMember.findOne({
+        const existing = await _realm_member_repo.find_one_q({
             where: { realm_id, member_type: 'daemon', member_id: daemon_id },
         });
         if (existing) return;
-        await RealmMember.create({
+        await _realm_member_repo.create_one({
             id: randomUUID(),
             realm_id,
             member_type: 'daemon',
@@ -1336,7 +1346,7 @@ export class RealmService {
      * @returns realm ids the daemon left
      */
     static async bind_daemon_to_realm(realm_id: string, daemon_id: string): Promise<string[]> {
-        const existing = await RealmMember.findAll({
+        const existing = await _realm_member_repo.find_all_q({
             where: { member_type: 'daemon', member_id: daemon_id },
             attributes: ['id', 'realm_id'],
         });
@@ -1345,13 +1355,11 @@ export class RealmService {
             .filter((id) => id !== realm_id);
 
         if (left.length > 0) {
-            await RealmMember.destroy({
-                where: {
-                    member_type: 'daemon',
-                    member_id: daemon_id,
-                    realm_id: { [Op.in]: left },
-                },
-            });
+            await _realm_member_repo.delete_where({
+                member_type: 'daemon',
+                member_id: daemon_id,
+                realm_id: { [Op.in]: left },
+            } as any);
             log.info(
                 `daemon moved: ${daemon_id} → realm=${realm_id} left=[${left.join(',')}]`,
             );
@@ -1362,39 +1370,47 @@ export class RealmService {
     }
 
     /** Realm ids where this user is a member. */
-    static async list_realm_ids_for_user(user_id: string): Promise<string[]> {
-        const rows = await RealmMember.findAll({
-            where: { member_type: 'user', member_id: user_id },
-            attributes: ['realm_id'],
+    /** Every live realm id in an org (site-admin views; no membership gate). */
+    static async list_realm_ids_in_org(org_id: string): Promise<string[]> {
+        const rows = await _realm_repo.find_all_q({ where: { org_id, ...ALIVE }, attributes: ['id'] });
+        return rows.map((r) => r.id);
+    }
+
+    /** Daemon ids that are members of any realm in an org (site-admin views). */
+    static async list_daemon_ids_in_org(org_id: string): Promise<string[]> {
+        const realm_ids = await RealmService.list_realm_ids_in_org(org_id);
+        if (realm_ids.length === 0) return [];
+        const rows = await _realm_member_repo.find_all_q({
+            where: { member_type: 'daemon', realm_id: { [Op.in]: realm_ids } },
+            attributes: ['member_id'],
         });
-        return rows.map((r) => r.realm_id);
+        return [...new Set(rows.map((r) => r.member_id))];
     }
 
     /**
-     * Realm ids where this user is a member AND the realm belongs to
-     * the given org. Used by list endpoints that must respect the
-     * X-Org-Id header (dashboard runs list, etc). Two queries by
-     * design — the user's realm-membership set is usually small and
-     * we don't want to build a JOIN policy on the members table.
+     * Realms the user can see: memberships + every realm of orgs they own or
+     * administer + realms they own (`visible_realm_ids`, same rules as the policy).
+     */
+    static async list_realm_ids_for_user(user_id: string): Promise<string[]> {
+        return visible_realm_ids(user_id);
+    }
+
+    /**
+     * Realm ids the user can see (`visible_realm_ids`) that belong to the
+     * given org. Used by list endpoints scoped to one org (dashboard, runs).
      */
     static async list_realm_ids_for_user_in_org(
         user_id: string,
         org_id: string,
     ): Promise<string[]> {
-        const member_realm_ids = await RealmService.list_realm_ids_for_user(user_id);
-        if (member_realm_ids.length === 0) return [];
-        const rows = await Realm.findAll({
-            where: { id: { [Op.in]: member_realm_ids }, org_id, ...ALIVE },
-            attributes: ['id'],
-        });
-        return rows.map((r) => r.id);
+        return visible_realm_ids(user_id, { org_id });
     }
 
     /** Daemon ids that share at least one realm with the user. */
     static async list_daemon_ids_for_user(user_id: string): Promise<string[]> {
         const realm_ids = await RealmService.list_realm_ids_for_user(user_id);
         if (realm_ids.length === 0) return [];
-        const rows = await RealmMember.findAll({
+        const rows = await _realm_member_repo.find_all_q({
             where: {
                 member_type: 'daemon',
                 realm_id: { [Op.in]: realm_ids },
@@ -1411,7 +1427,7 @@ export class RealmService {
     ): Promise<string[]> {
         const realm_ids = await RealmService.list_realm_ids_for_user_in_org(user_id, org_id);
         if (realm_ids.length === 0) return [];
-        const rows = await RealmMember.findAll({
+        const rows = await _realm_member_repo.find_all_q({
             where: {
                 member_type: 'daemon',
                 realm_id: { [Op.in]: realm_ids },
@@ -1433,11 +1449,11 @@ export class RealmService {
     }
 
     static async assert_daemon_in_realm(realm_id: string, daemon_id: string): Promise<void> {
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await _realm_repo.find_by_id(realm_id);
         if (!realm || realm.deleted) {
             throw ApiError.forbidden(`Daemon '${daemon_id}' is not a member of this realm`);
         }
-        const row = await RealmMember.findOne({
+        const row = await _realm_member_repo.find_one_q({
             where: { realm_id, member_type: 'daemon', member_id: daemon_id },
         });
         if (row) return;
@@ -1450,13 +1466,13 @@ export class RealmService {
         user_id: string,
     ): Promise<string[]> {
         await RealmService.require_member_row(realm_id, user_id);
-        const members = await RealmMember.findAll({
+        const members = await _realm_member_repo.find_all_q({
             where: { realm_id, member_type: 'daemon' },
             attributes: ['member_id'],
         });
         if (members.length === 0) return [];
 
-        const online = await Daemon.findAll({
+        const online = await _daemon_repo_r.find_all_q({
             where: {
                 id: { [Op.in]: members.map((m) => m.member_id) },
                 status: 'online',
@@ -1468,7 +1484,7 @@ export class RealmService {
     }
 
     private static async ensure_user_admin(realm_id: string, user_id: string): Promise<void> {
-        const existing = await RealmMember.findOne({
+        const existing = await _realm_member_repo.find_one_q({
             where: { realm_id, member_type: 'user', member_id: user_id },
         });
         if (existing) {
@@ -1477,7 +1493,7 @@ export class RealmService {
             await existing.save();
             return;
         }
-        await RealmMember.create({
+        await _realm_member_repo.create_one({
             id: randomUUID(),
             realm_id,
             member_type: 'user',
@@ -1488,18 +1504,35 @@ export class RealmService {
     }
 
     private static async require_member(realm_id: string, user_id: string): Promise<RealmModel> {
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await _realm_repo.find_by_id(realm_id);
         if (!realm || realm.deleted) throw ApiError.not_found(`Realm '${realm_id}' not found`);
         await RealmService.require_member_row(realm_id, user_id);
         return realm;
     }
 
+    /**
+     * The caller's standing in a realm, by the access rules (decisions of Sep 30):
+     * an explicit membership row, or — without one — realm owner, or owner/admin
+     * of the realm's org, who count as realm admin. Same rules as the route policy.
+     */
     private static async require_member_row(realm_id: string, user_id: string): Promise<RealmMemberModel> {
-        const row = await RealmMember.findOne({
+        const row = await _realm_member_repo.find_one_q({
             where: { realm_id, member_type: 'user', member_id: user_id },
         });
-        if (!row) throw ApiError.forbidden('Not a member of this realm');
-        return row;
+        if (row) return row;
+        const realm = await _realm_repo.find_by_id(realm_id);
+        if (realm && !realm.deleted) {
+            const implicit_admin = realm.owner_user_id === user_id
+                || await (async () => {
+                    if (!realm.org_id) return false;
+                    const role = await org_standing(String(realm.org_id), user_id);
+                    return Boolean(role && (role.is_system || role.slug === 'admin'));
+                })();
+            if (implicit_admin) {
+                return { realm_id, member_type: 'user', member_id: user_id, role: 'admin' } as unknown as RealmMemberModel;
+            }
+        }
+        throw ApiError.forbidden('Not a member of this realm');
     }
 
     /** Public membership check for cross-service AuthZ (e.g. notification bindings). */
@@ -1525,7 +1558,7 @@ export class RealmService {
         const q = query.trim().replace(/^@+/, '');
         if (q.length < 2) return [];
 
-        const members = await RealmMember.findAll({
+        const members = await _realm_member_repo.find_all_q({
             where: { realm_id, member_type: 'user' },
             attributes: ['member_id'],
         });
@@ -1546,7 +1579,7 @@ export class RealmService {
             where.id = { [Op.notIn]: member_ids };
         }
 
-        const users = await User.findAll({
+        const users = await _user_repo.find_all_q({
             where,
             attributes: ['id', 'username', 'display_name', 'email'],
             order: [['username', 'ASC']],
@@ -1577,7 +1610,7 @@ export class RealmService {
             token: string;
         }
     > {
-        await RealmService.require_admin(realm_id, actor_user_id);
+        // Callers authorized this: invitations/create (realm admin + realms.members.manage).
 
         const email = params.email.trim().toLowerCase();
         if (!EMAIL_PATTERN.test(email)) {
@@ -1585,7 +1618,7 @@ export class RealmService {
         }
 
         const role: Realm_member_role = params.role ?? 'member';
-        const existing = await User.findOne({
+        const existing = await _user_repo.find_one_q({
             where: { email },
             attributes: ['id', 'username'],
             raw: true,
@@ -1604,7 +1637,7 @@ export class RealmService {
             };
         }
 
-        const pending = await RealmInvite.findOne({
+        const pending = await _realm_invite_repo.find_one_q({
             where: { realm_id, email, status: 'pending' },
             attributes: ['id'],
             raw: true,
@@ -1615,7 +1648,7 @@ export class RealmService {
 
         const token = randomBytes(32).toString('hex');
         const expires_at = new Date(Date.now() + INVITE_TTL_MS);
-        const invite = await RealmInvite.create({
+        const invite = await _realm_invite_repo.create_one({
             realm_id,
             email,
             invited_by: actor_user_id,
@@ -1648,7 +1681,7 @@ export class RealmService {
     }>> {
         await RealmService.require_admin(realm_id, actor_user_id);
 
-        const invites = await RealmInvite.findAll({
+        const invites = await _realm_invite_repo.find_all_q({
             where: { realm_id, status: 'pending' },
             attributes: ['id', 'email', 'role', 'created_at', 'expires_at', 'invited_by'],
             order: [['created_at', 'DESC']],
@@ -1673,16 +1706,16 @@ export class RealmService {
         invite_id: string,
         actor_user_id: string,
     ): Promise<void> {
-        const invite = await RealmInvite.findByPk(invite_id, {
+        const invite = await _realm_invite_repo.find_by_id(invite_id, {
             attributes: ['id', 'realm_id', 'status'],
             raw: true,
         });
         if (!invite) throw ApiError.not_found('Invite not found');
-        await RealmService.require_admin(invite.realm_id, actor_user_id);
+        // Callers authorized this: invitations/revoke (realm admin + realms.members.manage).
         if (invite.status !== 'pending') {
             throw ApiError.conflict('Invite is not pending');
         }
-        await RealmInvite.update({ status: 'revoked' }, { where: { id: invite.id } });
+        await _realm_invite_repo.update_where({ id: invite.id } as any, { status: 'revoked' } as any);
     }
 
     static async get_invite_by_token(token: string): Promise<{
@@ -1694,7 +1727,7 @@ export class RealmService {
         expires_at: string;
     }> {
         const invite = await RealmService._load_pending_invite(token);
-        const realm = await Realm.findByPk(invite.realm_id);
+        const realm = await _realm_repo.find_by_id(invite.realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
         return {
@@ -1726,19 +1759,19 @@ export class RealmService {
             throw ApiError.forbidden('Signed-in email does not match this invite');
         }
 
-        const realm = await Realm.findByPk(invite.realm_id);
+        const realm = await _realm_repo.find_by_id(invite.realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
         const role = invite.role as Realm_member_role;
         await RealmService.upsert_user_member(invite.realm_id, actor_user_id, role);
 
-        await RealmInvite.update(
+        await _realm_invite_repo.update_where(
+            { id: invite.id } as any,
             {
                 status: 'accepted',
                 accepted_at: new Date(),
                 accepted_user_id: String(actor_user_id),
-            },
-            { where: { id: invite.id } },
+            } as any,
         );
 
         return {
@@ -1754,7 +1787,7 @@ export class RealmService {
         const trimmed = token.trim();
         if (!trimmed) throw ApiError.bad_request('token is required');
 
-        const invite = await RealmInvite.findOne({
+        const invite = await _realm_invite_repo.find_one_q({
             where: { token_hash: hash_invite_token(trimmed), status: 'pending' },
             raw: true,
         });
@@ -1764,7 +1797,7 @@ export class RealmService {
             ? invite.expires_at
             : new Date(invite.expires_at);
         if (expires_at.getTime() < Date.now()) {
-            await RealmInvite.update({ status: 'revoked' }, { where: { id: invite.id } });
+            await _realm_invite_repo.update_where({ id: invite.id } as any, { status: 'revoked' } as any);
             throw ApiError.conflict('Invite has expired');
         }
 
@@ -1813,7 +1846,7 @@ export class RealmService {
         await RealmService.assert_member(params.realm_id, user_id);
 
         // Realm + team-list.
-        const realm = await Realm.findByPk(params.realm_id);
+        const realm = await _realm_repo.find_by_id(params.realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
         const team_list_set = new Set(
             (((realm as unknown as { team_list?: Array<{ scope: string; slug: string }> })
@@ -1826,7 +1859,7 @@ export class RealmService {
         const daemon_ids = await RealmService.list_daemon_ids_in_realm(params.realm_id);
         const daemons = daemon_ids.length === 0
             ? []
-            : await Daemon.findAll({
+            : await _daemon_repo_r.find_all_q({
                 where: { id: { [Op.in]: daemon_ids } },
                 attributes: ['id', 'status'],
                 raw: true,
@@ -1860,7 +1893,7 @@ export class RealmService {
 
         // (A) Control-plane installs — the ONLY source for the teams list.
         if (daemon_ids.length > 0) {
-            const cp_teams = await Team.findAll({
+            const cp_teams = await _dt_repo.find_all_q({
                 where: { daemon_id: { [Op.in]: daemon_ids } },
                 attributes: ['id', 'daemon_id'],
                 raw: true,
@@ -1879,19 +1912,17 @@ export class RealmService {
         const agg: Map<string, Agg> = new Map();
         const all_team_ids = [...team_daemons.keys()];
         if (all_team_ids.length > 0) {
-            const team_records = await Team.findAll({
+            const team_records = await _dt_repo.find_all_q({
                 where: { id: { [Op.in]: all_team_ids } },
-                include: [{ model: Scope, as: 'scope', attributes: ['slug'] }],
             });
+            const scope_ids = [...new Set(team_records.map(t => t.scope_id).filter(Boolean))];
+            const scopes = scope_ids.length === 0
+                ? []
+                : await _scope_repo.find_all_q({ where: { id: { [Op.in]: scope_ids } }, attributes: ['id', 'slug'] });
+            const scope_slug_by_id = new Map(scopes.map(s => [s.id, s.slug]));
             for (const t of team_records) {
-                const plain = t.toJSON() as unknown as {
-                    id: string;
-                    slug: string;
-                    version: string | null;
-                    scope?: { slug: string };
-                };
-                const scope = plain.scope?.slug ?? '';
-                const slug = plain.slug ?? '';
+                const scope = scope_slug_by_id.get(t.scope_id) ?? '';
+                const slug = t.slug ?? '';
                 if (!scope || !slug) continue;
                 const key = `${scope}/${slug}`;
                 let row = agg.get(key);
@@ -1899,17 +1930,17 @@ export class RealmService {
                     row = {
                         scope, slug,
                         installed_daemon_ids: new Set<string>(),
-                        version: plain.version ?? null,
-                        sample_team_id: plain.id ?? null,
+                        version: t.version ?? null,
+                        sample_team_id: t.id ?? null,
                     };
                     agg.set(key, row);
                 }
-                const daemons_for_team = team_daemons.get(plain.id);
+                const daemons_for_team = team_daemons.get(t.id);
                 if (daemons_for_team) {
                     for (const d of daemons_for_team) row.installed_daemon_ids.add(d);
                 }
-                if (!row.version && plain.version) row.version = plain.version;
-                if (!row.sample_team_id && plain.id) row.sample_team_id = plain.id;
+                if (!row.version && t.version) row.version = t.version;
+                if (!row.sample_team_id && t.id) row.sample_team_id = t.id;
             }
         }
 
@@ -1934,7 +1965,7 @@ export class RealmService {
         let published_set = new Set<string>();
         if (agg.size > 0) {
             const pairs = [...agg.values()].map((r) => ({ scope: r.scope, name: r.slug }));
-            const published_rows = await RegistryTeam.findAll({
+            const published_rows = await _dt_repo.find_all_q({
                 where: { [Op.or]: pairs.map((p) => ({ scope: p.scope, name: p.name })) },
                 attributes: ['scope', 'name'],
                 raw: true,
@@ -1946,7 +1977,7 @@ export class RealmService {
         const last_run_map = new Map<string, number>();
         if (all_team_ids.length > 0 && daemon_ids.length > 0) {
             try {
-                const last_runs = await Run.findAll({
+                const last_runs = await _run_repo.find_all_q({
                     where: {
                         team_id: { [Op.in]: all_team_ids },
                         daemon_id: { [Op.in]: daemon_ids },
@@ -1961,7 +1992,8 @@ export class RealmService {
                 for (const r of last_runs) {
                     if (r.last_started_at) last_run_map.set(r.team_id, r.last_started_at);
                 }
-            } catch {
+            } catch (err) {
+                log.debug('run_table_unavailable', { error: err instanceof Error ? err.message : String(err) });
                 // Run table may not exist in local/dev environments without sync.
             }
         }
@@ -1974,7 +2006,7 @@ export class RealmService {
             const org_id = realm?.org_id;
             if (org_id && published_set.size > 0) {
                 // Batch-fetch registry team ids for all published teams.
-                const registry_rows = await RegistryTeam.findAll({
+                const registry_rows = await _dt_repo.find_all_q({
                     where: {
                         [Op.or]: [...published_set].map((k) => {
                             const [scope, name] = k.split('/', 2);
@@ -1994,7 +2026,7 @@ export class RealmService {
 
                 // Fetch all versions for these teams in one query.
                 if (registry_ids.length > 0) {
-                    const all_versions = await TeamVersion.findAll({
+                    const all_versions = await _tv_repo.find_all_q({
                         where: { team_id: { [Op.in]: registry_ids } },
                         attributes: ['team_id', 'version', 'workflow_json'],
                         raw: true,
@@ -2013,16 +2045,16 @@ export class RealmService {
                     const team_agents = new Map<string, Set<string>>();
 
                     for (const [team_id, versions] of by_team) {
-                        const latest_ver = max_semver(versions.map((v) => v.version));
+                        const latest_ver = SemVer.max(versions.map((v) => v.version));
                         const target = latest_ver
                             ? versions.find((v) => v.version === latest_ver)
                             : versions[0];
                         if (!target) continue;
 
-                        const refs = extract_agents_from_workflow(target.workflow_json);
+                        const refs = AgentWorkflow.extract_agents(target.workflow_json);
                         const names = new Set<string>();
                         for (const ref of refs) {
-                            const name = parse_agent_ref(ref).name;
+                            const name = AgentWorkflow.parse_ref(ref).name;
                             names.add(name);
                             all_agent_names.add(name);
                         }
@@ -2032,7 +2064,7 @@ export class RealmService {
 
                     // One bulk query: which of these agent names are registered?
                     if (all_agent_names.size > 0) {
-                        const registered_rows = await AgentCatalog.findAll({
+                        const registered_rows = await _agent_catalog_repo.find_all_q({
                             where: {
                                 name: { [Op.in]: [...all_agent_names] },
                                 deleted: false,
@@ -2050,7 +2082,8 @@ export class RealmService {
                     }
                 }
             }
-        } catch {
+        } catch (err) {
+            log.debug('agent_coverage_check_failed', { error: err instanceof Error ? err.message : String(err) });
             // Best-effort — missing agent detection should never block coverage.
         }
 

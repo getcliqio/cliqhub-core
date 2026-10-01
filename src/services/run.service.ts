@@ -2,16 +2,44 @@ import { randomUUID } from 'node:crypto';
 import { Op } from 'sequelize';
 import yaml from 'js-yaml';
 
-import {
-    Run, RunEvent, RunLog, RunLogLine,
-    RunPhase, RunArtifact, Team, Scope, Workspace, RealmMember,
-    Daemon, Realm,
-} from '../models/index.js';
+import { RunRepository } from '../repositories/run_repository.js';
+import { RunEventRepository } from '../repositories/run_event_repository.js';
+import { RunLogRepository } from '../repositories/run_log_repository.js';
+import { RunLogLineRepository } from '../repositories/run_log_line_repository.js';
+import { RunPhaseRepository } from '../repositories/run_phase_repository.js';
+import { RunArtifactRepository } from '../repositories/run_artifact_repository.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+import { WorkspaceRepository } from '../repositories/workspace_repository.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
+import { DaemonRepository } from '../repositories/daemon_repository.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+import { ScopeRepository } from '../repositories/scope_repository.js';
+import type { RunPhase } from '../models/run_phase.model.js';
+import { DaemonTeam } from '../models/daemon_team.model.js';
+import { Workspace } from '../models/workspace.model.js';
+
+import { visible_realm_ids } from '../auth/route_policy/visible.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.run');
+
+const _run_repo_rs = new RunRepository();
+const _run_event_repo_rs = new RunEventRepository();
+const _run_log_repo = new RunLogRepository();
+const _run_log_line_repo = new RunLogLineRepository();
+const _run_phase_repo_rs = new RunPhaseRepository();
+const _run_artifact_repo_rs = new RunArtifactRepository();
+const _dt_repo_rs = new DaemonTeamRepository();
+const _ws_repo_rs = new WorkspaceRepository();
+const _realm_member_repo_rs = new RealmMemberRepository();
+const _daemon_repo_rs = new DaemonRepository();
+const _realm_repo_rs = new RealmRepository();
+const _scope_repo_rs = new ScopeRepository();
 
 import { get_sequelize } from '../lib/sequelize.js';
 import { RealmService } from './realm.service.js';
-import { parse_log_level, split_log_chunk } from '../lib/log_line_parse.js';
-import { generate_slug } from '../lib/slug.js';
+import { LogLineParser } from '../lib/log_line_parse.js';
+import { SlugFactory } from '../lib/slug.js';
 import { QueryTypes } from 'sequelize';
 import { EventSubmitService } from './events_service.js';
 import type { EventType } from '../schemas/event_types.js';
@@ -431,21 +459,22 @@ export class RunService {
 
     // ── Core run CRUD ──────────────────────────────────────────────
 
-    private static readonly _run_includes = [
-        {
-            model: Team,
-            as: 'team',
-            attributes: ['id', 'slug', 'scope_id'],
-            include: [{ model: Scope, as: 'scope', attributes: ['slug'] }],
-        },
-        {
-            model: Workspace,
-            as: 'workspace',
-            attributes: ['id', 'path', 'name'],
-        },
-    ];
+    private static get _run_includes() {
+        return [
+            {
+                model: DaemonTeam,
+                as: 'team',
+                attributes: ['id', 'slug', 'scope_id'],
+            },
+            {
+                model: Workspace,
+                as: 'workspace',
+                attributes: ['id', 'path', 'name'],
+            },
+        ];
+    }
 
-    private static _enrich_run(r: any) {
+    private static _enrich_run(r: any, scope_slug_by_id: Map<string, string> = new Map()) {
         const plain = r.toJSON();
         const team = plain.team;
         const ws = plain.workspace;
@@ -460,9 +489,10 @@ export class RunService {
             return null;
         };
         const last_updated_at = to_ms(plain.completed_at) ?? to_ms(plain.started_at);
+        const scope_slug = team?.scope_id ? (scope_slug_by_id.get(team.scope_id) ?? 'default') : 'default';
         return {
             ...plain,
-            team_label: team ? `@${team.scope?.slug ?? 'default'}/${team.slug}` : null,
+            team_label: team ? `@${scope_slug}/${team.slug}` : null,
             workspace_name: ws?.name ?? ws?.path?.split('/').pop() ?? null,
             workspace_dir: ws?.path ?? null,
             last_updated_at,
@@ -502,6 +532,8 @@ export class RunService {
              */
             state?: string | string[];
             realm_id?: string;
+            /** Runs of this team only. Narrows; the realm gate still applies. */
+            team_id?: string;
             offset?: number;
             since_ms?: number;
             until_ms?: number;
@@ -524,6 +556,7 @@ export class RunService {
             active_only?: boolean;
         },
     ): Promise<{ runs: ReturnType<typeof RunService._enrich_run>[]; total: number }> {
+        log.debug('list_recent', { daemon_id, realm_id: filters?.realm_id, user_id: filters?.user_id });
         const where: Record<string, unknown> = {};
         if (daemon_id) {
             where.daemon_id = daemon_id;
@@ -534,26 +567,28 @@ export class RunService {
         if (filters?.workspace_id) {
             where.workspace_id = filters.workspace_id;
         }
-        // Keyed scopes (daemon_id / parent_run_id / workspace_id) carry their
-        // own tenancy bound — no realm gate needed or appropriate.
-        const keyed_scope = Boolean(daemon_id ?? filters?.parent_run_id ?? filters?.workspace_id);
-        // Realm gate: strict `team_runs.realm_id` match. The realm is
-        // snapshotted at run-create time (see RunService.create) so
-        // membership churn on the daemon side can't leak runs across
-        // realms. No daemon-hop fallback — that path is what caused
-        // cross-user run leakage when a daemon ended up as a member of
-        // multiple realms (see prod fossil 99a2f0f1).
-        if (!keyed_scope && filters?.realm_id) {
-            where.realm_id = filters.realm_id;
+        if (filters?.team_id) {
+            where.team_id = filters.team_id;
         }
-        if (!keyed_scope && !filters?.realm_id && !filters?.site_admin && filters?.user_id) {
-            // Intersect the user's realms with the active org (if the
-            // request carries one). Without this the home dashboard
-            // leaks runs from every org the user has touched — the
-            // org switcher up top would be lying.
-            const realm_ids = filters.org_id
-                ? await RealmService.list_realm_ids_for_user_in_org(filters.user_id, filters.org_id)
-                : await RealmService.list_realm_ids_for_user(filters.user_id);
+        // Realm gate (S5): every filter — realm_id, daemon_id, workspace_id,
+        // parent_run_id, team_id — stays inside the realms the caller can see
+        // (`visible_realm_ids`, same rules as the route policy). Strict
+        // `realm_id` match: the realm is snapshotted at run create, so daemon
+        // membership churn cannot leak runs across realms.
+        if (filters?.site_admin) {
+            if (filters.realm_id) {
+                where.realm_id = filters.realm_id;
+            } else if (filters.org_id) {
+                const realm_ids = await RealmService.list_realm_ids_in_org(filters.org_id);
+                if (realm_ids.length === 0) return { runs: [], total: 0 };
+                where.realm_id = { [Op.in]: realm_ids };
+            }
+        } else {
+            if (!filters?.user_id) return { runs: [], total: 0 };
+            const visible = await visible_realm_ids(filters.user_id, { org_id: filters.org_id, perm: 'runs.view' });
+            const realm_ids = filters.realm_id
+                ? visible.filter((id) => id === filters.realm_id)
+                : visible;
             if (realm_ids.length === 0) return { runs: [], total: 0 };
             where.realm_id = { [Op.in]: realm_ids };
         }
@@ -606,7 +641,7 @@ export class RunService {
             const seq = get_sequelize();
             if (sort_by === 'run_name') return [[seq.fn('LOWER', seq.col('Run.run_name')), sort_dir], ['started_at', 'DESC']];
             if (sort_by === 'state') return [['state', sort_dir], ['started_at', 'DESC']];
-            if (sort_by === 'team') return [[{ model: Team, as: 'team' }, 'slug', sort_dir], ['started_at', 'DESC']];
+            if (sort_by === 'team') return [[{ model: DaemonTeam, as: 'team' }, 'slug', sort_dir], ['started_at', 'DESC']];
             if (sort_by === 'started_at') return [['started_at', sort_dir]];
             return [
                 [seq.fn('COALESCE', seq.col('Run.completed_at'), seq.col('Run.started_at')), sort_dir],
@@ -614,8 +649,8 @@ export class RunService {
             ];
         })();
 
-        const total = await Run.count({ where });
-        const rows = await Run.findAll({
+        const total = await _run_repo_rs.find_count_q({ where });
+        const rows = await _run_repo_rs.find_all_q({
             where,
             include: RunService._run_includes,
             order,
@@ -623,11 +658,24 @@ export class RunService {
             offset,
             subQuery: false,
         });
-        return { runs: rows.map(RunService._enrich_run), total };
+
+        const scope_ids = [...new Set(
+            rows
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                .map(r => (r.toJSON() as any)?.team?.scope_id as string | undefined)
+                .filter((id): id is string => Boolean(id)),
+        )];
+        const scopes = scope_ids.length === 0
+            ? []
+            : await _scope_repo_rs.find_all_q({ where: { id: { [Op.in]: scope_ids } }, attributes: ['id', 'slug'] });
+        const scope_slug_by_id = new Map(scopes.map(s => [s.id, s.slug]));
+
+        return { runs: rows.map(r => RunService._enrich_run(r, scope_slug_by_id)), total };
     }
 
     static async get(run_id: string) {
-        return Run.findByPk(run_id) ?? null;
+        log.debug('get', { run_id });
+        return _run_repo_rs.find_by_id(run_id) ?? null;
     }
 
     /**
@@ -646,6 +694,7 @@ export class RunService {
         daemon_id: string | null,
         run_id: string,
     ): Promise<PendingControl | null> {
+        log.debug('load_pending_control', { run_id, daemon_id });
         return _load_pending_control(daemon_id, run_id);
     }
 
@@ -665,6 +714,7 @@ export class RunService {
         run_id: string,
         daemon_id: string | null,
     ): Promise<ForceTerminateStatus> {
+        log.debug('load_force_terminate_status', { run_id, daemon_id });
         return _load_force_terminate_status(run_id, daemon_id);
     }
 
@@ -679,6 +729,7 @@ export class RunService {
      * page to render the "state lost — Run again" affordance.
      */
     static async load_state_lost_at(run_id: string): Promise<number | null> {
+        log.debug('load_state_lost_at', { run_id });
         const sq = get_sequelize();
         const rows = await sq.query<{ state_lost_at: string | null }>(
             `SELECT "state_lost_at"
@@ -698,6 +749,7 @@ export class RunService {
      * does not declare this Hub-only column.
      */
     static async load_team_version_id(run_id: string): Promise<string | null> {
+        log.debug('load_team_version_id', { run_id });
         const sq = get_sequelize();
         try {
             const rows = await sq.query<{ team_version_id: string | null }>(
@@ -709,7 +761,8 @@ export class RunService {
             );
             const raw = rows[0]?.team_version_id;
             return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
-        } catch {
+        } catch (err) {
+            log.debug('team_version_lookup_failed', { error: err instanceof Error ? err.message : String(err) });
             return null;
         }
     }
@@ -753,7 +806,8 @@ export class RunService {
                 workflow_json: latest.workflow_json ?? '{}',
                 manifest_yaml: latest.manifest_yaml ?? '',
             };
-        } catch {
+        } catch (err) {
+            log.debug('run_lookup_failed', { error: err instanceof Error ? err.message : String(err) });
             return null;
         }
     }
@@ -792,7 +846,7 @@ export class RunService {
                     return;
                 }
             }
-            const team = await Team.findByPk(team_id, { attributes: ['manifest'] });
+            const team = await _dt_repo_rs.find_by_id(team_id, { attributes: ['manifest'] });
             const names = phase_names_from_manifest(team?.manifest);
             if (names.length > 0) {
                 await this.create_phases(
@@ -800,7 +854,8 @@ export class RunService {
                     names.map((name) => ({ name })),
                 );
             }
-        } catch {
+        } catch (err) {
+            log.warn('run_phase_seed_failed', { error: err instanceof Error ? err.message : String(err) });
             /* best-effort — update_status can still create rows later */
         }
     }
@@ -814,7 +869,7 @@ export class RunService {
         team_id: string,
     ): Promise<void> {
         try {
-            const count = await RunPhase.count({ where: { run_id } });
+            const count = await _run_phase_repo_rs.find_count_q({ where: { run_id } });
             if (count > 0) return;
 
             const stamped = await this.load_team_version_id(run_id);
@@ -832,23 +887,26 @@ export class RunService {
                 }
             }
             await this._stamp_version_and_seed(run_id, team_id);
-        } catch {
+        } catch (err) {
+            log.warn('run_version_stamp_failed', { error: err instanceof Error ? err.message : String(err) });
             /* best-effort */
         }
     }
 
     static async get_by_name(name: string) {
-        return Run.findOne({
+        log.debug('get_by_name', { name });
+        return _run_repo_rs.find_one_q({
             where: { run_name: name },
             order: [['started_at', 'DESC']],
         }) ?? null;
     }
 
     static async resolve(ref: string) {
-        const by_id = await Run.findByPk(ref);
+        log.debug('resolve', { ref });
+        const by_id = await _run_repo_rs.find_by_id(ref);
         if (by_id) return by_id;
 
-        return Run.findOne({
+        return _run_repo_rs.find_one_q({
             where: { run_name: ref },
             order: [['started_at', 'DESC']],
         }) ?? null;
@@ -878,7 +936,7 @@ export class RunService {
         extra?: { error?: string | null; message?: string; payload?: Record<string, unknown> },
     ): Promise<void> {
         try {
-            const row = await Run.findByPk(run_id, {
+            const row = await _run_repo_rs.find_by_id(run_id, {
                 attributes: ['run_id', 'realm_id', 'daemon_id', 'run_name', 'team_id', 'current_phase'],
             });
             if (!row) return;
@@ -911,9 +969,7 @@ export class RunService {
                 payload,
             });
         } catch (err) {
-            console.warn(
-                `[RunService] emit ${type} for ${run_id} failed: ${(err as Error).message}`,
-            );
+            log.warn('run_lifecycle_emit_failed', { run_id, type, error: (err as Error).message });
         }
     }
 
@@ -948,15 +1004,34 @@ export class RunService {
             execution_type?: string;
         },
     ): Promise<string> {
+        log.debug('create', { workspace_id, team_id, daemon_id: opts?.daemon_id });
         const run_id = opts?.run_id?.trim() || randomUUID();
         const now = Date.now();
         const inputs_json = opts?.inputs ? JSON.stringify(opts.inputs) : null;
-        const run_name = opts?.run_name ?? generate_slug();
         const execution_type = opts?.execution_type ?? 'local';
         const context_labels_json = opts?.context_labels ? JSON.stringify(opts.context_labels) : null;
 
         const realm_id = opts?.realm_id
             ?? (opts?.daemon_id ? await RunService._resolve_realm_for_daemon(opts.daemon_id) : null);
+
+        let org_id: string | null = null;
+        if (realm_id) {
+            const realm_row = await _realm_repo_rs.find_by_id(realm_id);
+            org_id = realm_row ? String((realm_row as unknown as Record<string, unknown>).org_id ?? '') || null : null;
+        }
+
+        let run_name = opts?.run_name ?? null;
+        if (!run_name && org_id) {
+            let attempt = 0;
+            let candidate = SlugFactory.generate();
+            while (await _run_repo_rs.exists_name_in_org(org_id, candidate)) {
+                attempt += 1;
+                candidate = `${SlugFactory.generate()}-${attempt}`;
+            }
+            run_name = candidate;
+        } else if (!run_name) {
+            run_name = SlugFactory.generate();
+        }
 
         /** Ensure Hub workspace + team link (replaces separate outbox upsert/add_team). */
         const path = opts?.workspace_path?.trim();
@@ -973,7 +1048,7 @@ export class RunService {
             await WorkspaceService.add_team(resolved_workspace_id, team_id);
         }
 
-        const existing = await Run.findByPk(run_id);
+        const existing = await _run_repo_rs.find_by_id(run_id);
         if (existing) {
             const was_running = existing.state === 'running';
             await existing.update({
@@ -1007,9 +1082,10 @@ export class RunService {
             return run_id;
         }
 
-        await Run.create({
+        await _run_repo_rs.create_one({
             run_id,
             run_name,
+            org_id,
             workspace_id: resolved_workspace_id,
             team_id,
             daemon_id: opts?.daemon_id ?? null,
@@ -1036,20 +1112,21 @@ export class RunService {
         if (realm_id) {
             try {
                 const { Realm } = await import('../models/index.js');
-                const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'] });
+                const realm = await _realm_repo_rs.find_by_id(realm_id, { attributes: ['org_id'] });
                 if (realm?.org_id) {
                     await get_sequelize().query(
                         `UPDATE cliq."team_runs" SET "org_id" = $1 WHERE "run_id" = $2`,
                         { bind: [realm.org_id, run_id] },
                     );
                 }
-            } catch { /* best-effort — backfill migration covers existing rows */ }
+            } catch (err) { log.warn('run_org_backfill_failed', { error: err instanceof Error ? err.message : String(err) }); /* best-effort — backfill migration covers existing rows */ }
         }
 
         // Stamp team_version_id + seed phase rows (replaces daemon create_many).
         await this._stamp_version_and_seed(run_id, team_id);
 
         await this._emit_lifecycle(run_id, 'run.started');
+        log.info('run_created', { run_id, team_id, workspace_id });
         return run_id;
     }
 
@@ -1058,9 +1135,10 @@ export class RunService {
         run_id: string,
         kind: 'running' | 'awaiting_input' = 'running',
     ): Promise<void> {
-        await Run.update(
-            { lease_expires_at: lease_deadline(kind) },
-            { where: { run_id, state: { [Op.in]: ['running', 'awaiting_input'] } } },
+        log.debug('touch_lease', { run_id, kind });
+        await _run_repo_rs.update_where(
+            { run_id, state: { [Op.in]: ['running', 'awaiting_input'] } } as any,
+            { lease_expires_at: lease_deadline(kind) } as any,
         );
     }
 
@@ -1071,7 +1149,7 @@ export class RunService {
      * NULL rather than picking arbitrarily and leaking cross-realm.
      */
     private static async _resolve_realm_for_daemon(daemon_id: string): Promise<string | null> {
-        const rows = await RealmMember.findAll({
+        const rows = await _realm_member_repo_rs.find_all_q({
             where: { member_type: 'daemon', member_id: daemon_id },
             attributes: ['realm_id'],
         });
@@ -1080,18 +1158,19 @@ export class RunService {
     }
 
     static async complete(run_id: string, state: 'completed' | 'failed' | 'cancelled' | 'crashed', error?: string) {
+        log.debug('complete', { run_id, state });
         // Gate on `state != target` so re-reporting the same terminal
         // state (idempotent daemon reconcile after Hub restart, retry
         // of an already-acked /v1/runs/complete, etc.) doesn't double
         // fire the lifecycle event.
-        const [count] = await Run.update(
+        const [count] = await _run_repo_rs.update_where(
+            { run_id, state: { [Op.ne]: state } } as any,
             {
                 state,
                 completed_at: Date.now(),
                 error: error ?? null,
                 lease_expires_at: null,
-            },
-            { where: { run_id, state: { [Op.ne]: state } } },
+            } as any,
         );
         if (count > 0) {
             await this._emit_lifecycle(run_id, `run.${state}` as EventType, { error: error ?? null });
@@ -1102,18 +1181,19 @@ export class RunService {
     }
 
     static async set_awaiting_input(run_id: string) {
+        log.debug('set_awaiting_input', { run_id });
         // Only emit when we're actually transitioning INTO awaiting_input.
         // The daemon calls this every time a phase gates for inputs; if
         // the run was already parked we don't want to re-notify. The
         // event maps to `phase.input_required` because that's the
         // human-meaningful transition — the run itself is a container,
         // but a specific phase is what's blocking on input.
-        const [count] = await Run.update(
+        const [count] = await _run_repo_rs.update_where(
+            { run_id, state: { [Op.ne]: 'awaiting_input' } } as any,
             {
                 state: 'awaiting_input',
                 lease_expires_at: lease_deadline('awaiting_input'),
-            },
-            { where: { run_id, state: { [Op.ne]: 'awaiting_input' } } },
+            } as any,
         );
         if (count > 0) {
             await this._emit_lifecycle(run_id, 'phase.input_required');
@@ -1121,14 +1201,15 @@ export class RunService {
     }
 
     static async resume(run_id: string) {
+        log.debug('resume', { run_id });
         // where clause already gates the update to only `awaiting_input`
         // rows, so rows-affected > 0 is a real transition.
-        const [count] = await Run.update(
+        const [count] = await _run_repo_rs.update_where(
+            { run_id, state: 'awaiting_input' } as any,
             {
                 state: 'running',
                 lease_expires_at: lease_deadline('running'),
-            },
-            { where: { run_id, state: 'awaiting_input' } },
+            } as any,
         );
         if (count > 0) {
             await this._emit_lifecycle(run_id, 'phase.inputs_supplied');
@@ -1136,53 +1217,58 @@ export class RunService {
     }
 
     static async restart(run_id: string) {
-        await Run.update(
+        log.debug('restart', { run_id });
+        await _run_repo_rs.update_where(
+            { run_id, state: { [Op.in]: ['completed', 'failed', 'crashed', 'cancelled'] } } as any,
             {
                 state: 'running',
                 error: null,
                 completed_at: null,
                 lease_expires_at: lease_deadline('running'),
-            },
-            { where: { run_id, state: { [Op.in]: ['completed', 'failed', 'crashed', 'cancelled'] } } },
+            } as any,
         );
     }
 
     static async set_inputs(run_id: string, inputs: RunInputs) {
-        await Run.update(
-            { inputs: JSON.stringify(inputs) },
-            { where: { run_id } },
+        log.debug('set_inputs', { run_id });
+        await _run_repo_rs.update_where(
+            { run_id } as any,
+            { inputs: JSON.stringify(inputs) } as any,
         );
     }
 
     static async set_current_pid(run_id: string, pid: number, phase: string) {
-        await Run.update(
-            { current_pid: pid, current_phase: phase },
-            { where: { run_id } },
+        log.debug('set_current_pid', { run_id, pid, phase });
+        await _run_repo_rs.update_where(
+            { run_id } as any,
+            { current_pid: pid, current_phase: phase } as any,
         );
     }
 
     static async clear_current_pid(run_id: string) {
-        await Run.update(
-            { current_pid: null, current_phase: null },
-            { where: { run_id } },
+        log.debug('clear_current_pid', { run_id });
+        await _run_repo_rs.update_where(
+            { run_id } as any,
+            { current_pid: null, current_phase: null } as any,
         );
     }
 
     static async crash_stale(daemon_id?: string): Promise<number> {
+        log.debug('crash_stale', { daemon_id });
         const where: Record<string, unknown> = { state: 'running' };
         if (daemon_id) where.daemon_id = daemon_id;
         // Select first so we can emit run.crashed per affected row.
         // Bulk UPDATE ... RETURNING would be cheaper but Sequelize
         // doesn't expose it uniformly across dialects; this path is
         // rarely-hit (daemon-restart) so the extra SELECT is fine.
-        const stale = await Run.findAll({
+        const stale = await _run_repo_rs.find_all_q({
             where,
             attributes: ['run_id'],
         });
         if (stale.length === 0) return 0;
-        const [count] = await Run.update(
-            { state: 'crashed', completed_at: Date.now(), error: 'daemon restarted' },
-            { where },
+        const [count] = await _run_repo_rs.update_where(
+            where as any,
+            { state: 'crashed', completed_at: Date.now(), error: 'daemon restarted' } as any,
         );
         for (const row of stale) {
             await this._emit_lifecycle(row.run_id, 'run.crashed', { error: 'daemon restarted' });
@@ -1191,7 +1277,8 @@ export class RunService {
     }
 
     static async delete_by_workspace(workspace_id: string): Promise<number> {
-        return Run.destroy({ where: { workspace_id } });
+        log.debug('delete_by_workspace', { workspace_id });
+        return _run_repo_rs.delete_where_q({ where: { workspace_id } });
     }
 
     // ── Events ─────────────────────────────────────────────────────
@@ -1203,7 +1290,8 @@ export class RunService {
         agent?: string,
         payload?: unknown,
     ): Promise<string> {
-        const record = await RunEvent.create({
+        log.debug('append_event', { run_id, type, phase });
+        const record = await _run_event_repo_rs.create_one({
             run_id,
             event_type: type,
             phase: phase ?? null,
@@ -1215,21 +1303,23 @@ export class RunService {
     }
 
     static async list_events(run_id: string) {
-        return RunEvent.findAll({
+        log.debug('list_events', { run_id });
+        return _run_event_repo_rs.find_all_q({
             where: { run_id },
             order: [['created_at', 'ASC'], ['id', 'ASC']],
         });
     }
 
     static async list_events_after(run_id: string, after_id: string) {
-        const cursor = await RunEvent.findByPk(after_id);
+        log.debug('list_events_after', { run_id, after_id });
+        const cursor = await _run_event_repo_rs.find_by_id(after_id);
         if (!cursor || String(cursor.get('run_id')) !== run_id) {
             return RunService.list_events(run_id);
         }
         const created_at = Number(cursor.get('created_at'));
         const cursor_id = String(cursor.get('id'));
         // Same-ms inserts share created_at; tie-break on id so the cursor is stable.
-        return RunEvent.findAll({
+        return _run_event_repo_rs.find_all_q({
             where: {
                 run_id,
                 [Op.or]: [
@@ -1242,11 +1332,13 @@ export class RunService {
     }
 
     static async count_events(run_id: string): Promise<number> {
-        return RunEvent.count({ where: { run_id } });
+        log.debug('count_events', { run_id });
+        return _run_event_repo_rs.find_count_q({ where: { run_id } });
     }
 
     static async delete_events(run_id: string): Promise<number> {
-        return RunEvent.destroy({ where: { run_id } });
+        log.debug('delete_events', { run_id });
+        return _run_event_repo_rs.delete_where_q({ where: { run_id } });
     }
 
     // ── Logs ───────────────────────────────────────────────────────
@@ -1256,11 +1348,12 @@ export class RunService {
         chunk: string,
         opts: { concern?: string } = {},
     ): Promise<string | null> {
+        log.debug('append_log', { run_id, concern: opts.concern });
         const current_size = await RunService.log_size(run_id);
         if (current_size + chunk.length > MAX_LOG_SIZE_BYTES) return null;
 
         const created_at = Date.now();
-        const record = await RunLog.create({
+        const record = await _run_log_repo.create_one({
             run_id,
             chunk,
             created_at,
@@ -1273,7 +1366,7 @@ export class RunService {
             await RunService._index_log_lines(run_id, chunk, created_at, chunk_id, concern);
         } catch (err) {
             // Chunk is durable; line index is best-effort for explorer.
-            console.warn(`[RunService] log line index failed for ${run_id}: ${(err as Error).message}`);
+            log.warn('run_log_index_failed', { run_id, error: (err as Error).message });
         }
 
         return chunk_id;
@@ -1287,32 +1380,30 @@ export class RunService {
         chunk_id: string,
         concern: string,
     ): Promise<void> {
-        const lines = split_log_chunk(chunk);
+        const lines = LogLineParser.split_chunk(chunk);
         if (lines.length === 0) return;
 
-        const run = await Run.findByPk(run_id);
+        const run = await _run_repo_rs.find_by_id(run_id);
         const daemon_id = run?.daemon_id ?? null;
         const workspace_id = run?.workspace_id ?? null;
         let team: string | null = null;
         if (run?.team_id) {
-            const team_row = await Team.findByPk(run.team_id, {
+            const team_row = await _dt_repo_rs.find_by_id(run.team_id, {
                 attributes: ['id', 'slug', 'scope_id'],
-                include: [{ model: Scope, as: 'scope', attributes: ['slug'] }],
             });
             if (team_row) {
-                const plain = team_row.toJSON() as {
-                    slug?: string;
-                    scope?: { slug?: string };
-                };
-                team = plain.scope?.slug
-                    ? `@${plain.scope.slug}/${plain.slug}`
-                    : (plain.slug ?? run.team_id);
+                const scope = team_row.scope_id
+                    ? (await _scope_repo_rs.find_by_id(team_row.scope_id, { attributes: ['slug'] }))?.slug
+                    : undefined;
+                team = scope
+                    ? `@${scope}/${team_row.slug}`
+                    : (team_row.slug ?? run.team_id);
             }
         }
 
         let realm_id: string | null = null;
         if (daemon_id) {
-            const membership = await RealmMember.findOne({
+            const membership = await _realm_member_repo_rs.find_one_q({
                 where: { member_type: 'daemon', member_id: daemon_id },
                 attributes: ['realm_id'],
                 order: [['created_at', 'ASC']],
@@ -1320,12 +1411,12 @@ export class RunService {
             realm_id = membership?.realm_id ?? null;
         }
 
-        await RunLogLine.bulkCreate(
+        await _run_log_line_repo.bulk_create(
             lines.map((message) => ({
                 id: randomUUID(),
                 run_id,
                 created_at,
-                level: parse_log_level(message),
+                level: LogLineParser.parse_level(message),
                 message,
                 daemon_id,
                 workspace_id,
@@ -1380,6 +1471,7 @@ export class RunService {
         };
         realm: { id: string; name: string | null; slug: string | null };
     }> {
+        log.debug('search_log_lines', { realm_id: opts.realm_id });
         const where: Record<string, unknown> = {};
         if (opts.realm_id) where.realm_id = opts.realm_id;
         if (opts.levels?.length) where.level = { [Op.in]: opts.levels };
@@ -1402,8 +1494,8 @@ export class RunService {
         const limit = Math.min(Math.max(1, opts.limit ?? 50), 200);
         const offset = Math.max(0, opts.offset ?? 0);
 
-        const total = await RunLogLine.count({ where });
-        const rows = await RunLogLine.findAll({
+        const total = await _run_log_line_repo.find_count_q({ where });
+        const rows = await _run_log_line_repo.find_all_q({
             where,
             order: [['created_at', 'DESC']],
             limit,
@@ -1415,7 +1507,7 @@ export class RunService {
         ): Promise<Array<{ value: string; count: number }>> => {
             const facet_where: Record<string, unknown> = { ...where };
             delete facet_where[field];
-            const grouped = await RunLogLine.findAll({
+            const grouped = await _run_log_line_repo.find_all_q({
                 attributes: [
                     field,
                     [get_sequelize().fn('COUNT', get_sequelize().col('*')), 'count'],
@@ -1462,16 +1554,16 @@ export class RunService {
 
         const [runs, daemons, workspaces, realm_row] = await Promise.all([
             run_ids.length
-                ? Run.findAll({ where: { run_id: { [Op.in]: run_ids } }, attributes: ['run_id', 'run_name'] })
+                ? _run_repo_rs.find_all_q({ where: { run_id: { [Op.in]: run_ids } }, attributes: ['run_id', 'run_name'] })
                 : Promise.resolve([]),
             daemon_ids.length
-                ? Daemon.findAll({ where: { id: { [Op.in]: daemon_ids } }, attributes: ['id', 'name', 'hostname'] })
+                ? _daemon_repo_rs.find_all_q({ where: { id: { [Op.in]: daemon_ids } }, attributes: ['id', 'name', 'hostname'] })
                 : Promise.resolve([]),
             workspace_ids.length
-                ? Workspace.findAll({ where: { id: { [Op.in]: workspace_ids } }, attributes: ['id', 'name'] })
+                ? _ws_repo_rs.find_all_q({ where: { id: { [Op.in]: workspace_ids } }, attributes: ['id', 'name'] })
                 : Promise.resolve([]),
             opts.realm_id
-                ? Realm.findByPk(opts.realm_id, { attributes: ['id', 'name', 'slug'] })
+                ? _realm_repo_rs.find_by_id(opts.realm_id, { attributes: ['id', 'name', 'slug'] })
                 : Promise.resolve(null),
         ]);
 
@@ -1552,7 +1644,8 @@ export class RunService {
 
 
     static async get_log(run_id: string): Promise<string> {
-        const rows = await RunLog.findAll({
+        log.debug('get_log', { run_id });
+        const rows = await _run_log_repo.find_all_q({
             where: { run_id },
             attributes: ['chunk'],
             order: [['created_at', 'ASC'], ['id', 'ASC']],
@@ -1561,7 +1654,8 @@ export class RunService {
     }
 
     static async get_log_chunks(run_id: string, after_id?: string | null, limit = 100) {
-        const rows = await RunLog.findAll({
+        log.debug('get_log_chunks', { run_id, after_id });
+        const rows = await _run_log_repo.find_all_q({
             where: { run_id },
             order: [['created_at', 'ASC'], ['id', 'ASC']],
         });
@@ -1587,11 +1681,13 @@ export class RunService {
     }
 
     static async delete_logs(run_id: string): Promise<number> {
-        await RunLogLine.destroy({ where: { run_id } });
-        return RunLog.destroy({ where: { run_id } });
+        log.debug('delete_logs', { run_id });
+        await _run_log_line_repo.delete_where_q({ where: { run_id } });
+        return _run_log_repo.delete_where_q({ where: { run_id } });
     }
 
     static async purge_logs(days: number): Promise<number> {
+        log.debug('purge_logs', { days });
         const cutoff = Date.now() - (days * 24 * 60 * 60 * 1000);
         const sequelize = get_sequelize();
         const [, meta] = await sequelize.query(
@@ -1607,6 +1703,7 @@ export class RunService {
     // ── Phases ─────────────────────────────────────────────────────
 
     static async create_phases(run_id: string, phases: ReadonlyArray<{ name: string; agent?: string }>) {
+        log.debug('create_phases', { run_id, count: phases.length });
         if (phases.length === 0) return;
 
         const sequelize = get_sequelize();
@@ -1614,7 +1711,7 @@ export class RunService {
         try {
             for (let i = 0; i < phases.length; i++) {
                 const p = phases[i]!;
-                const [row, created] = await RunPhase.findOrCreate({
+                const [row, created] = await _run_phase_repo_rs.find_or_create({
                     where: { run_id, phase: p.name },
                     defaults: {
                         run_id,
@@ -1663,7 +1760,7 @@ export class RunService {
     ): Promise<PhaseManifestSpec[]> {
         if (phase_names.length === 0) return [];
 
-        const run = await Run.findByPk(run_id, { attributes: ['team_id'] });
+        const run = await _run_repo_rs.find_by_id(run_id, { attributes: ['team_id'] });
         const team_id = run?.team_id ?? null;
 
         if (team_id) {
@@ -1675,13 +1772,13 @@ export class RunService {
                     if (specs.length > 0) return specs;
                 }
             }
-            const team = await Team.findByPk(team_id, { attributes: ['manifest'] });
+            const team = await _dt_repo_rs.find_by_id(team_id, { attributes: ['manifest'] });
             const specs = phase_specs_from_manifest(team?.manifest);
             if (specs.length > 0) return specs;
         }
 
         const needed = new Set(phase_names);
-        const teams = await Team.findAll({ attributes: ['manifest'], limit: 1_000 });
+        const teams = await _dt_repo_rs.find_all_q({ attributes: ['manifest'], limit: 1_000 });
         let best: PhaseManifestSpec[] = [];
         for (const t of teams) {
             const specs = phase_specs_from_manifest(t.manifest);
@@ -1712,7 +1809,8 @@ export class RunService {
                 if (current === i) return;
                 try {
                     await row.update({ sequence: i });
-                } catch {
+                } catch (err) {
+                    log.debug('run_column_unavailable', { error: err instanceof Error ? err.message : String(err) });
                     /* column may be missing */
                 }
             }),
@@ -1721,9 +1819,10 @@ export class RunService {
     }
 
     static async list_phases(run_id: string) {
+        log.debug('list_phases', { run_id });
         let rows: InstanceType<typeof RunPhase>[];
         try {
-            rows = await RunPhase.findAll({
+            rows = await _run_phase_repo_rs.find_all_q({
                 where: { run_id },
                 order: [
                     ['sequence', 'ASC'],
@@ -1733,7 +1832,7 @@ export class RunService {
             });
         } catch {
             // Pre-migrate DBs missing sequence — still return phases.
-            rows = await RunPhase.findAll({
+            rows = await _run_phase_repo_rs.find_all_q({
                 where: { run_id },
                 attributes: { exclude: ['sequence'] },
                 order: [
@@ -1748,13 +1847,15 @@ export class RunService {
     }
 
     static async find_phase(run_id: string, phase: string) {
-        return RunPhase.findOne({ where: { run_id, phase } });
+        log.debug('find_phase', { run_id, phase });
+        return _run_phase_repo_rs.find_one_q({ where: { run_id, phase } });
     }
 
     static async list_phases_by_status(run_id: string, status: string) {
+        log.debug('list_phases_by_status', { run_id, status });
         let rows: InstanceType<typeof RunPhase>[];
         try {
-            rows = await RunPhase.findAll({
+            rows = await _run_phase_repo_rs.find_all_q({
                 where: { run_id, status },
                 order: [
                     ['sequence', 'ASC'],
@@ -1763,7 +1864,7 @@ export class RunService {
                 ],
             });
         } catch {
-            rows = await RunPhase.findAll({
+            rows = await _run_phase_repo_rs.find_all_q({
                 where: { run_id, status },
                 attributes: { exclude: ['sequence'] },
                 order: [
@@ -1822,7 +1923,8 @@ export class RunService {
                     : (typeof raw === 'string' ? _safe_parse_array(raw) : []);
                 if (arr.length > 0) history_by_phase.set(row.phase, arr);
             }
-        } catch {
+        } catch (err) {
+            log.debug('run_history_unavailable', { error: err instanceof Error ? err.message : String(err) });
             /* pre-migration DB — history stays empty */
         }
 
@@ -1861,6 +1963,7 @@ export class RunService {
             started_at?: number | null;
         },
     ) {
+        log.debug('update_phase_status', { run_id, phase, status });
         // Snapshot the prior attempt into previous_attempts whenever we
         // start a *new* attempt (pending → running) after a terminal
         // one. Without this the chart loses everything the previous
@@ -1884,10 +1987,10 @@ export class RunService {
         }
         if (extra) Object.assign(updates, extra);
 
-        const [affected] = await RunPhase.update(updates, { where: { run_id, phase } });
+        const [affected] = await _run_phase_repo_rs.update_where({ run_id, phase } as any, updates as any);
         // First status for a phase that wasn't seeded (edge case): insert then apply.
         if (affected === 0) {
-            await RunPhase.findOrCreate({
+            await _run_phase_repo_rs.find_or_create({
                 where: { run_id, phase },
                 defaults: {
                     run_id,
@@ -1898,7 +2001,7 @@ export class RunService {
                     sequence: 0,
                 },
             });
-            await RunPhase.update(updates, { where: { run_id, phase } });
+            await _run_phase_repo_rs.update_where({ run_id, phase } as any, updates as any);
         }
         // Phase progress renews the Hub action lease.
         await RunService.touch_lease(run_id, 'running');
@@ -1919,6 +2022,7 @@ export class RunService {
             started_at?: number | null;
         }>,
     ): Promise<void> {
+        log.debug('update_phases_status', { run_id, count: phases.length });
         for (const p of phases) {
             const { phase, status, ...extra } = p;
             await this.update_phase_status(run_id, phase, status, extra);
@@ -1926,10 +2030,12 @@ export class RunService {
     }
 
     static async reset_phase(run_id: string, phase: string) {
+        log.debug('reset_phase', { run_id, phase });
         // Same snapshot-then-clear as update_phase_status(running) so
         // the timeline keeps every prior attempt across resume boundaries.
         await RunService._snapshot_prior_attempt(run_id, phase);
-        await RunPhase.update(
+        await _run_phase_repo_rs.update_where(
+            { run_id, phase } as any,
             {
                 status: 'pending',
                 dispatched_at: null,
@@ -1937,8 +2043,7 @@ export class RunService {
                 completed_at: null,
                 exit_code: null,
                 error: null,
-            },
-            { where: { run_id, phase } },
+            } as any,
         );
     }
 
@@ -1952,7 +2057,7 @@ export class RunService {
      * clobber each other's history the way a read-modify-write would.
      */
     private static async _snapshot_prior_attempt(run_id: string, phase: string): Promise<void> {
-        const row = await RunPhase.findOne({
+        const row = await _run_phase_repo_rs.find_one_q({
             where: { run_id, phase },
             attributes: ['status', 'dispatched_at', 'started_at', 'completed_at', 'exit_code', 'error', 'attempt'],
         });
@@ -1991,7 +2096,8 @@ export class RunService {
     }
 
     static async delete_phases(run_id: string): Promise<number> {
-        return RunPhase.destroy({ where: { run_id } });
+        log.debug('delete_phases', { run_id });
+        return _run_phase_repo_rs.delete_where_q({ where: { run_id } });
     }
 
     // ── Artifacts ──────────────────────────────────────────────────
@@ -2011,7 +2117,8 @@ export class RunService {
         target_phase?: string;
         sequence?: number;
     }): Promise<string> {
-        await RunArtifact.destroy({
+        log.debug('create_artifact', { run_id: data.run_id, phase: data.phase, kind: data.kind });
+        await _run_artifact_repo_rs.delete_where_q({
             where: {
                 run_id: data.run_id,
                 phase: data.phase,
@@ -2019,7 +2126,7 @@ export class RunService {
                 name: data.name,
             },
         });
-        const record = await RunArtifact.create({
+        const record = await _run_artifact_repo_rs.create_one({
             run_id: data.run_id,
             phase: data.phase,
             kind: data.kind,
@@ -2040,6 +2147,7 @@ export class RunService {
         name: string,
         content: string,
     ): Promise<string> {
+        log.debug('append_handoff', { run_id, from, to });
         const sequelize = get_sequelize();
         const tx = await sequelize.transaction();
         try {
@@ -2051,7 +2159,7 @@ export class RunService {
             );
             const seq_row = (seq_results as unknown as Array<{ next_seq: number }>)[0];
 
-            const record = await RunArtifact.create({
+            const record = await _run_artifact_repo_rs.create_one({
                 run_id,
                 phase: from,
                 kind: 'handoff',
@@ -2072,35 +2180,40 @@ export class RunService {
     }
 
     static async list_artifacts_by_phase(run_id: string, phase: string) {
-        return RunArtifact.findAll({
+        log.debug('list_artifacts_by_phase', { run_id, phase });
+        return _run_artifact_repo_rs.find_all_q({
             where: { run_id, phase },
             order: [['id', 'ASC']],
         });
     }
 
     static async list_artifacts_by_kind(run_id: string, kind: string) {
-        return RunArtifact.findAll({
+        log.debug('list_artifacts_by_kind', { run_id, kind });
+        return _run_artifact_repo_rs.find_all_q({
             where: { run_id, kind },
             order: [['id', 'ASC']],
         });
     }
 
     static async list_handoffs_for(run_id: string, target_phase: string) {
-        return RunArtifact.findAll({
+        log.debug('list_handoffs_for', { run_id, target_phase });
+        return _run_artifact_repo_rs.find_all_q({
             where: { run_id, target_phase, kind: 'handoff' },
             order: [['sequence', 'ASC'], ['id', 'ASC']],
         });
     }
 
     static async list_artifacts(run_id: string) {
-        return RunArtifact.findAll({
+        log.debug('list_artifacts', { run_id });
+        return _run_artifact_repo_rs.find_all_q({
             where: { run_id },
             order: [['id', 'ASC']],
         });
     }
 
     static async delete_artifacts(run_id: string): Promise<number> {
-        return RunArtifact.destroy({ where: { run_id } });
+        log.debug('delete_artifacts', { run_id });
+        return _run_artifact_repo_rs.delete_where_q({ where: { run_id } });
     }
 
     // ── Usage snapshot ingestion ─────────────────────────────────────
@@ -2119,6 +2232,7 @@ export class RunService {
         snapshot: UsageSnapshotPayload,
         pricing_service: import('./model_pricing.service.js').ModelPricingService,
     ): Promise<void> {
+        log.debug('ingest_usage_snapshot', { run_id: snapshot.run_id });
         const sq = get_sequelize();
 
         // Enrich by_model entries with cost_usd from the pricing catalog.
@@ -2169,6 +2283,7 @@ export class RunService {
      * Returns wire DTO {@link TelemetryUsageData}.
      */
     static async get_usage(run_id: string): Promise<TelemetryUsageData> {
+        log.debug('get_usage', { run_id });
         const sq = get_sequelize();
 
         const [run_rows] = await sq.query(
@@ -2212,6 +2327,7 @@ export class RunService {
             created_at: number;
         }>,
     ): Promise<{ count: number; ids: string[] }> {
+        log.debug('ingest_events', { run_id, daemon_id, count: events.length });
         if (events.length === 0) return { count: 0, ids: [] };
 
         const sq = get_sequelize();
@@ -2310,6 +2426,7 @@ export class RunService {
         payload: unknown;
         timestamp: number;
     }>> {
+        log.debug('get_events', { run_id, after_id });
         const sq = get_sequelize();
         let where_clause = `WHERE e."run_id" = :run_id`;
         const replacements: Record<string, unknown> = { run_id, limit };

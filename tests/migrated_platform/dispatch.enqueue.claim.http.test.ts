@@ -13,7 +13,7 @@ import {
     close_live_hub_app,
     open_live_hub_app,
 } from './helpers/live_hub_app.js';
-import { User } from '../../src/db/models/index.js';
+import { User } from '../../src/models/index.js';
 import {
     Realm,
     RealmMember,

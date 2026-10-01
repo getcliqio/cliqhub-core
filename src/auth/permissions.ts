@@ -125,8 +125,12 @@ export const DEFAULT_ROLES = [
 
 // ── Permission enforcement ──────────────────────────────────────────
 
-import { OrgMember, OrgRole } from '../db/models/index.js';
+import { OrgMemberRepository } from '../repositories/org_member_repository.js';
+import { OrgRoleRepository } from '../repositories/org_role_repository.js';
 import { ApiError } from '../errors/api_error.js';
+
+const perm_member_repo = new OrgMemberRepository();
+const perm_role_repo = new OrgRoleRepository();
 
 /**
  * Check whether a user has a specific permission within an org.
@@ -146,11 +150,10 @@ export async function require_permission(
 ): Promise<void> {
     if (opts?.site_role === 'admin') return;
 
-    const member = await OrgMember.findOne({
-        where: { org_id, user_id },
-        attributes: ['role_id'],
-        raw: true,
-    });
+    const member = await perm_member_repo.find_one(
+        { org_id, user_id } as any,
+        { attributes: ['role_id'] },
+    );
     if (!member) {
         throw new ApiError('forbidden', 'You are not a member of this organization', 403);
     }
@@ -158,10 +161,7 @@ export async function require_permission(
         throw new ApiError('forbidden', 'No role assigned — contact your org admin', 403);
     }
 
-    const role = await OrgRole.findByPk(member.role_id, {
-        attributes: ['is_system', 'permissions'],
-        raw: true,
-    });
+    const role = await perm_role_repo.find_by_id(member.role_id);
     if (!role) {
         throw new ApiError('forbidden', 'Role not found — contact your org admin', 403);
     }

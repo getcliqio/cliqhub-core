@@ -1,8 +1,10 @@
-import { TeamVersion } from '../db/models/index.js';
+import { TeamVersion } from '../models/index.js';
 import type { Transaction } from 'sequelize';
-import { max_semver, sort_semver_desc } from '../lib/semver.js';
+import { SemVer } from '../lib/semver.js';
+import { BaseRepository } from './base_repository.js';
 
-export class TeamVersionRepository {
+export class TeamVersionRepository extends BaseRepository<TeamVersion> {
+    protected readonly model = TeamVersion;
     async find_by_team_and_version(team_id: string, version: string) {
         return TeamVersion.findOne({ where: { team_id, version }, raw: true });
     }
@@ -29,7 +31,7 @@ export class TeamVersionRepository {
             attributes: ['version'],
             raw: true,
         });
-        return max_semver(rows.map((r) => r.version));
+        return SemVer.max(rows.map((r) => r.version));
     }
 
     async find_detail_by_team_and_version(team_id: string, version: string) {
@@ -46,7 +48,7 @@ export class TeamVersionRepository {
             attributes: ['version', 'changelog', 'published_at'],
             raw: true,
         });
-        return sort_semver_desc(rows);
+        return SemVer.sort_desc(rows);
     }
 
     async list_versions(team_id: string): Promise<string[]> {
@@ -73,8 +75,8 @@ export class TeamVersionRepository {
         return row.id;
     }
 
-    async delete_by_id(id: string): Promise<void> {
-        await TeamVersion.destroy({ where: { id } });
+    async delete_by_id(id: string): Promise<number> {
+        return TeamVersion.destroy({ where: { id } });
     }
 
     async find_id_and_package(team_id: string, version: string) {
@@ -108,7 +110,7 @@ export class TeamVersionRepository {
             raw: true,
         });
         if (rows.length === 0) return null;
-        return sort_semver_desc(rows)[0];
+        return SemVer.sort_desc(rows)[0];
     }
 
     async find_package_by_version(team_id: string, version: string) {

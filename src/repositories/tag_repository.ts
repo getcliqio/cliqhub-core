@@ -1,7 +1,9 @@
-import { TeamTag } from '../db/models/index.js';
+import { TeamTag } from '../models/index.js';
 import { Op, type Transaction } from 'sequelize';
+import { BaseRepository } from './base_repository.js';
 
-export class TagRepository {
+export class TagRepository extends BaseRepository<TeamTag> {
+    protected readonly model = TeamTag;
     async find_by_team_ids(ids: string[]) {
         if (ids.length === 0) return [];
         return TeamTag.findAll({

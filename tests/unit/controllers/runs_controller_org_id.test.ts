@@ -101,13 +101,6 @@ describe('RunController.get org_id tenancy', () => {
         }));
     });
 
-    it('org-scoped list with foreign org_id → 403', async () => {
-        await expect(
-            runs.get(make_req({ org_id: ORG_B, limit: 10 }, pat_auth([ORG_A])) as never, mock_res() as never),
-        ).rejects.toMatchObject({ status_code: 403 });
-        expect(RunService.list_recent).not.toHaveBeenCalled();
-    });
-
     it('realm_id path does not require org_id', async () => {
         const res = mock_res();
         await runs.get(make_req({ realm_id: REALM_A, limit: 5 }, pat_auth([ORG_A])) as never, res as never);
@@ -154,6 +147,40 @@ describe('RunController.get org_id tenancy', () => {
         );
     });
 
+    it('team_id path does not require org_id and passes team_id to list_recent', async () => {
+        const TEAM = hub_legacy_uuid(70);
+        const res = mock_res();
+        await runs.get(make_req({ team_id: TEAM, limit: 10 }, pat_auth([ORG_A])) as never, res as never);
+        expect(RunService.list_recent).toHaveBeenCalledWith(
+            10,
+            undefined,
+            expect.objectContaining({ team_id: TEAM, org_id: undefined, user_id: USER_A }),
+        );
+    });
+
+    it('team_id combines with org_id, realm_id and state', async () => {
+        const TEAM = hub_legacy_uuid(71);
+        await runs.get(make_req({ team_id: TEAM, org_id: ORG_A, state: ['failed', 'crashed'], limit: 1 }, pat_auth([ORG_A])) as never, mock_res() as never);
+        expect(RunService.list_recent).toHaveBeenLastCalledWith(
+            1,
+            undefined,
+            expect.objectContaining({ team_id: TEAM, org_id: ORG_A, state: ['failed', 'crashed'] }),
+        );
+        await runs.get(make_req({ team_id: TEAM, realm_id: REALM_A }, pat_auth([ORG_A])) as never, mock_res() as never);
+        expect(RunService.list_recent).toHaveBeenLastCalledWith(
+            undefined,
+            undefined,
+            expect.objectContaining({ team_id: TEAM, realm_id: REALM_A }),
+        );
+    });
+
+    it('team_id must be a uuid', async () => {
+        await expect(
+            runs.get(make_req({ team_id: 'not-a-uuid' }, pat_auth([ORG_A])) as never, mock_res() as never),
+        ).rejects.toMatchObject({ status: 422 });
+        expect(RunService.list_recent).not.toHaveBeenCalled();
+    });
+
     it('active_only with workspace_id passes active_only flag to list_recent', async () => {
         const WS = hub_legacy_uuid(51);
         const res = mock_res();
@@ -163,5 +190,13 @@ describe('RunController.get org_id tenancy', () => {
             undefined,
             expect.objectContaining({ workspace_id: WS, active_only: true }),
         );
+    });
+});
+
+describe('org tenancy is the route policy\'s job', () => {
+    it('/v1/runs/get with an org you are not in → 404', async () => {
+        const { policy_status } = await import('../../helpers/policy_decision.js');
+        const FOREIGN = '00000000-0000-4000-8000-0000000000ff';
+        expect(await policy_status('POST /v1/runs/get', { id: 'u1' }, { org_id: FOREIGN })).toBe(404);
     });
 });

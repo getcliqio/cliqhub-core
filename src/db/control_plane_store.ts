@@ -23,14 +23,14 @@
 
 import {
     connect_store,
-    migrate_store,
     type StoreConnection,
-} from '@getcliqio/cliq-store';
+} from '../store/connect.js';
+import { migrate_store } from '../store/migrate.js';
 
-import { run_core_api_schema_migrations } from './control_plane_schema_migrations.js';
+import { run_core_api_schema_migrations } from '../models/migrations/control_plane_schema_migrations.js';
 import { init_core_api_models, reset_core_api_models } from '../models/index.js';
 import { get_logger } from '../lib/log.js';
-import { seed_control_plane } from './control_plane_seed.js';
+import { seed_control_plane } from '../models/migrations/control_plane_seed.js';
 import { should_use_ssl } from './sequelize.js';
 import { init_model_pricing_service, reset_model_pricing_service } from '../services/model_pricing.service.js';
 

@@ -25,7 +25,7 @@ vi.mock('../../../src/services/realm.service.js', () => ({
     },
 }));
 
-vi.mock('../../../src/db/migrate_org_roles.js', () => ({
+vi.mock('../../../src/models/migrations/migrate_org_roles.js', () => ({
     seed_default_roles_for_org: vi.fn().mockResolvedValue(true),
 }));
 
@@ -62,7 +62,7 @@ vi.mock('../../../src/auth/permissions.js', async (importOriginal) => {
     };
 });
 
-vi.mock('../../../src/db/models/index.js', () => ({
+vi.mock('../../../src/models/index.js', () => ({
     User: { findOne: vi.fn(), create: vi.fn(), findAll: vi.fn().mockResolvedValue([]) },
     Scope: { create: vi.fn(), findAll: vi.fn().mockResolvedValue([]), findOne: vi.fn().mockResolvedValue(null), destroy: vi.fn(), count: vi.fn().mockResolvedValue(0) },
     Org: { create: vi.fn(), update: vi.fn().mockResolvedValue([1]), findByPk: vi.fn(), destroy: vi.fn(), count: vi.fn().mockResolvedValue(0), findAll: vi.fn().mockResolvedValue([]) },
@@ -112,6 +112,7 @@ function make_scope_repo() {
         find_owned_by_user: vi.fn(),
         find_by_org_ids: vi.fn(),
         find_member_scopes: vi.fn(),
+        find_default_scopes: vi.fn().mockResolvedValue([]),
         find_by_slug: vi.fn().mockResolvedValue(null),
         find_by_slug_with_transaction: vi.fn(),
         create: vi.fn().mockResolvedValue(hub_legacy_uuid(10)),
@@ -132,7 +133,7 @@ function make_scope_member_repo() {
 
 function make_user_repo() {
     return {
-        find_by_id: vi.fn(),
+        find_profile_by_id: vi.fn(),
         find_by_username: vi.fn().mockResolvedValue(null),
         find_by_username_or_email: vi.fn(),
         find_by_email: vi.fn().mockResolvedValue(null),
@@ -187,7 +188,7 @@ function make_service(opts?: { with_audit?: boolean }) {
     return { service, org_repo, org_member_repo, scope_repo, scope_member_repo, user_repo, team_repo, audit_repo };
 }
 
-import { Org, Scope, Team } from '../../../src/db/models/index.js';
+import { Org, Scope, Team } from '../../../src/models/index.js';
 
 // ─── get (regular user path) ───────────────────────────────────────
 
@@ -308,7 +309,7 @@ describe('OrgsService — new_org', () => {
     beforeEach(async () => {
         vi.clearAllMocks();
         ({ service, org_repo, scope_repo, user_repo, audit_repo } = make_service({ with_audit: true }));
-        const { User, Scope, Org, OrgMember, ScopeMember } = await import('../../../src/db/models/index.js');
+        const { User, Scope, Org, OrgMember, ScopeMember } = await import('../../../src/models/index.js');
         (User.findOne as any).mockResolvedValue(null);
         (User.create as any).mockResolvedValue({ id: hub_legacy_uuid(50), username: 'newadmin' });
         (Scope.create as any).mockResolvedValue({ id: hub_legacy_uuid(20), slug: 'neworg' });
@@ -318,7 +319,7 @@ describe('OrgsService — new_org', () => {
     });
 
     it('creates org with existing user', async () => {
-        const { User } = await import('../../../src/db/models/index.js');
+        const { User } = await import('../../../src/models/index.js');
         (User.findOne as any).mockResolvedValueOnce({ id: hub_legacy_uuid(5), username: 'existingadmin' });
 
         const result = await service.new_org(SITE_ADMIN, {
@@ -335,7 +336,7 @@ describe('OrgsService — new_org', () => {
     });
 
     it('creates org and new user when user does not exist', async () => {
-        const { User } = await import('../../../src/db/models/index.js');
+        const { User } = await import('../../../src/models/index.js');
         (User.findOne as any).mockResolvedValueOnce(null);
 
         const result = await service.new_org(SITE_ADMIN, {
@@ -353,18 +354,12 @@ describe('OrgsService — new_org', () => {
     });
 
     it('throws 404 when user not found and no email/password provided', async () => {
-        const { User } = await import('../../../src/db/models/index.js');
+        const { User } = await import('../../../src/models/index.js');
         (User.findOne as any).mockResolvedValueOnce(null);
 
         await expect(service.new_org(SITE_ADMIN, {
             slug: 'neworg', admin_username: 'ghost',
         })).rejects.toThrow("User 'ghost' not found");
-    });
-
-    it('rejects non-admin with 403', async () => {
-        await expect(service.new_org(ALICE, {
-            slug: 'neworg', admin_username: 'someone',
-        })).rejects.toThrow('Admin access required');
     });
 
     it('rejects invalid slug with 422', async () => {
@@ -407,12 +402,6 @@ describe('OrgsService — update', () => {
         expect(org_repo.update_display_name).toHaveBeenCalledWith(hub_legacy_uuid(1), 'New Name');
     });
 
-    it('rejects non-admin member with 403', async () => {
-        org_member_repo.find_by_org_and_user.mockResolvedValueOnce({ org_id: hub_legacy_uuid(1), user_id: hub_legacy_uuid(1), role: 'member' });
-
-        await expect(service.update(ALICE, { org_id: hub_legacy_uuid(1), display_name: 'New Name' }))
-            .rejects.toThrow("Permission 'org.members.manage' is required");
-    });
 });
 
 // ─── delete_org ────────────────────────────────────────────────────
@@ -424,7 +413,7 @@ describe('OrgsService — delete_org', () => {
     beforeEach(async () => {
         vi.clearAllMocks();
         ({ service, audit_repo } = make_service({ with_audit: true }));
-        const { Org, Scope, ScopeMember, OrgMember } = await import('../../../src/db/models/index.js');
+        const { Org, Scope, ScopeMember, OrgMember } = await import('../../../src/models/index.js');
         (Org.findByPk as any).mockResolvedValue({ id: hub_legacy_uuid(1), slug: 'acme' });
         (Scope.findAll as any).mockResolvedValue([{ id: hub_legacy_uuid(10) }, { id: hub_legacy_uuid(11) }]);
         (Scope.destroy as any).mockResolvedValue(2);
@@ -440,6 +429,19 @@ describe('OrgsService — delete_org', () => {
 
         expect(result.deleted).toBe(true);
         expect(audit_repo.create).toHaveBeenCalled();
+    });
+
+    it('an owner (not a site admin) deletes their org once the route policy let them through', async () => {
+        vi.mocked(Team.count).mockResolvedValueOnce(0);
+        const result = await service.delete_org(ALICE, { org_id: hub_legacy_uuid(1) });
+        expect(result.deleted).toBe(true);
+    });
+
+    it('a personal org (slug = a username) cannot be deleted by its owner → 409', async () => {
+        const made = make_service({ with_audit: true });
+        made.user_repo.find_by_username.mockResolvedValueOnce({ id: ALICE.user!.id, username: 'acme' });
+        await expect(made.service.delete_org(ALICE, { org_id: hub_legacy_uuid(1) }))
+            .rejects.toMatchObject({ status: 409 });
     });
 
     it('throws 404 when org not found', async () => {
@@ -531,10 +533,6 @@ describe('OrgsService — remove_member', () => {
             .rejects.toThrow('Cannot remove the last org admin');
     });
 
-    it('rejects non-admin with 403', async () => {
-        await expect(service.remove_member(ALICE, { org_id: hub_legacy_uuid(1), user_id: hub_legacy_uuid(5) }))
-            .rejects.toThrow("Permission 'org.members.manage' is required");
-    });
 });
 
 // ─── leave ─────────────────────────────────────────────────────────
@@ -632,12 +630,6 @@ describe('OrgsService — new_scope', () => {
             .rejects.toThrow('Org not found');
     });
 
-    it('rejects non-admin with 403', async () => {
-        org_member_repo.find_by_org_and_user.mockResolvedValueOnce({ org_id: hub_legacy_uuid(1), user_id: hub_legacy_uuid(1), role: 'member' });
-
-        await expect(service.new_scope(ALICE, { org_id: hub_legacy_uuid(1), slug: 'acme-dev' }))
-            .rejects.toThrow("Permission 'org.members.manage' is required");
-    });
 });
 
 // ─── delete_scope ──────────────────────────────────────────────────
@@ -649,13 +641,6 @@ describe('OrgsService — delete_scope', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         ({ service, org_member_repo } = make_service());
-    });
-
-    it('rejects non-admin with 403', async () => {
-        org_member_repo.find_by_org_and_user.mockResolvedValueOnce({ org_id: hub_legacy_uuid(1), user_id: hub_legacy_uuid(1), role: 'member' });
-
-        await expect(service.delete_scope(ALICE, { org_id: hub_legacy_uuid(1), scope_id: hub_legacy_uuid(10) }))
-            .rejects.toThrow("Permission 'org.members.manage' is required");
     });
 
     it('rejects when scope not found in org', async () => {
@@ -718,10 +703,4 @@ describe('OrgsService — unassign_scope_member', () => {
         expect(result.removed).toBe(true);
     });
 
-    it('rejects non-admin with 403', async () => {
-        org_member_repo.find_by_org_and_user.mockResolvedValueOnce({ org_id: hub_legacy_uuid(1), user_id: hub_legacy_uuid(1), role: 'member' });
-
-        await expect(service.unassign_scope_member(ALICE, { org_id: hub_legacy_uuid(1), scope_id: hub_legacy_uuid(10), user_id: hub_legacy_uuid(5) }))
-            .rejects.toThrow("Permission 'org.members.manage' is required");
-    });
 });

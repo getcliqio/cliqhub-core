@@ -27,6 +27,7 @@ export const AgentsGetInput = z.object({
     names: z.array(z.string().min(1)).min(1).optional().describe('When set, only return agents whose name is in this list'),
     agent_type: z.string().min(1).optional().describe('Filter by agent_type (e.g. exec, connector)'),
     include_manifest: z.boolean().optional().describe('When false, omit the heavy manifest from each AgentData row (default true)'),
+    include_usage: z.boolean().optional().describe('When true, each AgentData carries used_by: teams (in the org\'s scopes or installed in its realms) whose latest version uses the agent'),
 });
 export type AgentsGetInput = z.infer<typeof AgentsGetInput>;
 
@@ -129,6 +130,12 @@ export const AgentData = z.object({
 	manifest: z.record(z.string(), z.unknown()).optional().describe('Parsed manifest object when include_manifest was true'),
 	created_at: z.number().describe('Row create time (unix ms)'),
 	updated_at: z.number().describe('Row last update time (unix ms)'),
+	used_by: z.array(z.object({
+		scope: z.string().describe('Team scope'),
+		name: z.string().describe('Team name'),
+		version: z.string().nullable().describe('Team version whose workflow was checked (latest published)'),
+		realm_ids: z.array(z.string()).describe('This org\'s realms that have the team installed'),
+	})).optional().describe('Present when include_usage was true: teams visible to the org that use this agent'),
 });
 export type AgentData = z.infer<typeof AgentData>;
 

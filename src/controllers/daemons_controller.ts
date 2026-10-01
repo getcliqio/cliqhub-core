@@ -10,10 +10,12 @@ import type { Request, Response } from 'express';
 import { BaseController } from './base_controller.js';
 import { DaemonService } from '../services/daemon.service.js';
 import { RealmService } from '../services/realm.service.js';
-import { resolve_enroll_realm_and_grant } from '../lib/enroll_grant.js';
+import { EnrollGrant } from '../lib/enroll_grant.js';
 import { assert_access, assert_realm_domain } from '../auth/assert_grant.js';
 import { ApiError as HubApiError } from '../errors/api_error.js';
 import { ApiError } from '../lib/api_error.js';
+import { AdminCheck } from '../lib/site_admin.js';
+import { visible_realm_ids } from '../auth/route_policy/visible.js';
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
 import {
     DaemonDeregisterInput,
@@ -23,19 +25,7 @@ import {
     DaemonRegisterInput,
     DaemonRemoveInput,
 } from '../schemas/daemon_types.js';
-
-function require_daemon_auth(req: Request): void {
-    if (!req.auth?.user) {
-        throw new HubApiError('unauthorized', 'Unauthorized', 401);
-    }
-    if (req.auth.auth_via !== 'daemon_token') {
-        throw new HubApiError(
-            'forbidden',
-            'Daemon token required — daemons cannot use a user credential here',
-            403,
-        );
-    }
-}
+import { get_logger } from '../lib/log.js';
 
 function bearer_plaintext(req: Request): string {
     const auth_header = req.headers.authorization ?? '';
@@ -52,13 +42,16 @@ function respond_hub_error(err: unknown, res: Response): boolean {
 
 type DaemonFields = Record<string, unknown>;
 
+const log = get_logger('ctrl.daemons');
+
 export class DaemonController extends BaseController {
     async register(
         req: FlatApiRequest<DaemonRegisterInput, DaemonFields>,
         res: FlatApiOkResponse<DaemonFields>,
     ): Promise<void> {
         try {
-            require_daemon_auth(req);
+            log.debug('register', { realm_id: req.auth?.realm_id, daemon_id: (req.body as Record<string, unknown>)?.daemon_id });
+            // Route policy: daemon token only.
             assert_access(req.auth, 'daemons', 'write');
 
             const api_key = bearer_plaintext(req);
@@ -68,9 +61,9 @@ export class DaemonController extends BaseController {
             }
 
             const body = this.parse_body(DaemonRegisterInput, req);
-            let enroll: ReturnType<typeof resolve_enroll_realm_and_grant>;
+            let enroll: ReturnType<typeof EnrollGrant.resolve>;
             try {
-                enroll = resolve_enroll_realm_and_grant({
+                enroll = EnrollGrant.resolve({
                     token_permissions: req.auth!.token_permissions as Record<string, unknown> | undefined,
                     auth_realm_id: req.auth!.realm_id,
                     requested_realm_id: typeof body.realm_id === 'string' ? body.realm_id : undefined,
@@ -97,6 +90,7 @@ export class DaemonController extends BaseController {
                 public_url: body.public_url,
                 name: body.name,
             });
+            log.info('daemon_registered', { daemon_id: body.daemon_id, realm_id: enroll.realm_id });
             res.json({ ok: true, daemon: result });
         } catch (err) {
             if (respond_hub_error(err, res)) return;
@@ -109,7 +103,8 @@ export class DaemonController extends BaseController {
         res: FlatApiOkResponse<DaemonFields>,
     ): Promise<void> {
         try {
-            require_daemon_auth(req);
+            log.debug('heartbeat', { realm_id: req.auth?.realm_id, daemon_id: (req.body as Record<string, unknown>)?.daemon_id });
+            // Route policy: daemon token only.
             assert_access(req.auth, 'daemons', 'write');
 
             const { daemon_id } = this.parse_body(DaemonHeartbeatInput, req);
@@ -136,7 +131,8 @@ export class DaemonController extends BaseController {
         res: FlatApiOkResponse<DaemonFields>,
     ): Promise<void> {
         try {
-            require_daemon_auth(req);
+            log.debug('deregister', { realm_id: req.auth?.realm_id, daemon_id: (req.body as Record<string, unknown>)?.daemon_id });
+            // Route policy: daemon token only.
             assert_access(req.auth, 'daemons', 'write');
 
             const { daemon_id } = this.parse_body(DaemonDeregisterInput, req);
@@ -148,6 +144,7 @@ export class DaemonController extends BaseController {
             assert_realm_domain(req.auth!, realm_id);
             await RealmService.assert_daemon_in_realm(realm_id, daemon_id);
             await DaemonService.deregister(daemon_id);
+            log.info('daemon_deregistered', { daemon_id });
             res.json({ ok: true });
         } catch (err) {
             if (respond_hub_error(err, res)) return;
@@ -168,14 +165,19 @@ export class DaemonController extends BaseController {
     ): Promise<void> {
         // Zod SoT — org-scoped list requires org_id; never invent from X-Org-Id.
         const filters = this.parse_body(DaemonGetInput, req);
-        let org_id: string | undefined;
-        if (filters.org_id) {
-            await this.assert_org_authorized(this.auth_from(req), filters.org_id);
-            org_id = filters.org_id;
+        log.debug('get', { org_id: filters.org_id, user_id: req.auth?.user?.id });
+        const site_admin = filters.all === true && AdminCheck.is_site_admin(req);
+        if (filters.all && !site_admin && !filters.org_id && !filters.realm_id?.trim()) {
+            throw ApiError.unprocessable('org_id is required when listing daemons without realm_id', 'invalid_params');
         }
-        const result = await DaemonService.list(req.user?.user_id, {
-            ...filters,
+        let org_id: string | undefined;
+        // Route policy: realm view + daemons.view, or org daemons.view.
+        if (filters.org_id) org_id = filters.org_id;
+        const { all: _all, ...rest } = filters;
+        const result = await DaemonService.list(req.auth?.user?.id, {
+            ...rest,
             org_id,
+            ...(site_admin ? { site_admin: true } : {}),
         });
         res.json({
             ok: true,
@@ -193,10 +195,8 @@ export class DaemonController extends BaseController {
         res: FlatApiOkResponse<DaemonFields>,
     ): Promise<void> {
         const { daemon_id } = this.parse_body(DaemonGetByIdInput, req);
-        const user_id = req.user?.user_id;
-        if (user_id) {
-            await RealmService.assert_user_can_access_daemon(user_id, daemon_id);
-        }
+        log.debug('get_by_id', { daemon_id });
+        // Route policy: view + daemons.view in a realm this daemon serves.
         const daemon = await DaemonService.get(daemon_id);
         res.json({ ok: true, daemon });
     }
@@ -207,11 +207,23 @@ export class DaemonController extends BaseController {
         res: FlatApiOkResponse<DaemonFields>,
     ): Promise<void> {
         const { daemon_id } = this.parse_body(DaemonRemoveInput, req);
-        const user_id = req.user?.user_id;
-        if (user_id) {
+        log.debug('remove', { daemon_id, user_id: req.auth?.user?.id });
+        const user_id = req.auth?.user?.id;
+        if (user_id && !AdminCheck.is_site_admin(req)) {
             await RealmService.assert_user_can_access_daemon(user_id, daemon_id);
+            // Removing deletes the daemon for every realm it serves, so the caller
+            // must be admin (with daemons.remove) in all of them (S16).
+            const [daemon_realms, admin_realms] = await Promise.all([
+                RealmService.list_realms_for_daemon(daemon_id),
+                visible_realm_ids(String(user_id), { need: 'admin', perm: 'daemons.remove' }),
+            ]);
+            const blocked = daemon_realms.filter((r) => !admin_realms.includes(r.id));
+            if (blocked.length > 0) {
+                throw ApiError.forbidden('Realm admin (daemons.remove) required in every realm this daemon serves');
+            }
         }
         await DaemonService.remove(daemon_id);
+        log.info('daemon_removed', { daemon_id });
         res.json({ ok: true });
     }
 }

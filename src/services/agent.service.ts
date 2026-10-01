@@ -10,25 +10,36 @@
 import { randomUUID } from 'node:crypto';
 import { Op, type WhereOptions } from 'sequelize';
 
-import { AgentCatalog, RealmAgentSetting } from '../models/index.js';
-import { OrgAgentSetting } from '../db/models/index.js';
+import { AgentCatalogRepository } from '../repositories/agent_catalog_repository.js';
+import { RealmAgentSettingRepository } from '../repositories/realm_agent_setting_repository.js';
+import { OrgAgentSettingRepository } from '../repositories/org_agent_setting_repository.js';
+
+const _agent_catalog_repo_as = new AgentCatalogRepository();
+const _ras_repo_as = new RealmAgentSettingRepository();
+const _oas_repo = new OrgAgentSettingRepository();
 import { ApiError } from '../lib/api_error.js';
-import { find_teams_using_agent } from '../lib/agent_catalog_usage.js';
-import { resolve_agent_settings } from '../lib/agent_settings_schema.js';
+import { find_teams_using_agent } from '../lib/agent_workflow.js';
+import {
+    resolve_agent_settings,
+    setting_applies,
+    applicable_settings,
+    SCALAR_INPUT_TYPES,
+    SKIP_PROMOTE_INPUTS,
+} from '../lib/agent_settings.js';
 import type { BooleanData } from '../types/api_response.js';
 import type { AgentData } from '../schemas/agent_types.js';
 import type { SettingsData, SettingDef } from '../schemas/settings_types.js';
 import type { AgentsRegisterInput } from '../schemas/agent_types.js';
-import { to_agent_data } from '../types/mappers.js';
+import { to_agent_data } from '../lib/mappers.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.agent');
 
 export type AgentListFilters = {
     query?: string;
     names?: string[];
     agent_type?: string;
 };
-
-/** @deprecated Use AgentListFilters. */
-export type Agent_list_filters = AgentListFilters;
 
 type SettingsCounts = Pick<
     SettingsData,
@@ -100,6 +111,7 @@ export class AgentService {
      * Returns org-registered custom agents + all system agents.
      */
     async list(org_id: string, filters: AgentListFilters = {}, include_manifest = true): Promise<AgentData[]> {
+        log.debug('list', { org_id });
         // Always include system agents plus this org's custom rows.
         const conditions: WhereOptions[] = [
             { [Op.or]: [{ org_id }, { is_system: true }] },
@@ -123,7 +135,7 @@ export class AgentService {
             });
         }
 
-        const rows = await AgentCatalog.findAll({
+        const rows = await _agent_catalog_repo_as.find_all_q({
             where: { [Op.and]: conditions },
             order: [['name', 'ASC']],
         });
@@ -136,7 +148,8 @@ export class AgentService {
      * Custom rows must belong to org_id; system rows are visible to any authorized org.
      */
     async get_by_catalog_id(org_id: string, id: string, include_manifest = true): Promise<AgentData> {
-        const agent = await AgentCatalog.findOne({
+        log.debug('get_by_catalog_id', { org_id, id });
+        const agent = await _agent_catalog_repo_as.find_one_q({
             where: this.active_where({ id }),
         });
         if (!agent) {
@@ -154,9 +167,10 @@ export class AgentService {
      * Throws 404 if not found.
      */
     async get_by_name(org_id: string, name: string, version?: string, include_manifest = true): Promise<AgentData> {
+        log.debug('get_by_name', { org_id, name, version });
         // Omit version → newest matching active row for this name.
         const version_filter = version ? { version } : {};
-        const agent = await AgentCatalog.findOne({
+        const agent = await _agent_catalog_repo_as.find_one_q({
             where: this.active_where({
                 name,
                 ...version_filter,
@@ -176,6 +190,7 @@ export class AgentService {
      * Creates `(org_id, name, version)` or force-updates when `force` is true.
      */
     async register(org_id: string, data: Omit<AgentsRegisterInput, 'org_id'>): Promise<{ entry: AgentData; updated: boolean }> {
+        log.debug('register', { org_id, name: data.name });
         // Body fields win; otherwise fall back to values declared in the manifest.
         const manifest = this.parse_manifest(data.manifest);
         const version = data.version
@@ -187,14 +202,14 @@ export class AgentService {
 
         // Natural key is (org, name, version) including null version.
         const version_match = version ? { version } : { version: null as string | null };
-        const existing = await AgentCatalog.findOne({
+        const existing = await _agent_catalog_repo_as.find_one_q({
             where: { org_id, name: data.name, ...version_match },
         });
 
         // First registration for this key.
         if (!existing) {
             const now = new Date();
-            const row = await AgentCatalog.create({
+            const row = await _agent_catalog_repo_as.create_one({
                 id: randomUUID(),
                 name: data.name,
                 version,
@@ -208,6 +223,7 @@ export class AgentService {
                 created_at: now,
                 updated_at: now,
             });
+            log.info('agent_registered', { id: row.id, org_id, name: data.name });
             return { entry: to_agent_data(row, true), updated: false };
         }
 
@@ -239,9 +255,10 @@ export class AgentService {
      * Soft-delete custom agent(s). `id` XOR `name`(+optional `version`).
      */
     async deregister(org_id: string, selector: { id?: string; name?: string; version?: string }): Promise<BooleanData> {
+        log.debug('deregister', { org_id, id: selector.id, name: selector.name });
         // UUID → resolve to name(+exact version) then reuse name path.
         if (selector.id) {
-            const row = await AgentCatalog.findOne({
+            const row = await _agent_catalog_repo_as.find_one_q({
                 where: this.active_where({ id: selector.id }),
             });
             if (!row) return false;
@@ -260,7 +277,7 @@ export class AgentService {
     private async _deregister_by_name(org_id: string, name: string, version?: string): Promise<BooleanData> {
         // No version → soft-delete every org version of this name.
         const version_filter = version ? { version } : {};
-        const rows = await AgentCatalog.findAll({
+        const rows = await _agent_catalog_repo_as.find_all_q({
             where: this.active_where({ org_id, name, ...version_filter }),
         });
 
@@ -293,6 +310,7 @@ export class AgentService {
         for (const row of rows) {
             await row.update({ deleted: true, deleted_at: now_ms, updated_at: now });
         }
+        log.info('agent_deregistered', { org_id, name, count: rows.length });
 
         return true;
     }
@@ -301,8 +319,9 @@ export class AgentService {
      * Settings schema + current values for one agent by catalog id → SettingsData.
      */
     async get_settings(org_id: string, id: string, realm_id?: string): Promise<SettingsData> {
+        log.debug('get_settings', { org_id, id, realm_id });
         // Resolve via UUID — org/system visibility enforced in get_by_catalog_id.
-        const agent = await AgentCatalog.findOne({
+        const agent = await _agent_catalog_repo_as.find_one_q({
             where: this.active_where({ id }),
         });
         if (!agent) throw ApiError.not_found(`agent id '${id}' not found`);
@@ -356,11 +375,12 @@ export class AgentService {
      * → SettingsData[].
      */
     async list_settings_summary(org_id: string, realm_id?: string): Promise<SettingsData[]> {
+        log.debug('list_settings_summary', { org_id, realm_id });
         const where_clause = this.active_where({
             [Op.or]: [{ org_id }, { is_system: true }],
         });
 
-        const agents = await AgentCatalog.findAll({
+        const agents = await _agent_catalog_repo_as.find_all_q({
             where: where_clause,
             order: [['name', 'ASC']],
         });
@@ -405,7 +425,8 @@ export class AgentService {
      * Update settings at org or realm scope by catalog id.
      */
     async update_settings(org_id: string, id: string, settings: { values?: Record<string, string>; clear?: string[] }, realm_id?: string): Promise<BooleanData> {
-        const agent = await AgentCatalog.findOne({
+        log.debug('update_settings', { org_id, id, realm_id });
+        const agent = await _agent_catalog_repo_as.find_one_q({
             where: this.active_where({ id }),
         });
         if (!agent) throw ApiError.not_found(`agent id '${id}' not found`);
@@ -445,12 +466,13 @@ export class AgentService {
         const org_values: Record<string, string> = {};
         try {
             // Table may be missing on older deploys — treat as empty map.
-            const org_rows = await OrgAgentSetting.findAll({ where: { org_id, agent_name } });
+            const org_rows = await _oas_repo.find_all_q({ where: { org_id, agent_name } });
             for (const row of org_rows) {
                 const val = String((row as { value?: unknown }).value ?? '').trim();
                 if (val) org_values[(row as { setting_key: string }).setting_key] = val;
             }
-        } catch {
+        } catch (err) {
+            log.debug('org_agent_settings_unavailable', { error: err instanceof Error ? err.message : String(err) });
             /* org_agent_settings may not exist yet */
         }
         return org_values;
@@ -459,12 +481,13 @@ export class AgentService {
     private async _read_realm_values(realm_id: string, agent_name: string): Promise<Record<string, string>> {
         const realm_values: Record<string, string> = {};
         try {
-            const realm_rows = await RealmAgentSetting.findAll({ where: { realm_id, agent_name } });
+            const realm_rows = await _ras_repo_as.find_all_q({ where: { realm_id, agent_name } });
             for (const row of realm_rows) {
-                const val = String(row.setting_value ?? '').trim();
-                if (val) realm_values[row.setting_key] = val;
+                const val = String((row as any).setting_value ?? '').trim();
+                if (val) realm_values[(row as any).setting_key] = val;
             }
-        } catch {
+        } catch (err) {
+            log.debug('agent_settings_table_unavailable', { error: err instanceof Error ? err.message : String(err) });
             /* table may not exist yet */
         }
         return realm_values;
@@ -474,21 +497,21 @@ export class AgentService {
         // Upsert each key; create when missing so first write does not require a prior row.
         if (settings.values) {
             for (const [setting_key, value] of Object.entries(settings.values)) {
-                const existing = await OrgAgentSetting.findOne({
+                const existing = await _oas_repo.find_one_q({
                     where: { org_id, agent_name, setting_key },
                 });
                 if (existing) {
                     await existing.update({ value, updated_at: new Date() });
                     continue;
                 }
-                await OrgAgentSetting.create({
+                await _oas_repo.create_one({
                     org_id, agent_name, setting_key, value, updated_at: new Date(),
                 });
             }
         }
         // clear removes keys entirely (falls back to unset / inherited).
         if (settings.clear?.length) {
-            await OrgAgentSetting.destroy({
+            await _oas_repo.delete_where_q({
                 where: { org_id, agent_name, setting_key: settings.clear },
             });
         }
@@ -497,14 +520,14 @@ export class AgentService {
     private async _write_realm_settings(realm_id: string, agent_name: string, settings: { values?: Record<string, string>; clear?: string[] }): Promise<void> {
         if (settings.values) {
             for (const [setting_key, setting_value] of Object.entries(settings.values)) {
-                const existing = await RealmAgentSetting.findOne({
+                const existing = await _ras_repo_as.find_one_q({
                     where: { realm_id, agent_name, setting_key },
                 });
                 if (existing) {
                     await existing.update({ setting_value });
                     continue;
                 }
-                await RealmAgentSetting.create({
+                await _ras_repo_as.create_one({
                     id: randomUUID(),
                     realm_id,
                     agent_name,
@@ -512,11 +535,11 @@ export class AgentService {
                     setting_value,
                     created_at: new Date(),
                     updated_at: new Date(),
-                });
+                } as any);
             }
         }
         if (settings.clear?.length) {
-            await RealmAgentSetting.destroy({
+            await _ras_repo_as.delete_where_q({
                 where: { realm_id, agent_name, setting_key: settings.clear },
             });
         }

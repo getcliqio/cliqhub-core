@@ -9,7 +9,7 @@ vi.mock('../../../src/auth/password.js', () => ({
     verify_password: vi.fn().mockResolvedValue(true),
 }));
 
-import { User, ApiToken, OrgMember, OrgRole, Scope, Team, Draft } from '../../../src/db/models/index.js';
+import { User, ApiToken, OrgMember, OrgRole, Scope, Team, Draft } from '../../../src/models/index.js';
 import { hash_password, verify_password } from '../../../src/auth/password.js';
 import { UsersService } from '../../../src/services/users_service.js';
 import { test_config } from '../../helpers/test_container.js';
@@ -39,7 +39,7 @@ const anon_auth: AuthContext = {
 function make_repos() {
     return {
         user_repo: {
-            find_by_id: vi.fn(),
+            find_profile_by_id: vi.fn(),
             find_by_username_or_email: vi.fn(),
             find_by_email: vi.fn(),
             create: vi.fn().mockResolvedValue(hub_legacy_uuid(1)),
@@ -172,11 +172,6 @@ describe('UsersService', () => {
     // ── new_user ────────────────────────────────────────────────────
 
     describe('new_user', () => {
-        it('rejects non-admin', async () => {
-            await expect(service.new_user(user_auth, { username: 'x', email: 'x@x.com', password: 'longpassword' }))
-                .rejects.toThrow(expect.objectContaining({ status: 403 }));
-        });
-
         it('creates user with scope', async () => {
             const result = await service.new_user(admin_auth, {
                 username: 'newuser',
@@ -217,7 +212,7 @@ describe('UsersService', () => {
 
     describe('update', () => {
         it('updates self without user_id', async () => {
-            repos.user_repo.find_by_id.mockResolvedValue({ id: hub_legacy_uuid(1), username: 'admin', display_name: 'Updated', email: 'admin@test.com' });
+            repos.user_repo.find_profile_by_id.mockResolvedValue({ id: hub_legacy_uuid(1), username: 'admin', display_name: 'Updated', email: 'admin@test.com' });
 
             const result = await service.update(admin_auth, { display_name: 'Updated' });
 
@@ -226,7 +221,7 @@ describe('UsersService', () => {
         });
 
         it('admin updates another user by user_id', async () => {
-            repos.user_repo.find_by_id.mockResolvedValue({ id: hub_legacy_uuid(2), username: 'john', display_name: 'Johnny', email: 'john@test.com' });
+            repos.user_repo.find_profile_by_id.mockResolvedValue({ id: hub_legacy_uuid(2), username: 'john', display_name: 'Johnny', email: 'john@test.com' });
 
             const result = await service.update(admin_auth, { user_id: hub_legacy_uuid(2), display_name: 'Johnny' });
 
@@ -254,7 +249,7 @@ describe('UsersService', () => {
             vi.mocked(User.findByPk).mockResolvedValue({ id: hub_legacy_uuid(5), role: 'user' } as any);
             vi.mocked(OrgMember.findAll).mockResolvedValue([{ org_id: hub_legacy_uuid(10) }] as any);
             vi.mocked(OrgMember.findOne).mockResolvedValue({ org_id: hub_legacy_uuid(10) } as any);
-            repos.user_repo.find_by_id.mockResolvedValue({
+            repos.user_repo.find_profile_by_id.mockResolvedValue({
                 id: hub_legacy_uuid(5), username: 'bob', display_name: 'Bob', email: 'bob@test.com',
             });
 
@@ -287,11 +282,6 @@ describe('UsersService', () => {
     // ── delete ──────────────────────────────────────────────────────
 
     describe('delete', () => {
-        it('rejects non-admin', async () => {
-            await expect(service.delete(user_auth, { user_id: hub_legacy_uuid(1) }))
-                .rejects.toThrow(expect.objectContaining({ status: 403 }));
-        });
-
         it('rejects self-delete', async () => {
             await expect(service.delete(admin_auth, { user_id: hub_legacy_uuid(1) }))
                 .rejects.toThrow(expect.objectContaining({ status: 422 }));
@@ -334,11 +324,6 @@ describe('UsersService', () => {
     // ── suspend ─────────────────────────────────────────────────────
 
     describe('suspend', () => {
-        it('rejects non-admin', async () => {
-            await expect(service.suspend(user_auth, { user_id: hub_legacy_uuid(1) }))
-                .rejects.toThrow(expect.objectContaining({ status: 403 }));
-        });
-
         it('rejects self-suspend', async () => {
             await expect(service.suspend(admin_auth, { user_id: hub_legacy_uuid(1) }))
                 .rejects.toThrow(expect.objectContaining({ status: 422 }));
@@ -373,11 +358,6 @@ describe('UsersService', () => {
     // ── unsuspend ───────────────────────────────────────────────────
 
     describe('unsuspend', () => {
-        it('rejects non-admin', async () => {
-            await expect(service.unsuspend(user_auth, { user_id: hub_legacy_uuid(1) }))
-                .rejects.toThrow(expect.objectContaining({ status: 403 }));
-        });
-
         it('unsuspends user', async () => {
             const target = { id: hub_legacy_uuid(5), username: 'target' };
             (User.findByPk as any).mockResolvedValueOnce(target);
@@ -399,14 +379,6 @@ describe('UsersService', () => {
     // ── reset_password ──────────────────────────────────────────────
 
     describe('reset_password', () => {
-        it('rejects non-admin without org admin rights', async () => {
-            vi.mocked(User.findByPk).mockResolvedValueOnce({ id: hub_legacy_uuid(1), role: 'user' } as any);
-            vi.mocked(OrgMember.findAll).mockResolvedValueOnce([] as any);
-
-            await expect(service.reset_password(user_auth, { user_id: hub_legacy_uuid(1), new_password: 'longenough' }))
-                .rejects.toThrow(expect.objectContaining({ status: 403 }));
-        });
-
         it('resets password', async () => {
             const target = { id: hub_legacy_uuid(5), username: 'target' };
             (User.findByPk as any).mockResolvedValueOnce(target);
@@ -425,27 +397,6 @@ describe('UsersService', () => {
             );
         });
 
-        it('org admin can reset password for shared org member', async () => {
-            const org_admin_auth: AuthContext = {
-                ...user_auth,
-                user: { ...user_auth.user!, id: hub_legacy_uuid(2), role: 'user' },
-            };
-            vi.mocked(User.findByPk).mockResolvedValue({ id: hub_legacy_uuid(5), role: 'user', username: 'bob' } as any);
-            vi.mocked(OrgMember.findAll).mockResolvedValue([{ org_id: hub_legacy_uuid(10) }] as any);
-            vi.mocked(OrgMember.findOne).mockResolvedValue({ org_id: hub_legacy_uuid(10) } as any);
-
-            const result = await service.reset_password(org_admin_auth, {
-                user_id: hub_legacy_uuid(5),
-                new_password: 'newlongpassword',
-            });
-
-            expect(result.reset).toBe(true);
-
-            vi.mocked(User.findByPk).mockResolvedValue(null);
-            vi.mocked(OrgMember.findAll).mockResolvedValue([]);
-            vi.mocked(OrgMember.findOne).mockResolvedValue(null);
-        });
-
         it('rejects short password', async () => {
             await expect(service.reset_password(admin_auth, { user_id: hub_legacy_uuid(5), new_password: 'short' }))
                 .rejects.toThrow(expect.objectContaining({ status: 422 }));
@@ -455,11 +406,6 @@ describe('UsersService', () => {
     // ── set_role ────────────────────────────────────────────────────
 
     describe('set_role', () => {
-        it('rejects non-admin', async () => {
-            await expect(service.set_role(user_auth, { user_id: hub_legacy_uuid(1), role: 'admin' }))
-                .rejects.toThrow(expect.objectContaining({ status: 403 }));
-        });
-
         it('promotes user to admin', async () => {
             const target = { id: hub_legacy_uuid(5), username: 'target', role: 'user' };
             (User.findByPk as any).mockResolvedValueOnce(target);

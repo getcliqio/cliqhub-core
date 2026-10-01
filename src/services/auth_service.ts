@@ -16,8 +16,11 @@ import {
     MIN_PASSWORD_LENGTH, type EnvConfig,
 } from '../config/env.js';
 import { RealmService } from '../services/realm.service.js';
-import { seed_default_roles_for_org } from '../db/migrate_org_roles.js';
+import { seed_default_roles_for_org } from '../models/migrations/migrate_org_roles.js';
 import { ensure_per_user_channel } from '../services/per_user_channel.service.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.auth');
 
 function sha256_hex(plaintext: string): string {
     return crypto.createHash('sha256').update(plaintext).digest('hex');
@@ -49,7 +52,8 @@ export class AuthService {
         org_ids: string[];
         org_slugs: string[];
     }> {
-        const user = await this._user_repo.find_by_id(user_id);
+        log.debug('mint_session_pat', { user_id });
+        const user = await this._user_repo.find_profile_by_id(user_id);
         if (!user) throw new ApiError('not_found', 'User not found', 404);
         if (user.suspended_at) {
             throw new ApiError('forbidden', 'Account is suspended', 403);
@@ -72,7 +76,8 @@ export class AuthService {
         try {
             const { realms } = await RealmService.list_for_user(String(user.id));
             realm_ids = realms.map((r) => r.id);
-        } catch {
+        } catch (err) {
+            log.warn('realm_list_failed', { error: err instanceof Error ? err.message : String(err) });
             realm_ids = [];
         }
 
@@ -108,6 +113,7 @@ export class AuthService {
     }
 
     async signup(username: string, email: string, password: string) {
+        log.debug('signup', { username });
         if (password.length < MIN_PASSWORD_LENGTH) {
             throw new ApiError('invalid_params', 'Password must be at least 8 characters', 422);
         }
@@ -144,7 +150,7 @@ export class AuthService {
 
         const pw_hash = await hash_password(password);
 
-        const { User: UserModel, Org, OrgMember, OrgRole, ScopeMember } = await import('../db/models/index.js');
+        const { User: UserModel, Org, OrgMember, OrgRole, ScopeMember } = await import('../models/index.js');
         const { user, org_id } = await UserModel.sequelize!.transaction(async (t) => {
             const user_id = await this._user_repo.create(
                 norm_username, norm_email, pw_hash, norm_username, t,
@@ -194,6 +200,7 @@ export class AuthService {
             return { user: created_user, org_id: org.id };
         });
 
+        log.info('user_created', { user_id: user.id, username: norm_username });
         const minted = await this.mint_session_pat(user.id);
 
         const personal_realm = await RealmService.ensure_account_default_realm(
@@ -204,7 +211,8 @@ export class AuthService {
         /** Create per-user in-app notification channel for the new org (best-effort). */
         try {
             await ensure_per_user_channel(user.id, org_id, norm_username);
-        } catch {
+        } catch (err) {
+            log.warn('per_user_channel_failed', { error: err instanceof Error ? err.message : String(err) });
             /* Non-fatal — channel will be created on next login or backfill. */
         }
 
@@ -229,6 +237,7 @@ export class AuthService {
      * Called only from `/internal/auth/authenticate_user` (BFF).
      */
     async authenticate_user(username: string, password: string) {
+        log.debug('authenticate_user', { username });
         const row = await this._user_repo.find_by_username(username);
         if (!row) throw new ApiError('unauthorized', 'Invalid credentials', 401);
 
@@ -237,7 +246,7 @@ export class AuthService {
 
         if (row.suspended_at) throw new ApiError('forbidden', 'Account is suspended', 403);
 
-        const user = await this._user_repo.find_by_id(row.id);
+        const user = await this._user_repo.find_profile_by_id(row.id);
         if (!user) throw new ApiError('unauthorized', 'Invalid credentials', 401);
 
         const minted = await this.mint_session_pat(user.id);
@@ -258,6 +267,7 @@ export class AuthService {
      * Rejects suspended / missing / self. Does not revoke the admin's own PAT.
      */
     async issue_session_token(auth: AuthContext, target_user_id: string) {
+        log.debug('issue_session_token', { user_id: auth.user?.id, target_user_id });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         if (auth.user.role !== 'admin') {
             throw new ApiError('forbidden', 'Site admin required', 403);
@@ -266,7 +276,7 @@ export class AuthService {
             throw new ApiError('invalid_params', 'Cannot issue a session token for yourself', 422);
         }
 
-        const target = await this._user_repo.find_by_id(target_user_id);
+        const target = await this._user_repo.find_profile_by_id(target_user_id);
         if (!target) throw new ApiError('not_found', 'User not found', 404);
         if (target.suspended_at) {
             throw new ApiError('forbidden', 'Target account is suspended', 403);
@@ -289,6 +299,7 @@ export class AuthService {
      * already-revoked tokens still return `{ ok: true }`. Used by BFF logout.
      */
     async revoke_session_token(plaintext: string): Promise<{ ok: true }> {
+        log.debug('revoke_session_token', {});
         if (!plaintext.startsWith('cliq_tok_')) {
             return { ok: true };
         }
@@ -327,7 +338,7 @@ export class AuthService {
         // Build orgs list with default realm info.
         let orgs: { id: string; slug: string; name: string; default_realm_slug: string }[] = [];
         try {
-            const { OrgMember, Org } = await import('../db/models/index.js');
+            const { OrgMember, Org } = await import('../models/index.js');
             const { Realm } = await import('../models/index.js');
             const memberships = await OrgMember.findAll({
                 where: { user_id },
@@ -354,7 +365,7 @@ export class AuthService {
                     });
                 }
             }
-        } catch { /* best-effort */ }
+        } catch (err) { log.warn('login_default_realm_failed', { error: err instanceof Error ? err.message : String(err) }); /* best-effort */ }
 
         return {
             default_realm_id: personal.default_realm_id,

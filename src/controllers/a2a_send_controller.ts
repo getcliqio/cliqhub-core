@@ -4,6 +4,7 @@ import { ApiError } from '../lib/api_error.js';
 import { RealmA2aService } from '../services/realm_a2a.service.js';
 import { A2aInvokeService } from '../services/a2a_invoke.service.js';
 import type { A2a_task } from '../services/a2a_invoke.service.js';
+import { get_logger } from '../lib/log.js';
 
 const rpc_schema = z.object({
     jsonrpc: z.literal('2.0').optional(),
@@ -127,16 +128,19 @@ function write_sse(res: Response, event: unknown): void {
     res.write(`data: ${JSON.stringify(event)}\n\n`);
 }
 
+const log = get_logger('ctrl.a2a_send');
+
 export class A2aSendController {
     static async send(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
+            log.debug('send', { slug: req.params.slug, org_slug: req.params.org });
             const slug = String(req.params.slug ?? '').trim();
             const org_slug = String(req.params.org ?? '').trim();
 
             // Resolve org_id from the URL org slug for org-scoped lookup.
             let org_id: string | undefined;
             if (org_slug) {
-                const { Org } = await import('../db/models/index.js');
+                const { Org } = await import('../models/index.js');
                 const org = await Org.findOne({ where: { slug: org_slug } });
                 if (org) org_id = org.id;
             }
@@ -168,6 +172,7 @@ export class A2aSendController {
                     inputs: extracted.inputs,
                     context_id: extracted.context_id,
                 });
+                log.info('task_invoked', { task_id: task.id, realm_id });
                 res.json(rpc_result(body.id, task));
                 return;
             }
@@ -180,6 +185,7 @@ export class A2aSendController {
                     inputs: extracted.inputs,
                     context_id: extracted.context_id,
                 });
+                log.info('stream_started', { task_id: accepted.id, realm_id });
 
                 res.status(200);
                 res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');

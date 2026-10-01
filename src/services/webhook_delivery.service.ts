@@ -11,7 +11,10 @@
 
 import { Op } from 'sequelize';
 
-import { WebhookDelivery } from '../models/index.js';
+import { get_logger } from '../lib/log.js';
+import { WebhookDeliveryRepository } from '../repositories/webhook_delivery_repository.js';
+
+const log = get_logger('svc.webhook');
 
 const RETENTION_DAYS = parseInt(
     process.env.WEBHOOK_DELIVERY_RETENTION_DAYS ?? '30', 10,
@@ -19,6 +22,8 @@ const RETENTION_DAYS = parseInt(
 const RETENTION_INTERVAL_MS = parseInt(
     process.env.WEBHOOK_DELIVERY_RETENTION_INTERVAL_MS ?? String(24 * 60 * 60 * 1000), 10,
 );
+
+const delivery_repo = new WebhookDeliveryRepository();
 
 export interface WebhookDeliveryRecord {
     id: string;
@@ -45,21 +50,22 @@ export class WebhookDeliveryService {
         channel_id: string,
         limit: number = 20,
     ): Promise<WebhookDeliveryRecord[]> {
+        log.debug('list_by_channel', { channel_id });
         const clamped = Math.max(1, Math.min(200, Math.floor(limit)));
-        const rows = await WebhookDelivery.findAll({
-            where: { channel_id },
-            order: [['attempted_at', 'DESC']],
-            limit: clamped,
-        });
+        const rows = await delivery_repo.find_all(
+            { channel_id },
+            { order: [['attempted_at', 'DESC']], limit: clamped },
+        );
         return rows.map(_to_record);
     }
 
     /** Delete rows older than `days`. Returns the number pruned. */
     static async prune_older_than(days: number = RETENTION_DAYS): Promise<number> {
+        log.debug('prune_older_than', { days });
         const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-        return WebhookDelivery.destroy({
-            where: { attempted_at: { [Op.lt]: cutoff } },
-        });
+        const count = await delivery_repo.delete_where({ attempted_at: { [Op.lt]: cutoff } } as any);
+        if (count > 0) log.info('records_deleted', { count });
+        return count;
     }
 }
 
@@ -69,31 +75,24 @@ export class WebhookDeliveryService {
  * immediately to catch any stale rows from a previous process.
  */
 export function start_webhook_delivery_retention(): void {
+    log.debug('start_webhook_delivery_retention', {});
     if (_retention_timer) return;
-    console.log(
-        `[WebhookDeliveryRetention] started `
-        + `(interval=${RETENTION_INTERVAL_MS}ms, retention=${RETENTION_DAYS}d)`,
-    );
+    log.info('retention_started', { interval_ms: RETENTION_INTERVAL_MS, retention_days: RETENTION_DAYS });
 
     WebhookDeliveryService.prune_older_than().catch((err) => {
-        console.error(
-            '[WebhookDeliveryRetention] initial sweep failed:',
-            err instanceof Error ? err.message : err,
-        );
+        log.error('retention_sweep_failed', { error: err instanceof Error ? err.message : String(err) });
     });
 
     _retention_timer = setInterval(() => {
         WebhookDeliveryService.prune_older_than().catch((err) => {
-            console.error(
-                '[WebhookDeliveryRetention] sweep failed:',
-                err instanceof Error ? err.message : err,
-            );
+            log.error('retention_sweep_failed', { error: err instanceof Error ? err.message : String(err) });
         });
     }, RETENTION_INTERVAL_MS);
     _retention_timer.unref();
 }
 
 export function stop_webhook_delivery_retention(): void {
+    log.debug('stop_webhook_delivery_retention', {});
     if (_retention_timer) {
         clearInterval(_retention_timer);
         _retention_timer = null;
@@ -101,9 +100,8 @@ export function stop_webhook_delivery_retention(): void {
 }
 
 function _to_record(
-    row: InstanceType<typeof WebhookDelivery>,
-): WebhookDeliveryRecord {
-    const plain = (row as unknown as { toJSON: () => WebhookDeliveryRecord }).toJSON();
+    row: { toJSON(): WebhookDeliveryRecord },
+): WebhookDeliveryRecord {    const plain = (row as unknown as { toJSON: () => WebhookDeliveryRecord }).toJSON();
     return {
         id: plain.id,
         channel_id: plain.channel_id,

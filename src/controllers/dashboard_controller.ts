@@ -9,7 +9,19 @@
 import type { Request } from 'express';
 import { Op } from 'sequelize';
 import { BaseController } from './base_controller.js';
-import { Team, Run, InAppNotification, RealmMember, Review, Realm } from '../models/index.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+import { RunRepository } from '../repositories/run_repository.js';
+import { InAppNotificationRepository } from '../repositories/in_app_notification_repository.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
+import { ReviewRepository } from '../repositories/review_repository.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
+
+const _dt_repo_dc = new DaemonTeamRepository();
+const _run_repo_dc = new RunRepository();
+const _ian_repo = new InAppNotificationRepository();
+const _realm_member_repo_dc = new RealmMemberRepository();
+const _review_repo_dc = new ReviewRepository();
+const _realm_repo_dc = new RealmRepository();
 import { DaemonService } from '../services/daemon.service.js';
 import { RealmService } from '../services/realm.service.js';
 import { RunService } from '../services/run.service.js';
@@ -20,6 +32,7 @@ import {
     DashboardRealmsInput,
     DashboardSummaryInput,
 } from '../schemas/dashboard_types.js';
+import { get_logger } from '../lib/log.js';
 
 function as_ms(value: unknown): number | null {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -61,6 +74,8 @@ function map_run_row(
 
 type DashboardFields = Record<string, unknown>;
 
+const log = get_logger('ctrl.dashboard');
+
 export class DashboardController extends BaseController {
     /**
      * Realm-centric dashboard: per-realm daemon/run/review/notification rollup,
@@ -74,7 +89,8 @@ export class DashboardController extends BaseController {
         req: FlatApiRequest<DashboardRealmsInput, DashboardFields>,
         res: FlatApiOkResponse<DashboardFields>,
     ): Promise<void> {
-        const user_id = req.user?.user_id;
+        log.debug('realms_summary', { user_id: req.auth?.user?.id, org_id: (req.body as Record<string, unknown>)?.org_id });
+        const user_id = req.auth?.user?.id;
         if (!user_id) {
             res.status(401).json({ ok: false, error: 'Unauthorized' } as never);
             return;
@@ -82,7 +98,7 @@ export class DashboardController extends BaseController {
 
         // Zod SoT — org_id required; never invent from X-Org-Id.
         const body = this.parse_body(DashboardRealmsInput, req);
-        await this.assert_org_authorized(this.auth_from(req), body.org_id);
+        // Route policy: member of body.org_id.
         const org_id = body.org_id;
         const { realms: member_realms } = await RealmService.list_for_user(user_id, { org_id });
         if (member_realms.length === 0) {
@@ -99,13 +115,13 @@ export class DashboardController extends BaseController {
         const user_daemon_ids = await RealmService.list_daemon_ids_for_user(user_id);
 
         const [daemon_members, all_daemons, active_runs, pending_reviews, recent_notifs] = await Promise.all([
-            RealmMember.findAll({
+            _realm_member_repo_dc.find_all_q({
                 where: { realm_id: { [Op.in]: realm_ids }, member_type: 'daemon' },
                 attributes: ['realm_id', 'member_id'],
             }),
             DaemonService.list(user_id, { org_id }),
             user_daemon_ids.length > 0
-                ? Run.findAll({
+                ? _run_repo_dc.find_all_q({
                     where: {
                         daemon_id: { [Op.in]: user_daemon_ids },
                         state: { [Op.in]: ['running', 'awaiting_input'] },
@@ -113,14 +129,14 @@ export class DashboardController extends BaseController {
                     attributes: ['run_id', 'daemon_id', 'state', 'started_at'],
                 })
                 : Promise.resolve([]),
-            Review.findAll({
+            _review_repo_dc.find_all_q({
                 where: {
                     realm_id: { [Op.in]: realm_ids },
                     status: { [Op.in]: ['pending', 'decided'] },
                 },
                 attributes: ['realm_id'],
             }),
-            InAppNotification.findAll({
+            _ian_repo.find_all_q({
                 where: {
                     realm_id: { [Op.in]: realm_ids },
                     created_at: { [Op.gte]: one_hour_ago },
@@ -225,7 +241,8 @@ export class DashboardController extends BaseController {
         req: FlatApiRequest<DashboardSummaryInput, DashboardFields>,
         res: FlatApiOkResponse<DashboardFields>,
     ): Promise<void> {
-        const user_id = req.user?.user_id;
+        log.debug('summary', { user_id: req.auth?.user?.id, org_id: (req.body as Record<string, unknown>)?.org_id });
+        const user_id = req.auth?.user?.id;
         if (!user_id) {
             res.status(401).json({ ok: false, error: 'Unauthorized' } as never);
             return;
@@ -233,7 +250,7 @@ export class DashboardController extends BaseController {
 
         // Zod SoT — org_id required; never invent from X-Org-Id.
         const body = this.parse_body(DashboardSummaryInput, req);
-        await this.assert_org_authorized(this.auth_from(req), body.org_id);
+        // Route policy: member of body.org_id.
         const org_id = body.org_id;
 
         const day_ago = Date.now() - 24 * 60 * 60 * 1000;
@@ -255,13 +272,13 @@ export class DashboardController extends BaseController {
             run_count,
             pending_reviews,
         ] = await Promise.all([
-            Team.count(),
+            _dt_repo_dc.find_count(),
             DaemonService.list(user_id, { org_id }),
             RunService.list_recent(10, undefined, { user_id, org_id }),
             RunService.list_recent(8, undefined, { user_id, state: 'running', org_id }),
             RunService.list_recent(8, undefined, { user_id, state: 'awaiting_input', org_id }),
             run_where_base
-                ? Run.count({
+                ? _run_repo_dc.find_count_q({
                     where: {
                         ...run_where_base,
                         state: { [Op.in]: ['running', 'awaiting_input'] },
@@ -269,12 +286,12 @@ export class DashboardController extends BaseController {
                 })
                 : Promise.resolve(0),
             run_where_base
-                ? Run.count({
+                ? _run_repo_dc.find_count_q({
                     where: { ...run_where_base, state: 'awaiting_input' },
                 })
                 : Promise.resolve(0),
             run_where_base
-                ? Run.count({
+                ? _run_repo_dc.find_count_q({
                     where: {
                         ...run_where_base,
                         state: { [Op.in]: ['failed', 'crashed'] },
@@ -283,7 +300,7 @@ export class DashboardController extends BaseController {
                 })
                 : Promise.resolve(0),
             run_where_base
-                ? Run.count({
+                ? _run_repo_dc.find_count_q({
                     where: {
                         ...run_where_base,
                         state: 'completed',
@@ -292,7 +309,7 @@ export class DashboardController extends BaseController {
                 })
                 : Promise.resolve(0),
             run_where_base
-                ? Run.count({ where: run_where_base })
+                ? _run_repo_dc.find_count_q({ where: run_where_base })
                 : Promise.resolve(0),
             ReviewPendingService.list_for_user({ user_id, org_id, limit: 5, offset: 0 }),
         ]);

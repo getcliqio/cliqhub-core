@@ -3,7 +3,7 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { setup_sequelize_mocks } from '../../helpers/mock_sequelize.js';
 setup_sequelize_mocks();
 
-import { Draft } from '../../../src/db/models/index.js';
+import { Draft } from '../../../src/models/index.js';
 import { DraftRepository } from '../../../src/repositories/draft_repository.js';
 
 describe('DraftRepository', () => {

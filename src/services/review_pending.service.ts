@@ -1,6 +1,15 @@
 import { Op } from 'sequelize';
 
-import { RealmMember, Review, ReviewNotification } from '../models/index.js';
+import { get_logger } from '../lib/log.js';
+import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
+import { ReviewRepository } from '../repositories/review_repository.js';
+import { ReviewNotificationRepository } from '../repositories/review_notification_repository.js';
+
+const log = get_logger('svc.review_pending');
+
+const _realm_member_repo_rp = new RealmMemberRepository();
+const _review_repo_rp = new ReviewRepository();
+const _review_notif_repo_rp = new ReviewNotificationRepository();
 import { ApiError } from '../lib/api_error.js';
 import {
     load_artifact_counts,
@@ -56,6 +65,7 @@ export class ReviewPendingService {
         limit?: number;
         offset?: number;
     }): Promise<{ reviews: PendingReviewRecord[]; total: number }> {
+        log.debug('list_for_user', { user_id: opts.user_id, realm_id: opts.realm_id, org_id: opts.org_id });
         const user_id = opts.user_id.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
 
@@ -77,7 +87,7 @@ export class ReviewPendingService {
          */
         const broadcast_channel_ids = await _resolve_broadcast_channel_ids(user_id);
 
-        const notification_rows = await ReviewNotification.findAll({
+        const notification_rows = await _review_notif_repo_rp.find_all_q({
             where: {
                 [Op.or]: [
                     { user_id: normalized_user_id },
@@ -123,8 +133,8 @@ export class ReviewPendingService {
             where.org_id = opts.org_id;
         }
 
-        const total = await Review.count({ where });
-        const rows = await Review.findAll({
+        const total = await _review_repo_rp.find_count(where as any);
+        const rows = await _review_repo_rp.find_all_q({
             where,
             order: [['created_at', 'DESC']],
             limit,
@@ -190,13 +200,14 @@ export class ReviewPendingService {
         user_id: string;
         org_id?: string;
     }): Promise<number> {
+        log.debug('count_pending_for_user', { user_id: opts.user_id, org_id: opts.org_id });
         const user_id = opts.user_id.trim();
         if (!user_id) return 0;
 
         const normalized_user_id = String(user_id);
         const broadcast_channel_ids = await _resolve_broadcast_channel_ids(user_id);
 
-        const notification_rows = await ReviewNotification.findAll({
+        const notification_rows = await _review_notif_repo_rp.find_all_q({
             where: {
                 [Op.or]: [
                     { user_id: normalized_user_id },
@@ -222,7 +233,7 @@ export class ReviewPendingService {
             where.org_id = opts.org_id;
         }
 
-        return Review.count({ where });
+        return _review_repo_rp.find_count(where as any);
     }
 }
 
@@ -232,7 +243,7 @@ export class ReviewPendingService {
  * reviews (those with no explicit reviewers) in a user's pending list.
  */
 async function _resolve_broadcast_channel_ids(user_id: string): Promise<string[]> {
-    const memberships = await RealmMember.findAll({
+    const memberships = await _realm_member_repo_rp.find_all_q({
         where: { member_type: 'user', member_id: user_id },
         attributes: ['realm_id'],
     });

@@ -11,6 +11,10 @@ export const users_get_schema = z.object({
     query: z.string().optional(),
     /** @deprecated use `query` */
     search: z.string().optional(),
+    /** Site-admin hub list only: filter by hub role. */
+    role: z.enum(['user', 'admin']).optional(),
+    /** Site-admin hub list only: true = suspended accounts, false = active ones. */
+    suspended: z.boolean().optional(),
     limit: z.number().int().min(1).max(100).optional(),
     offset: z.number().int().min(0).optional(),
 });

@@ -3,7 +3,8 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 
 import { WorkspaceService } from '../../src/services/workspace.service.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
-import { Daemon, Workspace, WorkspaceTeam, Team, Scope, Run } from '../../src/models/index.js';
+import { Daemon, Workspace, WorkspaceTeam, DaemonTeam, Run } from '../../src/models/index.js';
+import { Scope } from '../../src/models/index.js';
 import { randomUUID } from 'node:crypto';
 
 const has_postgres = await postgres_reachable();
@@ -24,13 +25,17 @@ beforeAll(async () => {
     await Scope.create({
         id: scope_id,
         slug: `ws-test-scope-${Date.now()}`,
-        name: 'WS Test Scope',
+        display_name: 'WS Test Scope',
+        owner_id: null,
+        org_id: null,
+        visibility: 'public',
+        scope_type: 'platform',
         is_default: 0,
-        created_at: Date.now(),
+        created_at: new Date(),
     });
 
     team_id = randomUUID();
-    await Team.create({
+    await DaemonTeam.create({
         id: team_id,
         scope_id,
         slug: `ws-test-team-${Date.now()}`,
@@ -86,7 +91,7 @@ beforeEach(async () => {
 afterAll(async () => {
     if (!has_postgres) return;
     await cleanup_test_workspaces();
-    await Team.destroy({ where: { id: team_id } });
+    await DaemonTeam.destroy({ where: { id: team_id } });
     await Scope.destroy({ where: { id: scope_id } });
     await Daemon.destroy({ where: { id: daemon_id } });
     await close_test_control_plane_store();

@@ -1,3 +1,10 @@
+/**
+ * Users routes — authenticated user profile get, lookup by ID, and profile update.
+ *
+ * POST   /v1/users/get
+ * POST   /v1/users/get_by_id
+ * POST   /v1/users/update
+ */
 import type { Router } from 'express';
 import type { Container } from '../../container.js';
 

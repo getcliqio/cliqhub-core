@@ -1,11 +1,11 @@
 import { ApiError } from '../errors/api_error.js';
-import { can_view_team } from '../auth/access.js';
+import { can_read_team, can_view_team } from '../auth/access.js';
 import { assert_access, assert_admin_access } from '../auth/assert_grant.js';
 
 import yaml from 'js-yaml';
 import { extract_package, normalize_tags, compute_next_version, workflow_from_team_yml, enrich_required_inputs } from './package_parser.js';
 import type { ParsedTeamYml } from './package_parser.js';
-import { compare_semver } from '../lib/semver.js';
+import { SemVer } from '../lib/semver.js';
 import { SLUG_PATTERN, RESERVED_SCOPES } from '../config/env.js';
 import type { TeamRepository } from '../repositories/team_repository.js';
 import type { TeamVersionRepository } from '../repositories/team_version_repository.js';
@@ -17,10 +17,20 @@ import type { PackageStorage } from '../storage/package_storage.js';
 import { package_key, package_path } from '../storage/package_storage.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 import type { TeamListItemVO, TeamRoleVO } from '../schemas/team_types.js';
-import { OrgMember, Scope, Team, User } from '../db/models/index.js';
+import { User } from '../models/index.js';
 import { Op, literal, type WhereOptions } from 'sequelize';
 import type { NormalizedWorkflow } from './package_parser.js';
 import { RealmTeamListService } from '../services/realm_team_list.service.js';
+import { get_sequelize } from '../lib/sequelize.js';
+import { ScopeRepository as ScopeRepoClass } from '../repositories/scope_repository.js';
+import { OrgMemberRepository as OrgMemberRepoClass } from '../repositories/org_member_repository.js';
+
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.teams');
+
+const _scope_repo_ts = new ScopeRepoClass();
+const _org_member_repo_ts = new OrgMemberRepoClass();
 
 function escape_like(input: string): string {
     return input.replace(/[%_\\]/g, '\\$&');
@@ -101,6 +111,7 @@ export class TeamsService {
         status?: 'draft' | 'published';
         limit?: number; offset?: number;
     }) {
+        log.debug('get', { scope: params.scope, status: params.status });
         if (params.mine) {
             return this._get_mine(auth, params);
         }
@@ -126,7 +137,7 @@ export class TeamsService {
         }
         if (params.tag) {
             conditions.push(
-                literal(`EXISTS (SELECT 1 FROM team_tags tt WHERE tt.team_id = "Team"."id" AND tt.tag = ${Team.sequelize!.escape(params.tag)})`) as any,
+                literal(`EXISTS (SELECT 1 FROM team_tags tt WHERE tt.team_id = "Team"."id" AND tt.tag = ${get_sequelize().escape(params.tag)})`) as any,
             );
         }
         if (params.status === 'draft') {
@@ -152,11 +163,7 @@ export class TeamsService {
         if (params.group_by_scope) {
             // Include both the user's own scopes and all public scopes
             // so that teams like @cliq/hello-world are always visible.
-            const public_scopes = await Scope.findAll({
-                where: { visibility: 'public', scope_type: 'org' },
-                attributes: ['id', 'slug', 'display_name', 'visibility', 'scope_type'],
-                raw: true,
-            });
+            const public_scopes = await _scope_repo_ts.find_all_q({ where: { visibility: 'public', scope_type: 'org' }, attributes: ['id', 'slug', 'display_name', 'visibility', 'scope_type'], raw: true });
 
             const scope_map = new Map<string, typeof auth.scopes[0]>();
             for (const s of auth.scopes) scope_map.set(s.slug, s);
@@ -203,7 +210,7 @@ export class TeamsService {
             : [];
         // Also include author drafts that may live outside listed scopes.
         if (params.status === 'draft' || !params.status) {
-            const author_drafts = await Team.findAll({
+            const author_drafts = await this._team_repo.find_all_q({
                 where: { author_id: auth.user.id, visibility: 'draft' },
                 attributes: [
                     'id', 'name', 'scope', 'description', 'install_count', 'listed', 'visibility',
@@ -252,7 +259,7 @@ export class TeamsService {
 
         const where: WhereOptions = conditions.length > 0 ? { [Op.and]: conditions } : {};
 
-        const { count: total, rows: teams } = await Team.findAndCountAll({
+        const { count: total, rows: teams } = await this._team_repo.find_and_count_q({
             attributes: [
                 'id', 'name', 'scope', 'description', 'author_id',
                 'visibility', 'listed', 'install_count',
@@ -282,6 +289,7 @@ export class TeamsService {
     async get_by_id(auth: AuthContext, params: {
         name?: string; scope?: string; version?: string; team_id?: string;
     }) {
+        log.debug('get_by_id', { team_id: params.team_id, name: params.name, scope: params.scope });
         let team;
         if (params.team_id) {
             team = await this._team_repo.find_by_id(params.team_id);
@@ -290,7 +298,7 @@ export class TeamsService {
             const scope = params.scope || null;
             team = await this._team_repo.find_by_name_and_scope(params.name, scope);
         }
-        if (!team || !can_view_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
+        if (!team || !can_read_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
 
         const author = team.author_id ? await this._team_repo.find_author_username(team.author_id) : null;
         const versions = await this._version_repo.list_by_team_id(team.id);
@@ -369,10 +377,12 @@ export class TeamsService {
 
     // ─── Version queries ────────────────────────────────────────────
 
-    async get_versions(_auth: AuthContext, params: { name: string; scope?: string; latest_only?: boolean }) {
+    async get_versions(auth: AuthContext, params: { name: string; scope?: string; latest_only?: boolean }) {
+        log.debug('get_versions', { name: params.name, scope: params.scope });
         const scope = params.scope || null;
         const team = await this._team_repo.find_by_name_and_scope(params.name, scope);
-        if (!team) throw new ApiError('not_found', 'Team not found', 404);
+        // Same visibility as get_by_id (S14): private teams were readable here.
+        if (!team || !can_read_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
 
         if (params.latest_only) {
             const version = await this._version_repo.find_latest_version(team.id);
@@ -393,11 +403,13 @@ export class TeamsService {
      * can pin older runs via run.team_version_id.
      */
     async get_phases(
-        _auth: AuthContext,
+        auth: AuthContext,
         params: { team_id: string; version_id?: string },
     ) {
+        log.debug('get_phases', { team_id: params.team_id, version_id: params.version_id });
         const team = await this._team_repo.find_by_id(params.team_id);
-        if (!team) throw new ApiError('not_found', 'Team not found', 404);
+        // Same visibility as get_by_id (S14): workflow and prompts of private teams leaked here.
+        if (!team || !can_read_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
 
         let version_row: {
             id: string;
@@ -466,6 +478,7 @@ export class TeamsService {
         name: string; scope: string; description?: string;
         manifest?: string | Record<string, unknown>; team_json?: string;
     }) {
+        log.debug('create', { name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
         if (!SLUG_PATTERN.test(params.name)) {
@@ -486,7 +499,7 @@ export class TeamsService {
         let team_id = '';
         let version: string | undefined;
 
-        await Team.sequelize!.transaction(async (t) => {
+        await get_sequelize().transaction(async (t) => {
             team_id = await this._team_repo.create(
                 params.name, params.scope, scope_type, description,
                 auth.user!.id, 'MIT', 'draft', t, 0,
@@ -498,6 +511,7 @@ export class TeamsService {
             }
         });
 
+        log.info('team_created', { team_id, name: params.name, scope: params.scope });
         return {
             id: team_id,
             name: params.name,
@@ -517,6 +531,7 @@ export class TeamsService {
         manifest?: string | Record<string, unknown>; team_json?: string;
         bump?: 'minor' | 'major';
     }) {
+        log.debug('update', { team_id: params.team_id, name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
 
@@ -526,7 +541,7 @@ export class TeamsService {
 
         let resolved_version: string | null = null;
 
-        await Team.sequelize!.transaction(async (t) => {
+        await get_sequelize().transaction(async (t) => {
             if (params.description !== undefined) {
                 await this._team_repo.update_description(team.id, description, t);
             }
@@ -556,6 +571,7 @@ export class TeamsService {
     async unpublish(auth: AuthContext, params: {
         name?: string; scope?: string; team_id?: string;
     }) {
+        log.debug('unpublish', { team_id: params.team_id, name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
 
@@ -584,6 +600,7 @@ export class TeamsService {
         tags?: string[]; visibility?: 'public' | 'private';
         data_base64?: string; agents?: Record<string, unknown>;
     }) {
+        log.debug('publish', { team_id: params.team_id, name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
 
@@ -683,7 +700,7 @@ export class TeamsService {
             if (existing_ver) throw new ApiError('conflict', `Version ${resolved_version} already exists`, 409);
 
             const current_max = await this._version_repo.find_latest_version(team.id);
-            if (current_max && compare_semver(resolved_version, current_max) < 0) {
+            if (current_max && SemVer.compare(resolved_version, current_max) < 0) {
                 throw new ApiError(
                     'invalid_params',
                     `Version ${resolved_version} is older than the current latest (${current_max}). Publish a version >= ${current_max}.`,
@@ -696,7 +713,7 @@ export class TeamsService {
         const pkg_path = this._packages_path ? package_path(this._packages_path, name, resolved_version) : pkg_key;
         if (this._storage) await this._storage.write(pkg_key, zip_buffer);
 
-        await Team.sequelize!.transaction(async (t) => {
+        await get_sequelize().transaction(async (t) => {
             let effective_team_id: string;
 
             if (team) {
@@ -737,6 +754,7 @@ export class TeamsService {
     }
 
     async download(auth: AuthContext, params: { name: string; scope?: string; version?: string }) {
+        log.debug('download', { name: params.name, scope: params.scope, version: params.version });
         const scope = params.scope || null;
         const team = await this._team_repo.find_by_name_and_scope(params.name, scope);
         if (!team || !can_view_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
@@ -764,12 +782,13 @@ export class TeamsService {
     }
 
     async delete_team(auth: AuthContext, params: { name?: string; scope?: string; team_id?: string }) {
+        log.debug('delete_team', { team_id: params.team_id, name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
 
         let team;
         if (params.team_id && auth.user.role === 'admin') {
-            team = await Team.findByPk(params.team_id, { raw: true });
+            team = await this._team_repo.find_by_id(params.team_id);
             if (!team) throw new ApiError('not_found', 'Team not found', 404);
         }
         if (!team) {
@@ -783,7 +802,7 @@ export class TeamsService {
         }
 
         const versions = await this._version_repo.list_packages_by_team(team.id);
-        await Team.sequelize!.transaction(async (t) => {
+        await get_sequelize().transaction(async (t) => {
             await this._team_repo.delete_by_id(team.id, t);
         });
 
@@ -810,6 +829,7 @@ export class TeamsService {
     }
 
     async delete_version(auth: AuthContext, params: { name: string; scope?: string; version: string }) {
+        log.debug('delete_version', { name: params.name, scope: params.scope, version: params.version });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
         const scope = params.scope || null;
@@ -829,6 +849,7 @@ export class TeamsService {
     }
 
     async rename_team(auth: AuthContext, params: { name: string; scope: string; new_name: string }) {
+        log.debug('rename_team', { name: params.name, scope: params.scope, new_name: params.new_name });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
         const new_name = (params.new_name || '').trim().toLowerCase();
@@ -927,15 +948,9 @@ export class TeamsService {
         // Check if the user is an admin of the org that owns this scope.
         let is_org_admin = false;
         if (team.scope) {
-            const scope_row = await Scope.findOne({
-                where: { slug: team.scope },
-                attributes: ['org_id'],
-                raw: true,
-            });
+            const scope_row = await _scope_repo_ts.find_one_q({ where: { slug: team.scope }, attributes: ['org_id'], raw: true });
             if (scope_row?.org_id) {
-                const membership = await OrgMember.findOne({
-                    where: { org_id: scope_row.org_id, user_id: auth.user.id },
-                    attributes: ['role'],
+                const membership = await _org_member_repo_ts.find_one_q({ where: { org_id: scope_row.org_id, user_id: auth.user.id }, attributes: ['role'],
                     raw: true,
                 });
                 if (membership?.role === 'admin' || membership?.role === 'owner') {

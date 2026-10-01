@@ -1,21 +1,31 @@
 import { ApiError } from '../errors/api_error.js';
+import { get_logger } from '../lib/log.js';
 import { RESERVED_SCOPES, SLUG_PATTERN, EMAIL_PATTERN, MIN_PASSWORD_LENGTH } from '../config/env.js';
-import type { OrgRepository } from '../repositories/org_repository.js';
-import type { OrgMemberRepository } from '../repositories/org_member_repository.js';
-import type { ScopeRepository } from '../repositories/scope_repository.js';
-import type { ScopeMemberRepository } from '../repositories/scope_member_repository.js';
-import type { UserRepository } from '../repositories/user_repository.js';
-import type { TeamRepository } from '../repositories/team_repository.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 import { Op, literal } from 'sequelize';
-import { User, Scope, Org, OrgMember, OrgRole, ScopeMember, Team } from '../db/models/index.js';
+import { UserRepository } from '../repositories/user_repository.js';
+import { ScopeRepository } from '../repositories/scope_repository.js';
+import { OrgRepository } from '../repositories/org_repository.js';
+import { OrgMemberRepository } from '../repositories/org_member_repository.js';
+import { OrgRoleRepository } from '../repositories/org_role_repository.js';
+import { ScopeMemberRepository } from '../repositories/scope_member_repository.js';
+import { TeamRepository } from '../repositories/team_repository.js';
+
+const _user_repo_os = new UserRepository();
+const _scope_repo_os = new ScopeRepository();
+const _org_repo_os = new OrgRepository();
+const _org_member_repo_os = new OrgMemberRepository();
+const _org_role_repo_os = new OrgRoleRepository();
+const _scope_member_repo_os = new ScopeMemberRepository();
+const _team_repo_os = new TeamRepository();
 import { hash_password } from '../auth/password.js';
 import { ensure_per_user_channel } from '../services/per_user_channel.service.js';
-import { seed_default_roles_for_org } from '../db/migrate_org_roles.js';
-import { assert_admin_access } from '../auth/assert_grant.js';
+import { seed_default_roles_for_org } from '../models/migrations/migrate_org_roles.js';
 import { RealmService } from '../services/realm.service.js';
 import { OrgRealmSyncService } from './org_realm_sync_service.js';
+
+const log = get_logger('svc.orgs');
 
 function escape_like(input: string): string {
     return input.replace(/[%_\\]/g, '\\$&');
@@ -36,33 +46,10 @@ export class OrgsService {
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
     }
 
-    private _require_admin(auth: AuthContext) {
-        this._require_auth(auth);
-        assert_admin_access(auth, 'orgs');
-    }
-
-    private async _require_org_admin(auth: AuthContext, org_id: string): Promise<void> {
-        this._require_auth(auth);
-        if (auth.user!.role === 'admin') return;
-
-        // Use new permission system when role_id is backfilled
-        const { require_permission } = await import('../auth/permissions.js');
-        await require_permission(org_id, auth.user!.id, 'org.members.manage', {
-            site_role: auth.user!.role,
-        });
-    }
-
-    /** Member or site admin may list/get roles for an org. */
-    async assert_org_member_or_admin(auth: AuthContext, org_id: string): Promise<void> {
-        this._require_auth(auth);
-        if (auth.user!.role === 'admin') return;
-        const membership = await this._org_member_repo.find_by_org_and_user(org_id, auth.user!.id);
-        if (!membership) throw new ApiError('forbidden', 'You are not a member of this org', 403);
-    }
-
     // ─── Unified list (replaces list_my_orgs + admin_list_orgs) ─────
 
     async get(auth: AuthContext, params: { search?: string; limit?: number; offset?: number; exclude_personal?: boolean; mine?: boolean }) {
+        log.debug('get', { user_id: auth.user?.id });
         this._require_auth(auth);
 
         if (auth.user!.role === 'admin' && !params.mine) {
@@ -90,18 +77,22 @@ export class OrgsService {
             };
         }
 
-        const total = await Org.count({ where });
+        const total = await _org_repo_os.find_count_q({ where });
 
         const order_clause: Array<[any, string]> = params.search
             ? [[literal(`(slug = '${params.search.toLowerCase().replace(/'/g, "''")}')`), 'DESC'], ['created_at', 'DESC']]
             : [['created_at', 'DESC']];
 
-        const orgs = await Org.findAll({
+        const orgs = await _org_repo_os.find_all_q({
             where,
             attributes: [
                 'id', 'slug', 'display_name',
                 [literal('(SELECT count(*) FROM org_members om WHERE om.org_id = "Org"."id")'), 'member_count'],
                 [literal('(SELECT count(*) FROM scopes s WHERE s.org_id = "Org"."id")'), 'scope_count'],
+                // Members holding the org's `owner` role (0 = ownerless org; Admin flags it).
+                // Rows not yet backfilled (role_id NULL) count when legacy role is owner/admin —
+                // migrate_org_roles promotes the first admin to owner at next boot.
+                [literal('(SELECT count(*) FROM org_members om LEFT JOIN org_roles r ON r.id = om.role_id WHERE om.org_id = "Org"."id" AND (r.slug = \'owner\' OR (om.role_id IS NULL AND om.role IN (\'owner\', \'admin\'))))'), 'owner_count'],
                 'created_at',
             ],
             order: order_clause,
@@ -116,6 +107,7 @@ export class OrgsService {
     // ─── Get org by ID ──────────────────────────────────────────────
 
     async get_by_id(auth: AuthContext, params: { org_id: string }) {
+        log.debug('get_by_id', { org_id: params.org_id, user_id: auth.user?.id });
         this._require_auth(auth);
 
         let my_role: string = 'member';
@@ -136,7 +128,7 @@ export class OrgsService {
         const roles = await OrgRoleService.list(params.org_id);
         const { ALL_PERMISSIONS, OWNER_ONLY_PERMISSIONS } = await import('../auth/permissions.js');
 
-        const scopes = await Scope.findAll({
+        const scopes = await _scope_repo_os.find_all_q({
             where: { org_id: params.org_id },
             attributes: [
                 'id', 'slug', 'display_name', 'visibility',
@@ -167,13 +159,13 @@ export class OrgsService {
         auth: AuthContext,
         params: { org_id: string; query?: string },
     ): Promise<{ users: Array<{ username: string; display_name?: string }>; channels: Array<{ id: string; name: string }> }> {
+        log.debug('get_reviewable_targets', { org_id: params.org_id, user_id: auth.user?.id });
         this._require_auth(auth);
 
         const org_id = params.org_id;
         if (!org_id) throw new ApiError('invalid_params', 'org_id is required', 400);
 
-        await this.assert_org_member_or_admin(auth, org_id);
-
+        // Route policy: member of org_id.
         const query = (params.query ?? '').trim().toLowerCase();
         const { NotificationChannel } = await import('../models/index.js');
         const channel_where: Record<string, unknown> = {
@@ -202,7 +194,8 @@ export class OrgsService {
         slug: string; display_name?: string; admin_username: string;
         admin_email?: string; admin_password?: string; admin_display_name?: string;
     }) {
-        this._require_admin(auth);
+        log.debug('new_org', { slug: params.slug, user_id: auth.user?.id });
+        // Route policy: site admin (/v1/orgs/new and /internal/orgs/new).
 
         const slug = params.slug.toLowerCase();
         if (!SLUG_PATTERN.test(slug)) throw new ApiError('invalid_params', 'Slug must start with a letter and contain only lowercase letters, numbers, and hyphens', 422);
@@ -218,7 +211,7 @@ export class OrgsService {
         if (existing_user) throw new ApiError('conflict', 'That name is already taken by a user', 409);
 
         const uname = params.admin_username.toLowerCase();
-        let admin_user = await User.findOne({ where: { username: uname }, attributes: ['id', 'username'], raw: true });
+        let admin_user = await _user_repo_os.find_one_q({ where: { username: uname }, attributes: ['id', 'username'], raw: true });
 
         if (!admin_user) {
             if (!params.admin_email || !params.admin_password) {
@@ -239,14 +232,14 @@ export class OrgsService {
             const pw_hash = await hash_password(params.admin_password);
             const display = params.admin_display_name?.trim() || uname;
 
-            const new_user = await User.create({
+            const new_user = await _user_repo_os.create_one({
                 username: uname,
                 email: trimmed_email,
                 password_hash: pw_hash,
                 display_name: display,
                 role: 'user',
             });
-            await Scope.create({
+            await _scope_repo_os.create_one({
                 slug: uname,
                 display_name: display,
                 owner_id: new_user.id,
@@ -261,18 +254,18 @@ export class OrgsService {
         }
 
         const display_name = params.display_name || slug;
-        const org = await Org.create({ slug, display_name });
+        const org = await _org_repo_os.create_one({ slug, display_name });
         const org_id = org.id;
 
         await seed_default_roles_for_org(org_id);
-        const owner_role = await OrgRole.findOne({ where: { org_id, slug: 'owner' } });
-        await OrgMember.create({
+        const owner_role = await _org_role_repo_os.find_one_q({ where: { org_id, slug: 'owner' } });
+        await _org_member_repo_os.create_one({
             org_id, user_id: admin_user!.id, role: 'admin',
             role_id: owner_role?.id ?? null,
         });
 
         // Default org scope (registry namespace = org slug)
-        const scope = await Scope.create({
+        const scope = await _scope_repo_os.create_one({
             slug,
             display_name,
             owner_id: admin_user!.id,
@@ -280,11 +273,11 @@ export class OrgsService {
             scope_type: 'org',
             org_id,
         });
-        await ScopeMember.create({ scope_id: scope.id, user_id: admin_user!.id });
+        await _scope_member_repo_os.create_one({ scope_id: scope.id, user_id: admin_user!.id });
 
-        await Org.update(
-            { default_scope_id: scope.id },
-            { where: { id: org_id } },
+        await _org_repo_os.update_where(
+            { id: org_id } as any,
+            { default_scope_id: scope.id } as any,
         );
 
         await RealmService.ensure_org_default_realm(slug, String(admin_user!.id));
@@ -305,6 +298,7 @@ export class OrgsService {
             });
         }
 
+        log.info('org_created', { org_id, slug });
         return {
             id: org_id,
             slug,
@@ -317,37 +311,47 @@ export class OrgsService {
     // ─── Update org ─────────────────────────────────────────────────
 
     async update(auth: AuthContext, params: { org_id: string; display_name: string }) {
-        await this._require_org_admin(auth, params.org_id);
+        log.debug('update', { org_id: params.org_id, user_id: auth.user?.id });
+        // Route policy: org.settings in org_id.
         await this._org_repo.update_display_name(params.org_id, params.display_name);
+        log.info('org_updated', { org_id: params.org_id });
         return { updated: true };
     }
 
-    // ─── Delete org (admin only) ───────
+    // ─── Delete org ───────
+    // Route policy: /v1/orgs/delete → org.delete (owner); /internal/orgs/delete → site admin.
 
     async delete_org(auth: AuthContext, params: { org_id: string }) {
-        this._require_admin(auth);
+        log.debug('delete_org', { org_id: params.org_id, user_id: auth.user?.id });
+        this._require_auth(auth);
 
-        const org = await Org.findByPk(params.org_id, { attributes: ['id', 'slug'], raw: true });
+        const org = await _org_repo_os.find_by_id(params.org_id);
         if (!org) throw new ApiError('not_found', 'Org not found', 404);
 
-        const org_scopes = await Scope.findAll({ where: { org_id: org.id }, attributes: ['slug'], raw: true });
+        // A personal org (slug = its user's username) is removed with the user, not on its own.
+        if (auth.user!.role !== 'admin' && await this._user_repo.find_by_username(org.slug)) {
+            throw new ApiError('conflict', 'A personal org cannot be deleted', 409);
+        }
+
+        const org_scopes = await _scope_repo_os.find_all_q({ where: { org_id: org.id }, attributes: ['slug'], raw: true });
         const scope_slugs = org_scopes.map(s => s.slug);
         if (scope_slugs.length > 0) {
-            const team_count = await Team.count({ where: { scope: { [Op.in]: scope_slugs } } });
+            const team_count = await _team_repo_os.find_count_q({ where: { scope: { [Op.in]: scope_slugs } } });
             if (team_count > 0) {
                 throw new ApiError('conflict', `Cannot delete org with ${team_count} team(s) — delete or transfer teams first`, 409);
             }
         }
 
-        await ScopeMember.destroy({ where: { scope_id: await Scope.findAll({ where: { org_id: org.id }, attributes: ['id'], raw: true }).then(s => s.map(r => r.id)) } });
-        await Scope.destroy({ where: { org_id: org.id } });
-        await OrgMember.destroy({ where: { org_id: org.id } });
-        await Org.destroy({ where: { id: org.id } });
+        await _scope_member_repo_os.delete_where_q({ where: { scope_id: await _scope_repo_os.find_all_q({ where: { org_id: org.id }, attributes: ['id'], raw: true }).then(s => s.map(r => r.id)) } });
+        await _scope_repo_os.delete_where_q({ where: { org_id: org.id } });
+        await _org_member_repo_os.delete_where_q({ where: { org_id: org.id } });
+        await _org_repo_os.delete_where_q({ where: { id: org.id } });
 
         if (this._audit_repo) {
             await this._audit_repo.create(auth.user!.id, 'org.delete', 'org', org.slug, {});
         }
 
+        log.info('org_deleted', { org_id: params.org_id, slug: org.slug });
         return { deleted: true };
     }
 
@@ -359,17 +363,18 @@ export class OrgsService {
         email?: string;
         user_id?: string;
     }) {
-        await this._require_org_admin(auth, params.org_id);
+        log.debug('add_member', { org_id: params.org_id, user_id: auth.user?.id });
+        // Route policy: org.members.manage in org_id.
 
         let user: { id: string; username: string } | null = null;
         if (params.user_id != null) {
-            const found = await this._user_repo.find_by_id(params.user_id);
+            const found = await this._user_repo.find_profile_by_id(params.user_id);
             if (found) user = { id: found.id, username: found.username };
         }
         if (!user && params.email) {
             const email_row = await this._user_repo.find_by_email(params.email.trim().toLowerCase());
             if (email_row) {
-                const found = await this._user_repo.find_by_id(email_row.id);
+                const found = await this._user_repo.find_profile_by_id(email_row.id);
                 if (found) user = { id: found.id, username: found.username };
             }
         }
@@ -383,19 +388,19 @@ export class OrgsService {
         if (existing) throw new ApiError('conflict', 'User is already a member', 409);
 
         // Resolve the default 'member' role for assignment
-        const member_role = await OrgRole.findOne({
+        const member_role = await _org_role_repo_os.find_one_q({
             where: { org_id: params.org_id, slug: 'member' },
             attributes: ['id'],
         });
         await this._org_member_repo.create(params.org_id, user.id, 'member');
         if (member_role) {
-            await OrgMember.update(
-                { role_id: member_role.id },
-                { where: { org_id: params.org_id, user_id: user.id } },
+            await _org_member_repo_os.update_where(
+                { org_id: params.org_id, user_id: user.id } as any,
+                { role_id: member_role.id } as any,
             );
         }
 
-        const org = await Org.findByPk(params.org_id, { attributes: ['slug'], raw: true });
+        const org = await _org_repo_os.find_by_id(params.org_id);
         if (org?.slug) {
             await RealmService.ensure_org_default_realm(
                 org.slug,
@@ -407,7 +412,8 @@ export class OrgsService {
         /** Create per-user in-app notification channel for the new membership (best-effort). */
         try {
             await ensure_per_user_channel(user.id, params.org_id, user.username);
-        } catch {
+        } catch (err) {
+            log.warn('per_user_channel_failed', { error: err instanceof Error ? err.message : String(err) });
             /* Non-fatal — channel will be created on next login or backfill. */
         }
 
@@ -415,7 +421,8 @@ export class OrgsService {
     }
 
     async remove_member(auth: AuthContext, params: { org_id: string; user_id: string }) {
-        await this._require_org_admin(auth, params.org_id);
+        log.debug('remove_member', { org_id: params.org_id, user_id: params.user_id });
+        // Route policy: org.members.manage in org_id.
         const member = await this._org_member_repo.find_by_org_and_user(params.org_id, params.user_id);
         if (!member) throw new ApiError('not_found', 'Member not found', 404);
 
@@ -436,7 +443,8 @@ export class OrgsService {
             await NotificationChannel.destroy({
                 where: { user_id: params.user_id, org_id: params.org_id },
             });
-        } catch {
+        } catch (err) {
+            log.debug('per_user_channel_remove_failed', { error: err instanceof Error ? err.message : String(err) });
             /* Best-effort — channel may not exist. */
         }
 
@@ -444,6 +452,7 @@ export class OrgsService {
     }
 
     async leave(auth: AuthContext, params: { org_id: string }) {
+        log.debug('leave', { org_id: params.org_id, user_id: auth.user?.id });
         this._require_auth(auth);
         const membership = await this._org_member_repo.find_by_org_and_user(params.org_id, auth.user!.id);
         if (!membership) throw new ApiError('not_found', 'You are not a member of this org', 404);
@@ -465,7 +474,8 @@ export class OrgsService {
     // ─── Scope management ───────────────────────────────────────────
 
     async new_scope(auth: AuthContext, params: { org_id: string; slug: string; display_name?: string; visibility?: 'public' | 'private' }) {
-        await this._require_org_admin(auth, params.org_id);
+        log.debug('new_scope', { org_id: params.org_id, slug: params.slug });
+        // Route policy: org.scopes.manage in org_id.
         const org = await this._org_repo.find_by_id(params.org_id);
         if (!org) throw new ApiError('not_found', 'Org not found', 404);
 
@@ -492,8 +502,9 @@ export class OrgsService {
     }
 
     async delete_scope(auth: AuthContext, params: { org_id: string; scope_id: string }) {
-        await this._require_org_admin(auth, params.org_id);
-        const scope = await Scope.findOne({
+        log.debug('delete_scope', { org_id: params.org_id, scope_id: params.scope_id });
+        // Route policy: org.scopes.manage in org_id.
+        const scope = await _scope_repo_os.find_one_q({
             where: { id: params.scope_id, org_id: params.org_id },
             attributes: ['id', 'slug', 'org_id'],
             raw: true,
@@ -516,8 +527,9 @@ export class OrgsService {
     }
 
     async assign_scope_member(auth: AuthContext, params: { org_id: string; scope_id: string; user_id: string }) {
-        await this._require_org_admin(auth, params.org_id);
-        const scope = await Scope.findOne({
+        log.debug('assign_scope_member', { org_id: params.org_id, scope_id: params.scope_id, user_id: params.user_id });
+        // Route policy: org.scopes.manage in org_id.
+        const scope = await _scope_repo_os.find_one_q({
             where: { id: params.scope_id, org_id: params.org_id },
             attributes: ['id'],
             raw: true,
@@ -535,8 +547,9 @@ export class OrgsService {
     }
 
     async unassign_scope_member(auth: AuthContext, params: { org_id: string; scope_id: string; user_id: string }) {
-        await this._require_org_admin(auth, params.org_id);
-        const scope = await Scope.findOne({
+        log.debug('unassign_scope_member', { org_id: params.org_id, scope_id: params.scope_id, user_id: params.user_id });
+        // Route policy: org.scopes.manage in org_id.
+        const scope = await _scope_repo_os.find_one_q({
             where: { id: params.scope_id, org_id: params.org_id },
             attributes: ['id'],
             raw: true,

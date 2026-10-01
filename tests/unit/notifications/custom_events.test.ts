@@ -11,6 +11,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 
+vi.mock('../../../src/notifications/fan_out.service.js', () => ({
+    NotificationFanOutService: {
+        notify_realm: vi.fn().mockResolvedValue('queued'),
+        notify_account: vi.fn().mockResolvedValue('queued'),
+    },
+}));
+
 // ── event type catalog ──────────────────────────────────────────────
 
 import { is_event_type } from '../../../src/schemas/event_types.js';
@@ -79,24 +86,20 @@ describe('required_fields_for — custom.* family', () => {
 
 // ── family handler creation ─────────────────────────────────────────
 
-import { create_handler_for_type, CustomEventHandler } from '../../../src/notifications/handlers/family_handlers.js';
-import { get_notification_handler } from '../../../src/notifications/handlers/catalog_handlers.js';
+import { route_event } from '../../../src/notifications/router.js';
 
-describe('custom.* notification handler', () => {
-
-    it('create_handler_for_type returns CustomEventHandler for custom.*', () => {
-        const handler = create_handler_for_type('custom.enrichment_stale');
-        expect(handler).toBeInstanceOf(CustomEventHandler);
+describe('custom.* notification routing', () => {
+    it('routes custom.* events to notify_realm', async () => {
+        const result = await route_event({
+            type: 'custom.enrichment_stale',
+            realm_id: 'r-1',
+        } as any);
+        expect(result).toBe('queued');
     });
 
-    it('get_notification_handler resolves custom.* dynamically', () => {
-        const handler = get_notification_handler('custom.enrichment_stale');
-        expect(handler).toBeInstanceOf(CustomEventHandler);
-    });
-
-    it('get_notification_handler still works for cataloged types', () => {
-        const handler = get_notification_handler('run.started');
-        expect(handler).toBeDefined();
+    it('routes run.* events to notify_realm', async () => {
+        const result = await route_event({ type: 'run.started', realm_id: 'r-1' } as any);
+        expect(result).toBe('queued');
     });
 });
 
@@ -156,7 +159,57 @@ vi.mock('../../../src/models/index.js', async () => {
         },
         NotificationChannel: {},
         NotificationRule: {},
+        NotificationSubscription: {},
         Realm: {},
+        RealmMember: {},
+        HubEvent: {},
+        Org: {},
+        OrgMember: {},
+        OrgRole: {},
+        Daemon: {},
+        Run: {},
+        WebhookDelivery: {},
+        InAppNotification: {},
+        ChannelDestination: {},
+        RealmAgentSetting: {},
+        UserRealmAgentSetting: {},
+        OrgAgentSetting: {},
+        RealmDispatchKey: {},
+        RealmDispatchQueue: {},
+        RealmA2aSetting: {},
+        AccountMeshSetting: {},
+        AccountAgentSetting: {},
+        AccountInvite: {},
+        RealmInvite: {},
+        DaemonTeam: {},
+        DaemonConfig: {},
+        Scope: {},
+        ScopeMember: {},
+        User: {},
+        Draft: {},
+        AuditLog: {},
+        DownloadLog: {},
+        Setting: {},
+        TeamTag: {},
+        Agent: {},
+        Container: {},
+        RunEvent: {},
+        RunLog: {},
+        RunLogLine: {},
+        RunLogChunk: {},
+        RunPhase: {},
+        RunArtifact: {},
+        RunSpan: {},
+        Workspace: {},
+        WorkspaceTeam: {},
+        WorkspaceSecret: {},
+        Team: {},
+        TeamVersion: {},
+        ApiToken: {},
+        Review: {},
+        ReviewMessage: {},
+        ReviewNotification: {},
+        StoredArtifact: {},
     };
 });
 

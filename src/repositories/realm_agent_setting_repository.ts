@@ -1,4 +1,5 @@
-import { OrgAgentSetting, RealmAgentSetting } from '../db/models/index.js';
+import { OrgAgentSetting, UserRealmAgentSetting, RealmAgentSetting } from '../models/index.js';
+import { BaseRepository } from './base_repository.js';
 
 export interface Realm_agent_setting_row {
     agent_name: string;
@@ -11,11 +12,12 @@ export interface Realm_agent_setting_row {
  * Low-level CRUD for per-realm agent settings rows.
  * Used by RealmService for realm lifecycle (create/delete) snapshots.
  */
-export class RealmAgentSettingRepository {
+export class RealmAgentSettingRepository extends BaseRepository<RealmAgentSetting> {
+    protected readonly model = RealmAgentSetting;
 
     /** All settings for a user within a realm. */
     async list_for_user_realm(user_id: string, realm_id: string): Promise<Realm_agent_setting_row[]> {
-        return RealmAgentSetting.findAll({
+        return UserRealmAgentSetting.findAll({
             where: { user_id, realm_id },
             attributes: ['agent_name', 'setting_key', 'value', 'updated_at'],
             raw: true,
@@ -24,7 +26,7 @@ export class RealmAgentSettingRepository {
 
     /** Settings for a single agent in a user+realm scope. */
     async list_for_user_realm_and_agent(user_id: string, realm_id: string, agent_name: string): Promise<Realm_agent_setting_row[]> {
-        return RealmAgentSetting.findAll({
+        return UserRealmAgentSetting.findAll({
             where: { user_id, realm_id, agent_name },
             attributes: ['agent_name', 'setting_key', 'value', 'updated_at'],
             raw: true,
@@ -33,7 +35,7 @@ export class RealmAgentSettingRepository {
 
     /** Insert or update a single setting. */
     async upsert(user_id: string, realm_id: string, agent_name: string, setting_key: string, value: string): Promise<void> {
-        const [row, created] = await RealmAgentSetting.findOrCreate({
+        const [row, created] = await UserRealmAgentSetting.findOrCreate({
             where: { user_id, realm_id, agent_name, setting_key },
             defaults: { user_id, realm_id, agent_name, setting_key, value, updated_at: new Date() },
         });
@@ -43,7 +45,7 @@ export class RealmAgentSettingRepository {
 
     /** Remove a single setting. Returns true if a row was deleted. */
     async remove(user_id: string, realm_id: string, agent_name: string, setting_key: string): Promise<boolean> {
-        const removed = await RealmAgentSetting.destroy({
+        const removed = await UserRealmAgentSetting.destroy({
             where: { user_id, realm_id, agent_name, setting_key },
         });
         return removed > 0;
@@ -51,7 +53,7 @@ export class RealmAgentSettingRepository {
 
     /** Remove all settings for a realm (used on realm delete). */
     async remove_all_for_realm(realm_id: string): Promise<number> {
-        return RealmAgentSetting.destroy({ where: { realm_id } });
+        return UserRealmAgentSetting.destroy({ where: { realm_id } });
     }
 
     /**
@@ -66,7 +68,7 @@ export class RealmAgentSettingRepository {
         });
         if (org_rows.length === 0) return 0;
 
-        const existing = await RealmAgentSetting.findAll({
+        const existing = await UserRealmAgentSetting.findAll({
             where: { user_id, realm_id },
             attributes: ['agent_name', 'setting_key'],
             raw: true,
@@ -88,7 +90,7 @@ export class RealmAgentSettingRepository {
             }));
         if (to_create.length === 0) return 0;
 
-        await RealmAgentSetting.bulkCreate(to_create);
+        await UserRealmAgentSetting.bulkCreate(to_create);
         return to_create.length;
     }
 

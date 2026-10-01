@@ -9,32 +9,24 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Model, ModelStatic, Sequelize } from 'sequelize';
-import { DataTypes } from 'sequelize';
+import { DataTypes, type Sequelize } from 'sequelize';
+import { BaseModel } from './base_model.js';
 
-export interface NotificationRuleAttributes {
-    id?: string;
-    realm_id: string | null;
+export class NotificationRule extends BaseModel {
+    declare id: string;
+    declare realm_id: string | null;
     /** Owning org — set for org-level rules (realm_id IS NULL). */
-    org_id: string | null;
-    team_slug: string | null;
+    declare org_id: string | null;
+    declare team_slug: string | null;
     /** Event type or wildcard selector (e.g. 'run.*', 'custom.*', 'phase.escalated'). */
-    event: string;
-    channel_id: string;
-    priority: number;
-    created_at: number;
-    updated_at: number;
-}
+    declare event: string;
+    declare channel_id: string;
+    declare priority: number;
+    declare created_at: number;
+    declare updated_at: number;
 
-export type NotificationRuleModel =
-    Model<NotificationRuleAttributes> & NotificationRuleAttributes;
-
-export let NotificationRule: ModelStatic<NotificationRuleModel>;
-
-export function init_notification_rule(sequelize: Sequelize): void {
-    NotificationRule = sequelize.define(
-        'NotificationRule',
-        {
+    static register(sequelize: Sequelize): void {
+        NotificationRule.init({
             id: { type: DataTypes.UUID, primaryKey: true, defaultValue: () => randomUUID() },
             realm_id: { type: DataTypes.TEXT, allowNull: true },
             org_id: { type: DataTypes.UUID, allowNull: true },
@@ -44,8 +36,8 @@ export function init_notification_rule(sequelize: Sequelize): void {
             priority: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
             updated_at: { type: DataTypes.BIGINT, allowNull: false },
-        },
-        {
+        }, {
+            sequelize,
             schema: 'cliq',
             tableName: 'notification_rules',
             timestamps: false,
@@ -59,6 +51,18 @@ export function init_notification_rule(sequelize: Sequelize): void {
                     name: 'notification_rules_tier_event_channel_uidx',
                 },
             ],
-        },
-    ) as ModelStatic<NotificationRuleModel>;
+        });
+    }
 }
+
+export type NotificationRuleAttributes = {
+    id?: string;
+    realm_id: string | null;
+    org_id: string | null;
+    team_slug: string | null;
+    event: string;
+    channel_id: string;
+    priority: number;
+    created_at: number;
+    updated_at: number;
+};

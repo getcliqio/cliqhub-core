@@ -10,9 +10,9 @@
 import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { RunService } from '../services/run.service.js';
-import { RealmService } from '../services/realm.service.js';
 import { ApiError } from '../lib/api_error.js';
-import { is_site_admin } from '../lib/site_admin.js';
+import { AdminCheck } from '../lib/site_admin.js';
+import { get_logger } from '../lib/log.js';
 
 const append_logs_schema = z.object({
     run_id: z.string().min(1),
@@ -42,10 +42,13 @@ const get_logs_schema = z.object({
     limit: z.number().int().positive().optional(),
 });
 
+const log = get_logger('ctrl.logs');
+
 export class LogsController {
     /** POST /v1/runs/append_logs — daemon mirror of run log chunks. */
     static async append_logs(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
+            log.debug('append_logs', { run_id: req.body?.run_id });
             const body = append_logs_schema.parse(req.body ?? {});
             const id = await RunService.append_log(body.run_id, body.chunk, {
                 concern: body.concern,
@@ -59,16 +62,15 @@ export class LogsController {
     /** POST /v1/runs/get_logs — realm-scoped search; site admin may omit realm_id. */
     static async get_logs(req: Request, res: Response, next: NextFunction): Promise<void> {
         try {
+            log.debug('get_logs', { user_id: req.auth?.user?.id, realm_id: req.body?.realm_id });
             const body = get_logs_schema.parse(req.body ?? {});
-            const user_id = req.user?.user_id?.trim();
             const realm_id = body.realm_id?.trim();
             if (!realm_id) {
-                if (!is_site_admin(req)) {
+                if (!AdminCheck.is_site_admin(req)) {
                     throw ApiError.bad_request('realm_id is required');
                 }
-            } else if (user_id) {
-                await RealmService.get(realm_id, user_id);
             }
+            // With realm_id: route policy checked realm view + runs.view.
             const result = await RunService.search_log_lines({
                 ...body,
                 ...(realm_id ? { realm_id } : {}),

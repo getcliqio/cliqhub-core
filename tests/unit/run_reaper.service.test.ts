@@ -12,6 +12,7 @@ vi.mock('../../src/lib/sequelize.js', () => ({
 }));
 
 vi.mock('../../src/models/index.js', () => ({
+    DaemonTeam: {},
     Daemon: { findAll: (...args: unknown[]) => find_all_mock(...args) },
     Run: {},
 }));

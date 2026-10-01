@@ -3,12 +3,13 @@
  * Mesh defaults come from the realm's org; A2A flags live on the realm row.
  */
 
-import { Realm } from '../models/index.js';
+import { RealmRepository } from '../repositories/realm_repository.js';
 import { get_logger } from '../lib/log.js';
 import { OrgMeshService } from './org_mesh.service.js';
 import { RealmA2aService } from './realm_a2a.service.js';
 
 const log = get_logger('mesh-lifecycle');
+const realm_repo = new RealmRepository();
 
 export type Auto_enable_result =
     | 'skipped'
@@ -24,7 +25,7 @@ export class MeshLifecycleService {
         realm_id: string,
         _owner_user_id: string,
     ): Promise<Auto_enable_result> {
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await realm_repo.find_by_id(realm_id);
         if (!realm || realm.deleted || !realm.org_id) return 'skipped';
 
         const org_mesh = await OrgMeshService.get_raw(realm.org_id);
@@ -61,7 +62,7 @@ export class MeshLifecycleService {
     }
 
     static async on_skills_changed(realm_id: string): Promise<'skipped' | 'refreshed' | 'failed'> {
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await realm_repo.find_by_id(realm_id);
         if (!realm || realm.deleted) return 'skipped';
         if (!realm.a2a_enabled) return 'skipped';
 
@@ -88,7 +89,7 @@ export class MeshLifecycleService {
         realm_id: string,
         actor_user_id: string,
     ): Promise<'skipped' | 'disconnected' | 'cleared'> {
-        const realm = await Realm.findByPk(realm_id);
+        const realm = await realm_repo.find_by_id(realm_id);
         if (!realm) return 'skipped';
 
         let disconnected = false;

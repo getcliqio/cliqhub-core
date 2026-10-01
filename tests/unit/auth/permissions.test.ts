@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 
-vi.mock('../../../src/db/models/index.js', () => ({
+vi.mock('../../../src/models/index.js', () => ({
     OrgMember: { findOne: vi.fn() },
     OrgRole: { findByPk: vi.fn() },
 }));
@@ -23,7 +23,7 @@ vi.mock('../../../src/errors/api_error.js', () => ({
 }));
 
 import { require_permission } from '../../../src/auth/permissions.js';
-import { OrgMember, OrgRole } from '../../../src/db/models/index.js';
+import { OrgMember, OrgRole } from '../../../src/models/index.js';
 
 beforeEach(() => vi.clearAllMocks());
 

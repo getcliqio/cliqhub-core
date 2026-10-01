@@ -39,7 +39,7 @@ describe.skipIf(!ready)('schema coexistence (public + cliq)', () => {
 
     it('Hub sequelize (public) and control-plane store (cliq) work together', async () => {
         const { init_sequelize } = await import('../../src/db/sequelize.js');
-        const { init_models } = await import('../../src/db/models/index.js');
+        const { init_models } = await import('../../src/models/index.js');
         const {
             init_control_plane_store,
             get_control_plane_store,
@@ -58,16 +58,15 @@ describe.skipIf(!ready)('schema coexistence (public + cliq)', () => {
         // Distinct Sequelize instances, distinct schemas.
         expect(control.sequelize).not.toBe(hub_sq);
 
-        await hub_sq.query('SELECT 1 FROM information_schema.schemata WHERE schema_name = \'public\'');
-        await control.sequelize.query('SELECT 1 FROM cliq.scopes WHERE slug = \'cliq\' LIMIT 1');
+        await hub_sq.query('SELECT 1 FROM information_schema.schemata WHERE schema_name = \'cliq\'');
+        await hub_sq.query('SELECT 1 FROM cliq.scopes WHERE slug = \'cliq\' LIMIT 1');
         await control.sequelize.query(
             'SELECT 1 FROM cliq.daemon_config WHERE daemon_id = \'__global__\' LIMIT 1',
         );
 
-        // Control-plane Team/Scope must not be the Hub public.teams/scopes models.
-        // Qualified names would throw if sync wrote into the wrong schema.
+        // All registry tables are now in cliq schema.
         await expect(
-            control.sequelize.query('SELECT 1 FROM cliq.teams LIMIT 0'),
+            control.sequelize.query('SELECT 1 FROM cliq.daemon_teams LIMIT 0'),
         ).resolves.toBeTruthy();
     }, 300_000);
 });

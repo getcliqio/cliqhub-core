@@ -5,18 +5,24 @@
 
 import { ApiError } from '../lib/api_error.js';
 import { RealmService } from './realm.service.js';
+import { get_logger } from '../lib/log.js';
+
+const log = get_logger('svc.access');
 
 export class AccessService {
 	static async list_daemon_ids_for_user(user_id: string): Promise<string[]> {
+		log.debug('list_daemon_ids_for_user', { user_id });
 		return RealmService.list_daemon_ids_for_user(user_id);
 	}
 
 	static async assert_realm_access(user_id: string, daemon_id: string): Promise<void> {
+		log.debug('assert_realm_access', { user_id, daemon_id });
 		await RealmService.assert_user_can_access_daemon(user_id, daemon_id);
 	}
 
 	/** Scope ACL — caller's accessible scope_ids must include target. */
 	static assert_scope_access(accessible_scope_ids: string[], scope_id: string): void {
+		log.debug('assert_scope_access', { scope_id });
 		if (accessible_scope_ids.includes(scope_id)) return;
 		throw ApiError.forbidden(`Scope '${scope_id}' is not accessible to this user`);
 	}
@@ -30,12 +36,14 @@ export class AccessService {
 		scope_id: string;
 		accessible_scope_ids: string[];
 	}): Promise<void> {
+		log.debug('assert_can_run_team_on_daemon', { user_id: input.user_id, daemon_id: input.daemon_id, scope_id: input.scope_id });
 		AccessService.assert_scope_access(input.accessible_scope_ids, input.scope_id);
 		await AccessService.assert_realm_access(input.user_id, input.daemon_id);
 	}
 
 	/** Runs / logs / status on a daemon — realm only. */
 	static async assert_can_observe_daemon(user_id: string, daemon_id: string): Promise<void> {
+		log.debug('assert_can_observe_daemon', { user_id, daemon_id });
 		await AccessService.assert_realm_access(user_id, daemon_id);
 	}
 
@@ -47,6 +55,7 @@ export class AccessService {
 		user_id: string,
 		run: { daemon_id?: string | null },
 	): Promise<void> {
+		log.debug('assert_can_observe_run', { user_id, daemon_id: run.daemon_id });
 		if (!run.daemon_id) return;
 		await AccessService.assert_can_observe_daemon(user_id, run.daemon_id);
 	}

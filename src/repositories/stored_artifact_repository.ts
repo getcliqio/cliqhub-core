@@ -7,11 +7,13 @@
 
 import { StoredArtifact } from '../models/stored_artifact.model.js';
 import type { StoredArtifactAttributes, StoredArtifactModel } from '../models/stored_artifact.model.js';
+import { BaseRepository } from './base_repository.js';
 
 /** Fields required to create a stored artifact row. */
 export type StoredArtifactCreate = StoredArtifactAttributes;
 
-export class StoredArtifactRepository {
+export class StoredArtifactRepository extends BaseRepository<StoredArtifactModel> {
+    protected readonly model = StoredArtifact;
 
     /** Insert a new artifact metadata row. */
     async create(attrs: StoredArtifactCreate): Promise<StoredArtifactModel> {
@@ -34,9 +36,8 @@ export class StoredArtifactRepository {
         });
     }
 
-    /** Delete an artifact row by primary key. Returns true if a row was deleted. */
-    async delete_by_id(artifact_id: string): Promise<boolean> {
-        const count = await StoredArtifact.destroy({ where: { id: artifact_id } });
-        return count > 0;
+    /** Delete an artifact row by primary key. Returns count deleted. */
+    async delete_by_id(artifact_id: string): Promise<number> {
+        return StoredArtifact.destroy({ where: { id: artifact_id } });
     }
 }

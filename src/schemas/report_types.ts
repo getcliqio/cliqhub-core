@@ -4,6 +4,12 @@ export const reports_audit_schema = z.object({
     action: z.string().optional(),
     target_type: z.string().optional(),
     admin_id: z.string().uuid().optional(),
+    /** Exact target id (user id, org slug, team id, agent id, …). */
+    target_id: z.string().min(1).max(200).optional(),
+    /** Entries at or after this time (epoch ms). */
+    since_ms: z.number().int().min(0).optional(),
+    /** Entries before this time (epoch ms). */
+    until_ms: z.number().int().min(0).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     offset: z.number().int().min(0).optional(),
 });

@@ -33,8 +33,8 @@ export async function seed_all(): Promise<void> {
 async function seed_scopes(): Promise<void> {
     const { Scope } = await import('../models/index.js');
     await Scope.bulkCreate([
-        { id: '00000000-0000-0000-0000-000000000000', slug: 'cliq', name: 'Cliq', is_default: 1, created_at: 0 },
-        { id: '00000000-0000-0000-0000-000000000001', slug: 'measureone', name: 'MeasureOne', is_default: 0, created_at: 0 },
+        { id: '00000000-0000-0000-0000-000000000000', slug: 'cliq', display_name: 'Cliq', is_default: 1, owner_id: null, visibility: 'public', scope_type: 'platform' },
+        { id: '00000000-0000-0000-0000-000000000001', slug: 'measureone', display_name: 'MeasureOne', is_default: 0, owner_id: null, visibility: 'public', scope_type: 'platform' },
     ], { ignoreDuplicates: true });
 }
 
@@ -263,36 +263,65 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
 }
 
 
+/**
+ * Owner for the built-in `@cliq` scope: the first user, or — on an empty
+ * database — a site admin created from `CLIQ_BOOTSTRAP_ADMIN_USER` /
+ * `CLIQ_BOOTSTRAP_ADMIN_PASSWORD` (+ optional `CLIQ_BOOTSTRAP_ADMIN_EMAIL`).
+ * There is no default password (S22). Without the variables: production
+ * refuses to start; other environments skip team seeding until a user exists.
+ */
+export async function ensure_bootstrap_admin(): Promise<string | null> {
+    const { User } = await import('../models/index.js');
+    const first = await User.findOne({ order: [['id', 'ASC']], attributes: ['id'], raw: true });
+    if (first?.id != null) return first.id;
+
+    const username = process.env.CLIQ_BOOTSTRAP_ADMIN_USER?.trim();
+    const password = process.env.CLIQ_BOOTSTRAP_ADMIN_PASSWORD ?? '';
+    const email = process.env.CLIQ_BOOTSTRAP_ADMIN_EMAIL?.trim() || `${username}@cliqhub.local`;
+
+    if (!username || !password) {
+        if ((process.env.NODE_ENV ?? 'development') === 'production') {
+            log.fatal('bootstrap_admin_not_configured', {
+                need: ['CLIQ_BOOTSTRAP_ADMIN_USER', 'CLIQ_BOOTSTRAP_ADMIN_PASSWORD'],
+            });
+            throw new Error('Empty database and no bootstrap admin configured (CLIQ_BOOTSTRAP_ADMIN_USER / CLIQ_BOOTSTRAP_ADMIN_PASSWORD)');
+        }
+        log.warn('bootstrap_admin_not_configured', {
+            effect: 'team seeding skipped until a user exists',
+            need: ['CLIQ_BOOTSTRAP_ADMIN_USER', 'CLIQ_BOOTSTRAP_ADMIN_PASSWORD'],
+        });
+        return null;
+    }
+
+    const { MIN_PASSWORD_LENGTH } = await import('../config/env.js');
+    if (password.length < MIN_PASSWORD_LENGTH) {
+        log.fatal('bootstrap_admin_password_too_short', { min_length: MIN_PASSWORD_LENGTH });
+        throw new Error(`CLIQ_BOOTSTRAP_ADMIN_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters`);
+    }
+
+    const { hash_password } = await import('../auth/password.js');
+    const created = await User.create({
+        username,
+        email,
+        password_hash: await hash_password(password),
+        display_name: username,
+        role: 'admin',
+    });
+    log.info('bootstrap_admin_created', { user_id: created.id, username });
+    return created.id;
+}
+
 async function seed_teams(): Promise<void> {
-    const { Team, Scope: PublicScope, User } = await import('../db/models/index.js');
-    const { TeamVersion } = await import('../db/models/index.js');
+    const { Team, Scope: PublicScope } = await import('../models/index.js');
+    const { TeamVersion } = await import('../models/index.js');
 
     /**
      * Ensure the @cliq scope exists in public.scopes so teams are
      * visible on the Teams page. Needs an existing user for owner_id
      * (e2e global_setup / first admin may create users after first boot).
      */
-    let owner_id: string | undefined = (
-        await User.findOne({
-            order: [['id', 'ASC']],
-            attributes: ['id'],
-            raw: true,
-        })
-    )?.id;
-    if (owner_id == null) {
-        // Fresh DB: create bootstrap admin so @cliq scope + hello-world can seed.
-        // e2e global_setup upserts the same username with a known password.
-        const { hash_password } = await import('../auth/password.js');
-        const password_hash = await hash_password('admin123');
-        const created = await User.create({
-            username: 'admin',
-            email: 'admin@cliqhub.io',
-            password_hash,
-            display_name: 'admin',
-            role: 'admin',
-        });
-        owner_id = created.id;
-    }
+    const owner_id = await ensure_bootstrap_admin();
+    if (owner_id == null) return;
 
     await PublicScope.findOrCreate({
         where: { slug: 'cliq' },

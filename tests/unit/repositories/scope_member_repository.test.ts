@@ -3,7 +3,7 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { setup_sequelize_mocks } from '../../helpers/mock_sequelize.js';
 setup_sequelize_mocks();
 
-import { ScopeMember, Scope } from '../../../src/db/models/index.js';
+import { ScopeMember, Scope } from '../../../src/models/index.js';
 import { ScopeMemberRepository } from '../../../src/repositories/scope_member_repository.js';
 
 describe('ScopeMemberRepository', () => {

@@ -1,17 +1,28 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
 
 import { ScopeService } from '../../src/services/control_scope_service.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
-import { Scope } from '../../src/models/index.js';
+import { Scope, Org } from '../../src/models/index.js';
 
 const has_postgres = await postgres_reachable();
 
 const uid = () => `test-scope-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+let test_org_id: string;
+
 beforeAll(async () => {
     if (!has_postgres) return;
     process.env.CLIQ_BFF_LOG_LEVEL = 'error';
     await open_test_control_plane_store();
+    // Create a test org for tests that need org_id references
+    const org = await Org.create({
+        id: randomUUID(),
+        slug: `test-org-${Date.now()}`,
+        display_name: 'Test Org',
+        created_at: new Date(),
+    });
+    test_org_id = org.id;
 });
 
 beforeEach(async () => {
@@ -49,7 +60,7 @@ describe.skipIf(!has_postgres)('ScopeService.add', () => {
         const scope = await ScopeService.add(slug, 'My Scope');
 
         expect(scope.slug).toBe(slug);
-        expect(scope.name).toBe('My Scope');
+        expect(scope.display_name).toBe('My Scope');
         expect(scope.id).toBeTruthy();
     });
 
@@ -65,7 +76,7 @@ describe.skipIf(!has_postgres)('ScopeService.add', () => {
         const second = await ScopeService.add(slug, 'second');
 
         expect(first.id).toBe(second.id);
-        expect(second.name).toBe('first');
+        expect(second.display_name).toBe('first');
     });
 
     it('second scope is not default', async () => {
@@ -76,7 +87,7 @@ describe.skipIf(!has_postgres)('ScopeService.add', () => {
 
     it('creates scope with org_id and scope_type', async () => {
         const slug = uid();
-        const org = uid();
+        const org = test_org_id;
         const scope = await ScopeService.add(slug, 'Org Scope', org, 'org');
         expect(scope.org_id).toBe(org);
         expect(scope.scope_type).toBe('org');
@@ -173,7 +184,7 @@ describe.skipIf(!has_postgres)('ScopeService.list_by_org_ids', () => {
     });
 
     it('returns scopes matching org_ids', async () => {
-        const org = uid();
+        const org = test_org_id;
         const slug = uid();
         await ScopeService.add(slug, 'Org Scope', org, 'org');
 

@@ -2,9 +2,10 @@ import { AbstractChannelDeliverer, type DeliveryContext } from './abstract_chann
 import type { NotificationPayload } from '../types.js';
 import { get_logger } from '../../lib/log.js';
 import { InAppNotificationService } from '../../services/in_app_notification.service.js';
-import { NotificationChannel } from '../../models/index.js';
+import { NotificationChannelRepository } from '../../repositories/notification_channel_repository.js';
 
 const log = get_logger('notify.cliqhub');
+const channel_repo = new NotificationChannelRepository();
 
 /**
  * CliqHub in-app channel deliverer — persists a notification row.
@@ -26,9 +27,7 @@ export class CliqHubDeliverer extends AbstractChannelDeliverer {
         let target_user_id: string | null = null;
         const channel_id = context?.channel_id;
         if (channel_id) {
-            const channel = await NotificationChannel.findByPk(channel_id, {
-                attributes: ['user_id'],
-            });
+            const channel = await channel_repo.find_by_id(channel_id);
             if (channel?.user_id) {
                 target_user_id = channel.user_id;
             }

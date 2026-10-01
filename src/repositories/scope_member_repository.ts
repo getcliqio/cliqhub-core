@@ -1,7 +1,9 @@
-import { ScopeMember, Scope } from '../db/models/index.js';
+import { ScopeMember, Scope } from '../models/index.js';
 import { Op } from 'sequelize';
+import { BaseRepository } from './base_repository.js';
 
-export class ScopeMemberRepository {
+export class ScopeMemberRepository extends BaseRepository<ScopeMember> {
+    protected readonly model = ScopeMember;
     async find_by_scope_and_user(scope_id: string, user_id: string) {
         return ScopeMember.findOne({ where: { scope_id, user_id }, raw: true });
     }

@@ -6,10 +6,49 @@
  * and phase_output_journal (daemon-side recovery journal).
  */
 
-import type { Model, ModelStatic, Sequelize } from 'sequelize';
-import { DataTypes } from 'sequelize';
+import { DataTypes, type Sequelize } from 'sequelize';
+import { BaseModel } from './base_model.js';
 
-export interface StoredArtifactAttributes {
+export class StoredArtifact extends BaseModel {
+    declare id: string;
+    declare run_id: string;
+    declare phase: string;
+    declare name: string;
+    declare description: string | null;
+    declare mime_type: string;
+    declare size_bytes: number;
+    declare storage_key: string;
+    declare uploaded_by: string | null;
+    declare created_at: number;
+
+    static register(sequelize: Sequelize): void {
+        StoredArtifact.init({
+            id: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
+            run_id: { type: DataTypes.TEXT, allowNull: false },
+            phase: { type: DataTypes.TEXT, allowNull: false },
+            name: { type: DataTypes.TEXT, allowNull: false },
+            description: { type: DataTypes.TEXT, allowNull: true },
+            mime_type: { type: DataTypes.TEXT, allowNull: false },
+            size_bytes: { type: DataTypes.BIGINT, allowNull: false },
+            storage_key: { type: DataTypes.TEXT, allowNull: false },
+            uploaded_by: { type: DataTypes.TEXT, allowNull: true },
+            created_at: { type: DataTypes.BIGINT, allowNull: false },
+        }, {
+            sequelize,
+            schema: 'cliq',
+            tableName: 'stored_artifacts',
+            timestamps: false,
+            indexes: [
+                { fields: ['run_id'] },
+            ],
+        });
+    }
+}
+
+/** @deprecated Use StoredArtifact directly */
+export type StoredArtifactModel = StoredArtifact;
+
+export type StoredArtifactAttributes = {
     id: string;
     run_id: string;
     phase: string;
@@ -20,38 +59,4 @@ export interface StoredArtifactAttributes {
     storage_key: string;
     uploaded_by: string | null;
     created_at: number;
-}
-
-export type StoredArtifactModel = Model<StoredArtifactAttributes> & StoredArtifactAttributes;
-
-export let StoredArtifact: ModelStatic<StoredArtifactModel>;
-
-export function init_stored_artifact(sequelize: Sequelize): void {
-    StoredArtifact = sequelize.define(
-        'StoredArtifact',
-        {
-            id: {
-                type: DataTypes.UUID,
-                primaryKey: true,
-                defaultValue: DataTypes.UUIDV4,
-            },
-            run_id: { type: DataTypes.TEXT, allowNull: false },
-            phase: { type: DataTypes.TEXT, allowNull: false },
-            name: { type: DataTypes.TEXT, allowNull: false },
-            description: { type: DataTypes.TEXT, allowNull: true },
-            mime_type: { type: DataTypes.TEXT, allowNull: false },
-            size_bytes: { type: DataTypes.BIGINT, allowNull: false },
-            storage_key: { type: DataTypes.TEXT, allowNull: false },
-            uploaded_by: { type: DataTypes.TEXT, allowNull: true },
-            created_at: { type: DataTypes.BIGINT, allowNull: false },
-        },
-        {
-            schema: 'cliq',
-            tableName: 'stored_artifacts',
-            timestamps: false,
-            indexes: [
-                { fields: ['run_id'] },
-            ],
-        },
-    ) as ModelStatic<StoredArtifactModel>;
-}
+};

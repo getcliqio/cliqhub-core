@@ -27,10 +27,16 @@ import type { Request, Response } from 'express';
 import { Op } from 'sequelize';
 
 import { BaseController } from './base_controller.js';
+import { get_logger } from '../lib/log.js';
 import { ApiError } from '../lib/api_error.js';
 import { ApiError as LegacyApiError } from '../errors/api_error.js';
 import { DispatchService } from '../services/dispatch.service.js';
-import { Team, Scope } from '../models/index.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+
+const _dt_repo_tc = new DaemonTeamRepository();
+import { ScopeRepository } from '../repositories/scope_repository.js';
+
+const _scope_repo_tc = new ScopeRepository();
 import type { TeamsService } from '../services/teams_service.js';
 import type { BuilderService } from '../services/builder_service.js';
 import type { ApiOkResponse, ApiRequest, PagedData } from '../types/api_response.js';
@@ -52,7 +58,9 @@ import {
     TeamsUninstallInput,
 } from '../schemas/team_types.js';
 import { teams_build_schema } from '../schemas/builder_types.js';
-import { to_team_list_item_dto } from '../types/mappers.js';
+import { to_team_list_item_dto } from '../lib/mappers.js';
+
+const log = get_logger('ctrl.teams');
 
 export class TeamsController extends BaseController {
     constructor(
@@ -82,7 +90,7 @@ export class TeamsController extends BaseController {
         realm_id?: string,
         daemon_ids?: string[],
     ): Promise<void> {
-        const scope_row = await Scope.findOne({ where: { slug: scope_slug }, attributes: ['id'] });
+        const scope_row = await _scope_repo_tc.find_one_q({ where: { slug: scope_slug }, attributes: ['id'] });
         if (!scope_row) return;
 
         const where: Record<string, unknown> = {
@@ -99,7 +107,7 @@ export class TeamsController extends BaseController {
             where.daemon_id = { [Op.in]: realm_daemon_ids };
         }
 
-        await Team.destroy({ where });
+        await _dt_repo_tc.delete_where(where as any);
     }
 
     // ─── Read handlers ───────────────────────────────────────────────────────
@@ -118,6 +126,7 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsGetInput, PagedData<TeamData>>,
         res: ApiOkResponse<PagedData<TeamData>>,
     ): Promise<void> {
+        log.debug('get', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsGetInput, req);
         const offset = body.offset ?? 0;
         const limit = body.limit ?? 50;
@@ -219,6 +228,7 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsGetByIdInput, TeamData>,
         res: ApiOkResponse<TeamData>,
     ): Promise<void> {
+        log.debug('get_by_id', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsGetByIdInput, req);
         const result = await this._teams_service.get_by_id(req.auth!, body);
         this.ok(res, result as unknown as TeamData);
@@ -235,6 +245,7 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsGetVersionsInput, TeamsGetVersionsData>,
         res: ApiOkResponse<TeamsGetVersionsData>,
     ): Promise<void> {
+        log.debug('get_versions', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsGetVersionsInput, req);
         const result = await this._teams_service.get_versions(req.auth!, body);
         this.ok(res, result as TeamsGetVersionsData);
@@ -251,6 +262,7 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsGetPhasesInput, TeamsGetPhasesData>,
         res: ApiOkResponse<TeamsGetPhasesData>,
     ): Promise<void> {
+        log.debug('get_phases', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsGetPhasesInput, req);
         const result = await this._teams_service.get_phases(req.auth!, body);
         this.ok(res, result as TeamsGetPhasesData);
@@ -269,8 +281,10 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsCreateInput, TeamMutationData>,
         res: ApiOkResponse<TeamMutationData>,
     ): Promise<void> {
+        log.debug('create', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsCreateInput, req);
         const result = await this._teams_service.create(req.auth!, body);
+        log.info('team_created', { name: body.name });
         this.ok(res, result as TeamMutationData);
     }
 
@@ -285,8 +299,10 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsUpdateInput, TeamMutationData>,
         res: ApiOkResponse<TeamMutationData>,
     ): Promise<void> {
+        log.debug('update', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsUpdateInput, req);
         const result = await this._teams_service.update(req.auth!, body);
+        log.info('team_updated', { team_id: body.team_id, scope: body.scope, name: body.name });
         this.ok(res, result as TeamMutationData);
     }
 
@@ -301,8 +317,10 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsPublishInput, TeamMutationData>,
         res: ApiOkResponse<TeamMutationData>,
     ): Promise<void> {
+        log.debug('publish', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsPublishInput, req);
         const result = await this._teams_service.publish(req.auth!, body);
+        log.info('team_published', { team_id: body.team_id });
         this.ok(res, result as TeamMutationData);
     }
 
@@ -317,8 +335,10 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsUnpublishInput, TeamMutationData>,
         res: ApiOkResponse<TeamMutationData>,
     ): Promise<void> {
+        log.debug('unpublish', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsUnpublishInput, req);
         const result = await this._teams_service.unpublish(req.auth!, body);
+        log.info('team_unpublished', { team_id: body.team_id, scope: body.scope, name: body.name });
         this.ok(res, result as TeamMutationData);
     }
 
@@ -332,6 +352,7 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsDownloadInput, unknown>,
         res: ApiOkResponse<unknown>,
     ): Promise<void> {
+        log.debug('download', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsDownloadInput, req);
         const result = await this._teams_service.download(req.auth!, body);
         this.ok(res, result);
@@ -347,8 +368,10 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsDeleteTeamInput, { deleted: boolean }>,
         res: ApiOkResponse<{ deleted: boolean }>,
     ): Promise<void> {
+        log.debug('delete_team', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsDeleteTeamInput, req);
         const result = await this._teams_service.delete_team(req.auth!, body);
+        log.info('team_deleted', { team_id: body.team_id });
         this.ok(res, result);
     }
 
@@ -362,8 +385,10 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsDeleteVersionInput, { deleted: boolean; version: string }>,
         res: ApiOkResponse<{ deleted: boolean; version: string }>,
     ): Promise<void> {
+        log.debug('delete_version', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsDeleteVersionInput, req);
         const result = await this._teams_service.delete_version(req.auth!, body);
+        log.info('team_version_deleted', { scope: body.scope, name: body.name, version: body.version });
         this.ok(res, result);
     }
 
@@ -377,8 +402,10 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsRenameInput, TeamMutationData>,
         res: ApiOkResponse<TeamMutationData>,
     ): Promise<void> {
+        log.debug('rename', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsRenameInput, req);
         const result = await this._teams_service.rename_team(req.auth!, body);
+        log.info('team_renamed', { scope: body.scope, name: body.name, new_name: body.new_name });
         this.ok(res, result as TeamMutationData);
     }
 
@@ -395,6 +422,7 @@ export class TeamsController extends BaseController {
         req: ApiRequest<typeof teams_build_schema._type, unknown>,
         res: ApiOkResponse<unknown>,
     ): Promise<void> {
+        log.debug('build', { user_id: req.auth?.user?.id, action: req.body?.action });
         const body = this.parse_body(teams_build_schema, req);
         const builder = this._require_builder();
 
@@ -474,6 +502,7 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsInstallInput, TeamsInstallData>,
         res: ApiOkResponse<TeamsInstallData>,
     ): Promise<void> {
+        log.debug('install', { user_id: req.auth?.user?.id, team_id: req.body?.team_id });
         const body = this.parse_body(TeamsInstallInput, req);
         const auth = this.auth_from(req);
         const result = await DispatchService.install_via_queue({
@@ -486,6 +515,7 @@ export class TeamsController extends BaseController {
             user_id: String(auth?.user?.id ?? ''),
             org_ids: auth?.org_ids ?? [],
         });
+        log.info('team_installed', { team_id: body.team_id });
         this.ok(res, result);
     }
 
@@ -501,6 +531,7 @@ export class TeamsController extends BaseController {
         req: ApiRequest<TeamsUninstallInput, TeamsUninstallData>,
         res: ApiOkResponse<TeamsUninstallData>,
     ): Promise<void> {
+        log.debug('uninstall', { user_id: req.auth?.user?.id, scope: req.body?.scope, slug: req.body?.slug });
         const body = this.parse_body(TeamsUninstallInput, req);
         const daemon_ids = [
             ...(body.daemon_id ? [body.daemon_id] : []),
@@ -520,6 +551,7 @@ export class TeamsController extends BaseController {
             org_ids: auth?.org_ids ?? [],
         });
 
+        log.info('team_uninstalled', { scope: body.scope, slug: body.slug });
         this.ok(res, {
             ...result,
             // Convenience flag — true when at least one daemon acknowledged the uninstall.

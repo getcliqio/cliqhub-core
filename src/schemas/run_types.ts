@@ -29,14 +29,20 @@ export const RunsGetInput = z.object({
     /** Restrict to runs whose daemon is a member of this realm. */
     realm_id: z.string().optional(),
     /**
+     * Restrict to runs of this team (any version). Narrowing filter only —
+     * the realm-membership gate still applies. May be sent without org_id:
+     * the gate then spans the caller's realms in every org.
+     */
+    team_id: z.string().uuid().optional(),
+    /**
      * Organization UUID. Required for org-scoped recent list when
      * realm_id / daemon_id / workspace_id / parent_run_id are omitted.
      * Never invent from X-Org-Id.
      */
     org_id: z.string().uuid().optional().describe(
-        'Organization UUID. Required when listing recent runs without realm_id, daemon_id, workspace_id, or parent_run_id.',
+        'Organization UUID. Required when listing recent runs without realm_id, daemon_id, workspace_id, parent_run_id, or team_id.',
     ),
-    /** Substring match on run_id / run_name / team label (POST body only). */
+    /** Substring match on run_id / run_name (POST body only). */
     query: z.string().optional(),
     // Accept a single canonical state OR a list, so the dashboard's
     // "Failed" tile can drill into both `failed` and `crashed` in one
@@ -46,6 +52,7 @@ export const RunsGetInput = z.object({
         z.array(run_state_enum).min(1),
     ]).optional(),
     since_ms: z.number().optional(),
+    all: z.boolean().optional().describe('Site admins only: every record on the hub, not just the caller\'s realm memberships (ignored for everyone else). org_id still narrows.'),
     until_ms: z.number().optional(),
     /** Column to sort by. Default: last_updated_at DESC. */
     sort_by: z.enum(['run_name', 'state', 'team', 'started_at', 'last_updated_at']).optional(),
@@ -56,11 +63,15 @@ export const RunsGetInput = z.object({
     if (v.workspace_id?.trim()) return;
     if (v.realm_id?.trim()) return;
     if (v.daemon_id?.trim()) return;
+    // Team filter: realm gate over all the caller's realms (no org needed).
+    if (v.team_id) return;
+    // Site-admin hub-wide list (controller ignores `all` for everyone else → 422 there).
+    if (v.all) return;
     // Org-scoped recent list — body org_id is invent SoT.
     if (!v.org_id) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: 'org_id is required when listing recent runs without realm_id, daemon_id, workspace_id, or parent_run_id',
+            message: 'org_id is required when listing recent runs without realm_id, daemon_id, workspace_id, parent_run_id, or team_id',
             path: ['org_id'],
         });
     }
@@ -399,7 +410,7 @@ export const RunCountData = z.object({
 });
 export type RunCountData = z.infer<typeof RunCountData>;
 
-/** Single id ack (events_append, artifacts_create, handoff). */
+/** Single id ack (events_append, create_rdr, handoff). */
 export const RunIdData = z.object({
     id: z.string().describe('Created row id'),
 });

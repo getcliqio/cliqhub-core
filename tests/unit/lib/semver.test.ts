@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parse_semver, compare_semver, max_semver, sort_semver_desc } from '../../../src/lib/semver.js';
+import { SemVer } from '../../../src/lib/semver.js';
+const { parse: parse_semver, compare: compare_semver, max: max_semver, sort_desc: sort_semver_desc } = SemVer;
 
 describe('parse_semver', () => {
     it('parses major.minor.patch', () => {

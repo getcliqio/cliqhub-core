@@ -5,6 +5,8 @@
  * Under Daemons (not a separate Commands resource).
  */
 
+import { ApiError } from '../lib/api_error.js';
+import { RealmService } from '../services/realm.service.js';
 import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 
@@ -12,6 +14,7 @@ import { get_control_plane_store } from '../db/control_plane_store.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('command-ack');
+
 
 const ack_command_schema = z.object({
     tx_id: z.string().min(1),
@@ -34,12 +37,24 @@ export class CommandAckController {
             const body = ack_command_schema.parse(req.body);
             const store = get_control_plane_store();
 
+            // Route policy: daemon token only. The acking daemon must be in the
+            // token's realm (S26).
+            const realm_id = req.auth?.realm_id;
+            if (!realm_id) throw ApiError.forbidden('Daemon token has no realm');
+            await RealmService.assert_daemon_in_realm(realm_id, body.daemon_id);
+
             // Check if the command exists.
             const [rows] = await store.sequelize.query(
-                `SELECT tx_id, acked_at FROM cliq.command_outbox WHERE tx_id = ?`,
+                `SELECT tx_id, daemon_id, acked_at FROM cliq.command_outbox WHERE tx_id = ?`,
                 { replacements: [body.command_tx_id] },
             );
-            const command = (rows as Array<{ tx_id: string; acked_at: number | null }>)[0];
+            const command = (rows as Array<{ tx_id: string; daemon_id: string; acked_at: number | null }>)[0];
+
+            // A daemon may only ack commands addressed to it.
+            if (command && command.daemon_id !== body.daemon_id) {
+                log.warn('access_denied', { route: 'daemons/ack_command', reason: 'command_for_other_daemon', daemon_id: body.daemon_id, request_id: req.request_id });
+                throw ApiError.not_found('Command not found');
+            }
 
             // Unknown command_tx_id — the command may have been dispatched
             // via direct HTTP (e.g. offer_job, execute) rather than the
