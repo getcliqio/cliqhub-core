@@ -673,7 +673,15 @@ export class TeamsService {
             if (!team) throw new ApiError('invalid_params', 'data_base64 is required for new teams', 422);
             const latest = await this._version_repo.find_latest_version(team.id);
             if (!latest) throw new ApiError('invalid_params', 'data_base64 is required when the team has no versions', 422);
+            if (params.tags && params.tags.length > 20) throw new ApiError('invalid_params', 'Maximum 20 tags allowed', 422);
             await this._team_repo.update_visibility_and_listed(team.id, visibility, 1);
+            if (params.tags) {
+                const status_tags = normalize_tags(params.tags);
+                await get_sequelize().transaction(async (t) => {
+                    await this._tag_repo.delete_by_team_id(team!.id, t);
+                    for (const tag of status_tags) await this._tag_repo.create(team!.id, tag, t);
+                });
+            }
             if (params.description !== undefined || params.license !== undefined) {
                 await this._team_repo.update(
                     team.id,
@@ -758,6 +766,8 @@ export class TeamsService {
                 // Must use the same transaction: a second connection UPDATE on the
                 // locked team row deadlocks until the statement timeout → 500.
                 await this._team_repo.update_listed(team.id, 1, t);
+                // The published package supersedes any unversioned working copy.
+                if ((team as { draft_manifest?: string | null }).draft_manifest) await this._team_repo.clear_draft(team.id, t);
                 effective_team_id = team.id;
             } else {
                 const scope_record = scope ? auth.scopes.find((s) => s.slug === scope) : null;

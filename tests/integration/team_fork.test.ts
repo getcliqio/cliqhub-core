@@ -146,6 +146,22 @@ describe.skipIf(!has_postgres)('forking a team', () => {
         expect(empty.status).toBe(422);
     });
 
+    it('publishing a package supersedes the working copy; a status-only publish keeps the tags it is given', async () => {
+        const fork = await Team.findOne({ where: { name: 'my-pipeline', scope: forker.username }, attributes: ['id'], raw: true });
+        const draft = await post('/v1/teams/update', forker.token, { team_id: fork!.id, manifest: MANIFEST('my-pipeline'), save_as: 'draft' });
+        expect(draft.status, JSON.stringify(draft.body)).toBe(200);
+        const pkg = Buffer.from(JSON.stringify({ 'team.yml': MANIFEST('my-pipeline'), roles: [] })).toString('base64');
+        const published = await post('/v1/teams/publish', forker.token, { team_id: fork!.id, bump: 'patch', data_base64: pkg, changelog: 'First release' });
+        expect(published.status, JSON.stringify(published.body)).toBe(200);
+        const after = await post('/v1/teams/get_by_id', forker.token, { team_id: fork!.id });
+        expect(after.body.data.draft).toBeNull();
+
+        const status_only = await post('/v1/teams/publish', forker.token, { team_id: fork!.id, tags: ['Engineering', 'git'] });
+        expect(status_only.status, JSON.stringify(status_only.body)).toBe(200);
+        const tagged = await post('/v1/teams/get_by_id', forker.token, { team_id: fork!.id });
+        expect([...tagged.body.data.tags].sort()).toEqual(['engineering', 'git']);
+    });
+
     it("refuses a scope that isn't the caller's, and a name already taken", async () => {
         const other = await post('/v1/teams/create', forker.token, { name: 'x', scope: author.username, forked_from: { team_id: source_id } });
         expect(other.status).toBe(403);
