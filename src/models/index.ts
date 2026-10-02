@@ -14,6 +14,7 @@ import { ScopeMember } from './scope_member.model.js';
 import { Team } from './team.model.js';
 import { TeamVersion } from './team_version.model.js';
 import { TeamTag } from './team_tag.model.js';
+import { OrgTeam } from './org_team.model.js';
 import { Draft } from './draft.model.js';
 import { AuditLog } from './audit_log.model.js';
 import { DownloadLog } from './download_log.model.js';
@@ -65,7 +66,7 @@ export {
     // Registry
     User, Org, OrgMember, OrgRole,
     AccountAgentSetting, AccountInvite, RealmInvite, ApiToken,
-    Scope, ScopeMember, Team, TeamVersion, TeamTag,
+    Scope, ScopeMember, Team, TeamVersion, TeamTag, OrgTeam,
     Draft, AuditLog, DownloadLog, Setting,
     OrgAgentSetting, UserRealmAgentSetting,
     PasswordReset, PasswordResetRequest, EmailDelivery,
@@ -83,7 +84,7 @@ export {
 };
 
 /**
- * Register all 57 models on a single Sequelize instance and set up
+ * Register all 58 models on a single Sequelize instance and set up
  * associations. Called once at application boot.
  */
 export function init_models(sequelize: Sequelize): void {
@@ -101,6 +102,7 @@ export function init_models(sequelize: Sequelize): void {
     Team.register(sequelize);
     TeamVersion.register(sequelize);
     TeamTag.register(sequelize);
+    OrgTeam.register(sequelize);
     Draft.register(sequelize);
     AuditLog.register(sequelize);
     DownloadLog.register(sequelize);

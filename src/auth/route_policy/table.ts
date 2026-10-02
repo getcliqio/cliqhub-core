@@ -90,6 +90,9 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     // ── Org ─────────────────────────────────────────────────────────
     'POST /v1/orgs/get_by_id': org([ORG, 'body.slug'], 'member'),
     'POST /v1/orgs/get_reviewable_targets': org(ORG, 'member'),
+    'POST /v1/orgs/get_teams': org(ORG, 'member'),
+    'POST /v1/orgs/add_team': org(ORG, 'teams.install'),
+    'POST /v1/orgs/remove_team': org(ORG, 'teams.install'),
     'POST /v1/orgs/list_roles': org(ORG, 'member'),
     'POST /v1/orgs/get_role': org(ORG, 'member'),
     'POST /v1/orgs/get_scopes': org(ORG, 'member'),

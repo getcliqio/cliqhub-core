@@ -20,6 +20,7 @@
 
 import type { Request, Response } from 'express';
 
+import { OrgTeamsService } from '../services/org_teams.service.js';
 import { BaseController } from './base_controller.js';
 import { get_logger } from '../lib/log.js';
 import { ApiError } from '../lib/api_error.js';
@@ -341,6 +342,8 @@ export class RealmController extends BaseController {
         const body = this.parse_body(RealmTeamRefInput, req);
         const entry = { scope: body.scope, slug: body.slug };
 
+        // A team joins the realm's org before the realm (added to the org here when allowed).
+        await OrgTeamsService.ensure_for_realm(req.auth!, body.realm_id, body.scope, body.slug);
         // Persist on realm.team_list first so list reads stay consistent.
         const team_list = await this._team_list.add(body.realm_id, user.user_id, entry);
         // Fan-out install commands to online daemons (outbox; may be empty).

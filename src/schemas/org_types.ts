@@ -252,3 +252,18 @@ export type OrgMembershipVo = {
 
 /** @deprecated Use PascalCase `*Vo` names. */
 export type OrgMembershipVO = OrgMembershipVo;
+
+/** POST /v1/orgs/get_teams — the org's team library. */
+export const OrgsGetTeamsInput = z.object({
+    org_id: z.string().uuid().describe('Org whose team library to list'),
+});
+export type OrgsGetTeamsInput = z.infer<typeof OrgsGetTeamsInput>;
+
+/** POST /v1/orgs/add_team | remove_team — a team by id, or by scope + slug. */
+export const OrgTeamRefInput = z.object({
+    org_id: z.string().uuid().describe('Org whose team library to change'),
+    team_id: z.string().uuid().optional().describe('Team id (or scope + slug)'),
+    scope: z.string().optional().describe('Team scope, with slug'),
+    slug: z.string().optional().describe('Team slug, with scope'),
+}).refine((b) => Boolean(b.team_id || b.slug), { message: 'team_id or slug is required', path: ['team_id'] });
+export type OrgTeamRefInput = z.infer<typeof OrgTeamRefInput>;

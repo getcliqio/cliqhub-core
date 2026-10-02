@@ -42,6 +42,7 @@ const A1_ADMIN = '1YYY3344333';
 const A1_DAEMON_WRITE = '1YYYY344Y4Y';
 const ACME_MEMBER = '1YYYYYY4333';
 const ACME_ADMIN_PERM = '1YYY3334333';
+const ACME_OPERATOR_PERM = '1YYYY334333'; // a perm the org's operators have too
 const ACME_OWNER_ONLY = '1YY33334333';
 const TEAM_PRIVATE = '4Y444Y44444';
 const DAEMON_SELF = '1YYYYYYYYYY'; // users allowed while ALLOW_PAT_DAEMON_WRITES is on
@@ -122,6 +123,9 @@ const MATRIX: Record<string, Row> = {
     // org
     'POST /v1/orgs/get_by_id': { expect: ACME_MEMBER },
     'POST /v1/orgs/get_reviewable_targets': { expect: ACME_MEMBER },
+    'POST /v1/orgs/get_teams': { expect: ACME_MEMBER },
+    'POST /v1/orgs/add_team': { expect: ACME_OPERATOR_PERM },
+    'POST /v1/orgs/remove_team': { expect: ACME_OPERATOR_PERM },
     'POST /v1/orgs/list_roles': { expect: ACME_MEMBER },
     'POST /v1/orgs/get_role': { expect: ACME_MEMBER },
     'POST /v1/orgs/get_scopes': { expect: ACME_MEMBER },

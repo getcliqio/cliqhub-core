@@ -23,15 +23,20 @@
  * POST   /v1/orgs/set_notification_rules
  * POST   /v1/orgs/remove_notification_rules
  * POST   /v1/orgs/get_reviewable_targets
+ * POST   /v1/orgs/get_teams
+ * POST   /v1/orgs/add_team
+ * POST   /v1/orgs/remove_team
  * POST   /v1/permissions/list
  */
 import type { Router } from 'express';
 import type { Container } from '../../container.js';
 import { NotificationsController } from '../../controllers/notifications_controller.js';
+import { OrgTeamsController } from '../../controllers/org_teams_controller.js';
 
 export function register_orgs_routes(router: Router, container: Container): void {
     const { orgs_controller } = container;
     const notifications = new NotificationsController();
+    const org_teams = new OrgTeamsController();
 
     // ── Org CRUD ──────────────────────────────────────────────────────────────
     router.post('/orgs/get', orgs_controller.wrap(orgs_controller.get));
@@ -66,5 +71,10 @@ export function register_orgs_routes(router: Router, container: Container): void
 
     // ── Misc ──────────────────────────────────────────────────────────────────
     router.post('/orgs/get_reviewable_targets', orgs_controller.wrap(orgs_controller.get_reviewable_targets));
+
+    // ── Team library ──────────────────────────────────────────────────────────
+    router.post('/orgs/get_teams', org_teams.wrap(org_teams.get_teams));
+    router.post('/orgs/add_team', org_teams.wrap(org_teams.add_team));
+    router.post('/orgs/remove_team', org_teams.wrap(org_teams.remove_team));
     router.post('/permissions/list', orgs_controller.wrap(orgs_controller.permissions_list));
 }

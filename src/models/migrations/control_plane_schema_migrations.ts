@@ -1286,6 +1286,29 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_description" TEXT`);
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_saved_at" TIMESTAMPTZ`);
 
+    // Org team library: teams an org has taken on (from the marketplace or its own
+    // scopes). A team joins the org before any of the org's realms can add it.
+    await run(`
+        CREATE TABLE IF NOT EXISTS cliq."org_teams" (
+            "org_id" UUID NOT NULL REFERENCES cliq."orgs" ("id") ON DELETE CASCADE,
+            "team_id" UUID NOT NULL REFERENCES cliq."teams" ("id") ON DELETE CASCADE,
+            "added_by" UUID,
+            "added_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY ("org_id", "team_id")
+        )
+    `);
+    await run(`CREATE INDEX IF NOT EXISTS "org_teams_team_idx" ON cliq."org_teams" ("team_id")`);
+    // Teams already on a realm's team list are in that realm's org.
+    await run(`
+        INSERT INTO cliq."org_teams" ("org_id", "team_id")
+        SELECT DISTINCT r."org_id", t."id"
+          FROM cliq."realms" r
+          CROSS JOIN LATERAL jsonb_array_elements(r."team_list") e
+          JOIN cliq."teams" t ON t."name" = e->>'slug' AND t."scope" IS NOT DISTINCT FROM NULLIF(e->>'scope', '')
+         WHERE r."org_id" IS NOT NULL
+        ON CONFLICT DO NOTHING
+    `);
+
     // Add is_default column to public.scopes (registry) so the platform default
     // scope ('cliq') can be identified without a separate control-plane table.
     await run(`ALTER TABLE cliq."scopes" ADD COLUMN IF NOT EXISTS "is_default" INTEGER NOT NULL DEFAULT 0`);
