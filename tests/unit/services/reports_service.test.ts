@@ -10,6 +10,7 @@ function make_audit_repo() {
     return {
         list_paginated: vi.fn().mockResolvedValue([]),
         count_filtered: vi.fn().mockResolvedValue(0),
+        facets: vi.fn().mockResolvedValue({ action: [], target_type: [], admin: [] }),
     };
 }
 

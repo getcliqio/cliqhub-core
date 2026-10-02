@@ -25,6 +25,7 @@ const audit_repo = {
     create: vi.fn().mockResolvedValue(undefined),
     list_paginated: vi.fn().mockResolvedValue([]),
     count_filtered: vi.fn().mockResolvedValue(0),
+    facets: vi.fn().mockResolvedValue({ action: [], target_type: [], admin: [] }),
 };
 
 const app = express();

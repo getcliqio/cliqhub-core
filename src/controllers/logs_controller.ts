@@ -28,6 +28,8 @@ const append_logs_schema = z.object({
 const get_logs_schema = z.object({
     /** Omit only for site admins (all-realm search). */
     realm_id: z.string().optional(),
+    /** Site admins only: search several realms (e.g. one org's). */
+    realm_ids: z.array(z.string()).max(200).optional(),
     q: z.string().optional(),
     levels: z.array(z.string()).optional(),
     run_ids: z.array(z.string()).optional(),

@@ -1445,6 +1445,8 @@ export class RunService {
      */
     static async search_log_lines(opts: {
         realm_id?: string;
+        /** Several realms (site-admin search across the hub, e.g. one org's realms). */
+        realm_ids?: string[];
         q?: string;
         levels?: string[];
         run_ids?: string[];
@@ -1480,12 +1482,15 @@ export class RunService {
             run_id: Array<{ value: string; label?: string; count: number }>;
             workspace_id: Array<{ value: string; label?: string; count: number }>;
             concern: Array<{ value: string; label?: string; count: number }>;
+            /** Lines per realm (searches without a single realm_id). */
+            realm_id: Array<{ value: string; label?: string; count: number }>;
         };
         realm: { id: string; name: string | null; slug: string | null };
     }> {
         log.debug('search_log_lines', { realm_id: opts.realm_id });
         const where: Record<string, unknown> = {};
         if (opts.realm_id) where.realm_id = opts.realm_id;
+        else if (opts.realm_ids?.length) where.realm_id = { [Op.in]: opts.realm_ids };
         if (opts.levels?.length) where.level = { [Op.in]: opts.levels };
         if (opts.run_ids?.length) where.run_id = { [Op.in]: opts.run_ids };
         if (opts.daemon_ids?.length) where.daemon_id = { [Op.in]: opts.daemon_ids };
@@ -1515,7 +1520,7 @@ export class RunService {
         });
 
         const facet_counts = async (
-            field: 'level' | 'daemon_id' | 'team' | 'run_id' | 'workspace_id' | 'concern',
+            field: 'level' | 'daemon_id' | 'team' | 'run_id' | 'workspace_id' | 'concern' | 'realm_id',
         ): Promise<Array<{ value: string; count: number }>> => {
             const facet_where: Record<string, unknown> = { ...where };
             delete facet_where[field];
@@ -1542,14 +1547,23 @@ export class RunService {
                 .filter((r) => r.value);
         };
 
-        const [level, daemon_id_facets, team, run_id_facets, workspace_id_facets, concern_facets] = await Promise.all([
+        const [level, daemon_id_facets, team, run_id_facets, workspace_id_facets, concern_facets, realm_id_facets] = await Promise.all([
             facet_counts('level'),
             facet_counts('daemon_id'),
             facet_counts('team'),
             facet_counts('run_id'),
             facet_counts('workspace_id'),
             facet_counts('concern'),
+            opts.realm_id ? Promise.resolve([]) : facet_counts('realm_id'),
         ]);
+        const realm_slugs = new Map<string, string>();
+        if (realm_id_facets.length) {
+            const rows = await get_sequelize().query<{ id: string; slug: string }>(
+                'SELECT "id", "slug" FROM cliq."realms" WHERE "id" IN (:ids)',
+                { replacements: { ids: realm_id_facets.map((f) => f.value) }, type: QueryTypes.SELECT },
+            );
+            for (const r of rows) realm_slugs.set(String(r.id), r.slug);
+        }
 
         const run_ids = [...new Set([
             ...rows.map((r) => r.run_id),
@@ -1641,6 +1655,7 @@ export class RunService {
                     label: labeled(f.value, workspace_name_by_id.get(f.value) ?? null).label,
                 })),
                 concern: concern_facets,
+                realm_id: realm_id_facets.map((f) => ({ ...f, label: realm_slugs.get(f.value) ?? f.value })),
             },
             realm: {
                 id: opts.realm_id ?? '*',

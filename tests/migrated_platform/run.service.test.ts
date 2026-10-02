@@ -6,7 +6,7 @@ import { ScopeService } from '../../src/services/control_scope_service.js';
 import { TeamService } from '../../src/services/teams_install_service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
-import { Daemon, Run, RunEvent, RunLog, RunPhase, RunArtifact } from '../../src/models/index.js';
+import { Daemon, Run, RunEvent, RunLog, RunLogLine, RunPhase, RunArtifact } from '../../src/models/index.js';
 import { randomUUID } from 'node:crypto';
 
 let workspace_id: string;
@@ -597,6 +597,26 @@ describe.skipIf(!has_postgres)('RunService — Logs', () => {
                 concerns: ['run', 'command'],
             });
             expect(both.lines).toHaveLength(4);
+        });
+
+        it('searches several realms at once and counts lines per realm', async () => {
+            const realm_a = `test-realm-a-${uid()}`;
+            const realm_b = `test-realm-b-${uid()}`;
+            const in_a = await create_run({ realm_id: realm_a });
+            const in_b = await create_run({ realm_id: realm_b });
+            await RunService.append_log(in_a, 'a-1\na-2\n');
+            await RunService.append_log(in_b, 'b-1\n');
+            // Lines take their realm from the daemon's realm membership; these runs have no daemon.
+            await RunLogLine.update({ realm_id: realm_a } as never, { where: { run_id: in_a } });
+            await RunLogLine.update({ realm_id: realm_b } as never, { where: { run_id: in_b } });
+
+            const both = await RunService.search_log_lines({ realm_ids: [realm_a, realm_b] });
+            expect(both.lines).toHaveLength(3);
+            expect(new Map(both.facets.realm_id.map((f) => [f.value, f.count]))).toEqual(new Map([[realm_a, 2], [realm_b, 1]]));
+            const only_b = await RunService.search_log_lines({ realm_ids: [realm_b] });
+            expect(only_b.lines.map((l) => l.message)).toEqual(['b-1']);
+            // One realm: no per-realm counts.
+            expect((await RunService.search_log_lines({ realm_id: realm_a })).facets.realm_id).toEqual([]);
         });
     });
 });

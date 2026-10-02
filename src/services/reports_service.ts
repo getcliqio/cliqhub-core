@@ -33,11 +33,12 @@ export class ReportsService {
             until_ms: params.until_ms,
         };
 
-        const [entries, total] = await Promise.all([
+        const [entries, total, facets] = await Promise.all([
             this._audit_repo.list_paginated(filters, limit, offset, { sort_by: params.sort_by, sort_dir: params.sort_dir }),
             this._audit_repo.count_filtered(filters),
+            this._audit_repo.facets(filters),
         ]);
 
-        return { entries, total, limit, offset };
+        return { entries, total, limit, offset, facets };
     }
 }
