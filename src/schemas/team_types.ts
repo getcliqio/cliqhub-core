@@ -149,6 +149,11 @@ export const TeamsCreateInput = z.object({
         .describe('Scope (publisher) slug; caller must have write access to this scope'),
     description: z.string().optional()
         .describe('Human-readable summary'),
+    forked_from: z.object({
+        team_id: z.string().uuid().describe('Team to fork'),
+        version: z.string().optional().describe('Version to fork from; omit for the latest'),
+    }).optional()
+        .describe('Start the new team as a copy of this team version (its manifest unless `manifest` is given); the new team records where it came from'),
     manifest: z.union([z.string(), z.record(z.unknown())]).optional()
         .describe('Team manifest as YAML string or parsed object; seeds version 0.1.0 when provided'),
     team_json: z.string().optional()

@@ -132,6 +132,8 @@ function make_team_repo() {
         update_install_count: vi.fn().mockResolvedValue(undefined),
         list_by_scope: vi.fn().mockResolvedValue([]),
         list_by_scope_list: vi.fn().mockResolvedValue([]),
+        set_fork_origin: vi.fn().mockResolvedValue(undefined),
+        count_forks: vi.fn().mockResolvedValue(0),
     };
 }
 

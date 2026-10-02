@@ -37,6 +37,15 @@ function team_status(visibility: string): 'draft' | 'published' {
     return visibility === 'draft' ? 'draft' : 'published';
 }
 
+/**
+ * `manifest_yaml` with its top-level `name:` set to `name` (added at the top
+ * when missing); the rest of the text, comments included, is kept as is.
+ */
+export function with_manifest_name(manifest_yaml: string, name: string): string {
+    const line = /^name:.*$/m;
+    return line.test(manifest_yaml) ? manifest_yaml.replace(line, `name: ${name}`) : `name: ${name}\n${manifest_yaml}`;
+}
+
 /** Normalize optional manifest (YAML string, JSON object, or team_json string). */
 function resolve_manifest_yaml(params: {
     manifest?: string | Record<string, unknown>;
@@ -333,6 +342,8 @@ export class TeamsService {
 
         // Compute caller permissions for this team.
         const permissions = await this._resolve_team_permissions(auth, team);
+        const forked_from = await this._fork_summary(auth, team);
+        const fork_count = await this._team_repo.count_forks(team.id);
 
         /**
          * Prefer version-specific manifest_yaml (from team_versions) when
@@ -359,6 +370,8 @@ export class TeamsService {
             raw_manifest,
             /** SPA builder compat — same payload as former drafts.team_json. */
             team_json: raw_manifest,
+            forked_from,
+            fork_count,
             ...permissions,
         };
     }
@@ -464,6 +477,7 @@ export class TeamsService {
      */
     async create(auth: AuthContext, params: {
         name: string; scope: string; description?: string;
+        forked_from?: { team_id: string; version?: string };
         manifest?: string | Record<string, unknown>; team_json?: string;
     }) {
         log.debug('create', { name: params.name, scope: params.scope });
@@ -479,8 +493,10 @@ export class TeamsService {
         const existing = await this._team_repo.find_by_name_and_scope(params.name, params.scope);
         if (existing) throw new ApiError('conflict', `Team @${params.scope}/${params.name} already exists`, 409);
 
-        const description = params.description || '';
-        const manifest_yaml = resolve_manifest_yaml(params);
+        const origin = params.forked_from ? await this._fork_origin(auth, params.forked_from) : null;
+        const description = params.description || origin?.description || '';
+        const manifest_yaml = resolve_manifest_yaml(params)
+            ?? (origin ? with_manifest_name(origin.manifest_yaml, params.name) : null);
         const scope_record = auth.scopes.find((s) => s.slug === params.scope);
         const scope_type = scope_record?.scope_type || null;
 
@@ -497,9 +513,10 @@ export class TeamsService {
                 version = '0.1.0';
                 await this._seed_version_from_manifest(team_id, version, manifest_yaml, description, t);
             }
+            if (origin) await this._team_repo.set_fork_origin(team_id, origin.team_id, origin.version, t);
         });
 
-        log.info('team_created', { team_id, name: params.name, scope: params.scope });
+        log.info('team_created', { team_id, name: params.name, scope: params.scope, forked_from: origin ? `${origin.team_id}@${origin.version}` : null });
         return {
             id: team_id,
             name: params.name,
@@ -856,6 +873,43 @@ export class TeamsService {
     }
 
     // ─── Private helpers ────────────────────────────────────────────
+
+    /**
+     * The team version a new team is forked from: the caller must be able to
+     * read the team, and the version must exist (latest when not given).
+     *
+     * @throws ApiError 404 when the team or version is not found; 409 when the team has no version yet.
+     */
+    private async _fork_origin(auth: AuthContext, ref: { team_id: string; version?: string }): Promise<{
+        team_id: string; version: string; manifest_yaml: string; description: string;
+    }> {
+        const source = await this._team_repo.find_by_id(ref.team_id);
+        if (!source || !can_read_team(auth, source)) throw new ApiError('not_found', 'Team to fork not found', 404);
+        const version = ref.version ?? await this._version_repo.find_latest_version(source.id);
+        if (!version) throw new ApiError('conflict', `@${source.scope}/${source.name} has no version to fork yet`, 409);
+        const detail = await this._version_repo.find_detail_by_team_and_version(source.id, version);
+        const manifest_yaml = (detail as { manifest_yaml?: string | null } | null)?.manifest_yaml;
+        if (!detail || !manifest_yaml) throw new ApiError('not_found', `Version ${version} not found`, 404);
+        return { team_id: source.id, version, manifest_yaml, description: source.description };
+    }
+
+    /**
+     * Where `team` was forked from, for its detail: the origin team (null name
+     * and scope when it was deleted or the caller cannot see it), the version
+     * the fork started from, and the origin's latest version when visible.
+     */
+    private async _fork_summary(auth: AuthContext, team: { forked_from_team_id?: string | null; forked_from_version?: string | null }) {
+        if (!team.forked_from_team_id) return null;
+        const origin = await this._team_repo.find_by_id(team.forked_from_team_id);
+        const visible = Boolean(origin && can_read_team(auth, origin));
+        return {
+            team_id: team.forked_from_team_id,
+            scope: visible ? origin!.scope : null,
+            name: visible ? origin!.name : null,
+            version: team.forked_from_version ?? null,
+            latest_version: visible ? await this._version_repo.find_latest_version(origin!.id) : null,
+        };
+    }
 
     private async _resolve_team_for_write(
         auth: AuthContext,

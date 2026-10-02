@@ -93,6 +93,19 @@ export class TeamRepository extends BaseRepository<Team> {
         return team.id;
     }
 
+    /** Records the team and version `id` was forked from. */
+    async set_fork_origin(id: string, origin_team_id: string, origin_version: string, transaction?: Transaction): Promise<void> {
+        await Team.update(
+            { forked_from_team_id: origin_team_id, forked_from_version: origin_version },
+            { where: { id }, transaction },
+        );
+    }
+
+    /** How many teams were forked from `id`. */
+    async count_forks(id: string): Promise<number> {
+        return Team.count({ where: { forked_from_team_id: id } });
+    }
+
     async update(id: string, description: string, license: string, visibility: string, transaction?: Transaction): Promise<void> {
         await Team.update(
             { description, license, visibility, updated_at: fn('NOW') },

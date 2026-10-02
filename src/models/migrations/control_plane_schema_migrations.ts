@@ -418,6 +418,10 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`CREATE UNIQUE INDEX IF NOT EXISTS "team_runs_external_id_uniq"
                ON cliq."team_runs" ("external_id") WHERE "external_id" IS NOT NULL`);
 
+    // -- run start options: reviewers per human phase, notification channel override --
+    await run(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "reviewers" TEXT`);
+    await run(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "notify_channels" TEXT`);
+
     // Realm team list: declarative set of teams auto-installed on realm daemons.
     await run(`ALTER TABLE cliq."realms"
                ADD COLUMN IF NOT EXISTS "team_list" JSONB NOT NULL DEFAULT '[]'::jsonb`);
@@ -1272,6 +1276,11 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
             END IF;
         END $$
     `);
+
+    // Fork lineage: the team (and version) a team was forked from.
+    await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "forked_from_team_id" UUID`);
+    await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "forked_from_version" TEXT`);
+    await run(`CREATE INDEX IF NOT EXISTS "teams_forked_from_idx" ON cliq."teams" ("forked_from_team_id") WHERE "forked_from_team_id" IS NOT NULL`);
 
     // Add is_default column to public.scopes (registry) so the platform default
     // scope ('cliq') can be identified without a separate control-plane table.

@@ -102,6 +102,17 @@ export function to_agent_data(row: InstanceType<typeof AgentCatalog>, include_ma
     return { ...base, manifest: row.manifest };
 }
 
+/** A JSON text column parsed to `T`; null when empty or not valid JSON. */
+function parse_json_field<T>(v: unknown): T | null {
+    if (v == null || v === '') return null;
+    if (typeof v !== 'string') return v as T;
+    try {
+        return JSON.parse(v) as T;
+    } catch {
+        return null;
+    }
+}
+
 function coerce_ms(v: unknown): number | null {
     if (v === null || v === undefined) return null;
     if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -148,6 +159,8 @@ export function to_run_data(
         current_phase: plain.current_phase == null ? null : String(plain.current_phase),
         external_id: plain.external_id == null ? null : String(plain.external_id),
         context_labels: plain.context_labels ?? null,
+        reviewers: parse_json_field<Record<string, string[]>>(plain.reviewers),
+        notify_channels: parse_json_field<string[]>(plain.notify_channels),
         lease_expires_at: lease,
         started_at: started,
         completed_at: completed,

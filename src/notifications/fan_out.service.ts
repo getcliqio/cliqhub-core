@@ -28,6 +28,7 @@ import {
 	type OrgEventType,
 } from './org_events.js';
 import type { EmailSubjectType } from '../models/email_delivery.model.js';
+import { RUN_NOTIFY_OVERRIDE_EVENTS } from '../services/run_start_options.js';
 
 const log = get_logger('notify.fanout');
 const _fan_out_daemon_repo = new DaemonRepository();
@@ -49,7 +50,7 @@ export class NotificationFanOutService {
 		const realm_id = event.realm_id?.trim();
 		if (!realm_id) return 'skipped';
 
-		const intent = read_notify_channels_intent(event.payload ?? undefined);
+		const intent = read_notify_channels_intent(event.payload ?? undefined) ?? await run_notify_channels(event);
 		const plan = plan_fan_out(event.type, intent);
 
 		if (plan.action === 'mute') return 'skipped';
@@ -210,6 +211,24 @@ export class NotificationFanOutService {
 	}
 }
 
+
+/**
+ * The notification channels chosen when the event's run was started, for the
+ * run lifecycle events they cover; undefined when there are none.
+ */
+async function run_notify_channels(event: SubmittedEvent): Promise<string[] | undefined> {
+	const run_id = event.run_id?.trim();
+	if (!run_id || !RUN_NOTIFY_OVERRIDE_EVENTS.has(event.type)) return undefined;
+	const run = await _fan_out_run_repo.find_by_id(run_id);
+	const raw = run?.notify_channels;
+	if (!raw) return undefined;
+	try {
+		const refs = JSON.parse(raw) as unknown;
+		return Array.isArray(refs) && refs.length > 0 ? refs.filter((r): r is string => typeof r === 'string') : undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 /**
  * Resolve team.yml-style channel refs (`slack:oncall`, bare names) to

@@ -34,6 +34,10 @@ export class Run extends BaseModel {
     declare current_phase: string | null;
     declare external_id: string | null;
     declare context_labels: string | null;
+    /** Reviewers chosen at run start per human phase (JSON `{ phase: [username] }`), or null. */
+    declare reviewers: string | null;
+    /** Notification channel refs chosen at run start for its lifecycle events (JSON array), or null. */
+    declare notify_channels: string | null;
     /**
      * Hub action lease — when this epoch-ms passes while the run is still
      * non-terminal, RunReaper marks it crashed even if the daemon heartbeats.
@@ -66,6 +70,8 @@ export class Run extends BaseModel {
             current_phase: { type: DataTypes.TEXT },
             external_id: { type: DataTypes.TEXT, allowNull: true },
             context_labels: { type: DataTypes.TEXT, allowNull: true },
+            reviewers: { type: DataTypes.TEXT, allowNull: true },
+            notify_channels: { type: DataTypes.TEXT, allowNull: true },
             lease_expires_at: { type: DataTypes.BIGINT, allowNull: true },
             started_at: { type: DataTypes.BIGINT, allowNull: false },
             completed_at: { type: DataTypes.BIGINT },
@@ -95,6 +101,8 @@ export type RunAttributes = {
     current_phase: string | null;
     external_id: string | null;
     context_labels: string | null;
+    reviewers?: string | null;
+    notify_channels?: string | null;
     lease_expires_at: number | null;
     started_at: number;
     completed_at: number | null;

@@ -92,6 +92,8 @@ export function make_mock_repos() {
             list_filtered: vi.fn().mockResolvedValue([]),
             count_filtered: vi.fn().mockResolvedValue(0),
             find_author_username: vi.fn().mockResolvedValue(null),
+            set_fork_origin: vi.fn().mockResolvedValue(undefined),
+            count_forks: vi.fn().mockResolvedValue(0),
             create: vi.fn().mockResolvedValue(1),
             update: vi.fn(), update_name: vi.fn(), update_listed: vi.fn(),
             update_description: vi.fn(),

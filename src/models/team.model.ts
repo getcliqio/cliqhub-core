@@ -23,6 +23,10 @@ export class Team extends BaseModel {
     declare created_at: Date;
     declare updated_at: Date;
     declare install_count: number;
+    /** The team this one was forked from, or null. */
+    declare forked_from_team_id: string | null;
+    /** The version of that team the fork started from, or null. */
+    declare forked_from_version: string | null;
 
     static register(sequelize: Sequelize): void {
         Team.init({
@@ -38,6 +42,8 @@ export class Team extends BaseModel {
             created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
             updated_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
             install_count: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+            forked_from_team_id: { type: DataTypes.UUID, allowNull: true },
+            forked_from_version: { type: DataTypes.TEXT, allowNull: true },
         }, {
             sequelize, tableName: 'teams', schema: 'cliq',
             indexes: [{ unique: true, fields: ['name', 'scope'] }],
