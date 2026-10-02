@@ -27,6 +27,12 @@ export class Team extends BaseModel {
     declare forked_from_team_id: string | null;
     /** The version of that team the fork started from, or null. */
     declare forked_from_version: string | null;
+    /** Unversioned working copy of the manifest being edited, or null. */
+    declare draft_manifest: string | null;
+    /** Description that goes with the working copy, or null. */
+    declare draft_description: string | null;
+    /** When the working copy was last saved, or null. */
+    declare draft_saved_at: Date | null;
 
     static register(sequelize: Sequelize): void {
         Team.init({
@@ -44,6 +50,9 @@ export class Team extends BaseModel {
             install_count: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
             forked_from_team_id: { type: DataTypes.UUID, allowNull: true },
             forked_from_version: { type: DataTypes.TEXT, allowNull: true },
+            draft_manifest: { type: DataTypes.TEXT, allowNull: true },
+            draft_description: { type: DataTypes.TEXT, allowNull: true },
+            draft_saved_at: { type: DataTypes.DATE, allowNull: true },
         }, {
             sequelize, tableName: 'teams', schema: 'cliq',
             indexes: [{ unique: true, fields: ['name', 'scope'] }],

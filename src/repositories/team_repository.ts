@@ -101,6 +101,22 @@ export class TeamRepository extends BaseRepository<Team> {
         );
     }
 
+    /** Saves the unversioned working copy of a team's manifest. */
+    async save_draft(id: string, manifest: string, description: string | null, transaction?: Transaction): Promise<void> {
+        await Team.update(
+            { draft_manifest: manifest, draft_description: description, draft_saved_at: new Date() },
+            { where: { id }, transaction },
+        );
+    }
+
+    /** Drops the working copy (after a version was minted from it, or on discard). */
+    async clear_draft(id: string, transaction?: Transaction): Promise<void> {
+        await Team.update(
+            { draft_manifest: null, draft_description: null, draft_saved_at: null },
+            { where: { id }, transaction },
+        );
+    }
+
     /** How many teams were forked from `id`. */
     async count_forks(id: string): Promise<number> {
         return Team.count({ where: { forked_from_team_id: id } });

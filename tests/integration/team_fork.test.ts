@@ -8,7 +8,8 @@
  *     latest version; the origin counts its forks.
  *   - Teams the caller cannot see cannot be forked (404); the target scope must
  *     be the caller's (403); names stay unique in a scope (409).
- *   - Editing the fork adds versions to the fork only.
+ *   - Editing the fork adds versions to the fork only; edits can be kept as an
+ *     unversioned working copy (seen only by editors) until a version is saved.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -95,6 +96,18 @@ describe.skipIf(!has_postgres)('forking a team', () => {
         expect(origin.body.data.forked_from).toBeNull();
     });
 
+    it('the catalog with_workflow returns phases, version and fork counts and the verified flag', async () => {
+        const res = await post('/v1/teams/get', forker.token, { query: 'pipeline', with_workflow: true, limit: 100 });
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        const item = (res.body.data.items as Array<Record<string, unknown>>).find((t) => t.id === source_id);
+        expect(item).toMatchObject({
+            phases: [{ name: 'build', type: null, agent: 'claude-code' }],
+            version_count: 1, fork_count: 1, verified: false, updated_at: expect.any(Number),
+        });
+        const plain = await post('/v1/teams/get', forker.token, { query: 'pipeline', limit: 100 });
+        expect((plain.body.data.items as Array<Record<string, unknown>>).find((t) => t.id === source_id)).not.toHaveProperty('phases');
+    });
+
     it("editing the fork adds versions to the fork only; the origin's versions stay as they were", async () => {
         const fork = await Team.findOne({ where: { name: 'my-pipeline', scope: forker.username }, attributes: ['id'], raw: true });
         const edited = await post('/v1/teams/update', forker.token, { team_id: fork!.id, manifest: MANIFEST('my-pipeline').replace('Ticket to PR', 'Ticket to PR, my way') });
@@ -103,6 +116,34 @@ describe.skipIf(!has_postgres)('forking a team', () => {
         expect(await TeamVersion.count({ where: { team_id: source_id } })).toBe(1);
         const source_manifest = await TeamVersion.findOne({ where: { team_id: source_id }, attributes: ['manifest_yaml'], raw: true });
         expect(source_manifest!.manifest_yaml).toBe(MANIFEST('pipeline'));
+    });
+
+    it('keeps edits as a working copy until a version is saved, then mints it from the copy', async () => {
+        const fork = await Team.findOne({ where: { name: 'my-pipeline', scope: forker.username }, attributes: ['id'], raw: true });
+        const versions_before = await TeamVersion.count({ where: { team_id: fork!.id } });
+        const edited = MANIFEST('my-pipeline').replace('Ticket to PR', 'Ticket to PR, reviewed');
+
+        const draft = await post('/v1/teams/update', forker.token, { team_id: fork!.id, manifest: edited, save_as: 'draft' });
+        expect(draft.status, JSON.stringify(draft.body)).toBe(200);
+        expect(draft.body.data.version).toBeNull();
+        expect(draft.body.data.draft_saved_at).toEqual(expect.any(String));
+        expect(await TeamVersion.count({ where: { team_id: fork!.id } })).toBe(versions_before);
+
+        const mine = await post('/v1/teams/get_by_id', forker.token, { team_id: fork!.id });
+        expect(mine.body.data.draft).toMatchObject({ manifest: edited });
+        const theirs = await post('/v1/teams/get_by_id', author.token, { team_id: fork!.id });
+        expect(theirs.status).toBe(404);
+
+        const version = await post('/v1/teams/update', forker.token, { team_id: fork!.id, save_as: 'version', bump: 'minor', changelog: 'Adds review' });
+        expect(version.status, JSON.stringify(version.body)).toBe(200);
+        expect(version.body.data).toMatchObject({ version: '0.2.0', draft_saved_at: null });
+        const row = await TeamVersion.findOne({ where: { team_id: fork!.id, version: '0.2.0' }, attributes: ['manifest_yaml', 'changelog'], raw: true });
+        expect(row).toMatchObject({ manifest_yaml: edited, changelog: 'Adds review' });
+        const after = await post('/v1/teams/get_by_id', forker.token, { team_id: fork!.id });
+        expect(after.body.data.draft).toBeNull();
+
+        const empty = await post('/v1/teams/update', forker.token, { team_id: fork!.id, save_as: 'draft' });
+        expect(empty.status).toBe(422);
     });
 
     it("refuses a scope that isn't the caller's, and a name already taken", async () => {

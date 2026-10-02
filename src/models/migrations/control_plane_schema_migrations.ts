@@ -1281,6 +1281,10 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "forked_from_team_id" UUID`);
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "forked_from_version" TEXT`);
     await run(`CREATE INDEX IF NOT EXISTS "teams_forked_from_idx" ON cliq."teams" ("forked_from_team_id") WHERE "forked_from_team_id" IS NOT NULL`);
+    // Working copy: edits saved without minting a version until the editor saves a version.
+    await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_manifest" TEXT`);
+    await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_description" TEXT`);
+    await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_saved_at" TIMESTAMPTZ`);
 
     // Add is_default column to public.scopes (registry) so the platform default
     // scope ('cliq') can be identified without a separate control-plane table.

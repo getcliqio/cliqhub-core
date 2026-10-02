@@ -228,9 +228,13 @@ export class TeamsController extends BaseController {
 
         if ('teams' in r && r.tag_map) {
             const tag_map = r.tag_map as Map<string, string[]>;
-            const items: TeamData[] = (r.teams as any[]).map(
+            let items: TeamData[] = (r.teams as any[]).map(
                 (t) => to_team_list_item_dto(t, tag_map.get(t.id) ?? []) as TeamData,
             );
+            if (body.with_workflow && !body.mine) {
+                const extra = await this._teams_service.catalog_details(items.map((t) => ({ id: t.id ?? '', latest_version: t.latest_version ?? null, scope: t.scope })));
+                items = items.map((t) => ({ ...t, ...(extra.get(t.id ?? '') ?? {}) }));
+            }
             this.ok(res, { items, total: r.total ?? items.length, offset, limit });
             return;
         }

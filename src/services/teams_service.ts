@@ -17,7 +17,7 @@ import type { PackageStorage } from '../storage/package_storage.js';
 import { package_key, package_path } from '../storage/package_storage.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 import type { TeamCatalogSortKey, TeamListItemVO, TeamRoleVO } from '../schemas/team_types.js';
-import { Op, col, fn, literal, type WhereOptions } from 'sequelize';
+import { Op, QueryTypes, col, fn, literal, type WhereOptions } from 'sequelize';
 import { list_order, type SortColumns, type SortDir } from '../lib/list_sort.js';
 import type { NormalizedWorkflow } from './package_parser.js';
 import { RealmTeamListService } from '../services/realm_team_list.service.js';
@@ -344,6 +344,11 @@ export class TeamsService {
         const permissions = await this._resolve_team_permissions(auth, team);
         const forked_from = await this._fork_summary(auth, team);
         const fork_count = await this._team_repo.count_forks(team.id);
+        const working = team as { draft_manifest?: string | null; draft_description?: string | null; draft_saved_at?: Date | null };
+        // Only people who can edit the team see its unversioned working copy.
+        const draft = permissions.can_edit && working.draft_manifest
+            ? { manifest: working.draft_manifest, description: working.draft_description ?? null, saved_at: working.draft_saved_at ?? null }
+            : null;
 
         /**
          * Prefer version-specific manifest_yaml (from team_versions) when
@@ -372,6 +377,7 @@ export class TeamsService {
             team_json: raw_manifest,
             forked_from,
             fork_count,
+            draft,
             ...permissions,
         };
     }
@@ -527,27 +533,51 @@ export class TeamsService {
     }
 
     /**
-     * Update draft/manifest fields. Auto patch-bumps semver
-     * (optional `bump: minor|major`).
+     * Edits a team. Versions are never changed: with `save_as: 'draft'` the
+     * manifest is kept as the team's working copy; otherwise (`'version'`, the
+     * default) the next version is minted — patch unless `bump` says minor or
+     * major — from the manifest sent, or from the working copy when none is
+     * sent, and the working copy is cleared.
+     *
+     * @throws ApiError 422 when saving a draft without a manifest.
      */
     async update(auth: AuthContext, params: {
         name?: string; scope?: string; team_id?: string;
         description?: string;
         manifest?: string | Record<string, unknown>; team_json?: string;
         bump?: 'minor' | 'major';
+        save_as?: 'draft' | 'version';
+        changelog?: string;
     }) {
         log.debug('update', { team_id: params.team_id, name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
 
         const team = await this._resolve_team_for_write(auth, params);
-        const description = params.description !== undefined ? params.description : team.description;
-        const manifest_yaml = resolve_manifest_yaml(params);
+        const sent_manifest = resolve_manifest_yaml(params);
+
+        if (params.save_as === 'draft') {
+            if (!sent_manifest) throw new ApiError('invalid_params', 'A draft needs a manifest', 422, { field: 'manifest' });
+            await this._team_repo.save_draft(team.id, sent_manifest, params.description ?? null);
+            return {
+                id: team.id,
+                name: team.name,
+                scope: team.scope,
+                status: team_status(team.visibility),
+                version: null,
+                draft_saved_at: new Date().toISOString(),
+            };
+        }
+
+        const working = team as { draft_manifest?: string | null; draft_description?: string | null };
+        const manifest_yaml = sent_manifest ?? working.draft_manifest ?? null;
+        const new_description = params.description ?? (sent_manifest ? undefined : working.draft_description ?? undefined);
+        const description = new_description !== undefined ? new_description : team.description;
 
         let resolved_version: string | null = null;
 
         await get_sequelize().transaction(async (t) => {
-            if (params.description !== undefined) {
+            if (new_description !== undefined) {
                 await this._team_repo.update_description(team.id, description, t);
             }
 
@@ -558,8 +588,9 @@ export class TeamsService {
                 // First manifest on a create-without-manifest team → seed 0.1.0
                 if (!latest) resolved_version = '0.1.0';
                 await this._seed_version_from_manifest(
-                    team.id, resolved_version, manifest_yaml, description, t,
+                    team.id, resolved_version, manifest_yaml, params.changelog ?? description, t,
                 );
+                if (working.draft_manifest) await this._team_repo.clear_draft(team.id, t);
             }
         });
 
@@ -569,6 +600,7 @@ export class TeamsService {
             scope: team.scope,
             status: team_status(team.visibility),
             version: resolved_version,
+            draft_saved_at: null,
         };
     }
 
@@ -1010,6 +1042,64 @@ export class TeamsService {
         }
 
         return { can_edit: false, can_delete: false, can_toggle_listing: false };
+    }
+
+    /**
+     * Marketplace details for a page of catalog teams: the latest version's
+     * phases, version count, last update, fork count and whether the
+     * publisher scope is verified (a platform scope). One query per kind of
+     * detail, not per team.
+     */
+    async catalog_details(rows: Array<{ id: string; latest_version: string | null; scope: string | null }>): Promise<Map<string, {
+        phases: Array<{ name: string; type: string | null; agent: string | null }>;
+        version_count: number; updated_at?: number; fork_count: number; verified: boolean;
+    }>> {
+        const out = new Map<string, { phases: Array<{ name: string; type: string | null; agent: string | null }>; version_count: number; updated_at?: number; fork_count: number; verified: boolean }>();
+        const ids = rows.map((r) => r.id).filter(Boolean);
+        if (ids.length === 0) return out;
+        const sequelize = get_sequelize();
+        const [versions, teams, forks, platform] = await Promise.all([
+            sequelize.query<{ team_id: string; version: string; workflow_json: string | null }>(
+                'SELECT "team_id", "version", "workflow_json" FROM cliq."team_versions" WHERE "team_id" IN (:ids)',
+                { replacements: { ids }, type: QueryTypes.SELECT },
+            ),
+            sequelize.query<{ id: string; updated_at: Date | string | null }>(
+                'SELECT "id", "updated_at" FROM cliq."teams" WHERE "id" IN (:ids)',
+                { replacements: { ids }, type: QueryTypes.SELECT },
+            ),
+            sequelize.query<{ forked_from_team_id: string; n: string }>(
+                'SELECT "forked_from_team_id", COUNT(*) AS n FROM cliq."teams" WHERE "forked_from_team_id" IN (:ids) GROUP BY 1',
+                { replacements: { ids }, type: QueryTypes.SELECT },
+            ),
+            sequelize.query<{ slug: string }>(
+                `SELECT "slug" FROM cliq."scopes" WHERE "scope_type" = 'platform'`,
+                { type: QueryTypes.SELECT },
+            ),
+        ]);
+        const verified_scopes = new Set(platform.map((p) => p.slug));
+        const updated = new Map(teams.map((t) => [String(t.id), t.updated_at ? new Date(t.updated_at).getTime() : undefined]));
+        const fork_counts = new Map(forks.map((f) => [String(f.forked_from_team_id), Number(f.n)]));
+        for (const row of rows) {
+            const mine = versions.filter((v) => String(v.team_id) === row.id);
+            const latest = mine.find((v) => v.version === row.latest_version);
+            let phases: Array<{ name: string; type: string | null; agent: string | null }> = [];
+            try {
+                const wf = JSON.parse(latest?.workflow_json ?? '{}') as { phases?: Array<Record<string, unknown>> };
+                phases = (wf.phases ?? []).map((p) => ({
+                    name: String(p.name ?? ''),
+                    type: typeof p.type === 'string' ? p.type : null,
+                    agent: typeof p.agent === 'string' ? p.agent : null,
+                }));
+            } catch { /* no workflow: no phases */ }
+            out.set(row.id, {
+                phases,
+                version_count: mine.length,
+                ...(updated.get(row.id) !== undefined ? { updated_at: updated.get(row.id) } : {}),
+                fork_count: fork_counts.get(row.id) ?? 0,
+                verified: Boolean(row.scope && verified_scopes.has(row.scope)),
+            });
+        }
+        return out;
     }
 
     private async _build_tag_map(rows: TeamListItemVO[]): Promise<Map<string, string[]>> {

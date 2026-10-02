@@ -90,6 +90,9 @@ export const TeamsGetInput = z.object({
     sort_dir: SortDirField,
     limit: LimitField,
     offset: OffsetField,
+    with_workflow: z.boolean().optional()
+        .describe('Catalog mode: also return each team\'s latest workflow (phase name, type, agent), number of versions, '
+            + 'last update, fork count and whether its publisher is verified'),
 });
 export type TeamsGetInput = z.infer<typeof TeamsGetInput>;
 
@@ -181,6 +184,11 @@ export const TeamsUpdateInput = z.object({
         .describe('Updated SPA builder canvas JSON string'),
     bump: z.enum(['minor', 'major']).optional()
         .describe('Bump magnitude when updating manifest; omit for patch (default)'),
+    save_as: z.enum(['draft', 'version']).optional()
+        .describe("'draft': keep the manifest as the team's working copy without minting a version; "
+            + "'version' (default): mint the next version from the manifest, or from the working copy when no manifest is sent, and clear the working copy"),
+    changelog: z.string().max(2000).optional()
+        .describe('What changed in the version being minted'),
 }).refine(
     (d) => Boolean(d.name) || Boolean(d.team_id),
     { message: 'Provide exactly one of team_id or name' },
@@ -376,7 +384,17 @@ export const TeamData = z.object({
     install_count: z.number().int().optional()
         .describe('Total number of daemon installations'),
     version_count: z.number().int().optional()
-        .describe('Number of published versions (site-admin catalog listing only)'),
+        .describe('Number of published versions (site-admin catalog listing; catalog with_workflow)'),
+    phases: z.array(z.object({
+        name: z.string().describe('Phase name'),
+        type: z.string().nullable().describe('Phase type (e.g. gate), or null for a standard phase'),
+        agent: z.string().nullable().describe('Agent that runs the phase, or null'),
+    })).optional()
+        .describe('Latest version\'s workflow phases in order (catalog with_workflow)'),
+    fork_count: z.number().int().optional()
+        .describe('How many teams were forked from this one (catalog with_workflow)'),
+    verified: z.boolean().optional()
+        .describe('Published by a verified (platform) scope (catalog with_workflow)'),
     author_id: z.string().nullable().optional()
         .describe('UUID of the team author (site-admin catalog listing only)'),
     created_at: z.number().optional()
@@ -420,6 +438,8 @@ export const TeamMutationData = z.object({
     status: z.enum(['draft', 'published']).describe('Lifecycle status after the mutation'),
     version: z.string().nullable().describe('Version string after the mutation; null when no version was seeded'),
     listed: z.boolean().optional().describe('Listed flag (present after unpublish)'),
+    draft_saved_at: z.string().nullable().optional()
+        .describe('teams/update: when the working copy was saved (save_as draft), or null after a version was minted'),
 });
 export type TeamMutationData = z.infer<typeof TeamMutationData>;
 
