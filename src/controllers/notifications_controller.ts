@@ -219,6 +219,7 @@ export class NotificationsController extends BaseController {
                 event: data.event,
                 channel_id: data.channel_id,
                 priority: data.priority,
+                recipients: data.recipients,
             });
             log.info('rule_set', { id: rule.id });
             this.ok(res, rule);
@@ -233,6 +234,7 @@ export class NotificationsController extends BaseController {
             event: data.event,
             channel_id: data.channel_id,
             priority: data.priority,
+            recipients: data.recipients,
         });
         log.info('rule_set', { id: rule.id });
         this.ok(res, rule);

@@ -37,7 +37,6 @@ describe('POST /internal/auth/signup', () => {
     beforeEach(() => vi.clearAllMocks());
 
     it('returns 200 with user, account, and session PAT on success', async () => {
-        repos.user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
         repos.org_repo.find_by_slug.mockResolvedValueOnce(null);
         repos.scope_repo.find_by_slug.mockResolvedValueOnce(null);
         repos.user_repo.create.mockResolvedValueOnce(1);
@@ -63,7 +62,6 @@ describe('POST /internal/auth/signup', () => {
     });
 
     it('returns 200 when account_slug is omitted (derived from username)', async () => {
-        repos.user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
         repos.org_repo.find_by_slug.mockResolvedValueOnce(null);
         repos.scope_repo.find_by_slug.mockResolvedValueOnce(null);
         repos.user_repo.create.mockResolvedValueOnce(1);
@@ -95,11 +93,20 @@ describe('POST /internal/auth/signup', () => {
         expect(res.status).toBe(422);
     });
 
-    it('returns 409 for duplicate username', async () => {
-        repos.user_repo.find_by_username_or_email.mockResolvedValueOnce({ id: hub_legacy_uuid(99) });
+    it('returns 409 conflict for a username a live user holds', async () => {
+        repos.user_repo.find_by_username.mockResolvedValueOnce({ id: hub_legacy_uuid(99), username: 'alice', status: 'active', deleted_at: null });
         const res = await request(app).post('/internal/auth/signup')
             .send({ username: 'alice', email: 'alice@test.com', password: 'password123' });
         expect(res.status).toBe(409);
+        expect(res.body.error).toMatchObject({ code: 'conflict', details: { kind: 'user', field: 'username', holder: { id: hub_legacy_uuid(99), slug: 'alice' } } });
+    });
+
+    it('returns 409 deleted for an email a deleted user holds', async () => {
+        repos.user_repo.find_by_email.mockResolvedValueOnce({ id: hub_legacy_uuid(98), username: 'old', status: 'active', deleted_at: '2026-05-01T00:00:00.000Z' });
+        const res = await request(app).post('/internal/auth/signup')
+            .send({ username: 'newname', email: 'old@test.com', password: 'password123' });
+        expect(res.status).toBe(409);
+        expect(res.body.error).toMatchObject({ code: 'deleted', details: { kind: 'user', id: hub_legacy_uuid(98), was_active: true } });
     });
 
     it('returns 422 for reserved username', async () => {

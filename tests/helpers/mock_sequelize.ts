@@ -41,6 +41,8 @@ export function setup_sequelize_mocks() {
                 default_realm_slug: 'alice.default',
                 enroll_token: null,
             }),
+            org_delete_blocker: vi.fn().mockResolvedValue(null),
+            after_org_realms_removed: vi.fn().mockResolvedValue(undefined),
             ensure_org_default_realm: vi.fn().mockResolvedValue({
                 id: 'realm-org',
                 slug: 'acme.default',
@@ -118,6 +120,7 @@ export function setup_sequelize_mocks() {
                     return { commit: vi.fn(), rollback: vi.fn() };
                 }),
                 escape: vi.fn().mockImplementation((v: unknown) => `'${String(v)}'`),
+                query: vi.fn().mockResolvedValue([[], {}]),
             },
         });
 
@@ -138,9 +141,13 @@ export function setup_sequelize_mocks() {
             AccountInvite: make_model(),
             RealmInvite: make_model(),
             UserRealmAgentSetting: make_model(),
+            PasswordReset: make_model(),
+            PasswordResetRequest: make_model(),
+            EmailDelivery: make_model(),
             // Store models
             Realm: make_model(),
-            RealmMember: make_model(),
+            // Realm memberships are read through a default scope; writes use `unscoped()`.
+            RealmMember: ((m) => Object.assign(m, { unscoped: () => m }))(make_model()),
             RealmDispatchKey: make_model(),
             Daemon: make_model(),
             DaemonConfig: make_model(),

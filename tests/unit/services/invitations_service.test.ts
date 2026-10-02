@@ -1,264 +1,143 @@
+/**
+ * InvitationsService rules that are decided before anything is written:
+ * who may send which invite, and when accept / decline is refused.
+ * The flows themselves run over HTTP on Postgres in
+ * tests/integration/invitations_flow.test.ts.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { InvitationsService } from '../../../src/services/invitations_service.js';
-import { UNAUTHED, ORG_ADMIN } from '../../helpers/fixtures.js';
+import { ALICE, BOB, ORG_ADMIN, SITE_ADMIN, UNAUTHED } from '../../helpers/fixtures.js';
+
+const mocks = vi.hoisted(() => ({
+    find_invite_by_token: vi.fn(),
+    org_standing: vi.fn(),
+    require_permission: vi.fn(),
+    user_find_one: vi.fn(),
+    transaction: vi.fn(),
+}));
 
 vi.mock('../../../src/db/sequelize.js', () => ({
-    get_sequelize: vi.fn().mockReturnValue({
-        transaction: vi.fn().mockImplementation(async (fn: any) => fn({})),
-        query: vi.fn().mockResolvedValue([[], {}]),
-    }),
+    get_sequelize: () => ({ transaction: mocks.transaction }),
 }));
-
-vi.mock('../../../src/services/realm.service.js', () => ({
-    RealmService: {
-        upsert_user_member: vi.fn().mockResolvedValue(undefined),
-        remove_member_silent: vi.fn().mockResolvedValue(undefined),
-        create: vi.fn(),
-        list_for_user: vi.fn().mockResolvedValue({ realms: [], total: 0 }),
-        ensure_org_default_realm: vi.fn().mockResolvedValue({ id: 'realm-1', slug: 'org.default' }),
-        ensure_personal_realm: vi.fn().mockResolvedValue({
-            default_realm_id: 'realm-personal',
-            default_realm_slug: 'default',
-            default_realm_qualified: 'user.default',
-        }),
-        create_invite: vi.fn(),
-        list_invites: vi.fn().mockResolvedValue([]),
-        revoke_invite: vi.fn(),
-        get_invite_by_token: vi.fn(),
-        accept_invite: vi.fn(),
-    },
+vi.mock('../../../src/services/invite_records.js', async (orig) => ({
+    ...(await orig() as object),
+    find_invite_by_token: mocks.find_invite_by_token,
 }));
+vi.mock('../../../src/auth/route_policy/visible.js', () => ({ org_standing: mocks.org_standing }));
+vi.mock('../../../src/auth/permissions.js', async (orig) => ({
+    ...(await orig() as object),
+    require_permission: mocks.require_permission,
+}));
+vi.mock('../../../src/models/index.js', async (orig) => {
+    const real = await orig() as Record<string, unknown>;
+    return { ...real, User: { findOne: mocks.user_find_one } };
+});
 
-const _mock_require_permission = vi.hoisted(() => vi.fn().mockImplementation(
-    async (org_id: string, user_id: string, _perm: string, opts?: { site_role?: string }) => {
-        if (opts?.site_role === 'admin') return;
-        if (user_id === hub_legacy_uuid(3)) return;
+const ORG_ID = hub_legacy_uuid(7);
+
+function make_service() {
+    const ns_repo = { find_by_slug: vi.fn().mockResolvedValue(null), find_by_id: vi.fn(), find_by_username: vi.fn().mockResolvedValue(null), find_profile_by_id: vi.fn() };
+    const reactivation = { assert_can_reactivate: vi.fn(), restore_user: vi.fn(), restore_org: vi.fn() };
+    return new InvitationsService(ns_repo as never, ns_repo as never, ns_repo as never, reactivation as never, vi.fn());
+}
+
+function invite(overrides: Record<string, unknown> = {}) {
+    return {
+        table: 'account_invites', target: 'org', id: 'inv-1', email: 'alice@test.com', role: 'member', status: 'pending',
+        invited_by: hub_legacy_uuid(3), created_at: new Date(), expires_at: new Date(Date.now() + 60_000),
+        send_count: 1, last_sent_at: null, reminders_sent: 0, org_id: ORG_ID, realm_id: null,
+        ...overrides,
+    };
+}
+
+beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.require_permission.mockResolvedValue(undefined);
+    mocks.transaction.mockRejectedValue(new Error('no writes expected in this test'));
+});
+
+describe('InvitationsService.create — refused before any write', () => {
+    it('needs a signed-in caller', async () => {
+        await expect(make_service().create(UNAUTHED as never, { target_type: 'org', org_id: ORG_ID, email: 'x@test.com' }))
+            .rejects.toMatchObject({ status: 401 });
+    });
+
+    it('owner role on a realm and operator role on an org are 422', async () => {
+        await expect(make_service().create(SITE_ADMIN as never, { target_type: 'realm', realm_id: 'r1', email: 'x@test.com', role: 'owner' }))
+            .rejects.toMatchObject({ status: 422, code: 'invalid_params' });
+        await expect(make_service().create(SITE_ADMIN as never, { target_type: 'org', org_id: ORG_ID, email: 'x@test.com', role: 'operator' }))
+            .rejects.toMatchObject({ status: 422, code: 'invalid_params' });
+    });
+
+    it('an invalid email is 422', async () => {
+        await expect(make_service().create(SITE_ADMIN as never, { target_type: 'org', org_id: ORG_ID, email: 'not-an-email' }))
+            .rejects.toMatchObject({ status: 422 });
+    });
+
+    it('an org admin who is not an owner cannot invite an owner', async () => {
+        mocks.org_standing.mockResolvedValue({ slug: 'admin', is_system: false, permissions: ['org.members.manage'] });
+        await expect(make_service().create(ORG_ADMIN as never, { target_type: 'org', org_id: ORG_ID, email: 'x@test.com', role: 'owner' }))
+            .rejects.toMatchObject({ status: 403, code: 'forbidden' });
+        expect(mocks.org_standing).toHaveBeenCalledWith(ORG_ID, ORG_ADMIN.user!.id);
+    });
+
+    it('a caller without org.members.manage is refused by the org check', async () => {
         const { ApiError } = await import('../../../src/errors/api_error.js');
-        throw new ApiError('forbidden', `Permission '${_perm}' is required`, 403);
-    },
-));
-vi.mock('../../../src/auth/permissions.js', async (importOriginal) => {
-    const orig = await importOriginal() as Record<string, unknown>;
-    return {
-        ...orig,
-        require_permission: (...args: any[]) => _mock_require_permission(...args),
-    };
-});
-
-vi.mock('../../../src/models/index.js', () => ({
-    User: { findOne: vi.fn(), create: vi.fn(), findAll: vi.fn().mockResolvedValue([]) },
-    Org: { findByPk: vi.fn().mockResolvedValue({ slug: 'acme' }) },
-    AccountInvite: {
-        findOne: vi.fn(),
-        findByPk: vi.fn(),
-        findAll: vi.fn().mockResolvedValue([]),
-        create: vi.fn(),
-        update: vi.fn().mockResolvedValue([1]),
-    },
-    RealmInvite: {},
-    OrgMember: {},
-    OrgRole: {},
-    Realm: {},
-    RealmMember: {},
-    RealmAgentSetting: {},
-    UserRealmAgentSetting: {},
-    OrgAgentSetting: {},
-    NotificationChannel: {},
-    NotificationRule: {},
-    NotificationSubscription: {},
-    WebhookDelivery: {},
-    InAppNotification: {},
-    ChannelDestination: {},
-    HubEvent: {},
-    CustomEvent: {},
-    ApiToken: {},
-    AccountAgentSetting: {},
-    AccountMeshSetting: {},
-    Daemon: {},
-    DaemonConfig: {},
-    DaemonTeam: {},
-    Scope: {},
-    ScopeMember: {},
-    Team: {},
-    TeamVersion: {},
-    RealmDispatchKey: {},
-    RealmDispatchQueue: {},
-    RealmA2aSetting: {},
-    Run: {},
-    RunEvent: {},
-    RunLog: {},
-    RunLogLine: {},
-    RunLogChunk: {},
-    RunPhase: {},
-    RunArtifact: {},
-    RunSpan: {},
-    Workspace: {},
-    WorkspaceTeam: {},
-    WorkspaceSecret: {},
-    Agent: {},
-    Container: {},
-    Draft: {},
-    AuditLog: {},
-    DownloadLog: {},
-    Setting: {},
-    TeamTag: {},
-    Review: {},
-    ReviewMessage: {},
-    ReviewNotification: {},
-    StoredArtifact: {},
-}));
-
-vi.mock('../../../src/auth/jwt.js', () => ({
-    sign_token: vi.fn().mockReturnValue('jwt-token'),
-}));
-
-vi.mock('../../../src/auth/password.js', () => ({
-    hash_password: vi.fn().mockResolvedValue('hashed'),
-}));
-
-function make_org_repo() {
-    return {
-        find_by_id: vi.fn().mockResolvedValue(null),
-    };
-}
-
-function make_org_member_repo() {
-    return {
-        find_orgs_by_user: vi.fn().mockResolvedValue([]),
-        find_by_org_and_user: vi.fn().mockResolvedValue(null),
-        create: vi.fn(),
-    };
-}
-
-function make_scope_repo() {
-    return {
-        find_by_slug: vi.fn().mockResolvedValue(null),
-        create: vi.fn().mockResolvedValue(10),
-    };
-}
-
-function make_user_repo() {
-    return {
-        find_profile_by_id: vi.fn(),
-        find_by_username_or_email: vi.fn(),
-        find_by_email: vi.fn().mockResolvedValue(null),
-        create: vi.fn(),
-    };
-}
-
-function make_service(opts?: { with_config?: boolean }) {
-    const org_repo = make_org_repo();
-    const org_member_repo = make_org_member_repo();
-    const scope_repo = make_scope_repo();
-    const user_repo = make_user_repo();
-    const mint_session_pat = vi.fn().mockResolvedValue({ token: 'cliq_tok_session' });
-    const config = opts?.with_config
-        ? { jwt_secret: 'test-secret', jwt_expires_in: '1h' } as any
-        : undefined;
-    const service = new InvitationsService(
-        org_repo as any,
-        org_member_repo as any,
-        scope_repo as any,
-        user_repo as any,
-        config,
-        mint_session_pat,
-    );
-    return { service, org_repo, org_member_repo, scope_repo, user_repo, mint_session_pat };
-}
-
-describe('InvitationsService — create (org)', () => {
-    let service: InvitationsService;
-    let org_member_repo: ReturnType<typeof make_org_member_repo>;
-    let user_repo: ReturnType<typeof make_user_repo>;
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-        ({ service, org_member_repo, user_repo } = make_service());
-    });
-
-    it('adds existing user immediately', async () => {
-        org_member_repo.find_by_org_and_user.mockResolvedValueOnce(null);
-        user_repo.find_by_email.mockResolvedValueOnce({ id: hub_legacy_uuid(8) });
-        user_repo.find_profile_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(8), username: 'existing' });
-
-        const result = await service.create(ORG_ADMIN, {
-            target_type: 'org',
-            org_id: hub_legacy_uuid(1),
-            email: 'existing@test.com',
-        });
-
-        expect(result).toEqual({
-            target_type: 'org',
-            status: 'added',
-            user_id: hub_legacy_uuid(8),
-            username: 'existing',
-            role: 'member',
-        });
-        expect(org_member_repo.create).toHaveBeenCalledWith(hub_legacy_uuid(1), hub_legacy_uuid(8), 'member');
-    });
-
-    it('creates pending invite for unknown email', async () => {
-        const { AccountInvite } = await import('../../../src/models/index.js');
-        user_repo.find_by_email.mockResolvedValueOnce(null);
-        (AccountInvite.findOne as any).mockResolvedValueOnce(null);
-        (AccountInvite.create as any).mockResolvedValueOnce({ id: hub_legacy_uuid(42) });
-
-        const result = await service.create(ORG_ADMIN, {
-            target_type: 'org',
-            org_id: hub_legacy_uuid(1),
-            email: 'new@test.com',
-        });
-
-        expect(result.status).toBe('pending');
-        expect(result.target_type).toBe('org');
-        expect(result.invite_id).toBe(hub_legacy_uuid(42));
-        expect(result.token).toBeTruthy();
-        expect(AccountInvite.create).toHaveBeenCalled();
+        mocks.require_permission.mockRejectedValue(new ApiError('forbidden', "Permission 'org.members.manage' is required", 403));
+        await expect(make_service().create(BOB as never, { target_type: 'org', org_id: ORG_ID, email: 'x@test.com' }))
+            .rejects.toMatchObject({ status: 403 });
     });
 });
 
-describe('InvitationsService — accept (org)', () => {
-    let service: InvitationsService;
-    let org_member_repo: ReturnType<typeof make_org_member_repo>;
-    let user_repo: ReturnType<typeof make_user_repo>;
-    let scope_repo: ReturnType<typeof make_scope_repo>;
+describe('InvitationsService.accept — refused before any write', () => {
+    const accept = (auth: unknown, body: Record<string, unknown>) =>
+        make_service().accept(auth as never, { token: 'tok', decision: 'accept', ...body } as never);
 
-    beforeEach(() => {
-        vi.clearAllMocks();
-        ({ service, org_member_repo, user_repo, scope_repo } = make_service({ with_config: true }));
+    it('unknown token → 404', async () => {
+        mocks.find_invite_by_token.mockResolvedValue(null);
+        await expect(accept(UNAUTHED, {})).rejects.toMatchObject({ status: 404, code: 'not_found' });
     });
 
-    it('creates user without Account and joins org', async () => {
-        const { AccountInvite } = await import('../../../src/models/index.js');
-        (AccountInvite.findOne as any).mockResolvedValueOnce({
-            id: hub_legacy_uuid(7),
-            org_id: hub_legacy_uuid(1),
-            email: 'invitee@test.com',
-            role: 'member',
-            status: 'pending',
-            expires_at: new Date(Date.now() + 60_000),
-        });
-        user_repo.find_by_email.mockResolvedValueOnce(null);
-        user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
-        user_repo.create.mockResolvedValueOnce(hub_legacy_uuid(77));
-        scope_repo.find_by_slug.mockResolvedValueOnce(null);
-        org_member_repo.find_by_org_and_user.mockResolvedValueOnce(null);
-        org_member_repo.find_orgs_by_user.mockResolvedValueOnce([{ org_id: hub_legacy_uuid(1) }]);
+    it('past its expiry → 410 expired with expired_at', async () => {
+        const expires_at = new Date(Date.now() - 1000);
+        mocks.find_invite_by_token.mockResolvedValue(invite({ expires_at }));
+        await expect(accept(UNAUTHED, {})).rejects.toMatchObject({ status: 410, code: 'expired', details: { expired_at: expires_at.toISOString() } });
+        await expect(accept(UNAUTHED, { decision: 'decline' })).rejects.toMatchObject({ status: 410 });
+    });
 
-        const result = await service.accept(UNAUTHED, {
-            token: 'a'.repeat(64),
-            username: 'invitee',
-            password: 'longpassword',
-        });
+    it('used or revoked → 409 not_pending with the status', async () => {
+        for (const status of ['accepted', 'declined', 'revoked'] as const) {
+            mocks.find_invite_by_token.mockResolvedValue(invite({ status }));
+            await expect(accept(UNAUTHED, {})).rejects.toMatchObject({ status: 409, code: 'not_pending', details: { status } });
+        }
+    });
 
-        expect(result.accepted).toBe(true);
-        expect(result.target_type).toBe('org');
-        expect(result.user_id).toBe(hub_legacy_uuid(77));
-        expect(result.token).toBe('cliq_tok_session'); // session PAT, not a JWT (B2)
-        expect(user_repo.create).toHaveBeenCalled();
-        expect(scope_repo.create).toHaveBeenCalled();
-        expect(org_member_repo.create).toHaveBeenCalledWith(hub_legacy_uuid(1), hub_legacy_uuid(77), 'member');
-        expect(AccountInvite.update).toHaveBeenCalled();
+    it('signed in as another email → 403 email_mismatch with the invitee email', async () => {
+        mocks.find_invite_by_token.mockResolvedValue(invite({ email: 'someone@test.com' }));
+        await expect(accept(ALICE, {})).rejects.toMatchObject({ status: 403, code: 'email_mismatch', details: { invitee_email: 'someone@test.com' } });
+    });
+
+    it('an existing account that is not signed in → 401 sign_in_required', async () => {
+        mocks.find_invite_by_token.mockResolvedValue(invite());
+        mocks.user_find_one.mockResolvedValue({ id: hub_legacy_uuid(1), status: 'active', deleted_at: null });
+        await expect(accept(UNAUTHED, { username: 'alice2', password: 'password123' }))
+            .rejects.toMatchObject({ status: 401, code: 'sign_in_required', details: { invitee_email: 'alice@test.com' } });
+    });
+
+    it('a deleted account → 403 account_deleted', async () => {
+        mocks.find_invite_by_token.mockResolvedValue(invite());
+        mocks.user_find_one.mockResolvedValue({ id: hub_legacy_uuid(1), status: 'active', deleted_at: new Date() });
+        await expect(accept(UNAUTHED, {})).rejects.toMatchObject({ status: 403, code: 'account_deleted' });
+    });
+
+    it('a new person must send a valid username and password', async () => {
+        mocks.find_invite_by_token.mockResolvedValue(invite());
+        mocks.user_find_one.mockResolvedValue({ id: hub_legacy_uuid(8), status: 'invited', deleted_at: null });
+        await expect(accept(UNAUTHED, { password: 'password123' })).rejects.toMatchObject({ status: 422, details: { field: 'username' } });
+        await expect(accept(UNAUTHED, { username: 'newbie', password: 'short' })).rejects.toMatchObject({ status: 422, details: { field: 'password' } });
+        await expect(accept(UNAUTHED, { username: '1bad', password: 'password123' })).rejects.toMatchObject({ status: 422, details: { field: 'username' } });
+        expect(mocks.transaction).not.toHaveBeenCalled();
     });
 });

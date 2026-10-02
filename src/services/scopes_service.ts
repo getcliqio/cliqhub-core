@@ -9,16 +9,26 @@ import type { OrgRepository } from '../repositories/org_repository.js';
 import type { OrgMemberRepository } from '../repositories/org_member_repository.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 import { UserRepository } from '../repositories/user_repository.js';
-import { Op } from 'sequelize';
+import { Op, literal } from 'sequelize';
+import { list_order, type SortColumns, type SortDir } from '../lib/list_sort.js';
 import { assert_admin_access } from '../auth/assert_grant.js';
+import { namespace_conflict, namespace_holders, type NamespaceRepos } from '../lib/namespace.js';
+import { escape_like } from '../lib/search.js';
 
 const log = get_logger('svc.scopes');
 
-const user_repo = new UserRepository();
+/** `orgs/get_scopes` sort keys. */
+export type ScopeSortKey = 'slug' | 'visibility' | 'team_count' | 'created_at';
 
-function escape_like(input: string): string {
-    return input.replace(/[%_\\]/g, '\\$&');
-}
+/** `orgs/get_scopes` sort key → ORDER BY (team_count is the same subquery the catalog selects). */
+const SCOPE_SORT_COLUMNS: SortColumns<ScopeSortKey> = {
+    slug: (d) => [['slug', d]],
+    visibility: (d) => [['visibility', d]],
+    team_count: (d) => [[literal('(SELECT count(*) FROM teams t WHERE t.scope = "Scope"."slug")'), d]],
+    created_at: (d) => [['created_at', d]],
+};
+
+const user_repo = new UserRepository();
 
 export class ScopesService {
     constructor(
@@ -29,6 +39,11 @@ export class ScopesService {
         private _org_member_repo: OrgMemberRepository,
         private _scope_member_repo: ScopeMemberRepository,
     ) {}
+
+    /** This service's repositories, for the shared namespace check (lib/namespace.ts). */
+    private _ns(): NamespaceRepos {
+        return { org_repo: this._org_repo, scope_repo: this._scope_repo, user_repo };
+    }
 
     private _require_auth(auth: AuthContext) {
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -76,7 +91,7 @@ export class ScopesService {
     async get_for_user(
         auth: AuthContext,
         user_id: string,
-        params: { org_id?: string; search?: string; limit?: number; offset?: number },
+        params: { org_id?: string; search?: string; limit?: number; offset?: number; sort_by?: ScopeSortKey; sort_dir?: SortDir },
     ) {
         log.debug('get_for_user', { user_id, org_id: params.org_id });
         this._require_auth(auth);
@@ -114,7 +129,7 @@ export class ScopesService {
         const total = await this._scope_repo.find_count(where as any);
         const rows = await this._scope_repo.find_all(where as any, {
             attributes: ['id', 'slug', 'display_name', 'owner_id', 'org_id', 'visibility', 'scope_type', 'created_at'],
-            order: [['slug', 'ASC']],
+            order: list_order(SCOPE_SORT_COLUMNS, params, [['slug', 'ASC']]),
             limit,
             offset,
             raw: true,
@@ -140,7 +155,7 @@ export class ScopesService {
      */
     async list_catalog(
         auth: AuthContext,
-        params: { org_id?: string; search?: string; limit?: number; offset?: number },
+        params: { org_id?: string; search?: string; limit?: number; offset?: number; sort_by?: ScopeSortKey; sort_dir?: SortDir },
     ) {
         log.debug('list_catalog', { org_id: params.org_id });
         this._require_auth(auth);
@@ -164,7 +179,7 @@ export class ScopesService {
 
         const total = await this._scope_repo.find_count(where as any);
         const rows = await this._scope_repo.find_catalog_page(where as any, {
-            order: [['created_at', 'DESC']],
+            order: list_order(SCOPE_SORT_COLUMNS, params, [['created_at', 'DESC']]),
             limit,
             offset,
         });
@@ -205,8 +220,9 @@ export class ScopesService {
             throw new ApiError('invalid_params', `Scope '${slug}' is reserved`, 422);
         }
 
-        const existing = await this._scope_repo.find_by_slug(slug);
-        if (existing) throw new ApiError('conflict', 'Scope already exists', 409);
+        // Scope slugs share one namespace with org slugs and usernames (lib/namespace.ts).
+        const [scope_holder] = await namespace_holders(this._ns(), slug, ['scope']);
+        if (scope_holder) throw namespace_conflict(scope_holder);
 
         let org: { id: string; slug: string } | null = null;
         if (params.org_id != null) {
@@ -247,6 +263,15 @@ export class ScopesService {
             }
         } else if (manager === 'site' && scope_type === 'user') {
             throw new ApiError('invalid_params', 'owner_username is required for user scopes', 422);
+        }
+
+        // An org's own scope may take the org's slug, and a user scope its owner's
+        // username (and their personal org's); any other org or user holding it conflicts.
+        const owner_username = (await user_repo.find_profile_by_id(owner_id))?.username ?? null;
+        for (const h of await namespace_holders(this._ns(), slug, ['org', 'user'])) {
+            if (h.kind === 'org' && (org?.slug === slug || (scope_type === 'user' && h.personal && h.owner_username === owner_username))) continue;
+            if (h.kind === 'user' && scope_type === 'user' && owner_username === slug) continue;
+            throw namespace_conflict(h);
         }
 
         if (scope_type === 'org' && org) {

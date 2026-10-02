@@ -88,7 +88,13 @@ export type Policy =
         daemon?: DaemonRule;
     }
     /** Daemon push that creates a record in the token's own realm (runs/create). */
-    | Base & { kind: 'daemon_realm'; level: Level };
+    | Base & { kind: 'daemon_realm'; level: Level }
+    /**
+     * One route serving two callers, told apart by the body: `when_present`
+     * applies when `field` is in the request (a public form such as "Forgot
+     * password"), `otherwise` when it is not.
+     */
+    | Base & { kind: 'by_body'; field: FieldRef; when_present: Policy; otherwise: Policy };
 
 // ── Builders (keep the table readable) ─────────────────────────────────
 
@@ -115,3 +121,6 @@ export const record = (
 ): Policy => ({ kind: 'record', record: kind, from, level, ...opts });
 export const scope = (opts: Omit<Extract<Policy, { kind: 'scope' }>, 'kind'>): Policy => ({ kind: 'scope', ...opts });
 export const daemon_realm = (level: Level, handler?: string): Policy => ({ kind: 'daemon_realm', level, handler });
+/** Picks `when_present` when the request carries `field`, else `otherwise`. */
+export const by_body = (field: FieldRef, when_present: Policy, otherwise: Policy, handler?: string): Policy =>
+    ({ kind: 'by_body', field, when_present, otherwise, handler });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SortDirField, sort_by_field } from '../lib/list_sort.js';
 
 const LimitField = z.number().int().min(1).max(100).optional()
     .describe('Maximum number of results to return (1–100)');
@@ -19,6 +20,13 @@ export const OrgsGetInput = z.object({
         .describe('When true, omit personal orgs (slug matches a username). Site admin only.'),
     mine: z.boolean().optional()
         .describe('When true, return only orgs the caller is a member of (ignores admin privileges)'),
+    sort_by: sort_by_field(['slug', 'display_name', 'member_count', 'scope_count', 'created_at'],
+        'exact slug match first when searching, then newest first; site-admin list only — 400 with mine'),
+    sort_dir: SortDirField,
+    status: z.enum(['active', 'waiting_for_owner', 'deleted']).optional()
+        .describe('Site-admin list only: only orgs in this state (`deleted` lists soft-deleted orgs)'),
+    include_deleted: z.boolean().optional()
+        .describe('Site-admin list only: also list soft-deleted orgs'),
 });
 
 export type OrgsGetInput = z.infer<typeof OrgsGetInput>;
@@ -34,47 +42,38 @@ export const OrgIdInput = z.object({
 export type OrgIdInput = z.infer<typeof OrgIdInput>;
 
 /**
- * Unified create/update input — branch on org_id presence in the controller.
- * create: org_id absent; slug + admin_username required.
- * update: org_id required; only display_name is mutable.
+ * POST /orgs/new — an org for its future owner: an existing user, or someone
+ * invited by email.
+ */
+export const OrgsNewInput = z.object({
+    slug: z.string().min(1)
+        .describe('URL-safe org identifier; immutable after creation'),
+    display_name: z.string().optional()
+        .describe('Human-readable org name (default: the slug)'),
+    owner: z.union([
+        z.object({ user_id: z.string().uuid().describe('Existing user who will own the org') }).strict(),
+        z.object({
+            email: z.string().min(1).describe('Email of the person who will own the org'),
+            display_name: z.string().optional().describe('Their display name, for a person with no account'),
+        }).strict(),
+    ]).describe('The owner: { user_id } or { email, display_name? }'),
+    reactivate: z.boolean().optional()
+        .describe('Site admin: restore the deleted org (or owner) that holds the name'),
+});
+
+export type OrgsNewInput = z.infer<typeof OrgsNewInput>;
+
+/**
+ * POST /orgs/update — rename an org (only display_name is mutable).
  */
 export const OrgInput = z.object({
-    org_id: z.string().uuid().optional()
-        .describe('Present for update; omit to create'),
-    slug: z.string().min(1).optional()
-        .describe('URL-safe org identifier; required on create, immutable after creation'),
-    display_name: z.string().optional()
+    org_id: z.string().uuid()
+        .describe('Org UUID'),
+    display_name: z.string().min(1)
         .describe('Human-readable org name'),
-    admin_username: z.string().min(1).optional()
-        .describe('Username for the initial admin member; required on create'),
-    admin_email: z.string().optional()
-        .describe('Email for the initial admin; used on create only'),
-    admin_password: z.string().optional()
-        .describe('Password for the initial admin account; used on create only'),
-    admin_display_name: z.string().optional()
-        .describe('Display name for the initial admin; used on create only'),
 });
 
 export type OrgInput = z.infer<typeof OrgInput>;
-
-/**
- * Add a member to an org — at least one of username, email, or user_id is required.
- */
-export const OrgsAddMemberInput = z.object({
-    org_id: z.string().uuid()
-        .describe('Org UUID'),
-    username: z.string().min(1).optional()
-        .describe('Username of the user to add'),
-    email: z.string().min(1).optional()
-        .describe('Email of the user to add'),
-    user_id: z.string().uuid().optional()
-        .describe('UUID of the user to add'),
-}).refine(
-    (v) => Boolean(v.username || v.email || v.user_id != null),
-    { message: 'username, email, or user_id is required' },
-);
-
-export type OrgsAddMemberInput = z.infer<typeof OrgsAddMemberInput>;
 
 /**
  * Remove a member from an org.
@@ -175,6 +174,9 @@ export const OrgsGetScopesInput = z.object({
         .describe('Substring match on slug or display_name'),
     limit: LimitField,
     offset: OffsetField,
+    sort_by: sort_by_field(['slug', 'visibility', 'team_count', 'created_at'],
+        'a user\'s scopes by slug; the full catalog newest first'),
+    sort_dir: SortDirField,
 });
 
 export type OrgsGetScopesInput = z.infer<typeof OrgsGetScopesInput>;

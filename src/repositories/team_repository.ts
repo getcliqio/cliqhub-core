@@ -1,5 +1,5 @@
 import { Team, User } from '../models/index.js';
-import { fn, literal, Op, type Transaction, type WhereOptions } from 'sequelize';
+import { fn, literal, Op, type OrderItem, type Transaction, type WhereOptions } from 'sequelize';
 import { BaseRepository } from './base_repository.js';
 
 // "Latest" = highest semver, NOT most recently published. Splits the
@@ -26,7 +26,8 @@ export class TeamRepository extends BaseRepository<Team> {
         return Team.findOne({ where, raw: true });
     }
 
-    async list_filtered(where: WhereOptions, limit: number, offset: number) {
+    /** Catalog page; `order` defaults to most installed first. */
+    async list_filtered(where: WhereOptions, limit: number, offset: number, order: OrderItem[] = [['install_count', 'DESC'], ['id', 'ASC']]) {
         const rows = await Team.findAll({
             attributes: [
                 'id', 'name', 'scope', 'description', 'install_count', 'visibility', 'listed',
@@ -34,13 +35,40 @@ export class TeamRepository extends BaseRepository<Team> {
             ],
             include: [{ model: User, as: 'author', attributes: ['username'] }],
             where,
-            order: [['install_count', 'DESC']],
+            order,
             limit,
             offset,
             raw: true,
             nest: true,
         });
         return rows.map((r: any) => ({ ...r, author: r.author?.username ?? null }));
+    }
+
+    /**
+     * Site-admin catalog listing: every team (no visibility filter applied
+     * here), most recently updated first unless `order` says otherwise, with
+     * the author's username, latest version and number of published versions.
+     */
+    async list_admin(where: WhereOptions, limit: number, offset: number, order: OrderItem[] = [['updated_at', 'DESC'], ['id', 'ASC']]) {
+        const { count, rows } = await Team.findAndCountAll({
+            attributes: [
+                'id', 'name', 'scope', 'description', 'author_id', 'install_count', 'visibility', 'listed',
+                'created_at', 'updated_at',
+                [literal(LATEST_VERSION_SUBQUERY), 'latest_version'],
+                [literal('(SELECT count(*)::int FROM team_versions tv WHERE tv.team_id = "Team"."id")'), 'version_count'],
+            ],
+            include: [{ model: User, as: 'author', attributes: ['username'] }],
+            where,
+            order,
+            limit,
+            offset,
+            raw: true,
+            nest: true,
+        });
+        return {
+            total: count,
+            rows: rows.map((r: any) => ({ ...r, author: r.author?.username ?? null })),
+        };
     }
 
     async count_filtered(where: WhereOptions): Promise<number> {

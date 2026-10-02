@@ -111,6 +111,8 @@ export type AuthContext = {
     realm_id?: string;
     /** How the Bearer credential was resolved (`pat` | `daemon_token`). */
     auth_via?: 'jwt' | 'pat' | 'daemon_token';
+    /** Id of the user PAT (`api_tokens.id`) that authenticated the request; absent for daemon tokens. */
+    token_id?: string;
     /** @deprecated Act-as is a BFF session update; Core no longer embeds impersonation. */
     impersonation?: ImpersonationVo;
 };

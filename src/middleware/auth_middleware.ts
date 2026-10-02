@@ -84,6 +84,7 @@ async function resolve_api_token(token: string, deps: AuthDeps): Promise<AuthCon
 
     const context = await build_auth_context(user.id, deps, user);
     context.auth_via = 'pat';
+    context.token_id = String(row.id);
     // Session-scoped PATs (`session:…` name from mint_session_pat): do NOT
     // freeze token_permissions — assert_grant falls back to live membership
     // (same as former Hub JWT). Standing user PATs keep stored grants.

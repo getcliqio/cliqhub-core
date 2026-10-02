@@ -27,6 +27,7 @@ import express from 'express';
 import request from 'supertest';
 import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
 import { OrgsService } from '../../src/services/orgs_service.js';
+import { ReactivationService } from '../../src/services/reactivation.service.js';
 import { OrgsController } from '../../src/controllers/orgs_controller.js';
 import { ScopesService } from '../../src/services/scopes_service.js';
 import { UsersService } from '../../src/services/users_service.js';
@@ -38,10 +39,11 @@ import { create_route_policy_middleware } from '../../src/middleware/enforce_rou
 import { ALL_PERMISSIONS } from '../../src/auth/permissions.js';
 import { org_role_store } from '../helpers/policy_decision.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
-import { User, Org, OrgMember, OrgRole, Scope, ScopeMember, Team } from '../../src/models/index.js';
+import { Org, OrgMember, OrgRole, Scope, Team } from '../../src/models/index.js';
 
 const org_repo = {
     find_by_id: vi.fn().mockResolvedValue(null),
+    find_by_id_with_deleted: vi.fn().mockResolvedValue(null),
     find_by_slug: vi.fn().mockResolvedValue(null),
     create: vi.fn().mockResolvedValue(hub_legacy_uuid(1)),
     update_display_name: vi.fn(),
@@ -91,6 +93,8 @@ const orgs_service = new OrgsService(
     repos.user_repo as any,
     repos.team_repo as any,
     repos.audit_repo as any,
+    {} as any,
+    new ReactivationService(),
 );
 const orgs_controller = new OrgsController(orgs_service, new ScopesService(
     repos.scope_repo as any,
@@ -117,7 +121,6 @@ app.post('/v1/orgs/list_roles',            orgs_controller.wrap(orgs_controller.
 app.post('/internal/orgs/new',             orgs_controller.wrap(orgs_controller.new_org));
 app.post('/v1/orgs/update',                orgs_controller.wrap(orgs_controller.update));
 app.post('/internal/orgs/delete',          orgs_controller.wrap(orgs_controller.delete_org));
-app.post('/v1/orgs/add_member',            orgs_controller.wrap(orgs_controller.add_member));
 app.post('/v1/orgs/remove_member',         orgs_controller.wrap(orgs_controller.remove_member));
 app.post('/internal/orgs/get_role',        orgs_controller.wrap(orgs_controller.get_role));
 app.post('/internal/orgs/create_role',     orgs_controller.wrap(orgs_controller.create_role));
@@ -240,7 +243,7 @@ describe('POST /v1/orgs/get_by_id', () => {
 
     it('returns site_admin role for admin user', async () => {
         mock_admin_auth();
-        org_repo.find_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'acme', display_name: 'Acme' });
+        org_repo.find_by_id_with_deleted.mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'acme', display_name: 'Acme', status: 'active', owner_id: null, deleted_at: null });
         (repos.org_member_repo as any).list_members_by_org = vi.fn().mockResolvedValueOnce([]);
         (Scope.findAll as any).mockResolvedValueOnce([]);
         const res = await request(app).post('/v1/orgs/get_by_id')
@@ -266,52 +269,14 @@ describe('POST /v1/orgs/get_by_id', () => {
 // ─── NEW (admin-only create org) ────────────────────────────────────
 
 describe('POST /internal/orgs/new', () => {
+    // Creating the org and its owner invite runs on live Postgres (tests/integration/invitations_flow.test.ts).
     beforeEach(() => vi.clearAllMocks());
-
-    it('creates org with existing admin user', async () => {
-        mock_admin_auth();
-        org_repo.find_by_slug.mockResolvedValueOnce(null);
-        repos.scope_repo.find_by_slug.mockResolvedValueOnce(null);
-        (User.findOne as any).mockResolvedValueOnce({ id: hub_legacy_uuid(2), username: 'bob' });
-        (Org.create as any).mockResolvedValueOnce({ id: hub_legacy_uuid(5), slug: 'neworg' });
-        (OrgMember.create as any).mockResolvedValueOnce({});
-        (Scope.create as any).mockResolvedValueOnce({ id: hub_legacy_uuid(20) });
-        (ScopeMember.create as any).mockResolvedValueOnce({});
-        const res = await request(app).post('/internal/orgs/new')
-            .set('Authorization', admin_auth_header())
-            .send({ slug: 'neworg', admin_username: 'bob' });
-        expect(res.status).toBe(200);
-        expect(res.body.data.slug).toBe('neworg');
-    });
-
-    it('creates org and new admin user when user does not exist', async () => {
-        mock_admin_auth();
-        org_repo.find_by_slug.mockResolvedValueOnce(null);
-        repos.scope_repo.find_by_slug.mockResolvedValueOnce(null);
-        (User.findOne as any).mockResolvedValueOnce(null);
-        repos.user_repo.find_by_email.mockResolvedValueOnce(null);
-        (User.create as any).mockResolvedValueOnce({ id: hub_legacy_uuid(3), username: 'newadmin' });
-        (Scope.create as any)
-            .mockResolvedValueOnce({ id: hub_legacy_uuid(30) })
-            .mockResolvedValueOnce({ id: hub_legacy_uuid(31) });
-        (Org.create as any).mockResolvedValueOnce({ id: hub_legacy_uuid(6), slug: 'freshorg' });
-        (OrgMember.create as any).mockResolvedValueOnce({});
-        (ScopeMember.create as any).mockResolvedValueOnce({});
-        const res = await request(app).post('/internal/orgs/new')
-            .set('Authorization', admin_auth_header())
-            .send({
-                slug: 'freshorg', admin_username: 'newadmin',
-                admin_email: 'new@test.com', admin_password: 'securepass123',
-            });
-        expect(res.status).toBe(200);
-        expect(res.body.data.slug).toBe('freshorg');
-    });
 
     it('returns 403 for non-admin user', async () => {
         mock_user_auth();
         const res = await request(app).post('/internal/orgs/new')
             .set('Authorization', user_auth_header())
-            .send({ slug: 'neworg', admin_username: 'bob' });
+            .send({ slug: 'neworg', owner: { email: 'bob@test.com' } });
         expect(res.status).toBe(403);
     });
 
@@ -320,32 +285,35 @@ describe('POST /internal/orgs/new', () => {
         org_repo.find_by_slug.mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'taken' });
         const res = await request(app).post('/internal/orgs/new')
             .set('Authorization', admin_auth_header())
-            .send({ slug: 'taken', admin_username: 'bob' });
+            .send({ slug: 'taken', owner: { email: 'bob@test.com' } });
         expect(res.status).toBe(409);
+        expect(res.body.error).toMatchObject({ code: 'conflict', details: { field: 'slug', holder: { id: hub_legacy_uuid(1), slug: 'taken' } } });
     });
 
     it('returns 422 for invalid slug', async () => {
         mock_admin_auth();
         const res = await request(app).post('/internal/orgs/new')
             .set('Authorization', admin_auth_header())
-            .send({ slug: '123-bad', admin_username: 'bob' });
+            .send({ slug: '123-bad', owner: { user_id: hub_legacy_uuid(2) } });
         expect(res.status).toBe(422);
     });
 
-    it('returns 404 when user not found and no credentials provided', async () => {
+    it('returns 422 without an owner, and for the removed admin_* fields', async () => {
         mock_admin_auth();
-        org_repo.find_by_slug.mockResolvedValueOnce(null);
-        repos.scope_repo.find_by_slug.mockResolvedValueOnce(null);
-        (User.findOne as any).mockResolvedValueOnce(null);
-        const res = await request(app).post('/internal/orgs/new')
+        let res = await request(app).post('/internal/orgs/new')
             .set('Authorization', admin_auth_header())
-            .send({ slug: 'neworg', admin_username: 'ghost' });
-        expect(res.status).toBe(404);
+            .send({ slug: 'neworg' });
+        expect(res.status).toBe(422);
+        mock_admin_auth();
+        res = await request(app).post('/internal/orgs/new')
+            .set('Authorization', admin_auth_header())
+            .send({ slug: 'neworg', owner: { username: 'bob', admin_password: 'securepass123' } });
+        expect(res.status).toBe(422);
     });
 
     it('returns 401 when not authenticated', async () => {
         const res = await request(app).post('/internal/orgs/new')
-            .send({ slug: 'x', admin_username: 'y' });
+            .send({ slug: 'x', owner: { user_id: hub_legacy_uuid(2) } });
         expect(res.status).toBe(401);
     });
 });
@@ -379,9 +347,9 @@ describe('POST /v1/orgs/update', () => {
 describe('POST /internal/orgs/delete', () => {
     beforeEach(() => vi.clearAllMocks());
 
-    it('deletes org when no teams exist', async () => {
+    it('soft-deletes org when no teams exist', async () => {
         mock_admin_auth();
-        (Org.findByPk as any).mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'acme' });
+        (Org.findOne as any).mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'acme' });
         (Scope.findAll as any)
             .mockResolvedValueOnce([{ slug: 'acme' }])
             .mockResolvedValueOnce([{ id: hub_legacy_uuid(10) }, { id: hub_legacy_uuid(11) }]);
@@ -390,12 +358,12 @@ describe('POST /internal/orgs/delete', () => {
             .set('Authorization', admin_auth_header())
             .send({ org_id: hub_legacy_uuid(1) });
         expect(res.status).toBe(200);
-        expect(res.body.data.deleted).toBe(true);
+        expect(res.body.data).toEqual({ id: hub_legacy_uuid(1), deleted_at: expect.any(String) });
     });
 
     it('returns 409 when org has teams', async () => {
         mock_admin_auth();
-        (Org.findByPk as any).mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'acme' });
+        (Org.findOne as any).mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'acme' });
         (Scope.findAll as any).mockResolvedValueOnce([{ slug: 'acme' }]);
         (Team.count as any).mockResolvedValueOnce(3);
         const res = await request(app).post('/internal/orgs/delete')
@@ -406,7 +374,7 @@ describe('POST /internal/orgs/delete', () => {
 
     it('returns 404 when org not found', async () => {
         mock_admin_auth();
-        (Org.findByPk as any).mockResolvedValueOnce(null);
+        (Org.findOne as any).mockResolvedValueOnce(null);
         const res = await request(app).post('/internal/orgs/delete')
             .set('Authorization', admin_auth_header())
             .send({ org_id: hub_legacy_uuid(999) });
@@ -418,53 +386,6 @@ describe('POST /internal/orgs/delete', () => {
         const res = await request(app).post('/internal/orgs/delete')
             .set('Authorization', user_auth_header())
             .send({ org_id: hub_legacy_uuid(1) });
-        expect(res.status).toBe(403);
-    });
-});
-
-// ─── ADD MEMBER ─────────────────────────────────────────────────────
-
-describe('POST /v1/orgs/add_member', () => {
-    beforeEach(() => vi.clearAllMocks());
-
-    it('adds a member successfully', async () => {
-        mock_org_admin_auth();
-        repos.user_repo.find_by_username.mockResolvedValueOnce({ id: hub_legacy_uuid(2), username: 'bob' });
-        (repos.org_member_repo as any).find_by_org_and_user = vi.fn().mockResolvedValueOnce(null);
-        (repos.org_member_repo as any).create = vi.fn();
-        const res = await request(app).post('/v1/orgs/add_member')
-            .set('Authorization', user_auth_header())
-            .send({ org_id: hub_legacy_uuid(1), username: 'bob' });
-        expect(res.status).toBe(200);
-        expect(res.body.data.username).toBe('bob');
-        expect(res.body.data.role).toBe('member');
-    });
-
-    it('returns 404 when user not found', async () => {
-        mock_org_admin_auth();
-        repos.user_repo.find_by_username.mockResolvedValueOnce(null);
-        const res = await request(app).post('/v1/orgs/add_member')
-            .set('Authorization', user_auth_header())
-            .send({ org_id: hub_legacy_uuid(1), username: 'ghost' });
-        expect(res.status).toBe(404);
-    });
-
-    it('returns 409 when user already a member', async () => {
-        mock_org_admin_auth();
-        repos.user_repo.find_by_username.mockResolvedValueOnce({ id: hub_legacy_uuid(2), username: 'bob' });
-        (repos.org_member_repo as any).find_by_org_and_user = vi.fn()
-            .mockResolvedValueOnce({ org_id: hub_legacy_uuid(1), user_id: hub_legacy_uuid(2), role: 'member' });
-        const res = await request(app).post('/v1/orgs/add_member')
-            .set('Authorization', user_auth_header())
-            .send({ org_id: hub_legacy_uuid(1), username: 'bob' });
-        expect(res.status).toBe(409);
-    });
-
-    it('returns 403 for non-admin member', async () => {
-        mock_non_admin_auth();
-        const res = await request(app).post('/v1/orgs/add_member')
-            .set('Authorization', user_auth_header())
-            .send({ org_id: hub_legacy_uuid(1), username: 'bob' });
         expect(res.status).toBe(403);
     });
 });

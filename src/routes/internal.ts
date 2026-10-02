@@ -33,7 +33,6 @@ export function create_internal_router(container: Container): Router {
     internal.post('/orgs/delete', orgs_controller.wrap(orgs_controller.delete_org));
     // Member-facing org writes: BFF-only. Reads are Core /v1 only.
     internal.post('/orgs/update', orgs_controller.wrap(orgs_controller.update));
-    internal.post('/orgs/add_member', orgs_controller.wrap(orgs_controller.add_member));
     internal.post('/orgs/remove_member', orgs_controller.wrap(orgs_controller.remove_member));
     internal.post('/orgs/get_role', orgs_controller.wrap(orgs_controller.get_role));
     internal.post('/orgs/create_role', orgs_controller.wrap(orgs_controller.create_role));

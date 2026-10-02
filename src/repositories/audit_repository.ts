@@ -1,4 +1,5 @@
-import { Op } from 'sequelize';
+import { Op, type Transaction } from 'sequelize';
+import { list_order, type SortColumns, type SortDir } from '../lib/list_sort.js';
 import { AuditLog, User } from '../models/index.js';
 
 type AuditFilters = { action?: string; target_type?: string; admin_id?: string; target_id?: string; since_ms?: number; until_ms?: number };
@@ -19,19 +20,30 @@ function audit_where(filters: AuditFilters): Record<string | symbol, unknown> {
 }
 import { BaseRepository } from './base_repository.js';
 
+/** `/internal/reports/audit` sort keys. */
+export type AuditSortKey = 'created_at' | 'action';
+
+/** Audit sort key → ORDER BY. */
+const AUDIT_SORT_COLUMNS: SortColumns<AuditSortKey> = {
+    created_at: (d) => [['created_at', d]],
+    action: (d) => [['action', d]],
+};
+
 export class AuditRepository extends BaseRepository<AuditLog> {
     protected readonly model = AuditLog;
-    async create(admin_id: string, action: string, target_type: string, target_id: string | number, details: Record<string, unknown> = {}): Promise<void> {
-        await AuditLog.create({ admin_id, action, target_type, target_id: String(target_id), details: JSON.stringify(details) });
+    /** Records one admin action (inside `transaction` when given, so it commits or rolls back with the change). */
+    async create(admin_id: string, action: string, target_type: string, target_id: string | number, details: Record<string, unknown> = {}, transaction?: Transaction): Promise<void> {
+        await AuditLog.create({ admin_id, action, target_type, target_id: String(target_id), details: JSON.stringify(details) }, { transaction });
     }
 
-    async list_paginated(filters: AuditFilters, limit: number, offset: number) {
+    /** One page of entries, newest first unless `sort` says otherwise (ties by id). */
+    async list_paginated(filters: AuditFilters, limit: number, offset: number, sort: { sort_by?: AuditSortKey; sort_dir?: SortDir } = {}) {
         const where = audit_where(filters);
 
         const rows = await AuditLog.findAll({
             where,
             include: [{ model: User, attributes: ['username'] }],
-            order: [['created_at', 'DESC']],
+            order: list_order(AUDIT_SORT_COLUMNS, sort, [['created_at', 'DESC']]),
             limit,
             offset,
             raw: true,

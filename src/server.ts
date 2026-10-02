@@ -18,6 +18,8 @@ import {
     start_review_expiry_sweep,
     stop_review_expiry_sweep,
 } from './services/review_expiry_sweep.service.js';
+import { start_invite_sweep, stop_invite_sweep } from './services/invite_sweep.service.js';
+import { settle_background } from './lib/background.js';
 const log = get_logger('server');
 
 async function main() {
@@ -41,6 +43,7 @@ async function main() {
     start_command_outbox_worker();
     start_webhook_delivery_retention();
     start_review_expiry_sweep();
+    start_invite_sweep();
 
     // Bind explicitly to '::' so the backend is reachable on Railway's
     // IPv6-only private network. Node's default behavior is system-dependent.
@@ -55,7 +58,9 @@ async function main() {
         stop_command_outbox_worker();
         stop_webhook_delivery_retention();
         stop_review_expiry_sweep();
+        stop_invite_sweep();
         server.close();
+        await settle_background();
         await close_control_plane_store();
         await close_sequelize();
         process.exit(0);

@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod';
+import { SortDirField, sort_by_field } from '../lib/list_sort.js';
 
 /** POST /v1/daemons/register — daemon enroll/register body (loose optional fields). */
 export const DaemonRegisterInput = z.object({
@@ -47,6 +48,8 @@ export const DaemonGetInput = z.object({
     limit: z.number().int().positive().optional().describe('Page size'),
     offset: z.number().int().nonnegative().optional().describe('Page offset'),
     all: z.boolean().optional().describe('Site admins only: every record on the hub, not just the caller\'s realm memberships (ignored for everyone else). org_id still narrows.'),
+    sort_by: sort_by_field(['name', 'status', 'last_heartbeat'], 'most recently registered first; name = name, else hostname, else id'),
+    sort_dir: SortDirField,
 }).superRefine((v, ctx) => {
     if (v.realm_id?.trim()) return;
     // `all` (site admins) may omit org_id; the controller refuses it for everyone else.

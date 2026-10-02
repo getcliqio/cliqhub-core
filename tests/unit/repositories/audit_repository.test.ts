@@ -11,7 +11,13 @@ describe('AuditRepository', () => {
 
     it('create inserts audit log entry', async () => {
         await repo.create(hub_legacy_uuid(1), 'user.suspend', 'user', 5, { reason: 'test' });
-        expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ admin_id: hub_legacy_uuid(1), action: 'user.suspend' }));
+        expect(AuditLog.create).toHaveBeenCalledWith(expect.objectContaining({ admin_id: hub_legacy_uuid(1), action: 'user.suspend' }), { transaction: undefined });
+    });
+
+    it('create joins the caller\'s transaction when given (commits or rolls back with the change)', async () => {
+        const t = { id: 'tx' } as never;
+        await repo.create(hub_legacy_uuid(1), 'org.delete', 'org', 'acme', {}, t);
+        expect(AuditLog.create).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'org.delete', target_id: 'acme' }), { transaction: t });
     });
 
     it('list_paginated returns entries ordered by created_at desc', async () => {

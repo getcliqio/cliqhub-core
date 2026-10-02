@@ -17,6 +17,8 @@ vi.mock('../../../src/services/realm.service.js', () => ({
         create: vi.fn(),
         list_for_user: vi.fn().mockResolvedValue({ realms: [], total: 0 }),
         ensure_org_default_realm: vi.fn().mockResolvedValue({ id: 'realm-1', slug: 'org.default' }),
+        org_delete_blocker: vi.fn().mockResolvedValue(null),
+        after_org_realms_removed: vi.fn().mockResolvedValue(undefined),
         ensure_personal_realm: vi.fn().mockResolvedValue({
             default_realm_id: 'realm-personal',
             default_realm_slug: 'default',
@@ -27,6 +29,10 @@ vi.mock('../../../src/services/realm.service.js', () => ({
 
 vi.mock('../../../src/models/migrations/migrate_org_roles.js', () => ({
     seed_default_roles_for_org: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('../../../src/services/org_seed.service.js', () => ({
+    OrgSeedService: { seed_org: vi.fn().mockResolvedValue({ channels_created: 2, rules_created: 16 }) },
 }));
 
 vi.mock('../../../src/services/org_realm_sync_service.js', () => ({
@@ -63,12 +69,16 @@ vi.mock('../../../src/auth/permissions.js', async (importOriginal) => {
 });
 
 vi.mock('../../../src/models/index.js', () => ({
-    User: { findOne: vi.fn(), create: vi.fn(), findAll: vi.fn().mockResolvedValue([]) },
+    User: { findOne: vi.fn(), findByPk: vi.fn(), create: vi.fn(), findAll: vi.fn().mockResolvedValue([]) },
     Scope: { create: vi.fn(), findAll: vi.fn().mockResolvedValue([]), findOne: vi.fn().mockResolvedValue(null), destroy: vi.fn(), count: vi.fn().mockResolvedValue(0) },
-    Org: { create: vi.fn(), update: vi.fn().mockResolvedValue([1]), findByPk: vi.fn(), destroy: vi.fn(), count: vi.fn().mockResolvedValue(0), findAll: vi.fn().mockResolvedValue([]) },
+    Org: { create: vi.fn(), update: vi.fn().mockResolvedValue([1]), findByPk: vi.fn(), findOne: vi.fn(), destroy: vi.fn(), count: vi.fn().mockResolvedValue(0), findAll: vi.fn().mockResolvedValue([]) },
+    Realm: { findAll: vi.fn().mockResolvedValue([]), update: vi.fn().mockResolvedValue([0]) },
+    RealmMember: { destroy: vi.fn().mockResolvedValue(0) },
+    RealmInvite: { update: vi.fn().mockResolvedValue([0]) },
     OrgMember: { create: vi.fn(), destroy: vi.fn(), findOne: vi.fn().mockResolvedValue({ role_id: hub_legacy_uuid(1) }), findAll: vi.fn().mockResolvedValue([]), update: vi.fn().mockResolvedValue([1]), count: vi.fn().mockResolvedValue(0) },
-    OrgRole: { findOne: vi.fn().mockResolvedValue({ id: hub_legacy_uuid(1), is_system: false, permissions: ['org.members.manage', 'org.settings', 'org.scopes.manage'] }), findByPk: vi.fn().mockResolvedValue({ is_system: false, permissions: ['org.members.manage', 'org.settings', 'org.scopes.manage'] }), findAll: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(4), findOrCreate: vi.fn().mockResolvedValue([{}, false]) },
+    OrgRole: { findOne: vi.fn().mockResolvedValue({ id: hub_legacy_uuid(1), is_system: false, permissions: ['org.members.manage', 'org.settings', 'org.scopes.manage'] }), findByPk: vi.fn().mockResolvedValue({ is_system: false, permissions: ['org.members.manage', 'org.settings', 'org.scopes.manage'] }), findAll: vi.fn().mockResolvedValue([]), count: vi.fn().mockResolvedValue(4), findOrCreate: vi.fn().mockResolvedValue([{}, false]), destroy: vi.fn().mockResolvedValue(0) },
     AccountInvite: {
+        destroy: vi.fn().mockResolvedValue(0),
         findOne: vi.fn(),
         findByPk: vi.fn(),
         findAll: vi.fn().mockResolvedValue([]),
@@ -77,6 +87,10 @@ vi.mock('../../../src/models/index.js', () => ({
     },
     ScopeMember: { create: vi.fn(), destroy: vi.fn() },
     Team: { count: vi.fn().mockResolvedValue(0) },
+    NotificationRule: { destroy: vi.fn().mockResolvedValue(0) },
+    NotificationChannel: { destroy: vi.fn().mockResolvedValue(0) },
+    OrgAgentSetting: { destroy: vi.fn().mockResolvedValue(0) },
+    AgentCatalog: { destroy: vi.fn().mockResolvedValue(0) },
 }));
 
 vi.mock('../../../src/auth/jwt.js', () => ({
@@ -86,6 +100,7 @@ vi.mock('../../../src/auth/jwt.js', () => ({
 function make_org_repo() {
     return {
         find_by_id: vi.fn().mockResolvedValue(null),
+        find_by_id_with_deleted: vi.fn().mockResolvedValue(null),
         find_by_slug: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(hub_legacy_uuid(1)),
         update_display_name: vi.fn(),
@@ -135,7 +150,6 @@ function make_user_repo() {
     return {
         find_profile_by_id: vi.fn(),
         find_by_username: vi.fn().mockResolvedValue(null),
-        find_by_username_or_email: vi.fn(),
         find_by_email: vi.fn().mockResolvedValue(null),
         create: vi.fn(),
         find_by_id_with_transaction: vi.fn(),
@@ -202,11 +216,11 @@ describe('OrgsService — get (regular user)', () => {
     });
 
     it('returns orgs for authenticated user', async () => {
-        org_member_repo.list_my_orgs.mockResolvedValueOnce([{ id: hub_legacy_uuid(1), slug: 'acme' }]);
+        org_member_repo.list_my_orgs.mockResolvedValueOnce([{ id: hub_legacy_uuid(1), slug: 'acme', status: 'active', owner_id: null, deleted_at: null }]);
 
         const result = await service.get(ALICE, {});
 
-        expect(result.orgs).toEqual([{ id: hub_legacy_uuid(1), slug: 'acme' }]);
+        expect(result.orgs).toEqual([{ id: hub_legacy_uuid(1), slug: 'acme', status: 'active', owner: null, deleted_at: null }]);
         expect(org_member_repo.list_my_orgs).toHaveBeenCalledWith(hub_legacy_uuid(1));
     });
 });
@@ -221,24 +235,40 @@ describe('OrgsService — get (admin path)', () => {
         ({ service } = make_service());
     });
 
-    it('returns paginated orgs for admin without search', async () => {
+    const live = (id: string, slug: string) => ({ id, slug, status: 'active', owner_id: null, deleted_at: null });
+    const listed = (id: string, slug: string) => ({ id, slug, status: 'active', owner: null, deleted_at: null });
+
+    it('returns paginated live orgs for admin without search', async () => {
         vi.mocked(Org.count).mockResolvedValueOnce(3);
         vi.mocked(Org.findAll).mockResolvedValueOnce([
-            { id: hub_legacy_uuid(1), slug: 'a' }, { id: hub_legacy_uuid(2), slug: 'b' }, { id: hub_legacy_uuid(3), slug: 'c' },
+            live(hub_legacy_uuid(1), 'a'), live(hub_legacy_uuid(2), 'b'), live(hub_legacy_uuid(3), 'c'),
         ] as any);
 
         const result = await service.get(SITE_ADMIN, { limit: 10, offset: 0 });
 
-        expect(result).toEqual({ orgs: [{ id: hub_legacy_uuid(1), slug: 'a' }, { id: hub_legacy_uuid(2), slug: 'b' }, { id: hub_legacy_uuid(3), slug: 'c' }], total: 3, limit: 10, offset: 0 });
+        expect(result).toEqual({ orgs: [listed(hub_legacy_uuid(1), 'a'), listed(hub_legacy_uuid(2), 'b'), listed(hub_legacy_uuid(3), 'c')], total: 3, limit: 10, offset: 0 });
     });
 
     it('returns paginated orgs for admin with search', async () => {
         vi.mocked(Org.count).mockResolvedValueOnce(1);
-        vi.mocked(Org.findAll).mockResolvedValueOnce([{ id: hub_legacy_uuid(1), slug: 'acme' }] as any);
+        vi.mocked(Org.findAll).mockResolvedValueOnce([live(hub_legacy_uuid(1), 'acme')] as any);
 
         const result = await service.get(SITE_ADMIN, { search: 'acme', limit: 50, offset: 0 });
 
-        expect(result).toEqual({ orgs: [{ id: hub_legacy_uuid(1), slug: 'acme' }], total: 1, limit: 50, offset: 0 });
+        expect(result).toEqual({ orgs: [listed(hub_legacy_uuid(1), 'acme')], total: 1, limit: 50, offset: 0 });
+    });
+
+    it('include_deleted lists deleted orgs with status deleted and their owner', async () => {
+        const { User } = await import('../../../src/models/index.js');
+        const gone = new Date('2026-03-01T00:00:00.000Z');
+        vi.mocked(Org.count).mockResolvedValueOnce(1);
+        vi.mocked(Org.findAll).mockResolvedValueOnce([{ id: hub_legacy_uuid(1), slug: 'acme', status: 'deleted', owner_id: hub_legacy_uuid(7), deleted_at: gone }] as any);
+        vi.mocked(User.findAll).mockResolvedValueOnce([{ id: hub_legacy_uuid(7), username: 'olivia', status: 'active', deleted_at: null }] as any);
+
+        const result = await service.get(SITE_ADMIN, { include_deleted: true });
+
+        expect(vi.mocked(Org.count).mock.calls[0][0]).not.toHaveProperty('where.deleted_at');
+        expect((result as any).orgs).toEqual([{ id: hub_legacy_uuid(1), slug: 'acme', status: 'deleted', owner: { username: 'olivia', status: 'active' }, deleted_at: gone.toISOString() }]);
     });
 
     it('clamps limit to 100 and defaults offset to 0', async () => {
@@ -267,26 +297,33 @@ describe('OrgsService — get_by_id', () => {
     it('returns org for member', async () => {
         org_member_repo.find_by_org_and_user.mockResolvedValueOnce({ role: 'member' });
         org_repo.find_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'acme', display_name: 'Acme' });
-        org_member_repo.list_members_by_org.mockResolvedValueOnce([{ user_id: hub_legacy_uuid(1), role: 'member', role_id: hub_legacy_uuid(4) }]);
+        org_member_repo.list_members_by_org.mockResolvedValueOnce([
+            { user_id: hub_legacy_uuid(1), role: 'member', role_id: hub_legacy_uuid(4), status: 'active', email: 'alice@test.com' },
+            { user_id: hub_legacy_uuid(2), role: 'member', role_id: hub_legacy_uuid(4), status: 'pending', email: 'bob@test.com' },
+        ]);
 
         const result = await service.get_by_id(ALICE, { org_id: hub_legacy_uuid(1) });
 
         expect(result.my_role).toBe('member');
         expect(result.slug).toBe('acme');
-        expect(result.members).toEqual([{ user_id: hub_legacy_uuid(1), role: 'member', role_id: hub_legacy_uuid(4) }]);
+        // A plain member sees active members only, without emails.
+        expect(result.members).toEqual([{ user_id: hub_legacy_uuid(1), role: 'member', role_id: hub_legacy_uuid(4), status: 'active' }]);
         expect(result.roles).toEqual([]);
         expect(Array.isArray(result.available_permissions)).toBe(true);
         expect(result.available_permissions.length).toBeGreaterThan(0);
     });
 
-    it('returns org for site admin with site_admin role', async () => {
-        org_repo.find_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'acme', display_name: 'Acme' });
+    it('returns org for site admin with site_admin role, deleted orgs included', async () => {
+        const gone = new Date('2026-03-01T00:00:00.000Z');
+        org_repo.find_by_id_with_deleted.mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'acme', display_name: 'Acme', status: 'deleted', owner_id: null, deleted_at: gone });
         org_member_repo.list_members_by_org.mockResolvedValueOnce([]);
 
         const result = await service.get_by_id(SITE_ADMIN, { org_id: hub_legacy_uuid(1) });
 
         expect(result.my_role).toBe('site_admin');
+        expect(result).toMatchObject({ status: 'deleted', owner: null, deleted_at: gone.toISOString(), pending_owner_invite: null });
         expect(org_member_repo.find_by_org_and_user).not.toHaveBeenCalled();
+        expect(org_repo.find_by_id).not.toHaveBeenCalled();
     });
 
     it('rejects non-member with 403', async () => {
@@ -300,86 +337,115 @@ describe('OrgsService — get_by_id', () => {
 // ─── new_org ───────────────────────────────────────────────────────
 
 describe('OrgsService — new_org', () => {
+    const OWNER_ID = hub_legacy_uuid(50);
+    const ORG_ID = hub_legacy_uuid(100);
+    const INVITE_EXPIRES = new Date('2026-10-16T10:00:00Z');
     let service: OrgsService;
     let org_repo: ReturnType<typeof make_org_repo>;
-    let scope_repo: ReturnType<typeof make_scope_repo>;
-    let user_repo: ReturnType<typeof make_user_repo>;
     let audit_repo: ReturnType<typeof make_audit_repo>;
+    let invitations: { invitee_user_id: ReturnType<typeof vi.fn>; send_in_transaction: ReturnType<typeof vi.fn>; delivery_outcome: ReturnType<typeof vi.fn> };
+    let reactivation: { assert_can_reactivate: ReturnType<typeof vi.fn>; restore_org: ReturnType<typeof vi.fn>; restore_user: ReturnType<typeof vi.fn> };
 
     beforeEach(async () => {
         vi.clearAllMocks();
-        ({ service, org_repo, scope_repo, user_repo, audit_repo } = make_service({ with_audit: true }));
-        const { User, Scope, Org, OrgMember, ScopeMember } = await import('../../../src/models/index.js');
-        (User.findOne as any).mockResolvedValue(null);
-        (User.create as any).mockResolvedValue({ id: hub_legacy_uuid(50), username: 'newadmin' });
+        invitations = {
+            invitee_user_id: vi.fn().mockResolvedValue(OWNER_ID),
+            send_in_transaction: vi.fn().mockResolvedValue({ invite: { id: 'inv-1', expires_at: INVITE_EXPIRES }, resent: false, event: {} }),
+            delivery_outcome: vi.fn().mockResolvedValue({ email_sent: false, invite_url: 'https://app.test/invite/x' }),
+        };
+        reactivation = {
+            assert_can_reactivate: vi.fn(),
+            restore_org: vi.fn().mockResolvedValue({ id: ORG_ID, slug: 'neworg' }),
+            restore_user: vi.fn(),
+        };
+        const built = make_service({ with_audit: true });
+        ({ org_repo, audit_repo } = built);
+        service = new OrgsService(
+            built.org_repo as any, built.org_member_repo as any, built.scope_repo as any, built.scope_member_repo as any,
+            built.user_repo as any, built.team_repo as any, built.audit_repo as any, invitations as any, reactivation as any,
+        );
+        const { User, Scope, Org } = await import('../../../src/models/index.js');
         (Scope.create as any).mockResolvedValue({ id: hub_legacy_uuid(20), slug: 'neworg' });
-        (Org.create as any).mockResolvedValue({ id: hub_legacy_uuid(100), slug: 'neworg' });
-        (OrgMember.create as any).mockResolvedValue({});
-        (ScopeMember.create as any).mockResolvedValue({});
+        (Org.create as any).mockResolvedValue({ id: ORG_ID, slug: 'neworg' });
+        (Org.findByPk as any).mockResolvedValue({ id: ORG_ID, slug: 'neworg', display_name: 'New Org', status: 'waiting_for_owner', created_at: new Date('2026-10-02T10:00:00Z') });
+        (User.findByPk as any).mockResolvedValue({ id: OWNER_ID, email: 'owner@test.com', status: 'invited', deleted_at: null });
     });
 
-    it('creates org with existing user', async () => {
-        const { User } = await import('../../../src/models/index.js');
-        (User.findOne as any).mockResolvedValueOnce({ id: hub_legacy_uuid(5), username: 'existingadmin' });
-
+    it('creates a waiting_for_owner org and sends the owner invite to an email', async () => {
+        const { Org } = await import('../../../src/models/index.js');
         const result = await service.new_org(SITE_ADMIN, {
-            slug: 'neworg', admin_username: 'existingadmin',
+            slug: 'NewOrg', display_name: 'New Org', owner: { email: 'Owner@Test.com ', display_name: 'Owner' },
         });
 
+        expect(invitations.invitee_user_id).toHaveBeenCalledWith(SITE_ADMIN, 'owner@test.com', expect.objectContaining({ display_name: 'Owner' }));
+        expect(invitations.send_in_transaction).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+            target: 'org', org_id: ORG_ID, email: 'owner@test.com', role: 'owner', user_id: OWNER_ID,
+        }));
+        expect(audit_repo.create).toHaveBeenCalledWith(SITE_ADMIN.user!.id, 'org.create', 'org', 'neworg', expect.objectContaining({ owner_invite_id: 'inv-1' }), expect.anything());
         expect(result).toEqual({
-            id: hub_legacy_uuid(100),
-            slug: 'neworg',
-            scope_id: hub_legacy_uuid(20),
-            scope_slug: 'neworg',
-            default_scope_id: hub_legacy_uuid(20),
+            org: {
+                id: ORG_ID, slug: 'neworg', display_name: 'New Org', status: 'waiting_for_owner',
+                owner: { user_id: OWNER_ID, email: 'owner@test.com', status: 'invited' },
+                created_at: '2026-10-02T10:00:00.000Z', reactivated: false,
+            },
+            owner_invite: {
+                invite_id: 'inv-1', role: 'owner', status: 'pending', expires_at: INVITE_EXPIRES.toISOString(),
+                email_sent: false, invite_url: 'https://app.test/invite/x',
+            },
         });
     });
 
-    it('creates org and new user when user does not exist', async () => {
-        const { User } = await import('../../../src/models/index.js');
-        (User.findOne as any).mockResolvedValueOnce(null);
-
-        const result = await service.new_org(SITE_ADMIN, {
-            slug: 'neworg', admin_username: 'newadmin',
-            admin_email: 'new@test.com', admin_password: 'longpassword',
-            admin_display_name: 'New Admin',
-        });
-
-        expect(result.id).toBe(hub_legacy_uuid(100));
-        expect(result.slug).toBe('neworg');
-        expect(result.scope_id).toBe(hub_legacy_uuid(20));
-        expect(result).not.toHaveProperty('realm_id');
-        expect(User.create).toHaveBeenCalled();
-        expect(audit_repo.create).toHaveBeenCalled();
+    it('uses an existing user as owner without creating a user', async () => {
+        await service.new_org(SITE_ADMIN, { slug: 'neworg', owner: { user_id: OWNER_ID } });
+        expect(invitations.invitee_user_id).not.toHaveBeenCalled();
+        expect(invitations.send_in_transaction).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ user_id: OWNER_ID, email: 'owner@test.com' }));
     });
 
-    it('throws 404 when user not found and no email/password provided', async () => {
+    it('throws 404 for an unknown owner user_id', async () => {
         const { User } = await import('../../../src/models/index.js');
-        (User.findOne as any).mockResolvedValueOnce(null);
+        (User.findByPk as any).mockResolvedValueOnce(null);
+        await expect(service.new_org(SITE_ADMIN, { slug: 'neworg', owner: { user_id: hub_legacy_uuid(77) } }))
+            .rejects.toMatchObject({ status: 404 });
+    });
 
-        await expect(service.new_org(SITE_ADMIN, {
-            slug: 'neworg', admin_username: 'ghost',
-        })).rejects.toThrow("User 'ghost' not found");
+    it('a deleted owner is 409 deleted unless reactivate', async () => {
+        const { User } = await import('../../../src/models/index.js');
+        (User.findByPk as any).mockResolvedValueOnce({ id: OWNER_ID, email: 'gone@test.com', status: 'active', deleted_at: new Date('2026-09-01T00:00:00Z') });
+        await expect(service.new_org(SITE_ADMIN, { slug: 'neworg', owner: { user_id: OWNER_ID } }))
+            .rejects.toMatchObject({ status: 409, code: 'deleted', details: { kind: 'user', id: OWNER_ID, was_active: true } });
+    });
+
+    it('rejects an invalid owner email with 422', async () => {
+        await expect(service.new_org(SITE_ADMIN, { slug: 'neworg', owner: { email: 'nope' } })).rejects.toMatchObject({ status: 422 });
     });
 
     it('rejects invalid slug with 422', async () => {
-        await expect(service.new_org(SITE_ADMIN, {
-            slug: '123bad', admin_username: 'someone',
-        })).rejects.toThrow('Slug must start with a letter');
+        await expect(service.new_org(SITE_ADMIN, { slug: '123bad', owner: { user_id: OWNER_ID } })).rejects.toThrow('Slug must start with a letter');
     });
 
     it('rejects reserved slug with 422', async () => {
-        await expect(service.new_org(SITE_ADMIN, {
-            slug: 'admin', admin_username: 'someone',
-        })).rejects.toThrow("Slug 'admin' is reserved");
+        await expect(service.new_org(SITE_ADMIN, { slug: 'admin', owner: { user_id: OWNER_ID } })).rejects.toThrow("Slug 'admin' is reserved");
     });
 
-    it('rejects duplicate org slug with 409', async () => {
+    it('rejects a slug held by a live org with 409 conflict', async () => {
         org_repo.find_by_slug.mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'taken' });
+        await expect(service.new_org(SITE_ADMIN, { slug: 'taken', owner: { user_id: OWNER_ID } }))
+            .rejects.toMatchObject({ status: 409, message: 'taken is already an org', details: { kind: 'org', slug: 'taken', personal: false } });
+        expect(invitations.send_in_transaction).not.toHaveBeenCalled();
+    });
 
-        await expect(service.new_org(SITE_ADMIN, {
-            slug: 'taken', admin_username: 'someone',
-        })).rejects.toThrow('An org with that slug already exists');
+    it('a slug held by a deleted org: 409 deleted, or restored with reactivate', async () => {
+        const deleted_org = { id: ORG_ID, slug: 'neworg', deleted_at: new Date('2026-09-01T00:00:00Z'), status: 'deleted', activated_at: new Date('2026-01-01T00:00:00Z') };
+        org_repo.find_by_slug.mockResolvedValueOnce(deleted_org);
+        await expect(service.new_org(SITE_ADMIN, { slug: 'neworg', owner: { user_id: OWNER_ID } }))
+            .rejects.toMatchObject({ status: 409, code: 'deleted', details: { kind: 'org', id: ORG_ID, was_active: true } });
+
+        org_repo.find_by_slug.mockResolvedValueOnce(deleted_org);
+        const result = await service.new_org(SITE_ADMIN, { slug: 'neworg', owner: { user_id: OWNER_ID }, reactivate: true });
+        expect(reactivation.assert_can_reactivate).toHaveBeenCalledWith(SITE_ADMIN);
+        expect(reactivation.restore_org).toHaveBeenCalledWith(SITE_ADMIN, ORG_ID, expect.anything());
+        expect(result.org.reactivated).toBe(true);
+        expect(audit_repo.create).toHaveBeenCalledWith(SITE_ADMIN.user!.id, 'org.reactivate', 'org', 'neworg', expect.anything(), expect.anything());
     });
 });
 
@@ -414,7 +480,7 @@ describe('OrgsService — delete_org', () => {
         vi.clearAllMocks();
         ({ service, audit_repo } = make_service({ with_audit: true }));
         const { Org, Scope, ScopeMember, OrgMember } = await import('../../../src/models/index.js');
-        (Org.findByPk as any).mockResolvedValue({ id: hub_legacy_uuid(1), slug: 'acme' });
+        (Org.findOne as any).mockResolvedValue({ id: hub_legacy_uuid(1), slug: 'acme' });
         (Scope.findAll as any).mockResolvedValue([{ id: hub_legacy_uuid(10) }, { id: hub_legacy_uuid(11) }]);
         (Scope.destroy as any).mockResolvedValue(2);
         (ScopeMember.destroy as any).mockResolvedValue(3);
@@ -422,19 +488,20 @@ describe('OrgsService — delete_org', () => {
         (Org.destroy as any).mockResolvedValue(1);
     });
 
-    it('deletes org successfully when no teams', async () => {
+    it('soft-deletes the org when it has no teams: { id, deleted_at }, rows kept', async () => {
         vi.mocked(Team.count).mockResolvedValueOnce(0);
 
         const result = await service.delete_org(SITE_ADMIN, { org_id: hub_legacy_uuid(1) });
 
-        expect(result.deleted).toBe(true);
+        expect(result).toEqual({ id: hub_legacy_uuid(1), deleted_at: expect.any(String) });
+        expect(Org.destroy).not.toHaveBeenCalled();
         expect(audit_repo.create).toHaveBeenCalled();
     });
 
     it('an owner (not a site admin) deletes their org once the route policy let them through', async () => {
         vi.mocked(Team.count).mockResolvedValueOnce(0);
         const result = await service.delete_org(ALICE, { org_id: hub_legacy_uuid(1) });
-        expect(result.deleted).toBe(true);
+        expect(result.id).toBe(hub_legacy_uuid(1));
     });
 
     it('a personal org (slug = a username) cannot be deleted by its owner → 409', async () => {
@@ -445,7 +512,7 @@ describe('OrgsService — delete_org', () => {
     });
 
     it('throws 404 when org not found', async () => {
-        (Org.findByPk as any).mockResolvedValueOnce(null);
+        (Org.findOne as any).mockResolvedValueOnce(null);
 
         await expect(service.delete_org(SITE_ADMIN, { org_id: hub_legacy_uuid(999) }))
             .rejects.toThrow('Org not found');
@@ -456,48 +523,6 @@ describe('OrgsService — delete_org', () => {
 
         await expect(service.delete_org(SITE_ADMIN, { org_id: hub_legacy_uuid(1) }))
             .rejects.toThrow('Cannot delete org with 3 team(s)');
-    });
-});
-
-// ─── add_member ────────────────────────────────────────────────────
-
-describe('OrgsService — add_member', () => {
-    let service: OrgsService;
-    let org_member_repo: ReturnType<typeof make_org_member_repo>;
-    let user_repo: ReturnType<typeof make_user_repo>;
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-        ({ service, org_member_repo, user_repo } = make_service());
-    });
-
-    it('adds user as member', async () => {
-        // require_permission is mocked to allow ORG_ADMIN, so no repo admin check.
-        // Only the "is already member?" check uses find_by_org_and_user.
-        org_member_repo.find_by_org_and_user.mockResolvedValueOnce(null);
-        user_repo.find_by_username.mockResolvedValueOnce({ id: hub_legacy_uuid(5), username: 'charlie' });
-
-        const result = await service.add_member(ORG_ADMIN, { org_id: hub_legacy_uuid(1), username: 'charlie' });
-
-        expect(result).toEqual({ user_id: hub_legacy_uuid(5), username: 'charlie', role: 'member' });
-        expect(org_member_repo.create).toHaveBeenCalledWith(hub_legacy_uuid(1), hub_legacy_uuid(5), 'member');
-    });
-
-    it('rejects non-existent user with 404', async () => {
-        org_member_repo.find_by_org_and_user.mockResolvedValueOnce(null);
-        user_repo.find_by_username.mockResolvedValueOnce(null);
-
-        await expect(service.add_member(ORG_ADMIN, { org_id: hub_legacy_uuid(1), username: 'ghost' }))
-            .rejects.toThrow('User not found');
-    });
-
-    it('rejects duplicate member with 409', async () => {
-        org_member_repo.find_by_org_and_user
-            .mockResolvedValueOnce({ org_id: hub_legacy_uuid(1), user_id: hub_legacy_uuid(5), role: 'member' });
-        user_repo.find_by_username.mockResolvedValueOnce({ id: hub_legacy_uuid(5), username: 'charlie' });
-
-        await expect(service.add_member(ORG_ADMIN, { org_id: hub_legacy_uuid(1), username: 'charlie' }))
-            .rejects.toThrow('User is already a member');
     });
 });
 
@@ -620,7 +645,7 @@ describe('OrgsService — new_scope', () => {
         scope_repo.find_by_slug.mockResolvedValueOnce({ id: hub_legacy_uuid(5), slug: 'acme-dev' });
 
         await expect(service.new_scope(ORG_ADMIN, { org_id: hub_legacy_uuid(1), slug: 'acme-dev' }))
-            .rejects.toThrow('A scope with that slug already exists');
+            .rejects.toMatchObject({ status: 409, code: 'conflict', details: { kind: 'scope', slug: 'acme-dev' } });
     });
 
     it('rejects when org not found', async () => {

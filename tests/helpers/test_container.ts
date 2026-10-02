@@ -43,8 +43,8 @@ export function make_mock_repos() {
     return {
         user_repo: {
             find_profile_by_id: vi.fn().mockResolvedValue(null),
+            find_login_row_by_id: vi.fn().mockResolvedValue(null),
             find_by_username: vi.fn().mockResolvedValue(null),
-            find_by_username_or_email: vi.fn().mockResolvedValue(null),
             find_by_email: vi.fn().mockResolvedValue(null),
             create: vi.fn().mockResolvedValue(1),
             find_by_id_with_transaction: vi.fn().mockResolvedValue(null),

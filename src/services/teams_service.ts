@@ -16,9 +16,9 @@ import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { PackageStorage } from '../storage/package_storage.js';
 import { package_key, package_path } from '../storage/package_storage.js';
 import type { AuthContext } from '../schemas/auth_types.js';
-import type { TeamListItemVO, TeamRoleVO } from '../schemas/team_types.js';
-import { User } from '../models/index.js';
-import { Op, literal, type WhereOptions } from 'sequelize';
+import type { TeamCatalogSortKey, TeamListItemVO, TeamRoleVO } from '../schemas/team_types.js';
+import { Op, col, fn, literal, type WhereOptions } from 'sequelize';
+import { list_order, type SortColumns, type SortDir } from '../lib/list_sort.js';
 import type { NormalizedWorkflow } from './package_parser.js';
 import { RealmTeamListService } from '../services/realm_team_list.service.js';
 import { get_sequelize } from '../lib/sequelize.js';
@@ -26,15 +26,12 @@ import { ScopeRepository as ScopeRepoClass } from '../repositories/scope_reposit
 import { OrgMemberRepository as OrgMemberRepoClass } from '../repositories/org_member_repository.js';
 
 import { get_logger } from '../lib/log.js';
+import { escape_like } from '../lib/search.js';
 
 const log = get_logger('svc.teams');
 
 const _scope_repo_ts = new ScopeRepoClass();
 const _org_member_repo_ts = new OrgMemberRepoClass();
-
-function escape_like(input: string): string {
-    return input.replace(/[%_\\]/g, '\\$&');
-}
 
 function team_status(visibility: string): 'draft' | 'published' {
     return visibility === 'draft' ? 'draft' : 'published';
@@ -89,6 +86,14 @@ function build_visibility_where(auth: AuthContext): WhereOptions {
     };
 }
 
+/** `teams/get` catalog / site-admin sort key → ORDER BY (qualified: the author join also has columns). */
+const TEAM_SORT_COLUMNS: SortColumns<TeamCatalogSortKey> = {
+    name: (d) => [[fn('LOWER', col('Team.name')), d]],
+    install_count: (d) => [['install_count', d]],
+    created_at: (d) => [['created_at', d]],
+    updated_at: (d) => [['updated_at', d]],
+};
+
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/;
 
 export class TeamsService {
@@ -110,6 +115,8 @@ export class TeamsService {
         mine?: boolean; group_by_scope?: boolean; listed?: boolean;
         status?: 'draft' | 'published';
         limit?: number; offset?: number;
+        /** Catalog / site-admin modes only (the controller rejects it elsewhere). */
+        sort_by?: TeamCatalogSortKey; sort_dir?: SortDir;
     }) {
         log.debug('get', { scope: params.scope, status: params.status });
         if (params.mine) {
@@ -148,7 +155,7 @@ export class TeamsService {
 
         const where: WhereOptions = { [Op.and]: conditions };
         const total = await this._team_repo.count_filtered(where);
-        const rows = await this._team_repo.list_filtered(where, limit, offset);
+        const rows = await this._team_repo.list_filtered(where, limit, offset, list_order(TEAM_SORT_COLUMNS, params, [['install_count', 'DESC']]));
         const tag_map = await this._build_tag_map(rows);
         return { teams: rows, tag_map, total, limit, offset };
     }
@@ -242,6 +249,7 @@ export class TeamsService {
     private async _get_admin(_auth: AuthContext, params: {
         query?: string; scope?: string; listed?: boolean;
         limit?: number; offset?: number;
+        sort_by?: TeamCatalogSortKey; sort_dir?: SortDir;
     }, limit: number, offset: number) {
         const conditions: WhereOptions[] = [];
 
@@ -259,29 +267,9 @@ export class TeamsService {
 
         const where: WhereOptions = conditions.length > 0 ? { [Op.and]: conditions } : {};
 
-        const { count: total, rows: teams } = await this._team_repo.find_and_count_q({
-            attributes: [
-                'id', 'name', 'scope', 'description', 'author_id',
-                'visibility', 'listed', 'install_count',
-                'created_at', 'updated_at',
-                [literal('(SELECT count(*) FROM team_versions tv WHERE tv.team_id = "Team"."id")'), 'version_count'],
-            ],
-            include: [{ model: User, as: 'author', attributes: ['username'] }],
-            where,
-            order: [['updated_at', 'DESC']],
-            limit,
-            offset,
-            raw: true,
-            nest: true,
-        });
-
-        const mapped = teams.map((r: any) => ({
-            ...r,
-            author_username: r.author?.username ?? null,
-            author: undefined,
-        }));
-
-        return { teams: mapped, total, limit, offset };
+        const { total, rows } = await this._team_repo.list_admin(where, limit, offset, list_order(TEAM_SORT_COLUMNS, params, [['updated_at', 'DESC']]));
+        const tag_map = await this._build_tag_map(rows);
+        return { teams: rows, tag_map, total, limit, offset };
     }
 
     // ─── Single team detail (was: get) ──────────────────────────────
@@ -950,7 +938,7 @@ export class TeamsService {
         if (team.scope) {
             const scope_row = await _scope_repo_ts.find_one_q({ where: { slug: team.scope }, attributes: ['org_id'], raw: true });
             if (scope_row?.org_id) {
-                const membership = await _org_member_repo_ts.find_one_q({ where: { org_id: scope_row.org_id, user_id: auth.user.id }, attributes: ['role'],
+                const membership = await _org_member_repo_ts.find_one_q({ where: { org_id: scope_row.org_id, user_id: auth.user.id, status: 'active', deleted_at: null }, attributes: ['role'],
                     raw: true,
                 });
                 if (membership?.role === 'admin' || membership?.role === 'owner') {
@@ -983,7 +971,6 @@ export class TeamsService {
         return map;
     }
 }
-
 
 // ── Publish-time validation ─────────────────────────────────────────
 

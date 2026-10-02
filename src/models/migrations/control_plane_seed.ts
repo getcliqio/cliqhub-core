@@ -2,7 +2,7 @@
  * Idempotent control-plane seed for schema `cliq`.
  *
  * Seeds org-wide defaults on `daemon_config` with daemon_id `__global__`.
- * Platform scopes ('cliq', 'measureone') are now seeded in the schema
+ * The platform scope ('cliq') is seeded in the schema
  * migration via SQL INSERT … ON CONFLICT DO UPDATE.
  *
  * Does not touch Hub `public.*` registry tables. Safe to re-run on every boot.

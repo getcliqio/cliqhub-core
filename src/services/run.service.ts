@@ -639,13 +639,15 @@ export class RunService {
         // Postgres/sqlite without new schema.
         const order: any[] = (() => {
             const seq = get_sequelize();
-            if (sort_by === 'run_name') return [[seq.fn('LOWER', seq.col('Run.run_name')), sort_dir], ['started_at', 'DESC']];
-            if (sort_by === 'state') return [['state', sort_dir], ['started_at', 'DESC']];
-            if (sort_by === 'team') return [[{ model: DaemonTeam, as: 'team' }, 'slug', sort_dir], ['started_at', 'DESC']];
-            if (sort_by === 'started_at') return [['started_at', sort_dir]];
+            // run_id (the primary key) breaks remaining ties so equal values page stably.
+            if (sort_by === 'run_name') return [[seq.fn('LOWER', seq.col('Run.run_name')), sort_dir], ['started_at', 'DESC'], ['run_id', 'ASC']];
+            if (sort_by === 'state') return [['state', sort_dir], ['started_at', 'DESC'], ['run_id', 'ASC']];
+            if (sort_by === 'team') return [[{ model: DaemonTeam, as: 'team' }, 'slug', sort_dir], ['started_at', 'DESC'], ['run_id', 'ASC']];
+            if (sort_by === 'started_at') return [['started_at', sort_dir], ['run_id', 'ASC']];
             return [
                 [seq.fn('COALESCE', seq.col('Run.completed_at'), seq.col('Run.started_at')), sort_dir],
                 ['started_at', 'DESC'],
+                ['run_id', 'ASC'],
             ];
         })();
 

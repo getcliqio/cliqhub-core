@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
-import { Op } from 'sequelize';
+import { Op, col, fn } from 'sequelize';
+import { list_order, nulls_last, type SortColumns, type SortDir } from '../lib/list_sort.js';
 
 import { DaemonRepository } from '../repositories/daemon_repository.js';
 import type { Daemon } from '../models/daemon.model.js';
@@ -11,6 +12,16 @@ import { RealmDispatchKeyService } from './realm_dispatch_key.service.js';
 import { RealmTeamListService } from './realm_team_list.service.js';
 
 const _daemon_repo_ds = new DaemonRepository();
+
+/** `daemons/get` sort keys. */
+export type DaemonSortKey = 'name' | 'status' | 'last_heartbeat';
+
+/** `daemons/get` sort key → ORDER BY (name falls back to hostname, then id, as the UI shows it). */
+const DAEMON_SORT_COLUMNS: SortColumns<DaemonSortKey> = {
+    name: (d) => [[fn('LOWER', fn('COALESCE', col('name'), col('hostname'), col('id'))), d]],
+    status: (d) => [['status', d]],
+    last_heartbeat: (d) => [['last_heartbeat', nulls_last(d)]],
+};
 
 const log = get_logger('daemon-service');
 
@@ -411,6 +422,8 @@ export class DaemonService {
             limit?: number;
             offset?: number;
             site_admin?: boolean;
+            sort_by?: DaemonSortKey;
+            sort_dir?: SortDir;
         },
     ): Promise<{ daemons: DaemonInfo[]; total: number }> {
         await DaemonService._mark_stale();
@@ -459,7 +472,8 @@ export class DaemonService {
         const offset = Math.max(0, filters?.offset ?? 0);
 
         const total = await _daemon_repo_ds.find_count_q({ where });
-        const rows = await _daemon_repo_ds.find_all_q({ where, order: [['last_registered_at', 'DESC']], ...(limit != null ? { limit, offset } : {}) });
+        const order = list_order(DAEMON_SORT_COLUMNS, filters ?? {}, [['last_registered_at', 'DESC']]);
+        const rows = await _daemon_repo_ds.find_all_q({ where, order, ...(limit != null ? { limit, offset } : {}) });
         return { daemons: await with_realms(rows.map(to_info)), total };
     }
 

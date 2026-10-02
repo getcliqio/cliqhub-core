@@ -56,6 +56,9 @@ import {
     TeamsRenameInput,
     TeamsInstallInput,
     TeamsUninstallInput,
+    TEAM_CATALOG_SORT_KEYS,
+    TEAM_REALM_SORT_KEYS,
+    type TeamCatalogSortKey,
 } from '../schemas/team_types.js';
 import { teams_build_schema } from '../schemas/builder_types.js';
 import { to_team_list_item_dto } from '../lib/mappers.js';
@@ -131,6 +134,21 @@ export class TeamsController extends BaseController {
         const offset = body.offset ?? 0;
         const limit = body.limit ?? 50;
 
+        // sort_by is one enum across modes; each mode accepts only its own keys.
+        const realm_sort = body.sort_by && (TEAM_REALM_SORT_KEYS as readonly string[]).includes(body.sort_by)
+            ? body.sort_by as typeof TEAM_REALM_SORT_KEYS[number] : undefined;
+        const catalog_sort = body.sort_by && (TEAM_CATALOG_SORT_KEYS as readonly string[]).includes(body.sort_by)
+            ? body.sort_by as TeamCatalogSortKey : undefined;
+        if (body.sort_by) {
+            const mode = body.daemon_id ? 'daemon' : body.realm_id ? 'realm' : body.mine ? 'mine' : 'catalog';
+            const fits = mode === 'realm' ? realm_sort : mode === 'catalog' ? catalog_sort : undefined;
+            if (!fits) {
+                const allowed = mode === 'realm' ? TEAM_REALM_SORT_KEYS.join(', ')
+                    : mode === 'catalog' ? TEAM_CATALOG_SORT_KEYS.join(', ') : 'none';
+                throw ApiError.bad_request(`sort_by '${body.sort_by}' does not apply in ${mode} mode (allowed: ${allowed})`, 'invalid_params');
+            }
+        }
+
         // ── Daemon inventory mode ────────────────────────────────────────────
         if (body.daemon_id) {
             if (!req.auth?.user) throw ApiError.unauthorized('Authentication required');
@@ -141,8 +159,8 @@ export class TeamsController extends BaseController {
                 body.daemon_id,
                 String(req.auth?.user?.id ?? ''),
             );
-            // The daemon RPC returns its own teams array — normalize to PagedData<TeamData>.
-            const raw_teams: TeamData[] = (result as any)?.payload?.data?.teams ?? [];
+            // The daemon's `teams/get` data is `{ teams }` — normalize to PagedData<TeamData>.
+            const raw_teams = (Array.isArray(result.teams) ? result.teams : []) as TeamData[];
             const q = body.query?.toLowerCase();
             const filtered = q
                 ? raw_teams.filter((t) =>
@@ -165,7 +183,7 @@ export class TeamsController extends BaseController {
                     query: body.query,
                     origin: body.origin,
                     coverage: body.coverage,
-                    sort_by: body.sort_by,
+                    sort_by: realm_sort,
                     sort_dir: body.sort_dir,
                     limit,
                     offset,
@@ -173,11 +191,13 @@ export class TeamsController extends BaseController {
                 String(req.auth?.user?.id ?? ''),
             );
             // Map coverage rows to TeamData — coverage fields populated.
+            // `id` is the catalog team id (published teams only): install with it.
             const items: TeamData[] = result.rows.map((r) => ({
+                ...(r.team_id ? { id: r.team_id } : {}),
                 name: r.slug,
                 slug: r.slug,
                 label: r.label,
-                scope: null,
+                scope: r.scope,
                 version: r.version,
                 origin: r.origin,
                 in_team_list: r.in_team_list,
@@ -194,7 +214,7 @@ export class TeamsController extends BaseController {
         }
 
         // ── Catalog search mode ──────────────────────────────────────────────
-        const result = await this._teams_service.get(req.auth!, body);
+        const result = await this._teams_service.get(req.auth!, { ...body, sort_by: catalog_sort });
         const r = result as any;
 
         if ('scopes' in r && r.tag_map) {

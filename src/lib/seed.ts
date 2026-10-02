@@ -34,7 +34,6 @@ async function seed_scopes(): Promise<void> {
     const { Scope } = await import('../models/index.js');
     await Scope.bulkCreate([
         { id: '00000000-0000-0000-0000-000000000000', slug: 'cliq', display_name: 'Cliq', is_default: 1, owner_id: null, visibility: 'public', scope_type: 'platform' },
-        { id: '00000000-0000-0000-0000-000000000001', slug: 'measureone', display_name: 'MeasureOne', is_default: 0, owner_id: null, visibility: 'public', scope_type: 'platform' },
     ], { ignoreDuplicates: true });
 }
 

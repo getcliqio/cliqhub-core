@@ -65,7 +65,8 @@ export class SequelizeAccessStore implements AccessStore {
     }
 
     async org_role(org_id: string, user_id: string): Promise<OrgRoleInfo | null> {
-        const m = await OrgMember.findOne({ where: { org_id, user_id }, attributes: ['role', 'role_id'], ...raw }) as Row;
+        // A pending membership (open invite) grants nothing until accepted.
+        const m = await OrgMember.findOne({ where: { org_id, user_id, status: 'active', deleted_at: null }, attributes: ['role', 'role_id'], ...raw }) as Row;
         if (!m) return null;
         if (m.role_id) {
             const role = await OrgRole.findOne({
@@ -85,7 +86,7 @@ export class SequelizeAccessStore implements AccessStore {
     }
 
     async org_id_by_slug(slug: string): Promise<string | null> {
-        const o = await Org.findOne({ where: { slug }, attributes: ['id'], ...raw }) as Row;
+        const o = await Org.findOne({ where: { slug, deleted_at: null }, attributes: ['id'], ...raw }) as Row;
         return (o?.id as string | undefined) ?? null;
     }
 

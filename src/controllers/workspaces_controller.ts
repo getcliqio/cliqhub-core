@@ -6,6 +6,7 @@ import { AdminCheck } from '../lib/site_admin.js';
 import { visible_realm_ids } from '../auth/route_policy/visible.js';
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
+import { SortDirField, sort_by_field } from '../lib/list_sort.js';
 
 /**
  * Who may see or touch which workspaces (Core issue #14).
@@ -68,6 +69,9 @@ const get_schema = z.object({
     realm_id: z.string().optional(),
     limit: z.number().int().positive().optional(),
     offset: z.number().int().nonnegative().optional(),
+    /** Stored list only (400 with daemon_id, which asks the daemon live). */
+    sort_by: sort_by_field(['name', 'created_at'], 'oldest first; name = name, else path'),
+    sort_dir: SortDirField,
 }).optional();
 
 const get_by_id_schema = z.object({
@@ -90,8 +94,13 @@ export class WorkspaceController {
             log.debug('get', { user_id: req.auth?.user?.id });
             const body = get_schema.parse(req.body ?? {}) ?? {};
 
-            /** Live workspaces from a daemon (hard-cut from /v1/daemons/workspaces/get). */
+            /**
+             * Live workspaces from a daemon (hard-cut from /v1/daemons/workspaces/get):
+             * `data` is the daemon's `workspaces/get` data, `{ workspaces: [...] }`
+             * (cliq-sdk 2.0 wire — before it, the raw daemon envelope).
+             */
             if (body.daemon_id) {
+                if (body.sort_by) throw ApiError.bad_request('sort_by applies to the stored workspace list, not a live daemon_id read', 'invalid_params');
                 const user_id = req.auth?.user?.id;
                 if (!user_id) {
                     res.status(401).json({ ok: false, error: 'Authentication required' });
@@ -121,6 +130,8 @@ export class WorkspaceController {
                 daemon_ids,
                 limit: body.limit,
                 offset: body.offset,
+                sort_by: body.sort_by,
+                sort_dir: body.sort_dir,
             });
             res.json({
                 ok: true,

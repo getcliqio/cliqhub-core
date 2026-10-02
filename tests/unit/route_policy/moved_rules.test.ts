@@ -57,7 +57,7 @@ describe('org routes', () => {
     });
 
     it('update needs org.settings; members and roles need org.members.manage; scopes need org.scopes.manage', async () => {
-        for (const route of ['/v1/orgs/update', '/v1/orgs/add_member', '/v1/orgs/remove_member', '/v1/orgs/create_role',
+        for (const route of ['/v1/orgs/update', '/v1/orgs/remove_member', '/v1/orgs/create_role',
             '/internal/orgs/update_role', '/internal/users/update_role', '/v1/orgs/new_scope', '/v1/orgs/delete_scope',
             '/v1/orgs/assign_scope_member', '/v1/orgs/unassign_scope_member']) {
             expect(await st(route, u('admin'), { org_id: 'O1' }), route).toBe(200);
@@ -114,6 +114,19 @@ describe('invitations', () => {
     it('org invite: org.members.manage', async () => {
         expect(await st('/v1/invitations/get_by_id', u('admin'), { invite_id: 'inv_org', target_type: 'org' })).toBe(200);
         expect(await st('/v1/invitations/get_by_id', u('op'), { invite_id: 'inv_org', target_type: 'org' })).toBe(403);
+    });
+
+    it('get_by_id and revoke take invite_id alone', async () => {
+        expect(await st('/v1/invitations/get_by_id', u('admin'), { invite_id: 'inv_org' })).toBe(200);
+        expect(await st('/v1/invitations/revoke', u('admin'), { invite_id: 'inv_org' })).toBe(200);
+        expect(await st('/v1/invitations/revoke', u('mem'), { invite_id: 'inv_org' })).toBe(403);
+    });
+
+    it('get_by_token and accept are public; a signed-in caller may use them too', async () => {
+        for (const route of ['/v1/invitations/get_by_token', '/v1/invitations/accept']) {
+            expect(await st(route, null, { token: 't' }), route).toBe(200);
+            expect(await st(route, u('stranger'), { token: 't' }), route).toBe(200);
+        }
     });
 });
 

@@ -2,8 +2,9 @@
  * Permission vocabulary — every gateable action in CliqHub maps to
  * exactly one permission string. Roles are named bundles of these.
  *
- * Owner-only permissions (`org.delete`, `org.transfer`) cannot be
- * assigned to any role; the owner role gets all permissions implicitly.
+ * Owner-only permissions (`org.delete`, `org.transfer`, `rules.manage`)
+ * cannot be assigned to any role; the owner role gets all permissions
+ * implicitly.
  */
 
 /** All permission strings recognized by the system. */
@@ -44,7 +45,6 @@ export const ALL_PERMISSIONS = [
     'channels.manage',
     'channels.manage.realm',
     'channels.test',
-    'rules.manage',
     'rules.manage.realm',
     'inbox.view',
 
@@ -63,11 +63,13 @@ export type Permission = (typeof ALL_PERMISSIONS)[number];
 
 /**
  * Owner-only permissions — never assignable to roles.
- * The owner role bypasses all checks.
+ * The owner role bypasses all checks. `rules.manage` (org notification
+ * rules) is here so org admins can read the rules but only owners change them.
  */
 export const OWNER_ONLY_PERMISSIONS = [
     'org.delete',
     'org.transfer',
+    'rules.manage',
 ] as const;
 
 /** Quick lookup set for validation. */
@@ -138,7 +140,7 @@ const perm_role_repo = new OrgRoleRepository();
  *
  * Resolution order:
  *   1. Site admin → allow everything (bypass).
- *   2. Load org_members row → get role_id.
+ *   2. Load the active org_members row → get role_id.
  *   3. Load org_roles row → if is_system (owner) → allow everything.
  *   4. Check permission ∈ role.permissions.
  */
@@ -150,8 +152,9 @@ export async function require_permission(
 ): Promise<void> {
     if (opts?.site_role === 'admin') return;
 
+    // A pending membership (open invite) grants nothing until accepted.
     const member = await perm_member_repo.find_one(
-        { org_id, user_id } as any,
+        { org_id, user_id, status: 'active', deleted_at: null },
         { attributes: ['role_id'] },
     );
     if (!member) {

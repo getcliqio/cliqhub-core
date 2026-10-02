@@ -1,13 +1,13 @@
 import { DataTypes, type Sequelize } from 'sequelize';
 import { BaseModel } from './base_model.js';
+import type { InviteDecision, InviteStatus } from './account_invite.model.js';
 
 /**
  * Pending/accepted invitations for users to join a realm.
  *
- * Mirrors `AccountInvite` but at the realm level. The hashed token is emailed
- * to the invitee; roles map to realm membership levels (`admin | operator |
- * member`). On acceptance the row is updated and a `RealmMember` row is
- * created.
+ * Mirrors `AccountInvite` (token columns included) at the realm level; roles
+ * map to realm membership levels (`admin | operator | member`). On acceptance
+ * the row is updated and the realm membership becomes active.
  */
 export class RealmInvite extends BaseModel {
     declare id: string;
@@ -16,11 +16,21 @@ export class RealmInvite extends BaseModel {
     declare invited_by: string;
     declare token_hash: string;
     declare role: 'admin' | 'operator' | 'member';
-    declare status: 'pending' | 'accepted' | 'revoked';
+    declare status: InviteStatus;
     declare created_at: Date;
     declare expires_at: Date;
     declare accepted_at: Date | null;
     declare accepted_user_id: string | null;
+    /** The token encrypted with TOKEN_ENCRYPTION_KEY (lib/secure_token.ts), so resends reuse the link. */
+    declare token_enc: string | null;
+    /** How many times the invite email was sent (1 on create; "send again" adds one). */
+    declare send_count: number;
+    declare last_sent_at: Date | null;
+    /** Reminders sent for the current expiry window (reset when the invite is sent again). */
+    declare reminders_sent: number;
+    /** When the invitee accepted or declined. */
+    declare decided_at: Date | null;
+    declare decision: InviteDecision | null;
 
     static register(sequelize: Sequelize): void {
         RealmInvite.init({
@@ -35,6 +45,12 @@ export class RealmInvite extends BaseModel {
             expires_at: { type: DataTypes.DATE, allowNull: false },
             accepted_at: { type: DataTypes.DATE, allowNull: true },
             accepted_user_id: { type: DataTypes.UUID, allowNull: true },
+            token_enc: { type: DataTypes.TEXT, allowNull: true },
+            send_count: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
+            last_sent_at: { type: DataTypes.DATE, allowNull: true },
+            reminders_sent: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+            decided_at: { type: DataTypes.DATE, allowNull: true },
+            decision: { type: DataTypes.TEXT, allowNull: true },
         }, {
             sequelize,
             tableName: 'realm_invites',

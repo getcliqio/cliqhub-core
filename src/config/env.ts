@@ -15,6 +15,12 @@ export interface EnvConfig {
     rate_limit_public_rpm: number;
     rate_limit_auth_rpm: number;
     rate_limit_window_ms: number;
+    /** Brevo API key (`BREVO_API_KEY`); without it email is not sent and links are returned instead. */
+    brevo_api_key?: string;
+    /** Sender address for all email (`EMAIL_FROM_ADDRESS`). */
+    email_from_address?: string;
+    /** Sender display name (`EMAIL_FROM_NAME`). */
+    email_from_name?: string;
 }
 
 export const RESERVED_SCOPES = ['local', 'prebuilt', 'cliq', 'admin'];
@@ -30,12 +36,61 @@ export const MAX_PASSWORD_LENGTH = 128;
 export const MIN_SLUG_LENGTH = 2;
 export const MAX_SLUG_LENGTH = 64;
 
+const TOKEN_KEY_BYTES = 32;
+
+/**
+ * Parses `TOKEN_ENCRYPTION_KEY`: 32 bytes written as 64 hex characters or as
+ * base64 / base64url.
+ *
+ * @throws Error when the value does not decode to exactly 32 bytes.
+ */
+export function parse_token_encryption_key(raw: string): Buffer {
+    const value = raw.trim();
+    const key = /^[0-9a-fA-F]{64}$/.test(value)
+        ? Buffer.from(value, 'hex')
+        : Buffer.from(value.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+    if (key.length !== TOKEN_KEY_BYTES) {
+        throw new Error(`TOKEN_ENCRYPTION_KEY must be ${TOKEN_KEY_BYTES} bytes (64 hex characters or base64)`);
+    }
+    return key;
+}
+
+/**
+ * The key that encrypts stored link tokens (lib/secure_token.ts), read from
+ * `TOKEN_ENCRYPTION_KEY` on each call.
+ *
+ * @throws Error when the variable is missing or malformed.
+ */
+export function token_encryption_key(): Buffer {
+    const raw = process.env.TOKEN_ENCRYPTION_KEY;
+    if (!raw) throw new Error('Missing required env var: TOKEN_ENCRYPTION_KEY');
+    return parse_token_encryption_key(raw);
+}
+
+/**
+ * Base URL of the web app (`PUBLIC_APP_URL`, no trailing slash), read on each call.
+ *
+ * @throws Error when the variable is missing or not an http(s) URL.
+ */
+export function public_app_url(): string {
+    const raw = process.env.PUBLIC_APP_URL?.trim();
+    if (!raw) throw new Error('Missing required env var: PUBLIC_APP_URL');
+    if (!/^https?:\/\/[^\s]+$/.test(raw)) throw new Error('PUBLIC_APP_URL must be an http(s) URL');
+    return raw.replace(/\/+$/, '');
+}
+
 export function load_env(): EnvConfig {
     const required = (key: string): string => {
         const val = process.env[key];
         if (!val) throw new Error(`Missing required env var: ${key}`);
         return val;
     };
+
+    const node_env = process.env.NODE_ENV || 'development';
+    // Link tokens are encrypted at rest and every email link points at the web
+    // app: production must have both; elsewhere a set value must be valid.
+    if (node_env === 'production' || process.env.TOKEN_ENCRYPTION_KEY) token_encryption_key();
+    if (node_env === 'production' || process.env.PUBLIC_APP_URL) public_app_url();
 
     return {
         port: parseInt(process.env.PORT || '4000', 10),
@@ -51,9 +106,12 @@ export function load_env(): EnvConfig {
         s3_secret_access_key: process.env.S3_SECRET_ACCESS_KEY || '',
         allowed_origins: (process.env.ALLOWED_ORIGINS || '')
             .split(',').map(s => s.trim()).filter(Boolean),
-        node_env: process.env.NODE_ENV || 'development',
+        node_env,
         rate_limit_public_rpm: parseInt(process.env.RATE_LIMIT_PUBLIC_RPM || '30', 10),
         rate_limit_auth_rpm: parseInt(process.env.RATE_LIMIT_AUTH_RPM || '120', 10),
         rate_limit_window_ms: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
+        brevo_api_key: process.env.BREVO_API_KEY || undefined,
+        email_from_address: process.env.EMAIL_FROM_ADDRESS || undefined,
+        email_from_name: process.env.EMAIL_FROM_NAME || undefined,
     };
 }

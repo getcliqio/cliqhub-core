@@ -252,7 +252,7 @@ describe('command_outbox.service', () => {
             expect(mock_query).toHaveBeenCalledTimes(1);
         });
 
-        it('detects daemon run_not_found (404 + run_not_found body): marks state_lost_at, purges other queued commands, exhausts entry', async () => {
+        it('detects daemon run_not_found (404 + error.code RUN_NOT_FOUND): marks state_lost_at, purges other queued commands, exhausts entry', async () => {
             // Mocked in order: SELECT pending → UPDATE team_runs
             // (state_lost_at) → UPDATE command_outbox (purge siblings)
             // → UPDATE command_outbox (exhaust this entry).
@@ -288,8 +288,7 @@ describe('command_outbox.service', () => {
                 status: 404,
                 text: async () => JSON.stringify({
                     ok: false,
-                    error: 'run_not_found',
-                    message: "Run 'r-lost' not found",
+                    error: { code: 'RUN_NOT_FOUND', message: "Run 'r-lost' not found" },
                 }),
             }));
 
@@ -311,9 +310,10 @@ describe('command_outbox.service', () => {
             expect(purge_opts.replacements.run_id).toBe('r-lost');
             expect(purge_opts.replacements.tx_id).toBe('tx-orphan');
 
-            // Fourth query: exhaust this entry.
-            const [exhaust_sql] = mock_query.mock.calls[3];
+            // Fourth query: exhaust this entry, storing the daemon's code and message.
+            const [exhaust_sql, exhaust_opts] = mock_query.mock.calls[3];
             expect(exhaust_sql).toContain('"attempts" = "max_attempts"');
+            expect(exhaust_opts.replacements.error).toBe("HTTP 404: RUN_NOT_FOUND: Run 'r-lost' not found");
         });
 
         it('still treats generic 404 (no run_not_found body) as plain permanent failure — no orphan side-effects', async () => {

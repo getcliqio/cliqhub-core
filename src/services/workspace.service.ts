@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { Op } from 'sequelize';
+import { Op, col, fn } from 'sequelize';
+import { list_order, type SortColumns, type SortDir } from '../lib/list_sort.js';
 
 import { get_logger } from '../lib/log.js';
 import type { Workspace } from '../models/workspace.model.js';
@@ -19,6 +20,14 @@ const _run_repo_w = new RunRepository();
 const _scope_repo_w = new ScopeRepository();
 import { ApiError } from '../lib/api_error.js';
 
+/** `workspaces/get` sort keys. */
+export type WorkspaceSortKey = 'name' | 'created_at';
+
+/** `workspaces/get` sort key → ORDER BY (name falls back to the path, as the UI shows it). */
+const WORKSPACE_SORT_COLUMNS: SortColumns<WorkspaceSortKey> = {
+    name: (d) => [[fn('LOWER', fn('COALESCE', col('Workspace.name'), col('Workspace.path'))), d]],
+    created_at: (d) => [['created_at', d]],
+};
 
 export class WorkspaceService {
 
@@ -29,6 +38,8 @@ export class WorkspaceService {
         daemon_ids?: string[];
         limit?: number;
         offset?: number;
+        sort_by?: WorkspaceSortKey;
+        sort_dir?: SortDir;
     }) {
         log.debug('list', { daemon_id: opts?.daemon_id, realm_id: opts?.realm_id });
         const daemon_id = opts?.daemon_id;
@@ -65,7 +76,7 @@ export class WorkspaceService {
                     attributes: ['id', 'slug', 'scope_id'],
                 }],
             }],
-            order: [['created_at', 'ASC']],
+            order: list_order(WORKSPACE_SORT_COLUMNS, opts ?? {}, [['created_at', 'ASC']]),
             ...(limit != null ? { limit, offset } : {}),
         });
 

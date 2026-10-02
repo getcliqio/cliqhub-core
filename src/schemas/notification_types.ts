@@ -9,6 +9,7 @@
 import { z } from 'zod';
 
 import { destination_schema } from '../notifications/channel_config.js';
+import { is_recipient_selector } from '../notifications/recipients.js';
 
 const org_id_field = z.string().uuid().describe(
     'Organization this call targets. Required for account-scoped channel/rule ops and inbox. '
@@ -113,6 +114,9 @@ export const NotificationRulesSetInput = z.object({
     event: z.string().min(1).describe('Event selector (exact type, family wildcard like run.*, or *)'),
     channel_id: z.string().min(1).describe('Target notification channel id'),
     priority: z.number().int().optional().describe('Rule priority (higher wins within a tier when supported)'),
+    recipients: z.array(z.string().refine(is_recipient_selector, 'Not a recipient selector (invitee, org_owners, inviter, user or a user id)'))
+        .nullable().optional()
+        .describe('Who receives it: invitee | org_owners | inviter | user | user ids; null = the channel destinations; omit to keep'),
 }).superRefine((data, ctx) => {
     const has_realm = Boolean(data.realm_id?.trim());
     if (!has_realm && !data.org_id) {
@@ -171,6 +175,9 @@ export const NotificationChannelData = z.object({
 	created_at: z.number().describe('Create time (unix ms)'),
 	updated_at: z.number().describe('Last update time (unix ms)'),
 	rule_count: z.number().optional().describe('Number of notification rules pointing at this channel'),
+	system_key: z.string().nullable().describe('Stable key of a channel CliqHub seeded (e.g. org.email), else null'),
+	locked: z.boolean().describe('True when the channel cannot be changed or removed (409 locked)'),
+	lock_reason: z.string().nullable().describe('Why the channel is locked'),
 });
 export type NotificationChannelData = z.infer<typeof NotificationChannelData>;
 
@@ -193,6 +200,10 @@ export const NotificationRuleData = z.object({
 	created_at: z.number().describe('Create time (unix ms)'),
 	updated_at: z.number().describe('Last update time (unix ms)'),
 	tier: z.enum(['global', 'realm']).optional().describe('Present when listing effective (org + realm) rules'),
+	recipients: z.array(z.string()).nullable().describe('Who receives it: invitee | org_owners | inviter | user | user ids; null = the channel destinations'),
+	system_key: z.string().nullable().describe('Stable key of a rule CliqHub seeded (e.g. invite.sent.invitee), else null'),
+	locked: z.boolean().describe('True when the rule cannot be changed or removed (409 locked)'),
+	lock_reason: z.string().nullable().describe('Why the rule is locked'),
 });
 export type NotificationRuleData = z.infer<typeof NotificationRuleData>;
 

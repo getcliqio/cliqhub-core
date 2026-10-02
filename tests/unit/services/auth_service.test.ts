@@ -23,7 +23,8 @@ const { RealmService } = await import('../../../src/services/realm.service.js');
 function make_user_repo() {
     return {
         find_profile_by_id: vi.fn(), find_by_username: vi.fn(),
-        find_by_username_or_email: vi.fn(), find_by_email: vi.fn(),
+        find_login_row_by_id: vi.fn().mockResolvedValue(null),
+        find_by_email: vi.fn(),
         create: vi.fn().mockResolvedValue(1),
         find_by_id_with_transaction: vi.fn().mockResolvedValue(ALICE.user),
     };
@@ -89,6 +90,12 @@ describe('AuthService', () => {
     });
 
     describe('mint_session_pat', () => {
+        it('refuses a deleted user with 403 account_deleted', async () => {
+            user_repo.find_login_row_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(1), status: 'active', deleted_at: '2026-01-01T00:00:00.000Z' });
+            await expect(service.mint_session_pat(hub_legacy_uuid(1))).rejects.toMatchObject({ status: 403, code: 'account_deleted' });
+            expect(token_repo.create).not.toHaveBeenCalled();
+        });
+
         it('creates cliq_tok_ with session: name and default grant', async () => {
             user_repo.find_profile_by_id.mockResolvedValueOnce(ALICE.user);
             org_member_repo.find_orgs_by_user.mockResolvedValueOnce([
@@ -132,7 +139,6 @@ describe('AuthService', () => {
 
     describe('signup', () => {
         it('creates user, account, and session PAT', async () => {
-            user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
             user_repo.find_profile_by_id.mockResolvedValue(ALICE.user);
             const result = await service.signup('alice', 'alice@test.com', 'password123');
             expect(result.user).toBeDefined();
@@ -144,7 +150,6 @@ describe('AuthService', () => {
         });
 
         it('uses username as account_slug', async () => {
-            user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
             user_repo.find_profile_by_id.mockResolvedValue(ALICE.user);
             const result = await service.signup('Alice', 'alice@test.com', 'password123');
             expect(result.account_slug).toBe('alice');
@@ -160,17 +165,23 @@ describe('AuthService', () => {
                 .rejects.toThrow('start with a letter');
         });
 
-        it('rejects duplicate username or email', async () => {
-            user_repo.find_by_username_or_email.mockResolvedValueOnce({ id: hub_legacy_uuid(99) });
+        it('rejects an email already in use', async () => {
+            user_repo.find_by_email.mockResolvedValueOnce({ id: hub_legacy_uuid(99), username: 'other', status: 'active', deleted_at: null });
             await expect(service.signup('alice', 'alice@test.com', 'password123'))
-                .rejects.toThrow('already taken');
+                .rejects.toMatchObject({ status: 409, code: 'conflict', message: 'Email already in use', details: { field: 'email' } });
+        });
+
+        it('rejects a username held by a deleted user with 409 deleted', async () => {
+            user_repo.find_by_username.mockResolvedValueOnce({ id: hub_legacy_uuid(98), username: 'alice', status: 'invited', deleted_at: '2026-02-01T00:00:00.000Z' });
+            await expect(service.signup('alice', 'alice@test.com', 'password123'))
+                .rejects.toMatchObject({ status: 409, code: 'deleted', details: { kind: 'user', id: hub_legacy_uuid(98), was_active: false } });
         });
 
         it('rejects duplicate account slug', async () => {
-            user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
-            org_repo.find_by_slug.mockResolvedValueOnce({ id: hub_legacy_uuid(5) });
+            org_repo.find_by_slug.mockResolvedValueOnce({ id: hub_legacy_uuid(5), slug: 'alice' });
+            // The conflict names the holder (lib/namespace.ts).
             await expect(service.signup('alice', 'alice@test.com', 'password123'))
-                .rejects.toThrow('account with that name already exists');
+                .rejects.toMatchObject({ status: 409, code: 'conflict', message: 'alice is already an org', details: { kind: 'org', slug: 'alice' } });
         });
 
         it('rejects password shorter than 8 characters', async () => {
@@ -179,7 +190,6 @@ describe('AuthService', () => {
         });
 
         it('creates account default realm on signup', async () => {
-            user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
             user_repo.find_profile_by_id.mockResolvedValue(ALICE.user);
             vi.mocked(RealmService.ensure_account_default_realm).mockResolvedValueOnce({
                 realm: {
@@ -202,7 +212,6 @@ describe('AuthService', () => {
         });
 
         it('fails signup when account default realm creation fails', async () => {
-            user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
             user_repo.find_profile_by_id.mockResolvedValue(ALICE.user);
             vi.mocked(RealmService.ensure_account_default_realm).mockRejectedValueOnce(new Error('realm conflict'));
             await expect(service.signup('carol', 'carol@test.com', 'password123'))
@@ -252,6 +261,31 @@ describe('AuthService', () => {
                 .rejects.toThrow('Invalid credentials');
         });
 
+        it('a deleted user: the right password gets 403 account_deleted, a wrong one the plain 401', async () => {
+            const deleted = {
+                id: hub_legacy_uuid(1), username: 'alice', password_hash: 'hash', role: 'user', suspended_at: null,
+                status: 'active', deleted_at: '2026-01-01T00:00:00.000Z',
+            };
+            user_repo.find_by_username.mockResolvedValueOnce(deleted);
+            vi.mocked(password.verify_password).mockResolvedValueOnce(false);
+            await expect(service.authenticate_user('alice', 'wrong')).rejects.toMatchObject({ status: 401, code: 'unauthorized' });
+
+            user_repo.find_by_username.mockResolvedValueOnce(deleted);
+            vi.mocked(password.verify_password).mockResolvedValueOnce(true);
+            await expect(service.authenticate_user('alice', 'password123'))
+                .rejects.toMatchObject({ status: 403, code: 'account_deleted' });
+        });
+
+        it('an invited user (no password yet) gets the plain 401 without a password check', async () => {
+            user_repo.find_by_username.mockResolvedValueOnce({
+                id: hub_legacy_uuid(1), username: 'alice', password_hash: null, role: 'user', suspended_at: null,
+                status: 'invited', deleted_at: null,
+            });
+            await expect(service.authenticate_user('alice', 'password123'))
+                .rejects.toMatchObject({ status: 401, code: 'unauthorized' });
+            expect(password.verify_password).not.toHaveBeenCalled();
+        });
+
         it('returns forbidden for suspended user', async () => {
             user_repo.find_by_username.mockResolvedValueOnce({
                 id: hub_legacy_uuid(1), username: 'alice', password_hash: 'hash', role: 'user', suspended_at: '2025-06-01',
@@ -279,6 +313,16 @@ describe('AuthService', () => {
         it('rejects self', async () => {
             await expect(service.issue_session_token(SITE_ADMIN, hub_legacy_uuid(99)))
                 .rejects.toThrow('yourself');
+        });
+
+        it('refuses a deleted target (403 account_deleted) and an invited one (409 not_active)', async () => {
+            user_repo.find_login_row_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(2), status: 'active', deleted_at: '2026-01-01T00:00:00.000Z' });
+            await expect(service.issue_session_token(SITE_ADMIN, hub_legacy_uuid(2)))
+                .rejects.toMatchObject({ status: 403, code: 'account_deleted' });
+            user_repo.find_login_row_by_id.mockResolvedValueOnce({ id: hub_legacy_uuid(2), status: 'invited', deleted_at: null });
+            await expect(service.issue_session_token(SITE_ADMIN, hub_legacy_uuid(2)))
+                .rejects.toMatchObject({ status: 409, code: 'not_active' });
+            expect(token_repo.create).not.toHaveBeenCalled();
         });
 
         it('rejects missing target', async () => {

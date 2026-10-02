@@ -5,16 +5,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mock_realm_find_all = vi.fn(async () => []);
 const mock_realm_member_find_one = vi.fn(async () => null);
 const mock_realm_member_create = vi.fn(async () => ({}));
-const mock_realm_member_destroy = vi.fn(async () => 0);
+// Removing a realm membership soft-deletes it (an update of `deleted_at`).
+const mock_realm_member_remove = vi.fn(async (): Promise<[number]> => [0]);
 
-vi.mock('../../../src/models/index.js', () => ({
-    Realm: { findAll: (...a: unknown[]) => mock_realm_find_all(...a) },
-    RealmMember: {
+vi.mock('../../../src/models/index.js', () => {
+    const realm_member = {
         findOne: (...a: unknown[]) => mock_realm_member_find_one(...a),
         create: (...a: unknown[]) => mock_realm_member_create(...a),
-        destroy: (...a: unknown[]) => mock_realm_member_destroy(...a),
-    },
-}));
+        update: (...a: unknown[]) => mock_realm_member_remove(...a),
+        unscoped: () => realm_member,
+    };
+    return { Realm: { findAll: (...a: unknown[]) => mock_realm_find_all(...a) }, RealmMember: realm_member };
+});
 
 vi.mock('../../../src/lib/log.js', () => ({
     get_logger: () => ({ info: vi.fn(), warn: vi.fn() }),
@@ -35,12 +37,12 @@ describe('OrgRealmSyncService', () => {
                 { id: 'r1', owner_user_id: '99' },
                 { id: 'r2', owner_user_id: '99' },
             ]);
-            mock_realm_member_destroy.mockResolvedValue(1);
+            mock_realm_member_remove.mockResolvedValue([1]);
 
             const revoked = await OrgRealmSyncService.sync_member_removed(1, 42);
 
             expect(revoked).toBe(2);
-            expect(mock_realm_member_destroy).toHaveBeenCalledTimes(2);
+            expect(mock_realm_member_remove).toHaveBeenCalledTimes(2);
         });
 
         it('skips realms owned by the user', async () => {
@@ -51,7 +53,7 @@ describe('OrgRealmSyncService', () => {
             const revoked = await OrgRealmSyncService.sync_member_removed(1, 42);
 
             expect(revoked).toBe(0);
-            expect(mock_realm_member_destroy).not.toHaveBeenCalled();
+            expect(mock_realm_member_remove).not.toHaveBeenCalled();
         });
 
         it('returns 0 when no org realms exist', async () => {
@@ -67,9 +69,9 @@ describe('OrgRealmSyncService', () => {
                 { id: 'r1', owner_user_id: '99' },
                 { id: 'r2', owner_user_id: '99' },
             ]);
-            mock_realm_member_destroy
-                .mockResolvedValueOnce(1)
-                .mockResolvedValueOnce(0);
+            mock_realm_member_remove
+                .mockResolvedValueOnce([1])
+                .mockResolvedValueOnce([0]);
 
             const revoked = await OrgRealmSyncService.sync_member_removed(1, 42);
 

@@ -20,6 +20,9 @@ import { DownloadLog } from './download_log.model.js';
 import { Setting } from './setting.model.js';
 import { OrgAgentSetting } from './org_agent_setting.model.js';
 import { UserRealmAgentSetting } from './user_realm_agent_setting.model.js';
+import { PasswordReset } from './password_reset.model.js';
+import { PasswordResetRequest } from './password_reset_request.model.js';
+import { EmailDelivery } from './email_delivery.model.js';
 
 // Store models (control-plane: daemons, runs, realms)
 import { Agent } from './agent.model.js';
@@ -65,6 +68,7 @@ export {
     Scope, ScopeMember, Team, TeamVersion, TeamTag,
     Draft, AuditLog, DownloadLog, Setting,
     OrgAgentSetting, UserRealmAgentSetting,
+    PasswordReset, PasswordResetRequest, EmailDelivery,
     // Store
     Agent, AgentCatalog, AccountMeshSetting,
     Container, CustomEvent, Daemon, DaemonConfig, DaemonTeam,
@@ -79,7 +83,7 @@ export {
 };
 
 /**
- * Register all 54 models on a single Sequelize instance and set up
+ * Register all 57 models on a single Sequelize instance and set up
  * associations. Called once at application boot.
  */
 export function init_models(sequelize: Sequelize): void {
@@ -103,6 +107,9 @@ export function init_models(sequelize: Sequelize): void {
     Setting.register(sequelize);
     OrgAgentSetting.register(sequelize);
     UserRealmAgentSetting.register(sequelize);
+    PasswordReset.register(sequelize);
+    PasswordResetRequest.register(sequelize);
+    EmailDelivery.register(sequelize);
 
     // Store
     Daemon.register(sequelize);
@@ -183,8 +190,9 @@ export function init_models(sequelize: Sequelize): void {
     User.hasMany(Draft, { foreignKey: 'user_id', onDelete: 'CASCADE' });
     Draft.belongsTo(User, { foreignKey: 'user_id' });
 
-    User.hasMany(AuditLog, { foreignKey: 'admin_id' });
-    AuditLog.belongsTo(User, { foreignKey: 'admin_id' });
+    // No FK: audit rows outlive the admin who wrote them (users/delete keeps history).
+    User.hasMany(AuditLog, { foreignKey: 'admin_id', constraints: false });
+    AuditLog.belongsTo(User, { foreignKey: 'admin_id', constraints: false });
 
     Team.hasMany(DownloadLog, { foreignKey: 'team_id', onDelete: 'CASCADE' });
     DownloadLog.belongsTo(Team, { foreignKey: 'team_id' });

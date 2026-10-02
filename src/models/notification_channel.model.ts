@@ -19,6 +19,12 @@ export class NotificationChannel extends BaseModel {
     declare enabled: number;
     declare created_at: number;
     declare updated_at: number;
+    /** Set on channels the system seeds (e.g. `org.email`); unique per org. */
+    declare system_key: string | null;
+    /** A locked channel cannot be changed or removed (409 `locked`). */
+    declare locked: boolean;
+    /** Why the channel is locked, shown next to the lock. */
+    declare lock_reason: string | null;
 
     static register(sequelize: Sequelize): void {
         NotificationChannel.init({
@@ -31,6 +37,9 @@ export class NotificationChannel extends BaseModel {
             enabled: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
             updated_at: { type: DataTypes.BIGINT, allowNull: false },
+            system_key: { type: DataTypes.TEXT, allowNull: true },
+            locked: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            lock_reason: { type: DataTypes.TEXT, allowNull: true },
         }, {
             sequelize,
             schema: 'cliq',

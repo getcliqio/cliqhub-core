@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SortDirField, sort_by_field } from '../lib/list_sort.js';
 
 export const reports_audit_schema = z.object({
     action: z.string().optional(),
@@ -12,6 +13,8 @@ export const reports_audit_schema = z.object({
     until_ms: z.number().int().min(0).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     offset: z.number().int().min(0).optional(),
+    sort_by: sort_by_field(['created_at', 'action'], 'newest first'),
+    sort_dir: SortDirField,
 });
 
 

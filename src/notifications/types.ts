@@ -22,6 +22,9 @@ export const EVENT_GROUPS = [
 	'realm.*',
 	'auth.*',
 	'notification.*',
+	'invite.*',
+	'org.*',
+	'user.*',
 ] as const;
 
 export type EventGroup = (typeof EVENT_GROUPS)[number];
@@ -36,6 +39,9 @@ export const EVENT_GROUP_ALIASES: Record<string, EventGroup> = {
 	realm: 'realm.*',
 	auth: 'auth.*',
 	notification: 'notification.*',
+	invite: 'invite.*',
+	org: 'org.*',
+	user: 'user.*',
 };
 
 function types_with_prefix(prefix: string): readonly EventType[] {
@@ -51,6 +57,9 @@ export const EVENT_GROUP_TYPES: Record<EventGroup, readonly EventType[]> = {
 	'realm.*': types_with_prefix('realm.'),
 	'auth.*': types_with_prefix('auth.'),
 	'notification.*': types_with_prefix('notification.'),
+	'invite.*': types_with_prefix('invite.'),
+	'org.*': types_with_prefix('org.'),
+	'user.*': types_with_prefix('user.'),
 };
 
 const GROUP_SET: ReadonlySet<string> = new Set(EVENT_GROUPS);

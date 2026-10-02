@@ -40,7 +40,7 @@ function make_repos() {
     return {
         user_repo: {
             find_profile_by_id: vi.fn(),
-            find_by_username_or_email: vi.fn(),
+            find_by_username: vi.fn().mockResolvedValue(null),
             find_by_email: vi.fn(),
             create: vi.fn().mockResolvedValue(hub_legacy_uuid(1)),
             find_password_hash: vi.fn(),
@@ -99,8 +99,11 @@ describe('UsersService', () => {
                 .rejects.toThrow(expect.objectContaining({ status: 403 }));
         });
 
-        it('returns all users for admin', async () => {
-            const fake_users = [{ id: hub_legacy_uuid(1), username: 'admin' }, { id: hub_legacy_uuid(2), username: 'john' }];
+        it('returns all live users for admin, each with status and deleted_at', async () => {
+            const fake_users = [
+                { id: hub_legacy_uuid(1), username: 'admin', status: 'active', deleted_at: null },
+                { id: hub_legacy_uuid(2), username: 'john', status: 'invited', deleted_at: null },
+            ];
             vi.mocked(User.count).mockResolvedValueOnce(2);
             vi.mocked(User.findAll).mockResolvedValueOnce(fake_users as any);
 
@@ -112,14 +115,25 @@ describe('UsersService', () => {
             expect(result.offset).toBe(0);
         });
 
+        it('include_deleted lists deleted users with status deleted', async () => {
+            const gone = new Date('2026-03-01T00:00:00.000Z');
+            vi.mocked(User.count).mockResolvedValueOnce(1);
+            vi.mocked(User.findAll).mockResolvedValueOnce([{ id: hub_legacy_uuid(3), username: 'gone', status: 'active', deleted_at: gone }] as any);
+
+            const result = await service.get(admin_auth, { include_deleted: true });
+
+            expect(vi.mocked(User.count).mock.calls[0][0]).not.toHaveProperty('where.deleted_at');
+            expect(result.users).toEqual([{ id: hub_legacy_uuid(3), username: 'gone', status: 'deleted', deleted_at: gone.toISOString() }]);
+        });
+
         it('returns org members when org_id provided and user is an org member', async () => {
             repos.org_member_repo.find_by_org_and_user.mockResolvedValueOnce({ role: 'member' });
-            const fake_members = [{ User: { id: hub_legacy_uuid(3), username: 'orguser' }, role: 'member' }];
+            const fake_members = [{ User: { id: hub_legacy_uuid(3), username: 'orguser', status: 'active', deleted_at: null }, role: 'member' }];
             vi.mocked(OrgMember.findAndCountAll).mockResolvedValueOnce({ count: 1, rows: fake_members } as any);
 
             const result = await service.get(user_auth, { org_id: hub_legacy_uuid(10) });
 
-            expect(result.users).toEqual([{ id: hub_legacy_uuid(3), username: 'orguser', org_role: 'member' }]);
+            expect(result.users).toEqual([{ id: hub_legacy_uuid(3), username: 'orguser', status: 'active', deleted_at: null, org_role: 'member' }]);
             expect(result.total).toBe(1);
         });
 
@@ -172,38 +186,55 @@ describe('UsersService', () => {
     // ── new_user ────────────────────────────────────────────────────
 
     describe('new_user', () => {
-        it('creates user with scope', async () => {
-            const result = await service.new_user(admin_auth, {
-                username: 'newuser',
-                email: 'new@test.com',
-                password: 'strongpassword',
-                display_name: 'New User',
-            });
-
-            expect(result.id).toBe(hub_legacy_uuid(1));
-            expect(result.username).toBe('newuser');
-            expect(repos.user_repo.create).toHaveBeenCalled();
-            expect(repos.scope_repo.create).toHaveBeenCalled();
-            expect(repos.audit_repo.create).toHaveBeenCalledWith(
-                hub_legacy_uuid(1), 'user.create', 'user', hub_legacy_uuid(1),
-                expect.objectContaining({ username: 'newuser' }),
-            );
-        });
-
         it('rejects reserved username', async () => {
-            await expect(service.new_user(admin_auth, { username: 'admin', email: 'a@test.com', password: 'longpassword' }))
+            await expect(service.new_user(admin_auth, { username: 'admin', email: 'a@test.com' }))
                 .rejects.toThrow(expect.objectContaining({ status: 422 }));
         });
 
-        it('rejects duplicate username/email', async () => {
-            repos.user_repo.find_by_username_or_email.mockResolvedValueOnce({ id: hub_legacy_uuid(5) });
+        it('rejects an email a live user holds (409 conflict naming the holder)', async () => {
+            repos.user_repo.find_by_email.mockResolvedValueOnce({ id: hub_legacy_uuid(5), username: 'holder', status: 'active', deleted_at: null });
 
-            await expect(service.new_user(admin_auth, { username: 'taken', email: 'taken@test.com', password: 'longpassword' }))
-                .rejects.toThrow(expect.objectContaining({ status: 409 }));
+            await expect(service.new_user(admin_auth, { username: 'taken', email: 'taken@test.com' }))
+                .rejects.toMatchObject({ status: 409, code: 'conflict', details: { kind: 'user', field: 'email', holder: { id: hub_legacy_uuid(5), slug: 'holder' } } });
+        });
+
+        it('rejects an email a deleted user holds (409 deleted)', async () => {
+            repos.user_repo.find_by_email.mockResolvedValueOnce({ id: hub_legacy_uuid(6), username: 'gone', status: 'active', deleted_at: new Date('2026-01-01T00:00:00Z') });
+
+            await expect(service.new_user(admin_auth, { username: 'fresh', email: 'gone@test.com' }))
+                .rejects.toMatchObject({ status: 409, code: 'deleted', details: { kind: 'user', id: hub_legacy_uuid(6), deleted_at: '2026-01-01T00:00:00.000Z', was_active: true } });
+        });
+
+        it('with reactivate, restores the deleted user named by the 409 instead of refusing', async () => {
+            // Stop right after the restore call: the rest of the flow runs over HTTP in users_password_links.test.ts.
+            const restore_user = vi.fn().mockRejectedValue(new Error('restore_user called'));
+            service = new UsersService(
+                repos.user_repo as any, repos.scope_repo as any, repos.token_repo as any, repos.audit_repo as any,
+                repos.org_member_repo as any, config, { restore_user } as any,
+            );
+            repos.user_repo.find_by_email.mockResolvedValueOnce({ id: hub_legacy_uuid(6), username: 'gone', status: 'active', deleted_at: new Date('2026-01-01T00:00:00Z') });
+
+            await expect(service.new_user(admin_auth, { username: 'fresh', email: 'gone@test.com', reactivate: true }))
+                .rejects.toThrow('restore_user called');
+            expect(restore_user).toHaveBeenCalledWith(admin_auth, hub_legacy_uuid(6), expect.anything());
+            expect(User.create).not.toHaveBeenCalled();
+        });
+
+        it('with reactivate, a live holder still refuses (409 conflict)', async () => {
+            const restore_user = vi.fn();
+            service = new UsersService(
+                repos.user_repo as any, repos.scope_repo as any, repos.token_repo as any, repos.audit_repo as any,
+                repos.org_member_repo as any, config, { restore_user } as any,
+            );
+            repos.user_repo.find_by_email.mockResolvedValueOnce({ id: hub_legacy_uuid(5), username: 'holder', status: 'active', deleted_at: null });
+
+            await expect(service.new_user(admin_auth, { username: 'taken', email: 'taken@test.com', reactivate: true }))
+                .rejects.toMatchObject({ status: 409, code: 'conflict' });
+            expect(restore_user).not.toHaveBeenCalled();
         });
 
         it('rejects invalid slug', async () => {
-            await expect(service.new_user(admin_auth, { username: '123bad', email: 'x@x.com', password: 'longpassword' }))
+            await expect(service.new_user(admin_auth, { username: '123bad', email: 'x@x.com' }))
                 .rejects.toThrow(expect.objectContaining({ status: 422 }));
         });
     });
@@ -287,34 +318,51 @@ describe('UsersService', () => {
                 .rejects.toThrow(expect.objectContaining({ status: 422 }));
         });
 
-        it('deletes user and creates audit log', async () => {
+        it('soft-deletes the user in one transaction and writes the audit row in it', async () => {
             const target = { id: hub_legacy_uuid(5), username: 'target' };
-            (User.findByPk as any).mockResolvedValueOnce(target);
-            vi.mocked(Team.count).mockResolvedValueOnce(0);
-            vi.mocked(Draft.count).mockResolvedValueOnce(0);
-            vi.mocked(ApiToken.count).mockResolvedValueOnce(0);
-            vi.mocked(Scope.count).mockResolvedValueOnce(0);
+            (User.findOne as any).mockResolvedValueOnce(target);
 
             const result = await service.delete(admin_auth, { user_id: hub_legacy_uuid(5) });
 
             expect(result.deleted).toBe(true);
-            expect(User.destroy).toHaveBeenCalledWith({ where: { id: hub_legacy_uuid(5) } });
+            expect(User.destroy).not.toHaveBeenCalled();
+            expect(ApiToken.destroy).not.toHaveBeenCalled();
             expect(repos.audit_repo.create).toHaveBeenCalledWith(
                 hub_legacy_uuid(1), 'user.delete', 'user', hub_legacy_uuid(5),
-                expect.objectContaining({ username: 'target' }),
+                expect.objectContaining({ username: 'target' }), expect.anything(),
             );
+        });
+
+        it('refuses (409) and changes nothing when the user authored teams', async () => {
+            (User.findOne as any).mockResolvedValueOnce({ id: hub_legacy_uuid(5), username: 'target' });
+            vi.mocked(Team.count).mockResolvedValueOnce(2);
+
+            await expect(service.delete(admin_auth, { user_id: hub_legacy_uuid(5) }))
+                .rejects.toThrow(expect.objectContaining({ status: 409, code: 'conflict' }));
+            expect(User.update).not.toHaveBeenCalled();
+            expect(repos.audit_repo.create).not.toHaveBeenCalled();
+        });
+
+        it('refuses with 409 owns_orgs while the user owns another org', async () => {
+            const { Org } = await import('../../../src/models/index.js');
+            (User.findOne as any).mockResolvedValueOnce({ id: hub_legacy_uuid(5), username: 'target' });
+            vi.mocked(Org.findAll).mockResolvedValueOnce([{ id: hub_legacy_uuid(40), slug: 'measureone' }] as any);
+
+            await expect(service.delete(admin_auth, { user_id: hub_legacy_uuid(5) }))
+                .rejects.toMatchObject({ status: 409, code: 'owns_orgs', message: 'Transfer or delete these orgs first.', details: { orgs: [{ slug: 'measureone' }] } });
+            expect(User.update).not.toHaveBeenCalled();
         });
 
         it('rejects protected username', async () => {
             const target = { id: hub_legacy_uuid(5), username: 'cliq' };
-            (User.findByPk as any).mockResolvedValueOnce(target);
+            (User.findOne as any).mockResolvedValueOnce(target);
 
             await expect(service.delete(admin_auth, { user_id: hub_legacy_uuid(5) }))
                 .rejects.toThrow(expect.objectContaining({ status: 422 }));
         });
 
-        it('rejects when user not found', async () => {
-            (User.findByPk as any).mockResolvedValueOnce(null);
+        it('rejects when user not found (or already deleted)', async () => {
+            (User.findOne as any).mockResolvedValueOnce(null);
 
             await expect(service.delete(admin_auth, { user_id: hub_legacy_uuid(999) }))
                 .rejects.toThrow(expect.objectContaining({ status: 404 }));
@@ -337,7 +385,7 @@ describe('UsersService', () => {
 
             expect(result.suspended).toBe(true);
             expect(User.update).toHaveBeenCalledWith(
-                expect.objectContaining({ suspended_reason: 'spam' }),
+                expect.objectContaining({ suspended_reason: 'spam', status: 'suspended' }),
                 { where: { id: hub_legacy_uuid(5) } },
             );
             expect(repos.audit_repo.create).toHaveBeenCalledWith(
@@ -365,8 +413,9 @@ describe('UsersService', () => {
             const result = await service.unsuspend(admin_auth, { user_id: hub_legacy_uuid(5) });
 
             expect(result.suspended).toBe(false);
+            // Status goes back to invited when the person never set a password, else active.
             expect(User.update).toHaveBeenCalledWith(
-                { suspended_at: null, suspended_reason: '' },
+                expect.objectContaining({ suspended_at: null, suspended_reason: '', status: expect.objectContaining({ val: "CASE WHEN password_hash IS NULL THEN 'invited' ELSE 'active' END" }) }),
                 { where: { id: hub_legacy_uuid(5) } },
             );
             expect(repos.audit_repo.create).toHaveBeenCalledWith(
@@ -379,27 +428,62 @@ describe('UsersService', () => {
     // ── reset_password ──────────────────────────────────────────────
 
     describe('reset_password', () => {
-        it('resets password', async () => {
-            const target = { id: hub_legacy_uuid(5), username: 'target' };
-            (User.findByPk as any).mockResolvedValueOnce(target);
+        const target = { id: hub_legacy_uuid(5), username: 'target', email: 't@test.com', display_name: 'T', status: 'active', deleted_at: null, suspended_at: null };
 
-            const result = await service.reset_password(admin_auth, { user_id: hub_legacy_uuid(5), new_password: 'newlongpassword' });
-
-            expect(result.reset).toBe(true);
-            expect(hash_password).toHaveBeenCalledWith('newlongpassword');
-            expect(User.update).toHaveBeenCalledWith(
-                { password_hash: 'hashed' },
-                { where: { id: hub_legacy_uuid(5) } },
-            );
-            expect(repos.audit_repo.create).toHaveBeenCalledWith(
-                hub_legacy_uuid(1), 'user.reset_password', 'user', hub_legacy_uuid(5),
-                expect.objectContaining({ username: 'target' }),
-            );
+        it('unknown user → 404', async () => {
+            await expect(service.reset_password(admin_auth, { user_id: hub_legacy_uuid(5) }))
+                .rejects.toMatchObject({ status: 404 });
         });
 
-        it('rejects short password', async () => {
-            await expect(service.reset_password(admin_auth, { user_id: hub_legacy_uuid(5), new_password: 'short' }))
-                .rejects.toThrow(expect.objectContaining({ status: 422 }));
+        it('deleted user → 409 deleted with details', async () => {
+            vi.mocked(User.findByPk).mockResolvedValueOnce({ ...target, deleted_at: new Date('2026-01-01T00:00:00Z') } as any);
+            await expect(service.reset_password(admin_auth, { user_id: target.id }))
+                .rejects.toMatchObject({ status: 409, code: 'deleted', details: { kind: 'user', id: target.id, deleted_at: '2026-01-01T00:00:00.000Z', was_active: true } });
+        });
+
+        it('suspended user → 409 not_active { status: suspended }', async () => {
+            vi.mocked(User.findByPk).mockResolvedValueOnce({ ...target, status: 'suspended', suspended_at: new Date() } as any);
+            await expect(service.reset_password(admin_auth, { user_id: target.id }))
+                .rejects.toMatchObject({ status: 409, code: 'not_active', details: { status: 'suspended' } });
+        });
+
+        it('a person invited by email (no username yet) → 409 not_active { status: invited }', async () => {
+            vi.mocked(User.findByPk).mockResolvedValueOnce({ ...target, username: null, status: 'invited' } as any);
+            await expect(service.reset_password(admin_auth, { user_id: target.id }))
+                .rejects.toMatchObject({ status: 409, code: 'not_active', details: { status: 'invited' } });
+        });
+    });
+
+    describe('forgot_password', () => {
+        const fake_links = (record: ReturnType<typeof vi.fn>) => new UsersService(
+            repos.user_repo as any, repos.scope_repo as any, repos.token_repo as any, repos.audit_repo as any,
+            repos.org_member_repo as any, config, undefined, { record_forgot_request: record } as any,
+        );
+
+        it('counts the request, then always answers { requested: true }', async () => {
+            const record = vi.fn().mockResolvedValue(undefined);
+            const svc = fake_links(record);
+            vi.spyOn(svc, 'send_forgot_password_link').mockResolvedValue(false);
+            await expect(svc.forgot_password({ email: 'nobody@test.com' })).resolves.toEqual({ requested: true });
+            expect(record).toHaveBeenCalledWith('nobody@test.com');
+        });
+
+        it('over the limit → 429 rate_limited, nothing sent', async () => {
+            const record = vi.fn().mockRejectedValue(Object.assign(new Error('Too many'), { status: 429, code: 'rate_limited' }));
+            const svc = fake_links(record);
+            const send = vi.spyOn(svc, 'send_forgot_password_link');
+            await expect(svc.forgot_password({ email: 'a@test.com' })).rejects.toMatchObject({ status: 429 });
+            expect(send).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ['unknown', null],
+            ['deleted', { id: hub_legacy_uuid(5), username: 'x', email: 'x@test.com', display_name: 'X', status: 'active', deleted_at: new Date(), suspended_at: null }],
+            ['suspended', { id: hub_legacy_uuid(5), username: 'x', email: 'x@test.com', display_name: 'X', status: 'suspended', deleted_at: null, suspended_at: new Date() }],
+            ['invited without username', { id: hub_legacy_uuid(5), username: null, email: 'x@test.com', display_name: 'X', status: 'invited', deleted_at: null, suspended_at: null }],
+        ])('%s email: silently sends nothing', async (_label, row) => {
+            vi.mocked(User.findOne).mockResolvedValueOnce(row as any);
+            await expect(service.send_forgot_password_link('x@test.com')).resolves.toBe(false);
         });
     });
 
@@ -519,18 +603,6 @@ describe('UsersService', () => {
                 .rejects.toThrow(expect.objectContaining({ status: 401 }));
         });
 
-        it('changes password', async () => {
-            repos.user_repo.find_password_hash.mockResolvedValueOnce('old_hash');
-            vi.mocked(verify_password).mockResolvedValueOnce(true);
-
-            const result = await service.change_password(user_auth, { current_password: 'oldpassword', new_password: 'newlongpassword' });
-
-            expect(result.message).toBe('Password changed');
-            expect(verify_password).toHaveBeenCalledWith('oldpassword', 'old_hash');
-            expect(hash_password).toHaveBeenCalledWith('newlongpassword');
-            expect(repos.user_repo.update_password).toHaveBeenCalledWith(hub_legacy_uuid(2), 'hashed');
-        });
-
         it('rejects wrong current password', async () => {
             repos.user_repo.find_password_hash.mockResolvedValueOnce('old_hash');
             vi.mocked(verify_password).mockResolvedValueOnce(false);
@@ -542,6 +614,29 @@ describe('UsersService', () => {
         it('rejects short new password', async () => {
             await expect(service.change_password(user_auth, { current_password: 'old', new_password: 'short' }))
                 .rejects.toThrow(expect.objectContaining({ status: 422 }));
+        });
+
+        it('with a reset token: rejects a short new password before touching the link', async () => {
+            await expect(service.change_password_with_token({ reset_token: 'tok', new_password: 'short' }))
+                .rejects.toMatchObject({ status: 422, code: 'invalid_params' });
+        });
+
+        it('with a reset token: an unusable link is refused before the password is hashed', async () => {
+            const { ApiError } = await import('../../../src/errors/api_error.js');
+            const assert_open = vi.fn().mockRejectedValue(new ApiError('not_found', 'This link is not valid.', 404));
+            const svc = new UsersService(
+                repos.user_repo as any, repos.scope_repo as any, repos.token_repo as any, repos.audit_repo as any,
+                repos.org_member_repo as any, config, undefined, { assert_open } as any,
+            );
+            await expect(svc.change_password_with_token({ reset_token: 'nope', new_password: 'long-enough-password' }))
+                .rejects.toMatchObject({ status: 404 });
+            expect(assert_open).toHaveBeenCalledWith('nope');
+            expect(hash_password).not.toHaveBeenCalled();
+        });
+
+        it('rejects a password longer than the maximum', async () => {
+            await expect(service.change_password(user_auth, { current_password: 'old', new_password: 'x'.repeat(129) }))
+                .rejects.toMatchObject({ status: 422, details: { field: 'password' } });
         });
     });
 

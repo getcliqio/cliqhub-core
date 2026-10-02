@@ -32,7 +32,6 @@ export function live_hub_config(): EnvConfig {
 }
 
 export async function open_live_hub_app(): Promise<Live_hub> {
-    delete process.env.INTERNAL_API_TOKEN;
     await close_control_plane_store();
     await close_sequelize();
     await init_control_plane_store(database_url);

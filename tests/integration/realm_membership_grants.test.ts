@@ -17,6 +17,7 @@ import { Sequelize } from 'sequelize';
 import { create_test_app } from '../helpers/test_container.js';
 import { SequelizeAccessStore } from '../../src/auth/route_policy/store.js';
 import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
+import { database_url } from '../migrated_platform/helpers/control_plane_store.js';
 
 vi.mock('../../src/auth/password.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../src/auth/password.js')>();
@@ -71,9 +72,7 @@ const USERS = new Map<string, typeof ALICE>([
     [hub_legacy_uuid(3), CAROL],
 ]);
 
-const DATABASE_URL =
-    process.env.DATABASE_URL
-    ?? 'postgresql://cliqhub:cliqhub@localhost:5432/cliqhub';
+const DATABASE_URL = database_url;
 
 async function postgres_reachable(): Promise<boolean> {
     const probe = new Sequelize(DATABASE_URL, { dialect: 'postgres', logging: false });

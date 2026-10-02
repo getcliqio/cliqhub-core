@@ -1,3 +1,12 @@
+/**
+ * Users: directory reads, profile updates and site-admin account management.
+ *
+ * Routes: /v1/users/get, /v1/users/get_by_id, /v1/users/update, and on the
+ * BFF-only plane /internal/users/new, delete, suspend, unsuspend,
+ * reset_password (site admin, or public "Forgot password" with `{ email }`),
+ * change_password (signed in, or public with `{ reset_token }`), set_role,
+ * update_role.
+ */
 import type { Request, Response } from 'express';
 import { BaseController } from './base_controller.js';
 import type { UsersService } from '../services/users_service.js';
@@ -7,8 +16,16 @@ import {
     users_update_schema, users_delete_schema, users_suspend_schema,
     users_unsuspend_schema, users_reset_password_schema, users_set_role_schema,
     users_update_role_schema, users_change_password_schema,
+    users_forgot_password_schema, users_change_password_with_token_schema,
 } from '../schemas/user_types.js';
 import { to_user_dto } from '../lib/mappers.js';
+import { read_field } from '../auth/route_policy/engine.js';
+import type { FieldRef } from '../auth/route_policy/policy.js';
+
+/** Whether the body carries `field`, decided exactly as the route policy's `by_body` rule decides. */
+function body_has(req: Request, field: FieldRef): boolean {
+    return read_field({ method: req.method, path: req.path, body: req.body }, field) !== undefined;
+}
 
 const log = get_logger('ctrl.users');
 
@@ -28,6 +45,9 @@ export class UsersController extends BaseController {
             suspended: body.suspended,
             limit: body.limit,
             offset: body.offset,
+            sort_by: body.sort_by,
+            sort_dir: body.sort_dir,
+            include_deleted: body.include_deleted,
         });
         this.ok(res, result);
     }
@@ -39,11 +59,11 @@ export class UsersController extends BaseController {
         this.ok(res, result);
     }
 
+    /** `POST /internal/users/new` — invited user + "Set your password" email (site admin). */
     async new_user(req: Request, res: Response): Promise<void> {
         log.debug('new_user', { user_id: req.auth?.user?.id });
         const body = this.parse_body(users_new_schema, req);
         const result = await this._users_service.new_user(req.auth, body);
-        log.info('user_created', { username: body.username, role: body.role ?? 'user' });
         this.ok(res, result);
     }
 
@@ -83,11 +103,21 @@ export class UsersController extends BaseController {
         this.ok(res, result);
     }
 
+    /**
+     * `POST /internal/users/reset_password` — `{ user_id }` (site admin) emails
+     * a reset link; `{ email }` (public "Forgot password") always answers
+     * `{ requested: true }` and is rate-limited per email.
+     */
     async reset_password(req: Request, res: Response): Promise<void> {
         log.debug('reset_password', { user_id: req.auth?.user?.id });
+        if (body_has(req, 'body.email')) {
+            const body = this.parse_body(users_forgot_password_schema, req);
+            this.ok(res, await this._users_service.forgot_password(body));
+            return;
+        }
         const body = this.parse_body(users_reset_password_schema, req);
         const result = await this._users_service.reset_password(req.auth, body);
-        log.info('password_reset', { target_user_id: body.user_id });
+        log.info('password_reset_sent', { target_user_id: body.user_id, email_sent: result.email_sent });
         this.ok(res, result);
     }
 
@@ -107,11 +137,18 @@ export class UsersController extends BaseController {
         this.ok(res, result);
     }
 
+    /**
+     * `POST /internal/users/change_password` — `{ current_password, new_password }`
+     * signed in, or `{ reset_token, new_password }` from an emailed link (public).
+     */
     async change_password(req: Request, res: Response): Promise<void> {
         log.debug('change_password', { user_id: req.auth?.user?.id });
+        if (body_has(req, 'body.reset_token')) {
+            const body = this.parse_body(users_change_password_with_token_schema, req);
+            this.ok(res, await this._users_service.change_password_with_token(body));
+            return;
+        }
         const body = this.parse_body(users_change_password_schema, req);
-        const result = await this._users_service.change_password(req.auth, body);
-        log.info('password_changed', {});
-        this.ok(res, result);
+        this.ok(res, await this._users_service.change_password(req.auth, body));
     }
 }

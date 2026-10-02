@@ -45,8 +45,8 @@ describe('require_authenticated_user_id', () => {
 
 // Acme (org O1) with realm R1. op = realm operator + org operator,
 // mem = realm member + org member, adm = org admin (no realm row),
-// out = no standing anywhere.
-const ORG_ROLE: Record<string, string> = { op: 'operator', mem: 'member', adm: 'admin' };
+// own = org owner (no realm row), out = no standing anywhere.
+const ORG_ROLE: Record<string, string> = { op: 'operator', mem: 'member', adm: 'admin', own: 'owner' };
 const REALM_ROLE: Record<string, 'operator' | 'member'> = { op: 'operator', mem: 'member' };
 const role = (slug: string) => {
     const d = DEFAULT_ROLES.find((r) => r.slug === slug)!;
@@ -123,23 +123,26 @@ describe('route policy — notification rules (org and realm routes share one ha
             expect(await st(`${base}/set_notification_rules`, as('out'), body)).toBe(404);
         });
 
-        it(`${base}: no realm_id → org rules.manage`, async () => {
+        it(`${base}: no realm_id → org rules.manage (owner only; admins read)`, async () => {
             const body = { org_id: 'O1', event: 'run.failed' };
-            expect(await st(`${base}/set_notification_rules`, as('adm'), body)).toBe(200);
+            expect(await st(`${base}/set_notification_rules`, as('own'), body)).toBe(200);
+            expect(await st(`${base}/set_notification_rules`, as('adm'), body)).toBe(403);
             expect(await st(`${base}/set_notification_rules`, as('op'), body)).toBe(403);
+            expect(await st(`${base}/get_notification_rules`, as('adm'), { org_id: 'O1' })).toBe(200);
             expect(await st(`${base}/get_notification_rules`, as('mem'), { org_id: 'O1' })).toBe(200);
             expect(await st(`${base}/get_notification_rules`, as('out'), { org_id: 'O1' })).toBe(404);
         });
 
         it(`${base}: neither realm_id nor org_id → 400`, async () => {
-            expect(await st(`${base}/set_notification_rules`, as('adm'), { event: 'run.failed' })).toBe(400);
+            expect(await st(`${base}/set_notification_rules`, as('own'), { event: 'run.failed' })).toBe(400);
         });
     }
 
-    it('remove: realm rule by realm standing, org rule by rules.manage', async () => {
+    it('remove: realm rule by realm standing, org rule by rules.manage (owner only)', async () => {
         expect(await st('/v1/realms/remove_notification_rules', as('op'), { id: 'rule_realm' })).toBe(200);
         expect(await st('/v1/orgs/remove_notification_rules', as('op'), { id: 'rule_org' })).toBe(403);
-        expect(await st('/v1/orgs/remove_notification_rules', as('adm'), { id: 'rule_org' })).toBe(200);
+        expect(await st('/v1/orgs/remove_notification_rules', as('adm'), { id: 'rule_org' })).toBe(403);
+        expect(await st('/v1/orgs/remove_notification_rules', as('own'), { id: 'rule_org' })).toBe(200);
         expect(await st('/v1/orgs/remove_notification_rules', as('adm'), { id: 'nope' })).toBe(404);
     });
 });

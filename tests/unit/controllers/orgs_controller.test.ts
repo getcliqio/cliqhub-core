@@ -27,7 +27,6 @@ const mock_service = {
     new_org: vi.fn().mockResolvedValue({ id: hub_legacy_uuid(1), slug: 'acme' }),
     update: vi.fn().mockResolvedValue({ updated: true }),
     delete_org: vi.fn().mockResolvedValue({ deleted: true }),
-    add_member: vi.fn().mockResolvedValue({ user_id: hub_legacy_uuid(5), username: 'charlie', role: 'member' }),
     remove_member: vi.fn().mockResolvedValue({ removed: true }),
     leave: vi.fn().mockResolvedValue({ left: true }),
     new_scope: vi.fn().mockResolvedValue({ id: hub_legacy_uuid(10), slug: 'acme-dev' }),
@@ -99,23 +98,38 @@ describe('OrgsController', () => {
 
     // --- new_org ---
 
-    it('new_org passes with required fields', async () => {
+    it('new_org passes an existing-user owner through', async () => {
         const res = mock_res();
-        await call(controller.new_org, make_req({ slug: 'acme', admin_username: 'alice' }), res);
-        expect(mock_service.new_org).toHaveBeenCalled();
+        const body = { slug: 'acme', owner: { user_id: hub_legacy_uuid(2) } };
+        await call(controller.new_org, make_req(body), res);
+        expect(mock_service.new_org).toHaveBeenCalledWith(fake_auth, body);
         expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    it('new_org passes an owner invited by email through', async () => {
+        const res = mock_res();
+        const body = { slug: 'acme', owner: { email: 'sapan@example.test', display_name: 'Sapan' }, reactivate: true };
+        await call(controller.new_org, make_req(body), res);
+        expect(mock_service.new_org).toHaveBeenCalledWith(fake_auth, body);
     });
 
     it('new_org rejects missing slug with 422', async () => {
         const res = mock_res();
-        await call(controller.new_org, make_req({ admin_username: 'alice' }), res);
-        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status_code: 422 }));
+        await call(controller.new_org, make_req({ owner: { user_id: hub_legacy_uuid(2) } }), res);
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 
-    it('new_org rejects missing admin_username with 422', async () => {
+    it('new_org rejects a missing owner with 422', async () => {
         const res = mock_res();
         await call(controller.new_org, make_req({ slug: 'acme' }), res);
-        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status_code: 422 }));
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
+    });
+
+    it('new_org rejects the removed admin_* fields with 422', async () => {
+        const res = mock_res();
+        await call(controller.new_org, make_req({ slug: 'acme', owner: { user_id: hub_legacy_uuid(2), admin_username: 'alice' } }), res);
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
+        expect(mock_service.new_org).not.toHaveBeenCalled();
     });
 
     // --- update ---
@@ -130,13 +144,13 @@ describe('OrgsController', () => {
     it('update rejects missing org_id with 422', async () => {
         const res = mock_res();
         await call(controller.update, make_req({ display_name: 'Acme Inc' }), res);
-        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status_code: 422 }));
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422, code: 'invalid_params' }));
     });
 
     it('update rejects missing display_name with 422', async () => {
         const res = mock_res();
         await call(controller.update, make_req({ org_id: hub_legacy_uuid(1) }), res);
-        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status_code: 422 }));
+        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422, code: 'invalid_params' }));
     });
 
     // --- delete_org ---
@@ -151,21 +165,6 @@ describe('OrgsController', () => {
     it('delete_org rejects non-uuid org_id with 422', async () => {
         const res = mock_res();
         await call(controller.delete_org, make_req({ org_id: 'bad' }), res);
-        expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
-    });
-
-    // --- add_member ---
-
-    it('add_member passes with org_id and username', async () => {
-        const res = mock_res();
-        await call(controller.add_member, make_req({ org_id: hub_legacy_uuid(1), username: 'charlie' }), res);
-        expect(mock_service.add_member).toHaveBeenCalled();
-        expect(res.status).toHaveBeenCalledWith(200);
-    });
-
-    it('add_member rejects missing username/email/user_id with 422', async () => {
-        const res = mock_res();
-        await call(controller.add_member, make_req({ org_id: hub_legacy_uuid(1) }), res);
         expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
     });
 

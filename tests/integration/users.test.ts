@@ -71,7 +71,7 @@ const auth_repos = {
 const service_repos = {
     user_repo: {
         find_profile_by_id: vi.fn().mockResolvedValue(null),
-        find_by_username_or_email: vi.fn().mockResolvedValue(null),
+        find_by_username: vi.fn().mockResolvedValue(null),
         find_by_email: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue(hub_legacy_uuid(10)),
         find_by_id_with_transaction: vi.fn().mockResolvedValue(null),
@@ -81,6 +81,7 @@ const service_repos = {
     },
     scope_repo: {
         create: vi.fn().mockResolvedValue(1),
+        find_by_slug: vi.fn().mockResolvedValue(null),
         find_by_slug_with_transaction: vi.fn().mockResolvedValue(null),
     },
     token_repo: {
@@ -270,25 +271,26 @@ describe('POST /internal/users/new', () => {
         const res = await request(app)
             .post('/internal/users/new')
             .set('Authorization', user_header())
-            .send({ username: 'newuser', email: 'new@test.com', password: 'password123' });
+            .send({ username: 'newuser', email: 'new@test.com' });
         expect(res.status).toBe(403);
     });
 
-    it('creates user for admin', async () => {
+    it('reaches the service for admin and returns the invited user and setup link (flow: users_password_links.test.ts)', async () => {
         mock_admin_auth();
-        service_repos.user_repo.find_by_username_or_email.mockResolvedValueOnce(null);
-        service_repos.user_repo.create.mockResolvedValueOnce(hub_legacy_uuid(10));
-        service_repos.scope_repo.create.mockResolvedValueOnce(hub_legacy_uuid(1));
+        const data = {
+            user: { id: hub_legacy_uuid(10), username: 'newuser', email: 'new@test.com', status: 'invited' as const },
+            setup: { expires_at: '2026-10-09T10:00:00.000Z', email_sent: false, setup_url: 'https://app.example.test/reset/x' },
+        };
+        const spy = vi.spyOn(users_service, 'new_user').mockResolvedValueOnce(data);
 
         const res = await request(app)
             .post('/internal/users/new')
             .set('Authorization', admin_header())
-            .send({ username: 'newuser', email: 'new@test.com', password: 'password123' });
+            .send({ username: 'newuser', email: 'new@test.com' });
 
         expect(res.status).toBe(200);
-        expect(res.body.ok).toBe(true);
-        expect(res.body.data.id).toBe(hub_legacy_uuid(10));
-        expect(res.body.data.username).toBe('newuser');
+        expect(res.body.data).toEqual(data);
+        expect(spy).toHaveBeenCalledWith(expect.anything(), { username: 'newuser', email: 'new@test.com' });
     });
 
     it('returns 422 for missing username', async () => {
@@ -402,10 +404,12 @@ describe('POST /internal/users/change_password', () => {
         expect(res.status).toBe(401);
     });
 
-    it('changes password', async () => {
+    it('changes password: checks the current one, revokes the other sessions (flow: users_password_links.test.ts)', async () => {
         mock_user_auth();
         service_repos.user_repo.find_password_hash.mockResolvedValueOnce('existing_hash');
         vi.mocked(pw.verify_password).mockResolvedValueOnce(true);
+        const set = vi.spyOn(users_service as never as { _set_password: () => Promise<unknown> }, '_set_password')
+            .mockResolvedValueOnce({ user: { id: REGULAR_USER.id, username: 'john', status: 'active' }, sessions_revoked: 1 });
 
         const res = await request(app)
             .post('/internal/users/change_password')
@@ -413,8 +417,19 @@ describe('POST /internal/users/change_password', () => {
             .send({ current_password: 'oldpass123', new_password: 'newpass123' });
 
         expect(res.status).toBe(200);
-        expect(res.body.ok).toBe(true);
-        expect(res.body.data.message).toBe('Password changed');
+        expect(res.body.data).toEqual({ user: { id: REGULAR_USER.id, username: 'john', status: 'active' }, sessions_revoked: 1 });
+        expect(pw.verify_password).toHaveBeenCalledWith('oldpass123', 'existing_hash');
+        expect(set).toHaveBeenCalledWith(REGULAR_USER.id, 'hashed', { except_session: 'tok-session-1' });
+    });
+
+    it('reset_token in the body: public, no sign-in needed', async () => {
+        const spy = vi.spyOn(users_service, 'change_password_with_token')
+            .mockResolvedValueOnce({ user: { id: REGULAR_USER.id, username: 'john', status: 'active' }, sessions_revoked: 0 });
+        const res = await request(app)
+            .post('/internal/users/change_password')
+            .send({ reset_token: 'tok', new_password: 'newpass123' });
+        expect(res.status).toBe(200);
+        expect(spy).toHaveBeenCalledWith({ reset_token: 'tok', new_password: 'newpass123' });
     });
 });
 

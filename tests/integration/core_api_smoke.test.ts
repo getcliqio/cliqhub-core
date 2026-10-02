@@ -9,6 +9,7 @@ import { Sequelize } from 'sequelize';
 
 import { create_test_app } from '../helpers/test_container.js';
 import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
+import { database_url } from '../migrated_platform/helpers/control_plane_store.js';
 
 vi.mock('../../src/auth/password.js', () => ({
     hash_password: vi.fn().mockResolvedValue('hash'),
@@ -29,9 +30,7 @@ const ALICE = {
     created_at: '2025-01-01',
 };
 
-const DATABASE_URL =
-    process.env.DATABASE_URL
-    ?? 'postgresql://cliqhub:cliqhub@localhost:5432/cliqhub';
+const DATABASE_URL = database_url;
 
 async function postgres_reachable(): Promise<boolean> {
     const probe = new Sequelize(DATABASE_URL, {

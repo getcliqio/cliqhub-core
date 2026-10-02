@@ -55,7 +55,8 @@ function make_audit_repo() {
 
 function make_org_repo() {
     return {
-        find_by_slug: vi.fn().mockResolvedValue({ id: hub_legacy_uuid(1), slug: 'acme' }),
+        // Only the org named `acme` exists (scope names share the org namespace).
+        find_by_slug: vi.fn().mockImplementation(async (slug: string) => (slug === 'acme' ? { id: hub_legacy_uuid(1), slug: 'acme' } : null)),
     };
 }
 
@@ -240,7 +241,7 @@ describe('ScopesService — new_scope', () => {
         scope_repo.find_by_slug.mockResolvedValueOnce({ id: hub_legacy_uuid(10), slug: 'taken' });
 
         await expect(service.new_scope(SITE_ADMIN, { slug: 'taken', owner_username: 'alice' }))
-            .rejects.toThrow('Scope already exists');
+            .rejects.toMatchObject({ status: 409, message: 'taken is already a scope (scope, not attached to any org or user)', details: { kind: 'scope', slug: 'taken' } });
     });
 
     it('returns 404 when owner user not found', async () => {

@@ -40,6 +40,15 @@ const OffsetField = z.number().int().min(0).optional()
 const SortDirField = z.enum(['asc', 'desc']).optional()
     .describe('Sort direction (default asc)');
 
+/** `teams/get` sort keys valid in realm mode (`realm_id`). */
+export const TEAM_REALM_SORT_KEYS = ['team', 'origin', 'coverage'] as const;
+
+/** `teams/get` sort keys valid in catalog / site-admin mode (no realm_id, daemon_id or mine). */
+export const TEAM_CATALOG_SORT_KEYS = ['name', 'install_count', 'created_at', 'updated_at'] as const;
+
+/** A catalog / site-admin mode sort key. */
+export type TeamCatalogSortKey = typeof TEAM_CATALOG_SORT_KEYS[number];
+
 // ─── Read handlers ──────────────────────────────────────────────────────────
 
 /**
@@ -73,8 +82,11 @@ export const TeamsGetInput = z.object({
         .describe('Realm mode: filter by team origin (published catalog vs local)'),
     coverage: z.enum(['full', 'partial', 'none']).optional()
         .describe('Realm mode: filter by coverage status across realm daemons'),
-    sort_by: z.enum(['team', 'origin', 'coverage']).optional()
-        .describe('Realm mode: sort dimension'),
+    sort_by: z.enum([...TEAM_REALM_SORT_KEYS, ...TEAM_CATALOG_SORT_KEYS]).optional()
+        .describe('Sort column. Realm mode: team | origin | coverage (default team). Catalog / site-admin '
+            + 'mode: name | install_count | created_at | updated_at (default most installed; site-admin '
+            + '`listed` / `scope` listing: most recently updated). A key from the other mode, or any key in '
+            + 'daemon / mine mode, is 400 invalid_params. Ties are broken by id ascending.'),
     sort_dir: SortDirField,
     limit: LimitField,
     offset: OffsetField,
@@ -333,7 +345,7 @@ import type {
 export const TeamData = z.object({
     // Core identity — always present
     id: z.string().optional()
-        .describe('Team UUID'),
+        .describe('Catalog team UUID (realm mode: set for published teams; install with it)'),
     name: z.string()
         .describe('Team name (natural key within scope)'),
     scope: z.string().nullable()
@@ -358,6 +370,10 @@ export const TeamData = z.object({
         .describe('Latest published version string'),
     install_count: z.number().int().optional()
         .describe('Total number of daemon installations'),
+    version_count: z.number().int().optional()
+        .describe('Number of published versions (site-admin catalog listing only)'),
+    author_id: z.string().nullable().optional()
+        .describe('UUID of the team author (site-admin catalog listing only)'),
     created_at: z.number().optional()
         .describe('Team creation time (unix ms)'),
     updated_at: z.number().optional()
@@ -527,6 +543,10 @@ export type TeamListItemDto = {
     listed: boolean;
     visibility?: string;
     status?: 'draft' | 'published';
+    /** Site-admin listing only. */
+    version_count?: number;
+    /** Site-admin listing only. */
+    author_id?: string | null;
 };
 
 /** @deprecated Use PascalCase `*Vo` names. */

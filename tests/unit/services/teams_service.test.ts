@@ -267,6 +267,8 @@ describe('TeamsService — get (list)', () => {
         expect(team_repo.list_filtered).toHaveBeenCalledWith(
             expect.anything(),
             50, 0,
+            // Default catalog order (most installed), id as tie-breaker.
+            [['install_count', 'DESC'], ['id', 'ASC']],
         );
     });
 });

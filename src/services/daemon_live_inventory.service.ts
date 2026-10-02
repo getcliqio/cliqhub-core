@@ -16,17 +16,16 @@ const workspace_repo = new WorkspaceRepository();
 export async function live_teams_from_daemon(
     daemon_id: string,
     user_id: string,
-): Promise<Record<string, unknown> | null> {
+): Promise<{ teams?: unknown[] }> {
     log.debug('live_teams_from_daemon', { daemon_id, user_id });
-    const result = await DispatchService.query_daemon(
+    const result = await DispatchService.query_daemon<{ teams?: any[] }>(
         daemon_id,
         '/v1/teams/get',
         {},
         user_id,
-        'team_list',
     );
 
-    const live_teams: any[] = (result as any)?.payload?.data?.teams ?? [];
+    const live_teams: any[] = Array.isArray(result.teams) ? result.teams : [];
     const entries: HeartbeatTeamEntry[] = live_teams
         .filter((t: any) => t.team_id && t.scope && t.slug)
         .map((t: any) => ({
@@ -42,21 +41,20 @@ export async function live_teams_from_daemon(
         }));
 
     void DaemonTeamCacheService.sync(daemon_id, entries).catch(() => {});
-    return result as Record<string, unknown> | null;
+    return result;
 }
 
 export async function live_workspaces_from_daemon(
     daemon_id: string,
     user_id: string,
-): Promise<Record<string, unknown> | null> {
+): Promise<{ workspaces?: unknown[] }> {
     log.debug('live_workspaces_from_daemon', { daemon_id, user_id });
-    const result = await DispatchService.query_daemon(
+    const result = await DispatchService.query_daemon<{ workspaces?: unknown[] }>(
         daemon_id,
         '/v1/workspaces/get',
         {},
         user_id,
-        'workspace_list',
-    ) as Record<string, unknown> | null;
+    );
 
     try {
         await _cache_workspaces(daemon_id, result);
@@ -67,18 +65,12 @@ export async function live_workspaces_from_daemon(
     return result;
 }
 
-function _extract_live_workspaces(result: unknown): Array<Record<string, unknown>> {
-    const root = result as Record<string, unknown> | null;
-    if (!root || typeof root !== 'object') return [];
-    const nested = (root.payload as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined;
-    const list = nested?.workspaces
-        ?? (root as { workspaces?: unknown }).workspaces
-        ?? (root.data as { workspaces?: unknown } | undefined)?.workspaces
-        ?? [];
-    return Array.isArray(list) ? list as Array<Record<string, unknown>> : [];
+/** The workspace rows of the daemon's `workspaces/get` data. */
+function _extract_live_workspaces(result: { workspaces?: unknown[] }): Array<Record<string, unknown>> {
+    return Array.isArray(result.workspaces) ? result.workspaces as Array<Record<string, unknown>> : [];
 }
 
-async function _cache_workspaces(daemon_id: string, result: unknown): Promise<void> {
+async function _cache_workspaces(daemon_id: string, result: { workspaces?: unknown[] }): Promise<void> {
     const live_workspaces = _extract_live_workspaces(result);
     const live_ids = new Set<string>();
 

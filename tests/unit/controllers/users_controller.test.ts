@@ -9,22 +9,26 @@ function make_users_service() {
     return {
         get: vi.fn().mockResolvedValue({ users: [], total: 0, limit: 50, offset: 0 }),
         get_by_id: vi.fn().mockResolvedValue({ id: hub_legacy_uuid(1), username: 'test' }),
-        new_user: vi.fn().mockResolvedValue({ id: hub_legacy_uuid(1), username: 'test' }),
+        new_user: vi.fn().mockResolvedValue({
+            user: { id: hub_legacy_uuid(1), username: 'test', email: 'test@example.com', status: 'invited' },
+            setup: { expires_at: '2026-10-09T00:00:00.000Z', email_sent: true, setup_url: null },
+        }),
         update: vi.fn().mockResolvedValue({ updated: true }),
         delete: vi.fn().mockResolvedValue({ deleted: true }),
         suspend: vi.fn().mockResolvedValue({ suspended: true }),
         unsuspend: vi.fn().mockResolvedValue({ suspended: false }),
-        reset_password: vi.fn().mockResolvedValue({ reset: true }),
+        reset_password: vi.fn().mockResolvedValue({ reset_id: hub_legacy_uuid(9), expires_at: '2026-10-03T00:00:00.000Z', email_sent: true, reset_url: null }),
+        forgot_password: vi.fn().mockResolvedValue({ requested: true }),
         set_role: vi.fn().mockResolvedValue({ role: 'admin' }),
         update_role: vi.fn().mockResolvedValue({
             user_id: hub_legacy_uuid(2), org_id: hub_legacy_uuid(1), role_id: hub_legacy_uuid(3), role_slug: 'admin', role: 'admin',
         }),
-        change_password: vi.fn().mockResolvedValue({ message: 'Password changed' }),
+        change_password: vi.fn().mockResolvedValue({ user: { id: hub_legacy_uuid(1), username: 'test', status: 'active' }, sessions_revoked: 1 }),
+        change_password_with_token: vi.fn().mockResolvedValue({ user: { id: hub_legacy_uuid(1), username: 'test', status: 'active' }, sessions_revoked: 2 }),
     };
 }
 
-function make_app() {
-    const service = make_users_service();
+function make_app(service = make_users_service()) {
     const controller = new UsersController(service as any);
     const app = express();
     app.use(express.json());
@@ -87,24 +91,17 @@ describe('UsersController', () => {
         expect(res.body.error.message).toContain('email');
     });
 
-    it('POST /internal/users/new rejects short password', async () => {
-        const res = await request(app).post('/internal/users/new').send({
-            username: 'alice',
-            email: 'a@b.com',
-            password: 'short',
-        });
-        expect(res.status).toBe(422);
-        expect(res.body.error.message).toContain('password');
-    });
-
     it('POST /internal/users/new accepts valid input', async () => {
         const res = await request(app).post('/internal/users/new').send({
             username: 'alice',
             email: 'alice@example.com',
-            password: 'securepass',
+            reactivate: true,
         });
         expect(res.status).toBe(200);
-        expect(res.body.ok).toBe(true);
+        expect(res.body.data).toEqual({
+            user: { id: hub_legacy_uuid(1), username: 'test', email: 'test@example.com', status: 'invited' },
+            setup: { expires_at: '2026-10-09T00:00:00.000Z', email_sent: true, setup_url: null },
+        });
     });
 
     it('POST /v1/users/update rejects empty body (no display_name or email)', async () => {
@@ -160,6 +157,53 @@ describe('UsersController', () => {
         });
         expect(res.status).toBe(422);
         expect(res.body.error.message).toContain('current_password');
+    });
+
+    describe('reset_password and change_password pick the caller by the body', () => {
+        it('{ user_id } → the site-admin reset', async () => {
+            const service = make_users_service();
+            const res = await request(make_app(service)).post('/internal/users/reset_password').send({ user_id: hub_legacy_uuid(5) });
+            expect(res.status).toBe(200);
+            expect(service.reset_password).toHaveBeenCalledWith(expect.anything(), { user_id: hub_legacy_uuid(5) });
+            expect(service.forgot_password).not.toHaveBeenCalled();
+        });
+
+        it('{ email } → forgot password with the normalized email only (no client address is read)', async () => {
+            const service = make_users_service();
+            const res = await request(make_app(service)).post('/internal/users/reset_password')
+                .set('X-Forwarded-For', '198.51.100.7').send({ email: '  Priya@Example.com ' });
+            expect(res.status).toBe(200);
+            expect(res.body.data).toEqual({ requested: true });
+            expect(service.forgot_password).toHaveBeenCalledWith({ email: 'priya@example.com' });
+            expect(service.reset_password).not.toHaveBeenCalled();
+        });
+
+        it('{ email, user_id } → 422 (one caller per request)', async () => {
+            const res = await request(app).post('/internal/users/reset_password').send({ email: 'a@example.com', user_id: hub_legacy_uuid(5) });
+            expect(res.status).toBe(422);
+        });
+
+        it('{ user_id, new_password } → 422 (a site admin cannot set a password)', async () => {
+            const res = await request(app).post('/internal/users/reset_password').send({ user_id: hub_legacy_uuid(5), new_password: 'longenough1' });
+            expect(res.status).toBe(422);
+        });
+
+        it('{ reset_token, new_password } → the token change', async () => {
+            const service = make_users_service();
+            const res = await request(make_app(service)).post('/internal/users/change_password').send({ reset_token: 'tok', new_password: 'longenough1' });
+            expect(res.status).toBe(200);
+            expect(res.body.data).toEqual({ user: { id: hub_legacy_uuid(1), username: 'test', status: 'active' }, sessions_revoked: 2 });
+            expect(service.change_password_with_token).toHaveBeenCalledWith({ reset_token: 'tok', new_password: 'longenough1' });
+            expect(service.change_password).not.toHaveBeenCalled();
+        });
+
+        it('{ current_password, new_password } → the signed-in change', async () => {
+            const service = make_users_service();
+            const res = await request(make_app(service)).post('/internal/users/change_password').send({ current_password: 'old', new_password: 'longenough1' });
+            expect(res.status).toBe(200);
+            expect(res.body.data.sessions_revoked).toBe(1);
+            expect(service.change_password_with_token).not.toHaveBeenCalled();
+        });
     });
 
 });

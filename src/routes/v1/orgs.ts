@@ -7,7 +7,6 @@
  * POST   /v1/orgs/update
  * POST   /v1/orgs/delete
  * POST   /v1/orgs/leave
- * POST   /v1/orgs/add_member
  * POST   /v1/orgs/remove_member
  * POST   /v1/orgs/list_roles
  * POST   /v1/orgs/get_role
@@ -43,7 +42,6 @@ export function register_orgs_routes(router: Router, container: Container): void
     router.post('/orgs/leave', orgs_controller.wrap(orgs_controller.leave));
 
     // ── Members ───────────────────────────────────────────────────────────────
-    router.post('/orgs/add_member', orgs_controller.wrap(orgs_controller.add_member));
     router.post('/orgs/remove_member', orgs_controller.wrap(orgs_controller.remove_member));
 
     // ── Custom roles ─────────────────────────────────────────────────────────

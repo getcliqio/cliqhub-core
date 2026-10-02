@@ -10,13 +10,13 @@ import {
     close_sequelize,
     init_sequelize,
 } from '../../../src/db/sequelize.js';
+import { assert_not_dev_database, test_database_url } from '../../test_database.js';
 
-/** Local-only default. Never fall back to a shared/prod DATABASE_URL from .env. */
-export const database_url =
-    process.env.CLIQHUB_TEST_DATABASE_URL
-    ?? 'postgresql://cliqhub:cliqhub@localhost:5432/cliqhub';
+/** Local-only test database. Never the dev DB or a shared/prod DATABASE_URL from .env. */
+export const database_url = test_database_url;
 
 function assert_test_database_url(url: string): void {
+    assert_not_dev_database(url);
     const lower = url.toLowerCase();
     const blocked = [
         'rlwy.net',

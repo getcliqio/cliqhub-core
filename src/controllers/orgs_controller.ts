@@ -8,8 +8,8 @@ import { ApiError } from '../lib/api_error.js';
 import { ALL_PERMISSIONS, OWNER_ONLY_PERMISSIONS } from '../auth/permissions.js';
 import type { PagedData, ApiRequest, ApiOkResponse } from '../types/api_response.js';
 import {
-    OrgsGetInput, OrgIdInput, OrgInput,
-    OrgsAddMemberInput, OrgsRemoveMemberInput,
+    OrgsGetInput, OrgIdInput, OrgInput, OrgsNewInput,
+    OrgsRemoveMemberInput,
     OrgRoleIdInput, OrgRoleInput,
     OrgScopeInput, OrgScopeMemberInput,
     OrgsGetScopesInput, OrgsGetReviewableTargetsInput,
@@ -41,6 +41,10 @@ export class OrgsController extends BaseController {
             offset: body.offset,
             exclude_personal: body.exclude_personal,
             mine: body.mine,
+            sort_by: body.sort_by,
+            sort_dir: body.sort_dir,
+            status: body.status,
+            include_deleted: body.include_deleted,
         });
         this.ok(res, result);
     }
@@ -57,40 +61,22 @@ export class OrgsController extends BaseController {
     }
 
     /**
-     * POST /v1/orgs/new — create a new org (site admin only).
-     * POST /v1/orgs/update — rename an existing org.
-     * Both use OrgInput; controller branches on org_id presence.
+     * POST /v1/orgs/new, /internal/orgs/new — create an org for its owner and
+     * send the owner invite (site admin only).
      */
     async new_org(req: Request, res: Response): Promise<void> {
         log.debug('new_org', { user_id: req.auth?.user?.id });
-        const body = this.parse_body(OrgInput, req);
-        if (!body.slug) {
-            throw ApiError.unprocessable('slug is required to create an org');
-        }
-        if (!body.admin_username) {
-            throw ApiError.unprocessable('admin_username is required to create an org');
-        }
-        const result = await this._orgs_service.new_org(req.auth, {
-            slug: body.slug,
-            display_name: body.display_name,
-            admin_username: body.admin_username,
-            admin_email: body.admin_email,
-            admin_password: body.admin_password,
-            admin_display_name: body.admin_display_name,
-        });
-        log.info('org_created', { slug: body.slug });
+        const body = this.parse_body(OrgsNewInput, req);
+        const result = await this._orgs_service.new_org(req.auth, body);
         this.ok(res, result);
     }
 
+    /**
+     * POST /v1/orgs/update, /internal/orgs/update — rename an org.
+     */
     async update(req: Request, res: Response): Promise<void> {
         log.debug('update', { user_id: req.auth?.user?.id });
         const body = this.parse_body(OrgInput, req);
-        if (!body.org_id) {
-            throw ApiError.unprocessable('org_id is required to update an org');
-        }
-        if (!body.display_name) {
-            throw ApiError.unprocessable('display_name is required');
-        }
         const result = await this._orgs_service.update(req.auth, {
             org_id: body.org_id,
             display_name: body.display_name,
@@ -100,7 +86,7 @@ export class OrgsController extends BaseController {
     }
 
     /**
-     * POST /v1/orgs/delete — permanently delete an org (site admin only).
+     * POST /v1/orgs/delete — soft-delete an org (`{ id, deleted_at }`); the slug stays taken.
      */
     async delete_org(req: Request, res: Response): Promise<void> {
         log.debug('delete_org', { user_id: req.auth?.user?.id });
@@ -118,17 +104,6 @@ export class OrgsController extends BaseController {
         const body = this.parse_body(OrgIdInput, req);
         const result = await this._orgs_service.leave(req.auth, body);
         log.info('org_left', { org_id: body.org_id });
-        this.ok(res, result);
-    }
-
-    /**
-     * POST /v1/orgs/add_member — add a user to an org by username, email, or user_id.
-     */
-    async add_member(req: Request, res: Response): Promise<void> {
-        log.debug('add_member', { user_id: req.auth?.user?.id });
-        const body = this.parse_body(OrgsAddMemberInput, req);
-        const result = await this._orgs_service.add_member(req.auth, body);
-        log.info('org_member_added', { org_id: body.org_id, target_user_id: (result as { user_id?: string }).user_id });
         this.ok(res, result);
     }
 
@@ -357,6 +332,8 @@ export class OrgsController extends BaseController {
                 search: body.query,
                 limit: body.limit,
                 offset: body.offset,
+                sort_by: body.sort_by,
+                sort_dir: body.sort_dir,
             });
             this.ok(res, result);
         } else {
@@ -368,6 +345,8 @@ export class OrgsController extends BaseController {
                 search: body.query,
                 limit: body.limit,
                 offset: body.offset,
+                sort_by: body.sort_by,
+                sort_dir: body.sort_dir,
             });
             this.ok(res, result);
         }

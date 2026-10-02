@@ -134,7 +134,15 @@ export class InAppNotificationService {
 		} catch (err) { log.debug('notification_slug_lookup_failed', { error: err instanceof Error ? err.message : String(err) }); /* best-effort — slugs stay null */ }
 	}
 
-	static async create_from_payload(payload: NotificationPayload, user_id?: string | null): Promise<InAppNotificationRecord> {
+	/**
+	 * Stores one in-app notification. Its `org_id` (the org inbox it shows
+	 * in) comes from the realm when there is one, else from `org_id` (an org
+	 * event with no realm).
+	 *
+	 * @param user_id - The one user it is for; null for a realm-wide row.
+	 * @param org_id - The event's org, used when the payload has no realm.
+	 */
+	static async create_from_payload(payload: NotificationPayload, user_id?: string | null, org_id_hint?: string | null): Promise<InAppNotificationRecord> {
 		log.debug('create_from_payload', { event: payload.event, realm_id: payload.realm_id, user_id });
 		// event is the routing key for rules and the inbox type filter.
 		const event = String(payload.event ?? '').trim();
@@ -148,7 +156,7 @@ export class InAppNotificationService {
 			: null;
 
 		// Denormalize org_id from realm so org-scoped inbox queries stay cheap.
-		let org_id: string | null = null;
+		let org_id: string | null = org_id_hint ?? null;
 		const realm_id_val = payload.realm_id?.trim() || null;
 		if (realm_id_val) {
 			try {
@@ -174,13 +182,14 @@ export class InAppNotificationService {
 			payload_json: JSON.stringify(InAppNotificationService.extra_payload(payload)),
 			created_at,
 		});
-		log.info('notification_created', { id, event, realm_id: realm_id_val });
+		log.info('notification_created', { id, event, realm_id: realm_id_val, org_id, user_targeted: Boolean(user_id) });
 		return InAppNotificationService.to_record(row);
 	}
 
 	/**
-	 * Visibility: realm rows for memberships + account-scoped rows (realm_id null)
-	 * for any authenticated user.
+	 * Visibility: realm-wide rows of the caller's realms, rows with no realm
+	 * and no user, and rows addressed to the caller. A row addressed to one
+	 * user (`user_id`) is shown to that user only.
 	 */
 	static async list_for_user(opts: {
 		user_id: string;
@@ -230,21 +239,22 @@ export class InAppNotificationService {
 			return { notifications: [], total: 0 };
 		}
 
-		// Visibility: realm-scoped rows for memberships, account-scoped
-		// rows (realm_id null), and user-targeted rows (user_id match).
+		// Visibility: realm-wide rows of the caller's realms, rows with no
+		// realm and no user, and rows addressed to the caller only.
+		const shared = { user_id: { [Op.is]: null } };
 		const realm_clause = allowed.length > 0
 			? {
 				[Op.or]: [
-					{ realm_id: { [Op.in]: allowed } },
+					{ realm_id: { [Op.in]: allowed }, ...shared },
 					{ user_id },
 				],
 			}
 			: {
 				[Op.or]: [
-					{ realm_id: { [Op.is]: null } },
+					{ realm_id: { [Op.is]: null }, ...shared },
 					{ user_id },
 					...(member_realm_ids.length > 0
-						? [{ realm_id: { [Op.in]: member_realm_ids } }]
+						? [{ realm_id: { [Op.in]: member_realm_ids }, ...shared }]
 						: []),
 				],
 			};

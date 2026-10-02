@@ -14,17 +14,24 @@ describe('OrgRepository', () => {
         repo = new OrgRepository();
     });
 
-    it('find_by_id returns org when found', async () => {
-        const org = { id: hub_legacy_uuid(1), slug: 'acme', display_name: 'Acme', created_at: '2025-01-01' };
-        vi.mocked(Org.findByPk).mockResolvedValueOnce(org as any);
+    it('find_by_id returns a live org when found', async () => {
+        const org = { id: hub_legacy_uuid(1), slug: 'acme', display_name: 'Acme', created_at: '2025-01-01', status: 'active', owner_id: null, deleted_at: null };
+        vi.mocked(Org.findOne).mockResolvedValueOnce(org as any);
         const result = await repo.find_by_id(hub_legacy_uuid(1));
         expect(result).toEqual(org);
+        expect(Org.findOne).toHaveBeenCalledWith(expect.objectContaining({ where: { id: hub_legacy_uuid(1), deleted_at: null } }));
     });
 
     it('find_by_id returns null when not found', async () => {
-        vi.mocked(Org.findByPk).mockResolvedValueOnce(null);
+        vi.mocked(Org.findOne).mockResolvedValueOnce(null);
         const result = await repo.find_by_id(hub_legacy_uuid(999));
         expect(result).toBeNull();
+    });
+
+    it('find_by_id_with_deleted also finds a soft-deleted org', async () => {
+        vi.mocked(Org.findOne).mockResolvedValueOnce({ id: hub_legacy_uuid(1), deleted_at: new Date() } as any);
+        await repo.find_by_id_with_deleted(hub_legacy_uuid(1));
+        expect(Org.findOne).toHaveBeenCalledWith(expect.objectContaining({ where: { id: hub_legacy_uuid(1) } }));
     });
 
     it('find_by_slug returns id when found', async () => {

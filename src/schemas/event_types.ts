@@ -117,6 +117,30 @@ export const EVENT_TYPES = [
 	'auth.api_key_revoked',
 	'notification.test',
 	'notification.failed',
+	// Org-scoped identity events, raised only by CliqHub itself
+	// (notifications/org_events.ts); `events/submit` refuses them.
+	'invite.owner.sent',
+	'invite.owner.reminder',
+	'invite.owner.accepted',
+	'invite.owner.declined',
+	'invite.owner.expired',
+	'invite.owner.revoked',
+	'invite.org.sent',
+	'invite.org.reminder',
+	'invite.org.accepted',
+	'invite.org.declined',
+	'invite.org.expired',
+	'invite.org.revoked',
+	'invite.realm.sent',
+	'invite.realm.reminder',
+	'invite.realm.accepted',
+	'invite.realm.declined',
+	'invite.realm.expired',
+	'invite.realm.revoked',
+	'org.abandoned',
+	'user.setup.sent',
+	'user.password_reset.sent',
+	'user.password.changed',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -174,7 +198,37 @@ export const EVENT_TYPE_SEVERITY: Record<EventType, EventSeverity> = {
 	'auth.api_key_revoked': 'warn',
 	'notification.test': 'info',
 	'notification.failed': 'error',
+	'invite.owner.sent': 'info',
+	'invite.owner.reminder': 'info',
+	'invite.owner.accepted': 'info',
+	'invite.owner.declined': 'info',
+	'invite.owner.expired': 'warn',
+	'invite.owner.revoked': 'info',
+	'invite.org.sent': 'info',
+	'invite.org.reminder': 'info',
+	'invite.org.accepted': 'info',
+	'invite.org.declined': 'info',
+	'invite.org.expired': 'warn',
+	'invite.org.revoked': 'info',
+	'invite.realm.sent': 'info',
+	'invite.realm.reminder': 'info',
+	'invite.realm.accepted': 'info',
+	'invite.realm.declined': 'info',
+	'invite.realm.expired': 'warn',
+	'invite.realm.revoked': 'info',
+	'org.abandoned': 'warn',
+	'user.setup.sent': 'info',
+	'user.password_reset.sent': 'info',
+	'user.password.changed': 'info',
 };
+
+/** Families raised only by CliqHub (org events); clients cannot submit them. */
+const SYSTEM_EVENT_PREFIXES = ['invite.', 'org.', 'user.'] as const;
+
+/** True for event types only CliqHub raises (invites, org lifecycle, account emails). */
+export function is_system_event_type(type: string): boolean {
+	return SYSTEM_EVENT_PREFIXES.some((prefix) => type.startsWith(prefix));
+}
 
 
 const non_empty = z.string().trim().min(1);
@@ -276,6 +330,15 @@ export const event_submit_schema = z
 					`Unknown event type '${data.type}'. `
 					+ `Type must be one of the Hub event catalog (${EVENT_TYPES.length} types) `
 					+ `or custom.<name>.`,
+			});
+			return;
+		}
+
+		if (is_system_event_type(data.type)) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ['type'],
+				message: `'${data.type}' is raised by CliqHub only and cannot be submitted`,
 			});
 			return;
 		}

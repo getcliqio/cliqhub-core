@@ -51,7 +51,7 @@ describe('ReportsService', () => {
             });
 
             const expected_filters = { action: 'user.suspend', target_type: 'user', admin_id: hub_legacy_uuid(99) };
-            expect(audit_repo.list_paginated).toHaveBeenCalledWith(expected_filters, 50, 0);
+            expect(audit_repo.list_paginated).toHaveBeenCalledWith(expected_filters, 50, 0, { sort_by: undefined, sort_dir: undefined });
             expect(audit_repo.count_filtered).toHaveBeenCalledWith(expected_filters);
         });
 
@@ -65,6 +65,7 @@ describe('ReportsService', () => {
                 { action: undefined, target_type: undefined, admin_id: undefined },
                 25,
                 10,
+                { sort_by: undefined, sort_dir: undefined },
             );
             expect(result.limit).toBe(25);
             expect(result.offset).toBe(10);
@@ -80,6 +81,7 @@ describe('ReportsService', () => {
                 expect.anything(),
                 100,
                 0,
+                expect.anything(),
             );
             expect(result.limit).toBe(100);
         });

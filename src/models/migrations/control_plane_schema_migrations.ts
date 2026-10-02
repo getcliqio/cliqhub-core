@@ -238,14 +238,21 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
                    WHERE c2."id" = 'cliqhub-' || s."realm_id"
                  )`);
 
-    // Drop orphan account-global channels (no longer used).
+    // Drop orphan account-global channels: no realm, no org and no user. Org
+    // channels (the seeded Email / In-app ones included) and personal channels
+    // also have no realm and must survive every boot. `org_id` and `user_id`
+    // are read through to_jsonb because they are added further down, so on a
+    // database without them every realm-less channel is an orphan.
+    const orphan_channel = `(c."realm_id" IS NULL OR TRIM(c."realm_id") = '')
+                 AND to_jsonb(c) ->> 'org_id' IS NULL
+                 AND to_jsonb(c) ->> 'user_id' IS NULL`;
     await run(`DELETE FROM cliq."notification_subscriptions" s
                WHERE s."channel_id" IN (
                  SELECT c."id" FROM cliq."notification_channels" c
-                 WHERE c."realm_id" IS NULL OR TRIM(c."realm_id") = ''
+                 WHERE ${orphan_channel}
                )`);
-    await run(`DELETE FROM cliq."notification_channels"
-               WHERE "realm_id" IS NULL OR TRIM("realm_id") = ''`);
+    await run(`DELETE FROM cliq."notification_channels" c
+               WHERE ${orphan_channel}`);
 
     await run(`DROP INDEX IF EXISTS cliq."notification_channels_realm_name_uidx"`);
     await run(`CREATE UNIQUE INDEX IF NOT EXISTS "notification_channels_realm_name_uidx"
@@ -705,9 +712,14 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
 
     // v2 Notifications: multi-destination channels. Backfill existing
     // single-provider channels into the new destinations JSONB array.
-    await run(`ALTER TABLE cliq."notification_channels"
-               ADD COLUMN IF NOT EXISTS "destinations" TEXT NOT NULL DEFAULT '[]'`);
-    await run(`
+    // Only on schemas that still have the legacy "provider" column: the column is
+    // dropped again below, and Postgres never frees a dropped column's slot, so
+    // re-adding it on every boot eventually hits the 1600-column limit.
+    const [legacy_provider] = await sq.query(`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'cliq' AND table_name = 'notification_channels' AND column_name = 'provider'
+    `);
+    const backfill_destinations_sql = `
         UPDATE cliq."notification_channels"
         SET "destinations" = CASE
             WHEN "provider" = 'slack' THEN
@@ -735,7 +747,12 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
             ELSE '[]'
         END
         WHERE "destinations" = '[]'
-    `);
+    `;
+    if (legacy_provider.length > 0) {
+        await run(`ALTER TABLE cliq."notification_channels"
+                   ADD COLUMN IF NOT EXISTS "destinations" TEXT NOT NULL DEFAULT '[]'`);
+        await run(backfill_destinations_sql);
+    }
 
     // ── Org-as-account: org_id on channels and rules ────────────────
     await run(`ALTER TABLE cliq."notification_channels"
@@ -1049,7 +1066,7 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     /** Coerce legacy integer user_id FKs to UUID (Hub PK migration). */
     await coerce_user_id_columns_to_uuid(sq);
 
-    /** Ensure every org member has a personal notification channel. */
+    /** Ensure every org member with a username has a personal notification channel. */
     await backfill_per_user_channels(sq);
 
     // ── In-app notification: review_id column for HUG queries ────────
@@ -1262,13 +1279,22 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     // Allow owner_id to be NULL for platform-owned scopes.
     await run(`ALTER TABLE cliq."scopes" ALTER COLUMN "owner_id" DROP NOT NULL`);
 
-    // Seed the two platform scopes into the registry scopes table.
+    // Seed the platform scope into the registry scopes table.
     await run(`
         INSERT INTO cliq."scopes" ("id", "slug", "display_name", "owner_id", "visibility", "scope_type", "is_default", "created_at")
         VALUES
-            (gen_random_uuid(), 'cliq',        'Cliq',        NULL, 'public', 'platform', 1, NOW()),
-            (gen_random_uuid(), 'measureone',  'MeasureOne',  NULL, 'public', 'platform', 0, NOW())
+            (gen_random_uuid(), 'cliq', 'Cliq', NULL, 'public', 'platform', 1, NOW())
         ON CONFLICT ("slug") DO UPDATE SET "is_default" = EXCLUDED."is_default"
+    `);
+
+    // 'measureone' is no longer a platform scope; free the name unless something already lives in it.
+    await run(`
+        DELETE FROM cliq."scopes" s
+        WHERE s."slug" = 'measureone' AND s."scope_type" = 'platform'
+          AND s."org_id" IS NULL AND s."owner_id" IS NULL
+          AND NOT EXISTS (SELECT 1 FROM cliq."teams" t WHERE t."scope" = s."slug")
+          AND NOT EXISTS (SELECT 1 FROM cliq."scope_members" sm WHERE sm."scope_id" = s."id")
+          AND NOT EXISTS (SELECT 1 FROM cliq."daemon_teams" dt WHERE dt."scope_id"::text = s."id"::text)
     `);
 
     // Migrate daemon_teams.scope_id from old cliq.scopes fixed UUIDs to registry scope UUIDs.
@@ -1276,11 +1302,6 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
         UPDATE cliq."daemon_teams" dt
         SET "scope_id" = (SELECT "id" FROM cliq."scopes" WHERE "slug" = 'cliq')
         WHERE dt."scope_id" = '00000000-0000-0000-0000-000000000000'
-    `);
-    await run(`
-        UPDATE cliq."daemon_teams" dt
-        SET "scope_id" = (SELECT "id" FROM cliq."scopes" WHERE "slug" = 'measureone')
-        WHERE dt."scope_id" = '00000000-0000-0000-0000-000000000001'
     `);
 
     // Drop old cliq.scopes control-plane table now that data is migrated.
@@ -1356,7 +1377,8 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
                 EXTRACT(EPOCH FROM NOW()) * 1000
             FROM cliq."org_members" om
             JOIN cliq."users" u ON u."id" = om."user_id"
-            WHERE NOT EXISTS (
+            WHERE u."username" IS NOT NULL
+              AND NOT EXISTS (
                 SELECT 1 FROM cliq."notification_channels" nc
                 WHERE nc."user_id" = om."user_id" AND nc."org_id" = om."org_id"
             )

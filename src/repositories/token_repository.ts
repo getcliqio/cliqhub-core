@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ApiToken } from '../models/index.js';
-import { fn, Op } from 'sequelize';
+import { fn, Op, type Transaction } from 'sequelize';
 import type { TokenPermissions, Token_type } from '../models/api_token.model.js';
 import { BaseRepository } from './base_repository.js';
 
@@ -172,6 +172,28 @@ export class TokenRepository extends BaseRepository<ApiToken> {
         for (const row of rows) {
             await this.soft_revoke(row.id);
         }
+    }
+
+    /**
+     * Signs a user out everywhere: soft-revokes their live session PATs
+     * (`session:…` user tokens minted at sign-in). Standing PATs and daemon /
+     * realm tokens are left alone.
+     *
+     * @param user_id - Whose sessions to revoke.
+     * @param opts.except_id - A session to keep (the caller's own).
+     * @param opts.transaction - The caller's transaction.
+     * @returns How many sessions were revoked.
+     */
+    async revoke_sessions(user_id: string, opts: { except_id?: string; transaction?: Transaction } = {}): Promise<number> {
+        const where: Record<string | symbol, unknown> = {
+            user_id,
+            type: 'user',
+            name: { [Op.like]: 'session:%' },
+            revoked_at: { [Op.is]: null },
+        };
+        if (opts.except_id) where.id = { [Op.ne]: opts.except_id };
+        const [count] = await ApiToken.update({ revoked_at: new Date() }, { where, transaction: opts.transaction });
+        return count;
     }
 
     /**

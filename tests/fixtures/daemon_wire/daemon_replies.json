@@ -1,0 +1,108 @@
+{
+    "_comment": "cliqd replies as Core, the agent-side SDK and cliq-agents read them. Pinned against the daemon's real replies by daemon/tests/spec/contracts/core_wire.spec.ts and agent_wire.spec.ts (exact: byte-equal body; otherwise the real reply must have every key of the sample, with the same JSON type). Copies — keep in sync: cliqhub-core tests/fixtures/daemon_wire/daemon_replies.json, cliq-sdk tests/fixtures/daemon_replies.json, cliq-agents tests/fixtures/daemon_replies.json.",
+    "outbox": {
+        "supply_inputs_unknown_run": {
+            "request": { "path": "/v1/runs/supply_inputs", "body": { "run_id": "no-such-run", "inputs": { "a": 1 } } },
+            "status": 404,
+            "exact": true,
+            "body": { "ok": false, "error": { "code": "RUN_NOT_FOUND", "message": "Run 'no-such-run' not found" } },
+            "core": { "delivered": false, "retryable": false, "run_not_found": true, "error_msg": "HTTP 404: RUN_NOT_FOUND: Run 'no-such-run' not found" }
+        },
+        "supply_inputs_invalid_state": {
+            "request": { "path": "/v1/runs/supply_inputs", "body": { "run_id": "<completed run>", "inputs": { "a": 1 } } },
+            "status": 409,
+            "exact": true,
+            "body": { "ok": false, "error": { "code": "RUN_INVALID_STATE", "message": "Run is in state 'completed', not 'awaiting_input'" } },
+            "core": { "delivered": false, "retryable": false, "run_not_found": false, "error_msg": "HTTP 409: RUN_INVALID_STATE: Run is in state 'completed', not 'awaiting_input'" }
+        },
+        "resume_unknown_run": {
+            "request": { "path": "/v1/resume", "body": { "run_id": "no-such-run", "from_phase": "build" } },
+            "status": 404,
+            "exact": true,
+            "body": { "ok": false, "error": { "code": "RUN_NOT_FOUND", "message": "Run 'no-such-run' not found" } },
+            "core": { "delivered": false, "retryable": false, "run_not_found": true, "error_msg": "HTTP 404: RUN_NOT_FOUND: Run 'no-such-run' not found" }
+        },
+        "execute_team_not_installed": {
+            "request": { "path": "/v1/execute", "body": { "run_id": "run-contract-1", "workspace_dir": "/tmp/core-contract-ws", "manifest_yaml": "phases: []", "team_id": "no-such-team", "run_context": {}, "run_name": "contract", "execution_type": "local" } },
+            "status": 400,
+            "exact": true,
+            "body": { "ok": false, "error": { "code": "TEAM_NOT_INSTALLED", "message": "Team 'no-such-team' is not installed on this daemon" } },
+            "core": { "delivered": false, "retryable": false, "run_not_found": false, "error_msg": "HTTP 400: TEAM_NOT_INSTALLED: Team 'no-such-team' is not installed on this daemon" }
+        },
+        "cancel_invalid_body": {
+            "request": { "path": "/v1/cancel", "body": {} },
+            "status": 400,
+            "exact": true,
+            "body": { "ok": false, "error": { "code": "PAYLOAD_INVALID", "message": "run_id: Invalid input: expected string, received undefined", "details": [{ "path": "run_id", "message": "Invalid input: expected string, received undefined" }] } },
+            "core": { "delivered": false, "retryable": false, "run_not_found": false, "error_msg": "HTTP 400: PAYLOAD_INVALID: run_id: Invalid input: expected string, received undefined" }
+        },
+        "cancel_ok": {
+            "request": { "path": "/v1/cancel", "body": { "run_id": "no-such-run" } },
+            "status": 200,
+            "exact": true,
+            "body": { "ok": true, "data": { "cancelled": true } },
+            "core": { "delivered": true, "retryable": false, "run_not_found": false, "error_msg": "" }
+        },
+        "install_service_failure": {
+            "request": { "path": "/v1/install", "body": { "scope": "acme", "slug": "contract", "manifest": "phases: []", "version": "1.0.0", "description": "contract" } },
+            "status": 500,
+            "exact": true,
+            "body": { "ok": false, "error": { "code": "INTERNAL_ERROR", "message": "disk full" } },
+            "core": { "delivered": false, "retryable": true, "run_not_found": false, "error_msg": "HTTP 500: INTERNAL_ERROR: disk full" }
+        },
+        "settings_set_rejected_value": {
+            "request": { "path": "/v1/settings/set", "body": { "workspace_dir": null, "key": "a.b", "value": 1 } },
+            "status": 400,
+            "exact": true,
+            "body": { "ok": false, "error": { "code": "SETTING_VALUE_INVALID", "message": "Non-daemon key \"a.b\" requires a workspace (omit --global)" } },
+            "core": { "delivered": false, "retryable": false, "run_not_found": false, "error_msg": "HTTP 400: SETTING_VALUE_INVALID: Non-daemon key \"a.b\" requires a workspace (omit --global)" }
+        }
+    },
+    "query": {
+        "teams_get": {
+            "request": { "path": "/v1/teams/get", "body": {} },
+            "status": 200,
+            "exact": false,
+            "body": { "ok": true, "data": { "teams": [{ "team_id": "6f1c2a4e-3b5d-4c7e-9f10-1a2b3c4d5e6f", "scope": "test-org", "slug": "core-wire", "version": "1.2.3", "description": "Core wire contract", "manifest": "phases:\n  - name: go\n    agent: exec\n", "created_at": 1790000000000 }] } }
+        },
+        "workspaces_get": {
+            "request": { "path": "/v1/workspaces/get", "body": {} },
+            "status": 200,
+            "exact": false,
+            "body": { "ok": true, "data": { "workspaces": [{ "workspace_id": "7a1c2a4e-3b5d-4c7e-9f10-1a2b3c4d5e6f", "workspace_dir": "/tmp/core-wire-ws", "name": "core-wire", "teams": [], "active_runs": 0, "created_at": 1790000000000 }] } }
+        },
+        "teams_get_invalid": {
+            "request": { "path": "/v1/teams/get", "body": { "scope": "" } },
+            "status": 400,
+            "exact": true,
+            "body": { "ok": false, "error": { "code": "PAYLOAD_INVALID", "message": "scope: Too small: expected string to have >=1 characters", "details": [{ "path": "scope", "message": "Too small: expected string to have >=1 characters" }] } },
+            "core": { "error_msg": "HTTP 400: PAYLOAD_INVALID: scope: Too small: expected string to have >=1 characters" }
+        }
+    },
+    "agents": {
+        "events_push": {
+            "request": { "path": "/v1/runs/events", "body": { "run_id": "<running run>", "event_type": "phase.progress", "phase": "go", "agent": "exec", "payload": { "message": "hi" } } },
+            "status": 200,
+            "exact": false,
+            "body": { "ok": true, "data": { "id": 1, "run_id": "run" } }
+        },
+        "artifacts_submit": {
+            "request": { "path": "/v1/runs/artifacts/submit", "body": { "run_id": "<running run>", "phase": "go", "name": "plan.md", "content": "hello" } },
+            "status": 200,
+            "exact": true,
+            "body": { "ok": true, "data": { "artifact_id": "art-1", "name": "plan.md", "download_url": "https://dl/art-1", "size_bytes": 5 } }
+        },
+        "artifacts_get_by_id": {
+            "request": { "path": "/v1/artifacts/get_by_id", "body": { "artifact_id": "art-1" } },
+            "status": 200,
+            "exact": true,
+            "body": { "ok": true, "data": { "artifact_id": "art-1", "name": "plan.md", "mime_type": "text/markdown", "size_bytes": 5, "download_url": "https://dl/art-1" } }
+        },
+        "hug_poll": {
+            "request": { "path": "/v1/hug/inbox/poll", "body": { "review_id": "<review>" } },
+            "status": 200,
+            "exact": false,
+            "body": { "ok": true, "data": { "entries": [{ "type": "verdict", "role": "user", "payload": { "action": "approve", "comment": "ship it" } }] } }
+        }
+    }
+}

@@ -4,6 +4,9 @@
  * the public dispatch_run / cancel_run / install_team methods.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 
@@ -591,7 +594,7 @@ describe('DispatchService.install_team', () => {
 
     it('enqueues install to each target daemon via outbox', async () => {
         const result = await DispatchService.install_team({
-            team_id: '1',
+            team_id: hub_legacy_uuid(1), // catalog team UUID
             user_id: 'user-1',
             daemon_ids: ['daemon-1'],
             scope_ids: ['scope-1'],
@@ -613,7 +616,7 @@ describe('DispatchService.install_team', () => {
 
     it('passes force:true in outbox payload when force is set', async () => {
         const result = await DispatchService.install_team({
-            team_id: '1',
+            team_id: hub_legacy_uuid(1),
             user_id: 'user-1',
             daemon_ids: ['daemon-1'],
             scope_ids: ['scope-1'],
@@ -750,5 +753,65 @@ describe('DispatchService.offer_and_dispatch_run', () => {
             'q1',
             expect.objectContaining({ status: 'failed' }),
         );
+    });
+});
+
+// ── query_daemon / settings push (cliqd's one wire) ─────────────────
+
+/** Pinned cliqd replies — copy of the daemon's wire fixture (keep in sync). */
+const WIRE = JSON.parse(readFileSync(
+    fileURLToPath(new URL('../fixtures/daemon_wire/daemon_replies.json', import.meta.url)),
+    'utf8',
+)) as Record<string, Record<string, { status: number; body: unknown; core?: { error_msg: string } }>>;
+
+/** A fetch Response for a pinned reply. */
+function pinned_response(name: 'teams_get' | 'workspaces_get' | 'teams_get_invalid'): Response {
+    const { status, body } = WIRE.query![name]!;
+    return {
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => body,
+        text: async () => JSON.stringify(body),
+    } as unknown as Response;
+}
+
+describe('DispatchService.query_daemon', () => {
+    it('POSTs the plain input (plus tx_id, no envelope, no extra header) and returns data', async () => {
+        mock_fetch.mockResolvedValueOnce(pinned_response('teams_get'));
+        const data = await DispatchService.query_daemon<{ teams: unknown[] }>('daemon-1', '/v1/teams/get', {}, 'user-1');
+        expect(data).toEqual((WIRE.query!.teams_get!.body as { data: unknown }).data);
+
+        const [url, init] = mock_fetch.mock.calls[0]!;
+        expect(url).toBe('https://daemon.test:8443/v1/teams/get');
+        expect(JSON.parse(init.body as string)).toEqual({ tx_id: expect.any(String) });
+        expect(Object.keys(init.headers as Record<string, string>).map((h) => h.toLowerCase()))
+            .not.toContain('accept-envelope');
+    });
+
+    it('returns data.workspaces for workspaces/get', async () => {
+        mock_fetch.mockResolvedValueOnce(pinned_response('workspaces_get'));
+        const data = await DispatchService.query_daemon<{ workspaces: unknown[] }>('daemon-1', '/v1/workspaces/get', {}, 'user-1');
+        expect(data.workspaces.length).toBeGreaterThan(0);
+    });
+
+    it('a daemon failure is a 503 carrying the daemon code and message', async () => {
+        mock_fetch.mockResolvedValueOnce(pinned_response('teams_get_invalid'));
+        await expect(DispatchService.query_daemon('daemon-1', '/v1/teams/get', { scope: '' }, 'user-1'))
+            .rejects.toMatchObject({ status_code: 503, message: `Daemon query failed: ${WIRE.query!.teams_get_invalid!.core!.error_msg}` });
+    });
+
+    it('a pre-2.0 SDK envelope reply is not taken as data', async () => {
+        mock_fetch.mockResolvedValueOnce(ok_response({ type: 'ok', payload: { data: { teams: [] } } }));
+        await expect(DispatchService.query_daemon('daemon-1', '/v1/teams/get', {}, 'user-1'))
+            .rejects.toMatchObject({ status_code: 503 });
+    });
+});
+
+describe('DispatchService.push_agent_settings_to_realm', () => {
+    it('enqueues settings/set with the plain input for each key', async () => {
+        vi.spyOn(DispatchService as unknown as { _get_online_daemons_for_realm: () => Promise<unknown[]> }, '_get_online_daemons_for_realm')
+            .mockResolvedValueOnce([make_daemon()]);
+        await DispatchService.push_agent_settings_to_realm({ realm_id: 'realm-1', agent_name: 'git', settings: { token_ttl: '60' }, user_id: 'user-1' });
+        expect(mock_enqueue).toHaveBeenCalledWith('daemon-1', '/v1/settings/set', { workspace_dir: null, key: 'agents.git.token_ttl', value: '60' });
     });
 });

@@ -15,6 +15,7 @@ import { QueryTypes } from 'sequelize';
 
 import { get_sequelize } from '../lib/sequelize.js';
 import { get_logger } from '../lib/log.js';
+import { daemon_failure_message, is_daemon_run_not_found, is_retryable_daemon_status } from '../lib/daemon_reply.js';
 import type { Daemon } from '../models/daemon.model.js';
 import { DaemonRepository } from '../repositories/daemon_repository.js';
 import { DispatchAuthService } from './dispatch_auth.service.js';
@@ -234,31 +235,28 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
         }
 
         // Non-2xx: retryable vs. permanent failure.
-        const retryable = res.status === 408 || res.status === 429
-            || res.status === 401 || res.status >= 500;
+        const retryable = is_retryable_daemon_status(res.status);
 
-        // Read the body once — we need it both for the specific
-        // run_not_found orphan-handling below and for the generic
-        // error message. `.json()` on failure just falls through to
-        // a `HTTP <status>` label.
+        // Read the body once — for the run-not-found handling below and
+        // the stored error. A body that is not JSON falls back to a snippet.
         let body_text = '';
-        let body_json: { error?: unknown; message?: unknown } | null = null;
+        let body_json: unknown = null;
         try {
             body_text = await res.text();
-            body_json = body_text ? JSON.parse(body_text) as typeof body_json : null;
+            body_json = body_text ? JSON.parse(body_text) as unknown : null;
         } catch {
-            /* opaque body — fall back to status-only message */
+            /* opaque body — fall back to the status / snippet message */
         }
 
-        const error_msg = _extract_error_message(res.status, body_json, body_text);
+        const error_msg = daemon_failure_message(res.status, body_json, body_text);
 
         // Specialised handling: daemon says "I have no local record
-        // of this run" (its ephemeral pod storage was wiped on a
-        // restart). Retrying is pointless — the phase records are
+        // of this run" (404 RUN_NOT_FOUND — its ephemeral pod storage was
+        // wiped on a restart). Retrying is pointless — the phase records are
         // gone forever on that daemon. Mark the Hub run as orphaned
         // so the UI can steer the user to Run again with the same
         // inputs, then exhaust the outbox entry.
-        if (res.status === 404 && _is_run_not_found(body_json)) {
+        if (is_daemon_run_not_found(res.status, body_json)) {
             await _handle_daemon_run_not_found(entry);
             await sq.query(
                 `UPDATE cliq."command_outbox"
@@ -390,40 +388,6 @@ function _endpoint_label_for_log(endpoint: string): string | null {
 }
 
 /**
- * Detect the daemon's `run_not_found` response. The daemon returns
- * `{ ok?: false, error: 'run_not_found', message: "Run '…' not found" }`
- * with HTTP 404 from every endpoint that looks up local run state.
- * Matching on both the `error` code AND the message keeps this robust
- * against small shape changes.
- */
-function _is_run_not_found(body: { error?: unknown; message?: unknown } | null): boolean {
-    if (!body) return false;
-    if (typeof body.error === 'string' && body.error === 'run_not_found') return true;
-    if (typeof body.message === 'string' && /run\s.*?not found/i.test(body.message)) return true;
-    return false;
-}
-
-/**
- * Best-effort human message extraction from a non-2xx daemon response.
- * Falls back to `HTTP <status>` when the body is opaque.
- */
-function _extract_error_message(
-    status: number,
-    body_json: { error?: unknown; message?: unknown } | null,
-    body_text: string,
-): string {
-    if (body_json && typeof body_json.message === 'string' && body_json.message.trim()) {
-        return `HTTP ${status}: ${body_json.message.trim()}`;
-    }
-    if (body_json && typeof body_json.error === 'string' && body_json.error.trim()) {
-        return `HTTP ${status}: ${body_json.error.trim()}`;
-    }
-    const snippet = body_text.trim().slice(0, 200);
-    if (snippet) return `HTTP ${status}: ${snippet}`;
-    return `HTTP ${status}`;
-}
-
-/**
  * The daemon told us it doesn't know this run. Its local SQLite has
  * no row (pod restart wiped ephemeral storage). The run is orphaned
  * — no future retry against this or any other daemon can recover it.
@@ -518,7 +482,7 @@ async function _handle_daemon_run_not_found(entry: PendingEntry): Promise<void> 
         try {
             const { RunService } = await import('./run.service.js');
             const label = _endpoint_label_for_log(entry.endpoint) ?? entry.endpoint;
-            const line = `⚠ Daemon returned run_not_found for ${label} — `
+            const line = `⚠ Daemon returned RUN_NOT_FOUND for ${label} — `
                 + 'run state was lost on daemon restart. '
                 + 'Marked as crashed. Use Run again to dispatch a fresh run.\n';
             await RunService.append_log(run_id, line);

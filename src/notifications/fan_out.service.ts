@@ -12,7 +12,22 @@ import {
 } from './types.js';
 import type { Destination } from './channel_config.js';
 import type { DeliveryContext } from './deliverers/abstract_channel_deliverer.js';
+import { DELIVERER_BY_PROVIDER } from './deliverers/index.js';
+import type { EmailDeliverer } from './deliverers/email_deliverer.js';
 import { plan_fan_out, read_notify_channels_intent } from './notify_intent.js';
+import { InAppNotificationService } from '../services/in_app_notification.service.js';
+import { resolve_delivery_links } from './delivery_links.js';
+import { resolve_recipients, type ResolvedRecipient } from './recipients.js';
+import {
+	describe_org_event_for_inbox,
+	is_invite_event,
+	type DeliveryLinkRef,
+	type DeliveryLinks,
+	type OrgDeliveryOutcome,
+	type OrgEventPayload,
+	type OrgEventType,
+} from './org_events.js';
+import type { EmailSubjectType } from '../models/email_delivery.model.js';
 
 const log = get_logger('notify.fanout');
 const _fan_out_daemon_repo = new DaemonRepository();
@@ -96,6 +111,97 @@ export class NotificationFanOutService {
 	): Promise<NotificationDispatchStatus> {
 		if (channel_ids.length === 0) return 'skipped';
 		return deliver_for_channel_ids(channel_ids, event);
+	}
+
+	/**
+	 * Org event delivery (invites, org lifecycle, account emails): every org
+	 * rule matching the event fires. A rule with `recipients` delivers to the
+	 * resolved people — one email per recipient on email destinations, one
+	 * inbox row per recipient account on in-app destinations — and other
+	 * destination types once; a rule without recipients delivers to the
+	 * channel's own destinations as for any event. Links built from `link`
+	 * go only to the recipient they belong to (the invitee, or the user of a
+	 * password link). Never throws for delivery failures.
+	 *
+	 * @param event - The stored org event (`payload` is {@link OrgEventPayload}).
+	 * @param link - Where the email link comes from, when the event carries one.
+	 */
+	static async notify_org(
+		event: SubmittedEvent,
+		link?: DeliveryLinkRef,
+	): Promise<{ status: NotificationDispatchStatus; deliveries: OrgDeliveryOutcome[] }> {
+		const org_id = event.org_id ? String(event.org_id) : '';
+		if (!org_id) return { status: 'skipped', deliveries: [] };
+
+		const rules = await NotificationService.resolve_org_rules({ event: event.type, org_id });
+		if (rules.length === 0) return { status: 'skipped', deliveries: [] };
+		const channels = new Map(
+			(await NotificationService.find_enabled_channels([...new Set(rules.map((r) => r.channel_id))]))
+				.map((c) => [c.id, c]),
+		);
+
+		const org_payload = event.payload as unknown as OrgEventPayload;
+		const payload = await to_payload(event);
+		const type = event.type as OrgEventType;
+		let names_once: Promise<{ accepted: string | null }> | null = null;
+		const names = () => (names_once ??= accepted_name(org_payload.data));
+		let links: Promise<DeliveryLinks> | null = null;
+		const links_for = (r: ResolvedRecipient): Promise<DeliveryLinks> => {
+			if (!link || r.selector !== link_recipient(type)) return Promise.resolve({});
+			return (links ??= resolve_delivery_links(link));
+		};
+
+		const deliveries: OrgDeliveryOutcome[] = [];
+		const done = new Set<string>();
+		for (const rule of rules) {
+			const channel = channels.get(rule.channel_id);
+			if (!channel) continue;
+			const destinations = parse_channel_destinations(channel);
+
+			if (!rule.recipients || rule.recipients.length === 0) {
+				if (done.has(`${channel.id}|channel`)) continue;
+				done.add(`${channel.id}|channel`);
+				const ok = await deliver_destinations(destinations, payload, new Set(), { channel_id: channel.id }, (channel as unknown as { secret: string | null }).secret ?? null);
+				deliveries.push({ channel_id: channel.id, rule_id: rule.id, type: 'channel', to: null, with_links: false, ok, error: ok ? null : 'no destination accepted the event' });
+				continue;
+			}
+
+			const recipients = await resolve_recipients(rule.recipients, { org_id, data: org_payload.data });
+			for (const dest of destinations) {
+				if (dest.type === 'email') {
+					for (const r of recipients) {
+						const key = `${channel.id}|email|${r.email}`;
+						if (done.has(key)) continue;
+						done.add(key);
+						deliveries.push(await deliver_org_email(event, org_payload, channel.id, dest as unknown as Record<string, unknown>, r, links_for, rule.id));
+					}
+				} else if (dest.type === 'cliqhub') {
+					// The inbox is for people who can sign in: an invited person without an account gets nothing here.
+					const active = await active_account_ids(recipients.map((r) => r.user_id));
+					for (const r of recipients) {
+						const key = `${channel.id}|inbox|${r.user_id}`;
+						if (!r.user_id || !active.has(r.user_id) || done.has(key)) continue;
+						done.add(key);
+						const to_self = r.selector === link_recipient(type);
+						const words = describe_org_event_for_inbox(type, org_payload.data, to_self, await names());
+						// An invitee is not a member of the org yet: their "You're invited" lands in their own account org's inbox.
+						const own = to_self && is_invite_event(type) ? await account_org_id(r.user_id) : null;
+						deliveries.push(own
+							? await deliver_inbox({ ...payload, ...words, realm_id: null }, channel.id, r.user_id, rule.id, own)
+							: await deliver_inbox({ ...payload, ...words }, channel.id, r.user_id, rule.id, org_id));
+					}
+				} else {
+					const key = `${channel.id}|${dest.type}|${JSON.stringify(dest)}`;
+					if (done.has(key)) continue;
+					done.add(key);
+					const ok = await deliver_destinations([dest], payload, new Set(), { channel_id: channel.id });
+					deliveries.push({ channel_id: channel.id, rule_id: rule.id, type: dest.type, to: null, with_links: false, ok, error: ok ? null : 'delivery failed' });
+				}
+			}
+		}
+
+		if (deliveries.length === 0) return { status: 'skipped', deliveries };
+		return { status: deliveries.some((d) => d.ok) ? 'dispatched' : 'failed', deliveries };
 	}
 
 	/** @deprecated Prefer notify_realm / notify_account via family handlers. */
@@ -404,4 +510,93 @@ async function to_payload(event: SubmittedEvent): Promise<NotificationPayload> {
 		...(run_name ? { run_name } : {}),
 		...(daemon_name ? { daemon_name } : {}),
 	};
+}
+
+/** The selector whose recipient gets an event's links: the invitee for invites, the user for account emails. */
+function link_recipient(type: OrgEventType): 'invitee' | 'user' {
+	return is_invite_event(type) ? 'invitee' : 'user';
+}
+
+/** What `email_deliveries` records an org-event email against. */
+function email_subject(type: OrgEventType, payload: OrgEventPayload): { type: EmailSubjectType; id: string } {
+	const data = payload.data as unknown as Record<string, unknown>;
+	if (typeof data.invite_id === 'string') return { type: 'invite', id: data.invite_id };
+	if (typeof data.reset_id === 'string') return { type: 'reset', id: data.reset_id };
+	const user = data.user as { id: string };
+	return { type: 'user', id: user.id };
+}
+
+/** Sends one org-event email through the Email deliverer. */
+async function deliver_org_email(
+	event: SubmittedEvent,
+	payload: OrgEventPayload,
+	channel_id: string,
+	destination: Record<string, unknown>,
+	to: ResolvedRecipient,
+	links_for: (r: ResolvedRecipient) => Promise<DeliveryLinks>,
+	rule_id: string,
+): Promise<OrgDeliveryOutcome> {
+	const type = event.type as OrgEventType;
+	try {
+		const links = await links_for(to);
+		const { type: _type, ...dest_config } = destination;
+		const result = await (DELIVERER_BY_PROVIDER.email as EmailDeliverer).deliver_message({
+			event: type,
+			event_id: event.id,
+			org_id: String(event.org_id),
+			realm_id: event.realm_id,
+			channel_id,
+			occurred_at: event.occurred_at,
+			actor: payload.actor,
+			data: payload.data,
+			links,
+			to,
+			subject: email_subject(type, payload),
+			destination: dest_config,
+		});
+		return { channel_id, rule_id, type: 'email', to: to.email, with_links: Object.keys(links).length > 0, ok: result.sent, error: result.error };
+	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		log.error('org_email_failed', { event: type, event_id: event.id, channel_id, error });
+		return { channel_id, rule_id, type: 'email', to: to.email, with_links: false, ok: false, error };
+	}
+}
+
+/** Of `ids`, the users with an active, live account. */
+async function active_account_ids(ids: Array<string | null>): Promise<Set<string>> {
+	const wanted = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+	if (!wanted.length) return new Set();
+	const { User } = await import('../models/index.js');
+	const rows = await User.findAll({ where: { id: wanted, status: 'active', deleted_at: null }, attributes: ['id'], raw: true });
+	return new Set(rows.map((u) => String(u.id)));
+}
+
+/** The live account org of a user (slug = username), or null. */
+async function account_org_id(user_id: string): Promise<string | null> {
+	const { Org, User } = await import('../models/index.js');
+	const user = await User.findByPk(user_id, { attributes: ['username'], raw: true });
+	if (!user?.username) return null;
+	const org = await Org.findOne({ where: { slug: user.username, deleted_at: null }, attributes: ['id'], raw: true });
+	return org ? String(org.id) : null;
+}
+
+/** Display name of the person who accepted an invite (null when the event is not an accept). */
+async function accepted_name(data: OrgEventPayload['data']): Promise<{ accepted: string | null }> {
+	const accepted = (data as { accepted_user?: { id: string } }).accepted_user;
+	if (!accepted) return { accepted: null };
+	const { User } = await import('../models/index.js');
+	const row = await User.findByPk(accepted.id, { attributes: ['display_name', 'username'], raw: true });
+	return { accepted: row?.display_name || row?.username || null };
+}
+
+/** Writes one in-app notification for one recipient account, in the event's org. */
+async function deliver_inbox(payload: NotificationPayload, channel_id: string, user_id: string, rule_id: string, org_id: string): Promise<OrgDeliveryOutcome> {
+	try {
+		await InAppNotificationService.create_from_payload(payload, user_id, org_id);
+		return { channel_id, rule_id, type: 'cliqhub', to: user_id, with_links: false, ok: true, error: null };
+	} catch (err) {
+		const error = err instanceof Error ? err.message : String(err);
+		log.error('org_inbox_failed', { event: payload.event, channel_id, error });
+		return { channel_id, rule_id, type: 'cliqhub', to: user_id, with_links: false, ok: false, error };
+	}
 }

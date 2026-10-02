@@ -67,8 +67,9 @@ export class ScopeRepository extends BaseRepository<Scope> {
         });
     }
 
+    /** The scope holding `slug` (with type and owners, for namespace conflict messages). */
     async find_by_slug(slug: string) {
-        return Scope.findOne({ where: { slug }, attributes: ['id'], raw: true });
+        return Scope.findOne({ where: { slug }, attributes: ['id', 'slug', 'scope_type', 'org_id', 'owner_id'], raw: true });
     }
 
     async find_by_slug_with_transaction(slug: string, transaction: Transaction) {

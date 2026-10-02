@@ -12,7 +12,6 @@ import type { RealmModel } from '../models/realm.model.js';
 import type { RealmMemberModel, Realm_member_role, Realm_member_type } from '../models/realm_member.model.js';
 import { ApiTokenRepository } from '../repositories/api_token_repository.js';
 import { UserRepository } from '../repositories/user_repository.js';
-import { RealmInviteRepository } from '../repositories/realm_invite_repository.js';
 import { AgentCatalogRepository } from '../repositories/agent_catalog_repository.js';
 import { DaemonRepository } from '../repositories/daemon_repository.js';
 import { RealmRepository } from '../repositories/realm_repository.js';
@@ -28,9 +27,9 @@ import { RealmAgentSettingRepository } from '../repositories/realm_agent_setting
 import { NotificationService } from './notification.service.js';
 import { RealmDispatchKeyService } from './realm_dispatch_key.service.js';
 import { EventSubmitService } from './events_service.js';
+import { escape_like } from '../lib/search.js';
 const _api_token_repo = new ApiTokenRepository();
 const _user_repo = new UserRepository();
-const _realm_invite_repo = new RealmInviteRepository();
 const _agent_catalog_repo = new AgentCatalogRepository();
 const _daemon_repo_r = new DaemonRepository();
 const _realm_repo = new RealmRepository();
@@ -48,16 +47,6 @@ const log = get_logger('realm');
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const TOKEN_PREFIX = 'cliq_dt_';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
-
-function escape_like(input: string): string {
-    return input.replace(/[%_\\]/g, '\\$&');
-}
-
-function hash_invite_token(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
-}
 
 export interface Realm_dto {
     id: string;
@@ -544,7 +533,6 @@ export class RealmService {
             await user.save();
         }
 
-
         return {
             realm: await to_realm_dto_enriched(realm_row),
             default_realm_id: realm_row.id,
@@ -714,7 +702,8 @@ export class RealmService {
                 ...(query_clause ?? {}),
                 ...(owned_clause ?? {}),
             },
-            order: [[sort_by, sort_dir]],
+            // id breaks ties so equal values (e.g. created_by) page stably.
+            order: [[sort_by, sort_dir], ['id', 'ASC']],
             ...(limit != null ? { limit, offset } : {}),
         });
         return { realms: await to_realm_dtos(rows), total: count };
@@ -1015,6 +1004,47 @@ export class RealmService {
             actor_id: user_id,
             members_removed: members.length,
         });
+    }
+
+    /**
+     * Why an org's realms can't be removed with the org right now (null = they can):
+     * a run in progress, an active dispatch job, or a daemon still serving a realm.
+     */
+    static async org_delete_blocker(org_id: string): Promise<string | null> {
+        const realms = await _realm_repo.find_all_q({ where: { org_id, ...ALIVE }, attributes: ['id', 'slug'] });
+        for (const realm of realms) {
+            const runs = await _run_repo.find_count({ realm_id: realm.id, state: { [Op.in]: ['running', 'awaiting_input'] } } as any);
+            if (runs > 0) return `Realm ${realm.slug} has ${runs} run(s) in progress — finish or cancel them first`;
+            const jobs = await _rdq_repo.find_count({ realm_id: realm.id, status: { [Op.in]: ['queued', 'offered', 'claimed', 'running', 'dispatching'] } } as any);
+            if (jobs > 0) return `Realm ${realm.slug} has ${jobs} active dispatch job(s) — wait for them or cancel them first`;
+            const daemons = await _realm_member_repo.find_count({ realm_id: realm.id, member_type: 'daemon' } as any);
+            if (daemons > 0) return `Realm ${realm.slug} still has ${daemons} daemon(s) — remove them from the realm first`;
+        }
+        return null;
+    }
+
+    /**
+     * After an org's realms were soft-deleted and committed (soft_delete_org in
+     * namespace_removal.ts): revoke the realms' tokens, drop mesh connections
+     * and emit `realm.deleted`. Each step is best effort (logged): the realms
+     * are already gone and their members detached.
+     */
+    static async after_org_realms_removed(realms: Array<{ id: string; slug: string }>, actor_id: string): Promise<void> {
+        const token_repo = new TokenRepository();
+        for (const realm of realms) {
+            for (const [step, work] of [
+                ['tokens', () => token_repo.revoke_all_for_realm(realm.id)],
+                ['mesh', async () => { const { MeshLifecycleService } = await import('./mesh_lifecycle.service.js'); await MeshLifecycleService.on_realm_deleting(realm.id, actor_id); }],
+                ['event', () => EventSubmitService.submit({
+                    type: 'realm.deleted', realm_id: realm.id, actor_id, title: 'Realm deleted',
+                    message: `Realm '${realm.slug}' was deleted with its org`, payload: { slug: realm.slug, soft_delete: true, reason: 'org_deleted' },
+                })],
+            ] as const) {
+                try { await work(); } catch (err) {
+                    log.warn('org_realm_cleanup_failed', { realm_id: realm.id, step, error: err instanceof Error ? err.message : String(err) });
+                }
+            }
+        }
     }
 
     /** Idempotent user membership (org join / on-demand realm invites). */
@@ -1569,6 +1599,7 @@ export class RealmService {
         const pattern = `%${escape_like(q)}%`;
         const where: Record<string, unknown> = {
             suspended_at: null,
+            deleted_at: null,
             [Op.or]: [
                 { username: { [Op.iLike]: pattern } },
                 { email: { [Op.iLike]: pattern } },
@@ -1593,215 +1624,6 @@ export class RealmService {
             display_name: u.display_name,
             email: u.email,
         }));
-    }
-
-    static async create_invite(
-        realm_id: string,
-        actor_user_id: string,
-        params: { email: string; role?: Realm_member_role },
-    ): Promise<
-        | { status: 'added'; user_id: string; username: string; role: Realm_member_role }
-        | {
-            status: 'pending';
-            invite_id: string;
-            email: string;
-            role: Realm_member_role;
-            expires_at: string;
-            token: string;
-        }
-    > {
-        // Callers authorized this: invitations/create (realm admin + realms.members.manage).
-
-        const email = params.email.trim().toLowerCase();
-        if (!EMAIL_PATTERN.test(email)) {
-            throw ApiError.bad_request('Invalid email address');
-        }
-
-        const role: Realm_member_role = params.role ?? 'member';
-        const existing = await _user_repo.find_one_q({
-            where: { email },
-            attributes: ['id', 'username'],
-            raw: true,
-        });
-        if (existing) {
-            await RealmService.add_member(realm_id, actor_user_id, {
-                member_type: 'user',
-                member_id: String(existing.id),
-                role,
-            });
-            return {
-                status: 'added',
-                user_id: existing.id,
-                username: existing.username,
-                role,
-            };
-        }
-
-        const pending = await _realm_invite_repo.find_one_q({
-            where: { realm_id, email, status: 'pending' },
-            attributes: ['id'],
-            raw: true,
-        });
-        if (pending) {
-            throw ApiError.conflict('A pending invite already exists for that email');
-        }
-
-        const token = randomBytes(32).toString('hex');
-        const expires_at = new Date(Date.now() + INVITE_TTL_MS);
-        const invite = await _realm_invite_repo.create_one({
-            realm_id,
-            email,
-            invited_by: actor_user_id,
-            token_hash: hash_invite_token(token),
-            role,
-            status: 'pending',
-            expires_at,
-        });
-
-        return {
-            status: 'pending',
-            invite_id: invite.id,
-            email,
-            role,
-            expires_at: expires_at.toISOString(),
-            token,
-        };
-    }
-
-    static async list_invites(
-        realm_id: string,
-        actor_user_id: string,
-    ): Promise<Array<{
-        id: string;
-        email: string;
-        role: string;
-        invited_by: string;
-        created_at: string;
-        expires_at: string;
-    }>> {
-        await RealmService.require_admin(realm_id, actor_user_id);
-
-        const invites = await _realm_invite_repo.find_all_q({
-            where: { realm_id, status: 'pending' },
-            attributes: ['id', 'email', 'role', 'created_at', 'expires_at', 'invited_by'],
-            order: [['created_at', 'DESC']],
-            raw: true,
-        });
-
-        return invites.map((row) => ({
-            id: row.id,
-            email: row.email,
-            role: row.role,
-            invited_by: row.invited_by,
-            created_at: row.created_at instanceof Date
-                ? row.created_at.toISOString()
-                : String(row.created_at),
-            expires_at: row.expires_at instanceof Date
-                ? row.expires_at.toISOString()
-                : String(row.expires_at),
-        }));
-    }
-
-    static async revoke_invite(
-        invite_id: string,
-        actor_user_id: string,
-    ): Promise<void> {
-        const invite = await _realm_invite_repo.find_by_id(invite_id, {
-            attributes: ['id', 'realm_id', 'status'],
-            raw: true,
-        });
-        if (!invite) throw ApiError.not_found('Invite not found');
-        // Callers authorized this: invitations/revoke (realm admin + realms.members.manage).
-        if (invite.status !== 'pending') {
-            throw ApiError.conflict('Invite is not pending');
-        }
-        await _realm_invite_repo.update_where({ id: invite.id } as any, { status: 'revoked' } as any);
-    }
-
-    static async get_invite_by_token(token: string): Promise<{
-        email: string;
-        role: string;
-        realm_id: string;
-        realm_slug: string;
-        realm_name: string;
-        expires_at: string;
-    }> {
-        const invite = await RealmService._load_pending_invite(token);
-        const realm = await _realm_repo.find_by_id(invite.realm_id);
-        if (!realm) throw ApiError.not_found('Realm not found');
-
-        return {
-            email: invite.email,
-            role: invite.role,
-            realm_id: realm.id,
-            realm_slug: realm.slug,
-            realm_name: realm.name,
-            expires_at: invite.expires_at instanceof Date
-                ? invite.expires_at.toISOString()
-                : String(invite.expires_at),
-        };
-    }
-
-    /** Accept a realm invite while signed in (email must match). */
-    static async accept_invite(
-        token: string,
-        actor_user_id: string,
-        actor_email: string,
-    ): Promise<{
-        accepted: true;
-        realm_id: string;
-        realm_slug: string;
-        user_id: string;
-        role: Realm_member_role;
-    }> {
-        const invite = await RealmService._load_pending_invite(token);
-        if (actor_email.trim().toLowerCase() !== invite.email) {
-            throw ApiError.forbidden('Signed-in email does not match this invite');
-        }
-
-        const realm = await _realm_repo.find_by_id(invite.realm_id);
-        if (!realm) throw ApiError.not_found('Realm not found');
-
-        const role = invite.role as Realm_member_role;
-        await RealmService.upsert_user_member(invite.realm_id, actor_user_id, role);
-
-        await _realm_invite_repo.update_where(
-            { id: invite.id } as any,
-            {
-                status: 'accepted',
-                accepted_at: new Date(),
-                accepted_user_id: String(actor_user_id),
-            } as any,
-        );
-
-        return {
-            accepted: true,
-            realm_id: realm.id,
-            realm_slug: realm.slug,
-            user_id: String(actor_user_id),
-            role,
-        };
-    }
-
-    private static async _load_pending_invite(token: string) {
-        const trimmed = token.trim();
-        if (!trimmed) throw ApiError.bad_request('token is required');
-
-        const invite = await _realm_invite_repo.find_one_q({
-            where: { token_hash: hash_invite_token(trimmed), status: 'pending' },
-            raw: true,
-        });
-        if (!invite) throw ApiError.not_found('Invite not found');
-
-        const expires_at = invite.expires_at instanceof Date
-            ? invite.expires_at
-            : new Date(invite.expires_at);
-        if (expires_at.getTime() < Date.now()) {
-            await _realm_invite_repo.update_where({ id: invite.id } as any, { status: 'revoked' } as any);
-            throw ApiError.conflict('Invite has expired');
-        }
-
-        return invite;
     }
 
     // ─── Team coverage (realm-scoped installed teams) ──────────────────
@@ -1834,6 +1656,8 @@ export class RealmService {
             coverage_label: string;
             version: string | null;
             sample_team_id: string | null;
+            /** Catalog (`cliq.teams`) id of a published team — what `/v1/teams/install` takes; null for local teams. */
+            team_id: string | null;
             origin: 'published' | 'local';
             in_team_list: boolean;
             last_run_at: number | null;
@@ -1960,18 +1784,21 @@ export class RealmService {
             });
         }
 
-        // Bulk registry lookup — one query for all (scope, name) pairs. Used
-        // to classify origin (published vs. local) on the row.
-        let published_set = new Set<string>();
+        // Bulk catalog lookup — one query for all (scope, name) pairs against
+        // the published registry (`cliq.teams`). Classifies origin (published
+        // vs. local) and gives each published row its catalog team id, which
+        // is what `/v1/teams/install` takes — also for teams no daemon has yet.
+        const registry_id_by_key = new Map<string, string>();
         if (agg.size > 0) {
             const pairs = [...agg.values()].map((r) => ({ scope: r.scope, name: r.slug }));
-            const published_rows = await _dt_repo.find_all_q({
-                where: { [Op.or]: pairs.map((p) => ({ scope: p.scope, name: p.name })) },
-                attributes: ['scope', 'name'],
+            const registry_rows = await _team_repo.find_all_q({
+                where: { [Op.or]: pairs },
+                attributes: ['id', 'scope', 'name'],
                 raw: true,
-            }) as unknown as Array<{ scope: string; name: string }>;
-            published_set = new Set(published_rows.map((r) => `${r.scope}/${r.name}`));
+            }) as unknown as Array<{ id: string; scope: string; name: string }>;
+            for (const r of registry_rows) registry_id_by_key.set(`${r.scope}/${r.name}`, r.id);
         }
+        const published_set = new Set(registry_id_by_key.keys());
 
         // Last run timestamp per team — MAX(started_at) grouped by team_id.
         const last_run_map = new Map<string, number>();
@@ -2005,23 +1832,12 @@ export class RealmService {
         try {
             const org_id = realm?.org_id;
             if (org_id && published_set.size > 0) {
-                // Batch-fetch registry team ids for all published teams.
-                const registry_rows = await _dt_repo.find_all_q({
-                    where: {
-                        [Op.or]: [...published_set].map((k) => {
-                            const [scope, name] = k.split('/', 2);
-                            return { scope, name };
-                        }),
-                    },
-                    attributes: ['id', 'scope', 'name'],
-                    raw: true,
-                }) as unknown as Array<{ id: string; scope: string; name: string }>;
-
+                // Catalog ids of the published teams (looked up above).
                 const registry_id_to_key = new Map<string, string>();
                 const registry_ids: string[] = [];
-                for (const r of registry_rows) {
-                    registry_id_to_key.set(r.id, `${r.scope}/${r.name}`);
-                    registry_ids.push(r.id);
+                for (const [key, id] of registry_id_by_key) {
+                    registry_id_to_key.set(id, key);
+                    registry_ids.push(id);
                 }
 
                 // Fetch all versions for these teams in one query.
@@ -2104,6 +1920,7 @@ export class RealmService {
                 coverage_label,
                 version: r.version,
                 sample_team_id: r.sample_team_id,
+                team_id: registry_id_by_key.get(key) ?? null,
                 origin,
                 in_team_list: team_list_set.has(key),
                 last_run_at,
@@ -2135,12 +1952,13 @@ export class RealmService {
         // Sort.
         const dir = params.sort_dir === 'desc' ? -1 : 1;
         const sort_by = params.sort_by ?? 'team';
+        // Equal origin / coverage fall back to the label, so pages don't depend on input order.
         rows.sort((a, b) => {
-            if (sort_by === 'origin') return a.origin.localeCompare(b.origin) * dir;
+            if (sort_by === 'origin') return a.origin.localeCompare(b.origin) * dir || a.label.localeCompare(b.label);
             if (sort_by === 'coverage') {
                 const sa = a.online_daemon_count > 0 ? a.installed_count / a.online_daemon_count : -1;
                 const sb = b.online_daemon_count > 0 ? b.installed_count / b.online_daemon_count : -1;
-                return (sa - sb) * dir;
+                return (sa - sb) * dir || a.label.localeCompare(b.label);
             }
             return a.label.localeCompare(b.label) * dir;
         });

@@ -29,7 +29,6 @@ function make_deps() {
         user_repo: {
             find_profile_by_id: vi.fn().mockResolvedValue(null),
             find_by_username: vi.fn(), find_by_email: vi.fn(),
-            find_by_username_or_email: vi.fn(),
             create: vi.fn(), find_by_id_with_transaction: vi.fn(),
         },
         token_repo: {

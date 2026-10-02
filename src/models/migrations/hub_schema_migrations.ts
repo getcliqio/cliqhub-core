@@ -6,6 +6,7 @@ import { QueryTypes, type Sequelize } from 'sequelize';
 import { migrate_hub_integer_pks_to_uuid } from './migrate_hub_uuid_pks.js';
 import { migrate_remaining_integer_pks_to_uuid } from './migrate_remaining_int_pks.js';
 import { migrate_hub_remint_legacy_uuids } from './migrate_hub_remint_uuids.js';
+import { migrate_identity_lifecycle } from './migrate_identity_lifecycle.js';
 const REGISTRY_TABLES = [
     'users',
     'orgs',
@@ -426,5 +427,11 @@ export async function migrate_hub_schema(sequelize: Sequelize): Promise<void> {
             END IF;
         END $$
     `);
+    // Audit history outlives the admin who wrote it: the old association made
+    // audit_log.admin_id cascade on user delete. Drop it (idempotent).
+    await sequelize.query('ALTER TABLE IF EXISTS cliq.audit_log DROP CONSTRAINT IF EXISTS audit_log_admin_id_fkey');
 
+    // User / org status and soft delete, pending memberships, tracked invite and
+    // password links, system notification rows, email delivery log.
+    await migrate_identity_lifecycle(sequelize);
 }

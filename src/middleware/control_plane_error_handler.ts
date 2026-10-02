@@ -28,7 +28,7 @@ export function core_api_error_handler(
     // BaseController.parse_body throws errors/ApiError ({ code, status }).
     if (err instanceof BaseApiError) {
         log_request_error(req, err.status, err);
-        res.status(err.status).json({ ok: false, error: err.message, code: err.code });
+        res.status(err.status).json({ ok: false, error: err.message, code: err.code, ...(err.details ? { details: err.details } : {}) });
         return;
     }
 

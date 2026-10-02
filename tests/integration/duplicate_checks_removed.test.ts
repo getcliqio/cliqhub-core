@@ -11,6 +11,8 @@ import { randomUUID } from 'node:crypto';
 import { postgres_reachable } from '../migrated_platform/helpers/control_plane_store.js';
 import { open_live_hub_app, close_live_hub_app } from '../migrated_platform/helpers/live_hub_app.js';
 import { seed_authz, type Seed } from '../helpers/authz_seed.js';
+import { accept_invite_url } from '../helpers/invite_links.js';
+import { use_test_link_env } from '../helpers/link_env.js';
 import { Org, OrgMember } from '../../src/models/index.js';
 
 const has_postgres = await postgres_reachable();
@@ -24,7 +26,10 @@ describe.skipIf(!has_postgres)('duplicate handler checks removed (Core API 5)', 
         return token ? r.set('Authorization', `Bearer ${token}`) : r;
     };
 
+    let restore_link_env: () => void;
+
     beforeAll(async () => {
+        restore_link_env = use_test_link_env();
         const live = await open_live_hub_app();
         app = live.app;
         s = await seed_authz(app);
@@ -35,6 +40,7 @@ describe.skipIf(!has_postgres)('duplicate handler checks removed (Core API 5)', 
         await Org.destroy({ where: { id: orgs } }).catch(() => {});
         await s?.cleanup();
         await close_live_hub_app();
+        restore_link_env?.();
     }, 300_000);
 
     it('a realm operator can add a team to the realm (the service used to demand realm admin)', async () => {
@@ -53,20 +59,23 @@ describe.skipIf(!has_postgres)('duplicate handler checks removed (Core API 5)', 
     });
 
     it('orgs/new is for site admins only', async () => {
-        expect((await post('/v1/orgs/new', s.token.olivia, { slug: `azn${s.stamp}`, admin_username: 'x' })).status).toBe(403);
+        expect((await post('/v1/orgs/new', s.token.olivia, { slug: `azn${s.stamp}`, owner: { email: `x${s.stamp}@authz.test` } })).status).toBe(403);
     });
 
     it('an org owner can delete their org; a personal org cannot be deleted by its owner', async () => {
         const owner = await s.signup('odel');
         const slug = `azdel${s.stamp}`.slice(0, 30);
-        const created = await post('/v1/orgs/new', s.token.sam, { slug, display_name: 'Del', admin_username: owner.username });
+        const created = await post('/v1/orgs/new', s.token.sam, { slug, display_name: 'Del', owner: { user_id: owner.id } });
         expect(created.status).toBe(200);
+        // Until the owner accepts, they hold no rights in the org.
+        expect((await post('/v1/orgs/delete', owner.token, { org_id: created.body.data.org.id })).status).toBe(404);
+        await accept_invite_url(app, owner.token, created.body.data.owner_invite.invite_url);
         const org = await Org.findOne({ where: { slug }, raw: true }) as unknown as { id: string };
         orgs.push(org.id);
 
         expect((await post('/v1/orgs/delete', s.token.adam, { org_id: org.id })).status).toBe(404);
         expect((await post('/v1/orgs/delete', owner.token, { org_id: org.id })).status).toBe(200);
-        expect(await Org.findOne({ where: { id: org.id } })).toBeNull();
+        expect(await Org.findOne({ where: { id: org.id, deleted_at: null } })).toBeNull();
 
         // Personal org: the policy already refuses (no org.delete there); the service refuses too (409).
         const personal = await post('/v1/orgs/delete', owner.token, { org_id: owner.org_id });

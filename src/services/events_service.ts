@@ -62,7 +62,8 @@ export interface SubmittedEvent {
 	notifications: NotificationDispatchStatus;
 }
 
-function to_dto(
+/** Wire DTO of a stored event row (`payload_json` parsed, severity defaulted). */
+export function to_dto(
 	row: HubEvent,
 	notifications: NotificationDispatchStatus = 'deferred',
 ): SubmittedEvent {

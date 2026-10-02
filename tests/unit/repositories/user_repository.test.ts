@@ -21,8 +21,9 @@ describe('UserRepository', () => {
             suspended_at: null, suspended_reason: null,
             created_at: '2026-01-01T00:00:00.000Z',
         };
-        vi.mocked(User.findByPk).mockResolvedValueOnce(row as any);
+        vi.mocked(User.findOne).mockResolvedValueOnce(row as any);
         const result = await repo.find_profile_by_id(hub_legacy_uuid(1));
+        expect(User.findOne).toHaveBeenCalledWith(expect.objectContaining({ where: { id: hub_legacy_uuid(1), deleted_at: null } }));
         expect(result).toEqual({
             id: hub_legacy_uuid(1), username: 'alice', display_name: 'Alice',
             email: 'alice@example.com', role: 'user',
@@ -32,14 +33,14 @@ describe('UserRepository', () => {
         });
     });
 
-    it('find_profile_by_id returns null when not found', async () => {
-        vi.mocked(User.findByPk).mockResolvedValueOnce(null);
+    it('find_profile_by_id returns null when not found (or deleted)', async () => {
+        vi.mocked(User.findOne).mockResolvedValueOnce(null);
         const result = await repo.find_profile_by_id(hub_legacy_uuid(999));
         expect(result).toBeNull();
     });
 
     it('find_by_username returns login row', async () => {
-        const row = { id: hub_legacy_uuid(1), username: 'alice', password_hash: 'hash', suspended_at: null };
+        const row = { id: hub_legacy_uuid(1), username: 'alice', password_hash: 'hash', role: 'user', suspended_at: null, status: 'active', deleted_at: null };
         vi.mocked(User.findOne).mockResolvedValueOnce(row as any);
         const result = await repo.find_by_username('alice');
         expect(result).toEqual(row);
@@ -49,12 +50,6 @@ describe('UserRepository', () => {
         vi.mocked(User.findOne).mockResolvedValueOnce(null);
         const result = await repo.find_by_username('ghost');
         expect(result).toBeNull();
-    });
-
-    it('find_by_username_or_email finds by username', async () => {
-        vi.mocked(User.findOne).mockResolvedValueOnce({ id: hub_legacy_uuid(1) } as any);
-        const result = await repo.find_by_username_or_email('alice', 'other@test.com');
-        expect(result).toEqual({ id: hub_legacy_uuid(1) });
     });
 
     it('find_by_email finds by email', async () => {

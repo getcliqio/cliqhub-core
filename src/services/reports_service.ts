@@ -1,6 +1,7 @@
 import { ApiError } from '../errors/api_error.js';
 import { get_logger } from '../lib/log.js';
-import type { AuditRepository } from '../repositories/audit_repository.js';
+import type { AuditRepository, AuditSortKey } from '../repositories/audit_repository.js';
+import type { SortDir } from '../lib/list_sort.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 
 const log = get_logger('svc.reports');
@@ -14,6 +15,7 @@ export class ReportsService {
         action?: string; target_type?: string; admin_id?: string;
         target_id?: string; since_ms?: number; until_ms?: number;
         limit?: number; offset?: number;
+        sort_by?: AuditSortKey; sort_dir?: SortDir;
     }) {
         log.debug('audit', { user_id: auth.user?.id });
         // Route policy: site admin.
@@ -32,7 +34,7 @@ export class ReportsService {
         };
 
         const [entries, total] = await Promise.all([
-            this._audit_repo.list_paginated(filters, limit, offset),
+            this._audit_repo.list_paginated(filters, limit, offset, { sort_by: params.sort_by, sort_dir: params.sort_dir }),
             this._audit_repo.count_filtered(filters),
         ]);
 

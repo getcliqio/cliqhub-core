@@ -16,8 +16,16 @@ import { readFileSync } from 'node:fs';
  *       reports/audit `since_ms` / `until_ms` / `target_id`; agents.update_settings audited.
  *   4 — workspaces/get, get_by_id, remove enforce realm membership (site admins see
  *       all; daemon tokens their realm; users the daemons in their realms).
+ *   5 — teams/get realm mode sends each row's `scope` and, for published teams, the
+ *       catalog `id`; teams/install accepts a catalog team UUID; site-admin
+ *       `listed` / `scope` listing returns rows with `version_count` / `author_id`.
+ *   6 — list sorting: `sort_by` / `sort_dir` on orgs/get (site-admin list), users/get
+ *       (hub list), daemons/get, teams/get catalog + site-admin modes (keys from the
+ *       wrong mode are 400), orgs/get_scopes, workspaces/get, reports/audit; every
+ *       sorted list (realms/get and runs/get included) breaks ties by id ascending.
+ *       Older Cores drop these fields silently, so clients gate on this version.
  */
-export const CORE_API_VERSION = 4;
+export const CORE_API_VERSION = 6;
 
 /** package.json version (src/lib and dist/lib both sit two levels below the repo root). */
 function read_package_version(): string | null {

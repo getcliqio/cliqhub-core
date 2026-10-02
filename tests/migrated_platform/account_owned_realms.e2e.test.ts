@@ -26,6 +26,8 @@ import {
     RealmDispatchKey,
 } from '../../src/models/index.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
+import { accept_invite_url, invite_and_accept } from '../helpers/invite_links.js';
+import { use_test_link_env } from '../helpers/link_env.js';
 
 const has_postgres = await postgres_reachable();
 const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -165,7 +167,10 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
         };
     }
 
+    let restore_link_env: () => void;
+
     beforeAll(async () => {
+        restore_link_env = use_test_link_env();
         process.env.CLIQ_BFF_LOG_LEVEL = 'error';
         const live = await open_live_hub_app();
         app = live.app;
@@ -177,6 +182,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
     afterAll(async () => {
         await cleanup_usernames(tracked);
         await close_live_hub_app();
+        restore_link_env?.();
     }, 300_000);
 
     it('login, scopes expose personal default realm', async () => {
@@ -389,7 +395,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
         expect(carol_invite.status).toBe(403);
     });
 
-    it('org create / add_member ensures {org}.default and grants members', async () => {
+    it('org create → owner accepts → {org}.default; an invited member who accepts sees it', async () => {
         await User.update({ role: 'admin' }, { where: { id: alice.user_id } });
 
         const org_slug = `orge2e${stamp}`.slice(0, 24);
@@ -400,10 +406,13 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
             .send({
                 slug: org_slug,
                 display_name: 'E2E Org',
-                admin_username: alice.username,
+                owner: { user_id: String(alice.user_id) },
             });
         expect(created.status).toBe(200);
-        const org_id = created.body.data.id as number;
+        const org_id = created.body.data.org.id as string;
+        // The default realm comes with the owner's accept.
+        expect(await Realm.count({ where: { org_id, slug: 'default' } })).toBe(0);
+        await accept_invite_url(app, alice.token, created.body.data.owner_invite.invite_url);
 
         const org_default = await Realm.findOne({
             where: { org_id, slug: 'default' },
@@ -412,11 +421,7 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
         expect(org_default!.owner_user_id).toBe(String(alice.user_id));
         expect(org_default!.created_by).toBe(String(alice.user_id));
 
-        const add = await request(app)
-            .post('/internal/orgs/add_member')
-            .set('Authorization', bearer(alice.token))
-            .send({ org_id, username: bob.username });
-        expect(add.status).toBe(200);
+        await invite_and_accept(app, alice.token, bob.token, { org_id, email: bob.email });
 
         const bob_realms = await request(app)
             .post('/v1/realms/get')

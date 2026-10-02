@@ -5,14 +5,15 @@
  * Also copies `account_agent_settings` into `org_agent_settings`
  * keyed by the user's personal org, and backfills `org_id` on
  * notification channels and rules that are currently "global"
- * (realm_id IS NULL).
+ * (realm_id IS NULL), and removes owner-only permissions from every role
+ * other than the owner role.
  *
  * Fully idempotent — safe to run on every boot.
  */
 
 import { Op, QueryTypes, type Transaction } from 'sequelize';
 import { Org, OrgMember, OrgRole } from '../../models/index.js';
-import { DEFAULT_ROLES } from '../../auth/permissions.js';
+import { DEFAULT_ROLES, OWNER_ONLY_PERMISSIONS } from '../../auth/permissions.js';
 import { get_logger } from '../../lib/log.js';
 
 const log = get_logger('migrate_org_roles');
@@ -23,6 +24,7 @@ export interface MigrateOrgRolesResult {
     agent_settings_copied: number;
     channels_backfilled: number;
     rules_backfilled: number;
+    owner_only_permissions_removed: number;
 }
 
 /**
@@ -36,6 +38,7 @@ export async function migrate_org_roles(): Promise<MigrateOrgRolesResult> {
         agent_settings_copied: 0,
         channels_backfilled: 0,
         rules_backfilled: 0,
+        owner_only_permissions_removed: 0,
     };
 
     const orgs = await Org.findAll({ attributes: ['id'] });
@@ -49,6 +52,7 @@ export async function migrate_org_roles(): Promise<MigrateOrgRolesResult> {
     result.agent_settings_copied = await copy_account_agent_settings_to_org();
     result.channels_backfilled = await backfill_channel_org_ids();
     result.rules_backfilled = await backfill_rule_org_ids();
+    result.owner_only_permissions_removed = await strip_owner_only_permissions();
 
     return result;
 }
@@ -229,4 +233,27 @@ async function backfill_rule_org_ids(): Promise<number> {
     `, { type: QueryTypes.UPDATE });
 
     return Array.isArray(meta) ? (meta as unknown[]).length : (meta as { rowCount?: number }).rowCount ?? 0;
+}
+
+/**
+ * Removes owner-only permissions ({@link OWNER_ONLY_PERMISSIONS}) from every
+ * role that is not the system owner role, so a permission that becomes
+ * owner-only is taken away from existing admin and custom roles.
+ *
+ * @returns The number of roles changed.
+ */
+export async function strip_owner_only_permissions(): Promise<number> {
+    const owner_only = [...OWNER_ONLY_PERMISSIONS] as string[];
+    const roles = await OrgRole.findAll({
+        where: { is_system: false, permissions: { [Op.overlap]: owner_only } },
+        attributes: ['id', 'permissions'],
+    });
+    for (const role of roles) {
+        await OrgRole.update(
+            { permissions: role.permissions.filter((p) => !owner_only.includes(p)) },
+            { where: { id: role.id } },
+        );
+    }
+    if (roles.length > 0) log.info('owner_only_permissions_removed', { roles: roles.length });
+    return roles.length;
 }

@@ -7,10 +7,9 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Sequelize } from 'sequelize';
+import { database_url } from '../migrated_platform/helpers/control_plane_store.js';
 
-const DATABASE_URL =
-    process.env.DATABASE_URL
-    ?? 'postgresql://cliqhub:cliqhub@localhost:5432/cliqhub';
+const DATABASE_URL = database_url;
 
 /** Local Hub DBs re-run full schema migrations on every init (~2–3 min). */
 const INIT_TIMEOUT_MS = 300_000;
@@ -68,7 +67,7 @@ describe.skipIf(!ready)('control_plane_store (postgres)', () => {
         const [scope_rows] = await sequelize.query(
             `SELECT slug FROM cliq.scopes WHERE slug IN ('cliq', 'measureone')`,
         );
-        expect(scope_rows.length).toBe(2);
+        expect(scope_rows).toEqual([{ slug: 'cliq' }]);
 
         const [setting_rows] = await sequelize.query(
             `SELECT key FROM cliq.daemon_config

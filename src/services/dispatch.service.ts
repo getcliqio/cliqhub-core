@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { Op, QueryTypes } from 'sequelize';
 
 import { get_sequelize } from '../lib/sequelize.js';
+import { daemon_failure_message, daemon_reply_data } from '../lib/daemon_reply.js';
 import { WorkspaceRepository } from '../repositories/workspace_repository.js';
 import { RunRepository } from '../repositories/run_repository.js';
 import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
@@ -39,6 +40,9 @@ import { command_outbox_enqueue } from './command_outbox.service.js';
 
 const _ws_repo = new WorkspaceRepository();
 const _run_repo = new RunRepository();
+/** A catalog team id, as `/v1/teams/install` sends it. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const _dt_repo = new DaemonTeamRepository();
 const _daemon_repo = new DaemonRepository();
 const _realm_member_repo = new RealmMemberRepository();
@@ -1237,21 +1241,22 @@ export class DispatchService {
     }
 
     /**
-     * Query a daemon endpoint and return its response directly.
-     * Used to proxy live data (workspaces, teams) from the daemon.
-     * Wraps the payload in a MessageEnvelope as required by the daemon protocol.
+     * Query a daemon route synchronously and return the reply's `data`.
+     * Used to proxy live data (workspaces, teams) from the daemon; the
+     * route gets its plain input.
      *
      * NOTE: This is intentionally kept as inline POST (not outboxed) because
      * the caller needs a synchronous response. A future iteration will convert
      * to async via command_outbox with ack payloads (design task 4.15).
+     *
+     * @throws ApiError 503 with the daemon's message when it answers with a failure.
      */
-    static async query_daemon(
+    static async query_daemon<T = Record<string, unknown>>(
         daemon_id: string,
         path: string,
-        payload: Record<string, unknown>,
+        input: Record<string, unknown>,
         user_id: string,
-        message_type: string = 'workspace_list',
-    ): Promise<unknown> {
+    ): Promise<T> {
         if (!user_id) throw ApiError.forbidden('Not authenticated');
 
         const daemon = await _daemon_repo.find_by_id(daemon_id);
@@ -1259,23 +1264,13 @@ export class DispatchService {
 
         await AccessService.assert_can_observe_daemon(user_id, daemon.id);
 
-        const envelope = {
-            version: 1,
-            id: randomUUID(),
-            timestamp: Date.now(),
-            run_id: null,
-            instance_id: null,
-            type: message_type,
-            payload,
-        };
-
-        const resp = await DispatchService._post_to_daemon(daemon, path, envelope);
-        if (resp.status < 200 || resp.status >= 300) {
-            const msg = DispatchService._extract_error_message(resp.body);
+        const resp = await DispatchService._post_to_daemon(daemon, path, input);
+        const data = daemon_reply_data<T>(resp.body);
+        if (resp.status < 200 || resp.status >= 300 || data === undefined) {
+            const msg = daemon_failure_message(resp.status, resp.body, JSON.stringify(resp.body ?? ''));
             throw ApiError.service_unavailable(`Daemon query failed: ${msg}`);
         }
-
-        return resp.body;
+        return data;
     }
 
     /** Dispatch team uninstall from a daemon. */
@@ -1294,37 +1289,6 @@ export class DispatchService {
 
         log.info(`dispatched uninstall @${input.scope}/${input.slug} from daemon ${daemon.id}`);
         return { dispatched: true };
-    }
-
-    /**
-     * Admin proxy — POST an arbitrary control body to a specific
-     * daemon's `public_url`, gated by "can this user observe this
-     * daemon" and returning the raw `{ status, body }` so the
-     * calling controller can translate the failure surface.
-     *
-     * Used by the daemon outbox management routes (retry / purge /
-     * inspect / status). The daemon-side routes read `req.body`
-     * directly, so unlike `query_daemon()` we DO NOT wrap the body
-     * in an SDK envelope — pass the raw admin payload as-is and it
-     * arrives as `req.body` on the daemon side (with a `tx_id`
-     * merged in automatically for idempotency).
-     *
-     * Sync-mode daemons transparently receive the call through the
-     * relay — no branching needed here.
-     */
-    static async admin_call_to_daemon(
-        user_id: string,
-        daemon_id: string,
-        path: string,
-        body: Record<string, unknown>,
-    ): Promise<{ status: number; body: unknown; tx_id: string }> {
-        if (!user_id) throw ApiError.forbidden('Not authenticated');
-
-        const daemon = await _daemon_repo.find_by_id(daemon_id);
-        if (!daemon) throw ApiError.not_found(`Daemon '${daemon_id}' not found`);
-
-        await AccessService.assert_can_observe_daemon(user_id, daemon.id);
-        return DispatchService._post_to_daemon(daemon, path, body);
     }
 
     /**
@@ -1403,23 +1367,6 @@ export class DispatchService {
             aud: daemon.id,
             action: 'access',
         });
-    }
-
-    /** Extract a human-readable error message from a daemon response body. */
-    private static _extract_error_message(body: unknown): string {
-        if (!body || typeof body !== 'object') return String(body ?? 'unknown error');
-        const obj = body as Record<string, unknown>;
-        if (obj.payload && typeof obj.payload === 'object') {
-            const payload = obj.payload as Record<string, unknown>;
-            if (typeof payload.message === 'string') return payload.message;
-        }
-        if (obj.error && typeof obj.error === 'object') {
-            const err = obj.error as Record<string, unknown>;
-            if (typeof err.message === 'string') return err.message;
-        }
-        if (typeof obj.error === 'string') return obj.error;
-        if (typeof obj.message === 'string') return obj.message;
-        return JSON.stringify(body).slice(0, 200);
     }
 
     /**
@@ -1901,8 +1848,10 @@ export class DispatchService {
             hub_team = await _team_repo.find_one({ scope: scope_slug, name } as any);
         }
 
-        if (!hub_team && /^\d+$/.test(team_id)) {
-            hub_team = await _team_repo.find_by_id(String(team_id));
+        // Catalog team id (UUID). Anything else (e.g. a daemon_teams id that
+        // is not in the catalog) falls through to the daemon-team path.
+        if (!hub_team && UUID_RE.test(team_id)) {
+            hub_team = await _team_repo.find_by_id(team_id);
         }
 
         if (!hub_team) return null;
@@ -2024,8 +1973,8 @@ export class DispatchService {
 
     /**
      * Push updated agent settings to all online daemons in a realm.
-     * Each key is written via the daemon's `/v1/settings/set` Message
-     * envelope (daemon-scoped `agents.<name>.<key>`). `/v1/settings/pull`
+     * Each key is written with the daemon's `/v1/settings/set`
+     * (`{ workspace_dir: null, key, value }`, daemon-scoped `agents.<name>.<key>`). `/v1/settings/pull`
      * is a different op (daemon pulls org defaults from Hub) and must
      * not be used for push.
      */
@@ -2043,17 +1992,9 @@ export class DispatchService {
                 const setting_key = `agents.${input.agent_name}.${key}`;
                 try {
                     await command_outbox_enqueue(daemon.id, '/v1/settings/set', {
-                        version: 1,
-                        id: randomUUID(),
-                        timestamp: Date.now(),
-                        run_id: null,
-                        instance_id: null,
-                        type: 'settings_set',
-                        payload: {
-                            workspace_dir: null,
-                            key: setting_key,
-                            value,
-                        },
+                        workspace_dir: null,
+                        key: setting_key,
+                        value,
                     });
                 } catch {
                     log.warn(`failed to enqueue settings push ${setting_key} to daemon ${daemon.id}`);

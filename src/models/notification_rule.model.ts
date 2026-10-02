@@ -6,6 +6,10 @@
  *   Global:         realm_id IS NULL, team_slug IS NULL
  *   Realm:          realm_id set,     team_slug IS NULL
  *   Team-in-realm:  realm_id set,     team_slug set
+ *
+ * `recipients` (org rules) names who a delivery goes to, resolved per event
+ * by notifications/recipients.ts; null means the channel's own destinations.
+ * Seeded defaults carry a `system_key`; locked ones cannot be changed.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -24,6 +28,14 @@ export class NotificationRule extends BaseModel {
     declare priority: number;
     declare created_at: number;
     declare updated_at: number;
+    /** Recipient selectors (`invitee`, `org_owners`, `inviter`, `user`, or user ids); null = channel destinations. */
+    declare recipients: string[] | null;
+    /** Set on seeded default rules (e.g. `invite.sent.invitee`). */
+    declare system_key: string | null;
+    /** A locked rule cannot be changed or removed (409 `locked`). */
+    declare locked: boolean;
+    /** Why the rule is locked, shown next to the lock. */
+    declare lock_reason: string | null;
 
     static register(sequelize: Sequelize): void {
         NotificationRule.init({
@@ -36,6 +48,10 @@ export class NotificationRule extends BaseModel {
             priority: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
             updated_at: { type: DataTypes.BIGINT, allowNull: false },
+            recipients: { type: DataTypes.JSONB, allowNull: true },
+            system_key: { type: DataTypes.TEXT, allowNull: true },
+            locked: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+            lock_reason: { type: DataTypes.TEXT, allowNull: true },
         }, {
             sequelize,
             schema: 'cliq',

@@ -10,6 +10,7 @@ import { list_routes } from '../../../src/auth/route_policy/registry.js';
 import { ROUTE_POLICY } from '../../../src/auth/route_policy/table.js';
 import { check_route_policies } from '../../../src/middleware/enforce_route_policy.js';
 import type { Container } from '../../../src/container.js';
+import type { Policy } from '../../../src/auth/route_policy/policy.js';
 
 /** Any controller, any method: routes only need handler functions to mount. */
 function fake_container(): Container {
@@ -42,15 +43,20 @@ describe('route policy coverage', () => {
     });
 
     it('public routes are exactly these (change on purpose)', () => {
+        const open = (p: Policy) => p.kind === 'public' || p.kind === 'bff_only' || p.kind === 'a2a_dispatch';
         const pub = Object.entries(ROUTE_POLICY)
-            .filter(([, p]) => p.kind === 'public' || p.kind === 'bff_only' || p.kind === 'a2a_dispatch')
-            .map(([k, p]) => `${p.kind} ${k}`).sort();
+            .filter(([, p]) => open(p) || (p.kind === 'by_body' && (open(p.when_present) || open(p.otherwise))))
+            .map(([k, p]) => (p.kind === 'by_body'
+                ? `by_body(${p.field} ? ${p.when_present.kind} : ${p.otherwise.kind}) ${k}`
+                : `${p.kind} ${k}`)).sort();
         expect(pub).toMatchInlineSnapshot(`
           [
             "a2a_dispatch POST /a2a/o/:org/r/:slug/send",
             "bff_only POST /internal/auth/authenticate_user",
             "bff_only POST /internal/auth/revoke_session_token",
             "bff_only POST /internal/auth/signup",
+            "by_body(body.email ? public : site_admin) POST /internal/users/reset_password",
+            "by_body(body.reset_token ? public : signed_in) POST /internal/users/change_password",
             "public GET /a2a/o/:org/r/:slug/.well-known/agent-card.json",
             "public GET /v1/health",
             "public POST /v1/integrations/jira/disconnect_workspace",

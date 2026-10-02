@@ -108,7 +108,7 @@ describe('POST /internal/reports/audit', () => {
         expect(res.body.data.entries).toHaveLength(1);
         expect(audit_repo.list_paginated).toHaveBeenCalledWith(
             expect.objectContaining({ action: 'scope.create' }),
-            50, 0,
+            50, 0, { sort_by: undefined, sort_dir: undefined },
         );
     });
 
@@ -124,7 +124,7 @@ describe('POST /internal/reports/audit', () => {
         expect(res.status).toBe(200);
         expect(audit_repo.list_paginated).toHaveBeenCalledWith(
             expect.objectContaining({ target_type: 'scope', admin_id: hub_legacy_uuid(1) }),
-            50, 0,
+            50, 0, { sort_by: undefined, sort_dir: undefined },
         );
     });
 
@@ -141,7 +141,7 @@ describe('POST /internal/reports/audit', () => {
         expect(res.body.data.limit).toBe(10);
         expect(res.body.data.offset).toBe(20);
         expect(audit_repo.list_paginated).toHaveBeenCalledWith(
-            expect.any(Object), 10, 20,
+            expect.any(Object), 10, 20, { sort_by: undefined, sort_dir: undefined },
         );
     });
 

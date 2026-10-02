@@ -1,12 +1,13 @@
 /**
- * Invitations routes — create, look up, revoke, and accept org/team invitations.
+ * Invitations routes — send (and send again), list, look up, revoke, and the
+ * public preview and accept / decline of org, owner and realm invites.
  *
  * POST   /v1/invitations/create
  * POST   /v1/invitations/get
  * POST   /v1/invitations/get_by_id
  * POST   /v1/invitations/revoke
- * POST   /v1/invitations/get_by_token
- * POST   /v1/invitations/accept
+ * POST   /v1/invitations/get_by_token   (public)
+ * POST   /v1/invitations/accept         (public)
  */
 import type { Router } from 'express';
 import type { Container } from '../../container.js';

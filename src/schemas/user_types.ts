@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SortDirField, sort_by_field } from '../lib/list_sort.js';
 
 export const users_get_schema = z.object({
     org_id: z.string().uuid().optional(),
@@ -17,6 +18,12 @@ export const users_get_schema = z.object({
     suspended: z.boolean().optional(),
     limit: z.number().int().min(1).max(100).optional(),
     offset: z.number().int().min(0).optional(),
+    /** Site-admin hub list only (400 with org_id / realm_id). */
+    sort_by: sort_by_field(['username', 'role', 'created_at', 'suspended_at'],
+        'exact username match first when searching, then newest first; site-admin hub list only'),
+    sort_dir: SortDirField,
+    /** Site-admin hub list only: also list soft-deleted users (status `deleted`). */
+    include_deleted: z.boolean().optional(),
 });
 
 export const users_get_by_id_schema = z.object({
@@ -28,12 +35,14 @@ export const users_get_by_id_schema = z.object({
     include_preferences: z.boolean().optional().default(false),
 });
 
+/** `users/new`: the person gets a "Set your password" email; no password here. */
 export const users_new_schema = z.object({
     username: z.string().min(1, 'username is required'),
     email: z.string().email('Invalid email address'),
-    password: z.string().min(8, 'Password must be at least 8 characters'),
     display_name: z.string().optional(),
     role: z.enum(['user', 'admin']).optional(),
+    /** Restore the deleted user that holds the username or email (`409 deleted`) instead of refusing. */
+    reactivate: z.boolean().optional(),
 });
 
 export const users_update_schema = z.object({
@@ -66,10 +75,15 @@ export const users_unsuspend_schema = z.object({
     user_id: z.string().uuid(),
 });
 
+/** `users/reset_password` as a site admin: email the user a reset link. */
 export const users_reset_password_schema = z.object({
     user_id: z.string().uuid(),
-    new_password: z.string().min(8, 'Password must be at least 8 characters'),
-});
+}).strict();
+
+/** `users/reset_password` signed out ("Forgot password"): the body carries only the email. */
+export const users_forgot_password_schema = z.object({
+    email: z.string().trim().toLowerCase().email('Invalid email address'),
+}).strict();
 
 export const users_set_role_schema = z.object({
     user_id: z.string().uuid(),
@@ -83,10 +97,17 @@ export const users_update_role_schema = z.object({
     role_id: z.string().uuid(),
 });
 
+/** `users/change_password` signed in: prove the current password. */
 export const users_change_password_schema = z.object({
     current_password: z.string().min(1, 'current_password is required'),
     new_password: z.string().min(1, 'new_password is required'),
 });
+
+/** `users/change_password` from an emailed set-password / reset link: the token is the credential. */
+export const users_change_password_with_token_schema = z.object({
+    reset_token: z.string().min(1, 'reset_token is required'),
+    new_password: z.string().min(1, 'new_password is required'),
+}).strict();
 
 
 /**
@@ -134,9 +155,13 @@ export type UserVo = {
 export type UserLoginRowVo = {
     id: string;
     username: string;
+    /** NULL in the database for an invited user who never set a password: refuse sign-in before verifying. */
     password_hash: string;
     role: 'user' | 'admin';
     suspended_at: string | null;
+    status: 'invited' | 'active' | 'suspended';
+    /** ISO timestamp when the account was soft-deleted. */
+    deleted_at: string | null;
 };
 
 export type UserDto = {

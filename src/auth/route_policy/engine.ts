@@ -241,6 +241,9 @@ export async function decide(policy: Policy, req: RequestLike, store: AccessStor
     const signed = Boolean(auth?.user);
 
     switch (policy.kind) {
+        case 'by_body':
+            return decide(read_field(req, policy.field) !== undefined ? policy.when_present : policy.otherwise, req, store, opts);
+
         case 'public':
         case 'bff_only':
         case 'a2a_dispatch':

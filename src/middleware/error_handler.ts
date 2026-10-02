@@ -12,7 +12,7 @@ export function error_handler(
         log_request_error(req, err.status, err);
         res.status(err.status).json({
             ok: false,
-            error: { code: err.code, message: err.message },
+            error: { code: err.code, message: err.message, ...(err.details ? { details: err.details } : {}) },
         });
         return;
     }

@@ -37,11 +37,17 @@ export function to_team_list_item_dto(
         install_count: number;
         listed?: number;
         visibility?: string;
+        /** Site-admin listing only. */
+        version_count?: number;
+        /** Site-admin listing only. */
+        author_id?: string | null;
     },
     tags: string[],
 ): TeamListItemDto {
     const visibility = row.visibility || 'public';
     return {
+        ...(row.version_count !== undefined ? { version_count: Number(row.version_count) } : {}),
+        ...(row.author_id !== undefined ? { author_id: row.author_id } : {}),
         id: row.id,
         name: row.name,
         scope: row.scope,

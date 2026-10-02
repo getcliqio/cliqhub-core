@@ -45,10 +45,10 @@ function to_dto(org: Org): Org_mesh_settings_dto {
 }
 
 async function require_org_admin(org_id: string, user_id: string): Promise<Org> {
-    const org = await _org_repo_m.find_one_q({ where: { id: org_id } });
+    const org = await _org_repo_m.find_one_q({ where: { id: org_id, deleted_at: null } });
     if (!org) throw ApiError.not_found('Org not found');
     const membership = await _org_member_repo_m.find_one_q({
-        where: { org_id, user_id },
+        where: { org_id, user_id, status: 'active', deleted_at: null },
     });
     if (!membership || membership.role !== 'admin') {
         throw ApiError.forbidden('Org admin role required');

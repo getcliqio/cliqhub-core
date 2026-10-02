@@ -118,6 +118,35 @@ describe('RelayController', () => {
         expect(res.json).toHaveBeenCalledWith({ result: 'ok' });
     });
 
+    it('relays a plain daemon input and the daemon\'s failure reply unchanged (no header needed)', async () => {
+        // cliqd's one wire: Core sends the route's plain input; the daemon
+        // answers { ok: false, error: { code, message } } and the poller
+        // merges tx_id in. The relay stores and forwards both as-is.
+        pool.query
+            .mockResolvedValueOnce({ rows: [{ status: 'online' }] })   // daemon check
+            .mockResolvedValueOnce({ rows: [] })                        // idempotency lookup: no match
+            .mockResolvedValueOnce({ rows: [] })                        // INSERT command
+            .mockResolvedValueOnce({ rows: [] });                       // pg_notify
+        const reply = { ok: false, error: { code: 'RUN_NOT_FOUND', message: "Run 'r-1' not found" }, tx_id: 'tx-9' };
+        poll_hold.wait_for_response.mockResolvedValue({ status_code: 404, body: reply });
+
+        const input = { run_id: 'r-1', inputs: { a: 1 }, tx_id: 'tx-9' };
+        const req = mock_req({
+            params: { daemon_id: 'daemon-1', path: 'v1/runs/supply_inputs' },
+            body: input,
+            headers: { 'content-type': 'application/json' },
+        });
+        const res = mock_res();
+
+        await controller.relay(req, res, mock_next);
+
+        const insert_call = pool.query.mock.calls[2];
+        expect(insert_call[1][3]).toBe('/v1/runs/supply_inputs');
+        expect(JSON.parse(insert_call[1][5])).toEqual(input);
+        expect(res.status).toHaveBeenCalledWith(404);
+        expect(res.json).toHaveBeenCalledWith(reply);
+    });
+
     it('returns 404 if daemon is not found in DB', async () => {
         pool.query.mockResolvedValueOnce({ rows: [] });
 

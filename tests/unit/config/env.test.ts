@@ -53,3 +53,59 @@ describe('load_env', () => {
         expect(cfg.rate_limit_public_rpm).toBe(30);
     });
 });
+
+describe('load_env link settings', () => {
+    const LINK_KEYS = ['DATABASE_URL', 'NODE_ENV', 'TOKEN_ENCRYPTION_KEY', 'PUBLIC_APP_URL', 'BREVO_API_KEY', 'EMAIL_FROM_ADDRESS', 'EMAIL_FROM_NAME'] as const;
+    const before: Record<string, string | undefined> = {};
+
+    afterEach(() => {
+        for (const key of LINK_KEYS) {
+            if (before[key] === undefined) delete process.env[key];
+            else process.env[key] = before[key];
+        }
+    });
+
+    function reset() {
+        for (const key of LINK_KEYS) {
+            before[key] = process.env[key];
+            delete process.env[key];
+        }
+        process.env.DATABASE_URL = 'postgres://localhost/hub';
+    }
+
+    it('production refuses to boot without a valid TOKEN_ENCRYPTION_KEY', () => {
+        reset();
+        process.env.NODE_ENV = 'production';
+        expect(() => load_env()).toThrow('TOKEN_ENCRYPTION_KEY');
+        process.env.TOKEN_ENCRYPTION_KEY = 'too-short';
+        expect(() => load_env()).toThrow('32 bytes');
+    });
+
+    it('production refuses to boot without a valid PUBLIC_APP_URL', () => {
+        reset();
+        process.env.NODE_ENV = 'production';
+        process.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
+        expect(() => load_env()).toThrow('PUBLIC_APP_URL');
+        process.env.PUBLIC_APP_URL = 'not a url';
+        expect(() => load_env()).toThrow('http(s) URL');
+        process.env.PUBLIC_APP_URL = 'https://app.example.test';
+        expect(() => load_env()).not.toThrow();
+    });
+
+    it('outside production the key is optional but validated when set; email settings are read', () => {
+        reset();
+        expect(() => load_env()).not.toThrow();
+        process.env.TOKEN_ENCRYPTION_KEY = 'nope';
+        expect(() => load_env()).toThrow('32 bytes');
+        process.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
+        process.env.PUBLIC_APP_URL = 'nope';
+        expect(() => load_env()).toThrow('http(s) URL');
+        process.env.PUBLIC_APP_URL = 'https://app.example.test/';
+        process.env.EMAIL_FROM_ADDRESS = 'noreply@example.test';
+        process.env.EMAIL_FROM_NAME = 'CliqHub';
+        const cfg = load_env();
+        expect(cfg.email_from_address).toBe('noreply@example.test');
+        expect(cfg.email_from_name).toBe('CliqHub');
+        expect(cfg.brevo_api_key).toBeUndefined();
+    });
+});

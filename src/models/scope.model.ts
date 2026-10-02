@@ -5,7 +5,7 @@ export class Scope extends BaseModel {
     declare id: string;
     declare slug: string;
     declare display_name: string;
-    /** Nullable for platform-owned scopes (e.g. 'cliq', 'measureone'). */
+    /** Nullable for platform-owned scopes (e.g. 'cliq'). */
     declare owner_id: string | null;
     declare org_id: string | null;
     declare visibility: 'public' | 'private';

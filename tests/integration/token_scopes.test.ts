@@ -23,6 +23,7 @@ vi.mock('../../src/auth/password.js', async (importOriginal) => {
     };
 });
 import { TokenRepository } from '../../src/repositories/token_repository.js';
+import { database_url } from '../migrated_platform/helpers/control_plane_store.js';
 
 const { app, repos } = create_test_app();
 const SECRET = 'test-secret';
@@ -39,9 +40,7 @@ const ALICE = {
     created_at: '2025-01-01',
 };
 
-const DATABASE_URL =
-    process.env.DATABASE_URL
-    ?? 'postgresql://cliqhub:cliqhub@localhost:5432/cliqhub';
+const DATABASE_URL = database_url;
 
 async function postgres_reachable(): Promise<boolean> {
     const probe = new Sequelize(DATABASE_URL, { dialect: 'postgres', logging: false });

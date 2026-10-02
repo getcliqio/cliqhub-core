@@ -25,7 +25,8 @@ export async function org_standing(org_id: string, user_id: string): Promise<Org
 }
 
 async function org_roles_for_user(user_id: string): Promise<Map<string, OrgRoleRow>> {
-    const members = await OrgMember.findAll({ where: { user_id }, attributes: ['org_id', 'role', 'role_id'], raw: true }) as unknown as
+    // Pending memberships (open invites) grant nothing until accepted.
+    const members = await OrgMember.findAll({ where: { user_id, status: 'active', deleted_at: null }, attributes: ['org_id', 'role', 'role_id'], raw: true }) as unknown as
         Array<{ org_id: string; role: string; role_id: string | null }>;
     const role_ids = members.map((m) => m.role_id).filter((x): x is string => Boolean(x));
     const roles = role_ids.length
