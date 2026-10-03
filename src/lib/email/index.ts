@@ -7,6 +7,9 @@
  *                     default Brevo's relay smtp-relay.brevo.com:587.
  *   BREVO_API_KEY   → Brevo's API (xkeysib-… key; images as data URIs).
  *   neither         → no-op: nothing is sent and callers return links.
+ *
+ * A Brevo API key (xkeysib-…) given as SMTP_PASS can't log in to SMTP; that
+ * logs an error and sends through the Brevo API with it instead.
  */
 
 import { EMAIL_PATTERN, type EnvConfig } from '../../config/env.js';
@@ -14,6 +17,9 @@ import { BrevoEmailSender } from './brevo_email_sender.js';
 import { NoopEmailSender } from './noop_email_sender.js';
 import { SmtpEmailSender } from './smtp_email_sender.js';
 import type { EmailSender } from './email_sender.js';
+import { get_logger } from '../log.js';
+
+const log = get_logger('lib.email');
 
 /** Sender display name when `EMAIL_FROM_NAME` is unset. */
 const DEFAULT_FROM_NAME = 'CliqHub';
@@ -43,6 +49,11 @@ export function create_email_sender(
     if (user) {
         const pass = config.smtp_pass?.trim() || (smtp_key_in_api_var ? key : undefined);
         if (!pass) throw new Error('SMTP_PASS must be set when SMTP_USER is set');
+        // A Brevo API key can't log in to SMTP; send through the API with it instead of failing every email.
+        if (pass.startsWith('xkeysib-')) {
+            log.error('email_smtp_misconfigured', { reason: 'SMTP_PASS holds a Brevo API key (xkeysib-…); SMTP needs a Brevo SMTP key (xsmtpsib-…). Sending through the Brevo API instead; Gmail will not show the logo.' });
+            return new BrevoEmailSender({ api_key: pass, from });
+        }
         return new SmtpEmailSender({ host: config.smtp_host?.trim() || BREVO_SMTP_HOST, port: config.smtp_port || 587, user, pass, from });
     }
     if (smtp_key_in_api_var) {

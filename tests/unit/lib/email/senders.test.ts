@@ -231,6 +231,10 @@ describe('create_email_sender: SMTP', () => {
         expect(create_email_sender({ ...from, smtp_user: 'me@smtp-brevo.com', brevo_api_key: 'xsmtpsib-x' })).toBeInstanceOf(SmtpEmailSender);
         expect(create_email_sender({ ...from, smtp_user: 'me@smtp-brevo.com', smtp_pass: 'p', brevo_api_key: KEY }).name).toBe('smtp');
     });
+    it('a Brevo API key given as SMTP_PASS sends through the API instead of failing at SMTP login', () => {
+        expect(create_email_sender({ ...from, smtp_user: 'me@smtp-brevo.com', smtp_pass: 'xkeysib-abc' })).toBeInstanceOf(BrevoEmailSender);
+    });
+
     it('half set up is an error naming what to set, never the key', () => {
         expect(() => create_email_sender({ ...from, smtp_user: 'me@smtp-brevo.com' })).toThrow('SMTP_PASS');
         let err: Error | null = null;
