@@ -1,8 +1,6 @@
 /**
  * Email over SMTP (Brevo's relay `smtp-relay.brevo.com:587`, or any other).
- * Images the HTML refers to as `cid:<name>` travel inside the message as
- * inline parts, so every client (Gmail included) shows them without fetching
- * anything. Brevo tags go in the `X-Mailin-Tag` header.
+ * Brevo tags go in the `X-Mailin-Tag` header.
  *
  * The password, the recipient addresses and the message bodies are never
  * logged: log lines carry the recipient count, tags and the failure class.
@@ -60,7 +58,7 @@ export class SmtpEmailSender implements EmailSender {
     }
 
     /**
-     * Sends one message, with its images embedded.
+     * Sends one message.
      *
      * @returns The message id the server gave.
      * @throws EmailSendError `rejected`, `unauthorized`, `rate_limited`, `timeout`, `network` or `provider_error`.
@@ -77,9 +75,6 @@ export class SmtpEmailSender implements EmailSender {
                 subject: message.subject,
                 html: message.html,
                 text: message.text,
-                attachments: (message.images ?? []).map((i) => ({
-                    filename: i.filename, content: Buffer.from(i.base64, 'base64'), contentType: i.content_type, cid: i.cid, contentDisposition: 'inline' as const,
-                })),
                 ...(message.tags?.length ? { headers: { 'X-Mailin-Tag': message.tags.join(',') } } : {}),
             });
             log.info('email_sent', { ...ctx, provider: 'smtp' });

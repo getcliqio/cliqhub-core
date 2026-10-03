@@ -18,8 +18,6 @@ import { NoopEmailSender } from '../../../../src/lib/email/noop_email_sender.js'
 import { EmailSendError, mask_email } from '../../../../src/lib/email/email_sender.js';
 import { create_email_sender } from '../../../../src/lib/email/index.js';
 import { SmtpEmailSender, smtp_failure_kind } from '../../../../src/lib/email/smtp_email_sender.js';
-import { with_data_uris } from '../../../../src/lib/email/brevo_email_sender.js';
-import { email_images_in } from '../../../../src/lib/email/layout.js';
 
 const KEY = 'test-brevo-key-not-real';
 const msg = { to: [{ email: 'a@x.test', name: 'A' }], subject: 'Hi', html: '<p>Hi</p>', text: 'Hi', tags: ['invite.org.sent'] };
@@ -192,21 +190,15 @@ describe('create_email_sender', () => {
     });
 });
 
-describe('embedded images per transport', () => {
-    const logo = email_images_in('<img src="cid:logo">');
-    const with_logo = { ...msg, html: '<img src="cid:logo"><p>Hi</p>', images: logo };
-
-    it('SMTP puts the logo inside the message as an inline part and tags it for Brevo', async () => {
+describe('SmtpEmailSender', () => {
+    it('sends the message with Brevo tags in X-Mailin-Tag', async () => {
         const sendMail = vi.fn().mockResolvedValue({ messageId: '<m1@relay>' });
         const sender = new SmtpEmailSender({ host: 'h', port: 587, user: 'u', pass: 'p', from: { email: 'no-reply@x.test', name: 'CliqHub' }, transport: { sendMail } as never });
-        expect(await sender.send(with_logo)).toEqual({ message_id: '<m1@relay>' });
-        const mail = sendMail.mock.calls[0][0];
-        expect(mail).toMatchObject({ from: { name: 'CliqHub', address: 'no-reply@x.test' }, to: [{ name: 'A', address: 'a@x.test' }], subject: 'Hi', html: with_logo.html, headers: { 'X-Mailin-Tag': 'invite.org.sent' } });
-        expect(mail.attachments).toEqual([expect.objectContaining({ cid: 'logo', filename: 'logo.png', contentType: 'image/png', contentDisposition: 'inline' })]);
-        expect(Buffer.isBuffer(mail.attachments[0].content)).toBe(true);
+        expect(await sender.send(msg)).toEqual({ message_id: '<m1@relay>' });
+        expect(sendMail.mock.calls[0][0]).toMatchObject({ from: { name: 'CliqHub', address: 'no-reply@x.test' }, to: [{ name: 'A', address: 'a@x.test' }], subject: 'Hi', html: msg.html, text: msg.text, headers: { 'X-Mailin-Tag': 'invite.org.sent' } });
     });
 
-    it('SMTP failures map to the send error kinds', async () => {
+    it('failures map to the send error kinds', async () => {
         expect(smtp_failure_kind({ code: 'EAUTH', responseCode: 535 })).toBe('unauthorized');
         expect(smtp_failure_kind({ code: 'ETIMEDOUT' })).toBe('timeout');
         expect(smtp_failure_kind({ code: 'ECONNECTION' })).toBe('network');
@@ -214,13 +206,6 @@ describe('embedded images per transport', () => {
         expect(smtp_failure_kind({ responseCode: 550 })).toBe('rejected');
         const sender = new SmtpEmailSender({ host: 'h', port: 587, user: 'u', pass: 'secret-pass', from: { email: 'f@x.test' }, transport: { sendMail: vi.fn().mockRejectedValue(Object.assign(new Error('Invalid login'), { code: 'EAUTH', responseCode: 535 })) } as never });
         await expect(sender.send(msg)).rejects.toMatchObject({ kind: 'unauthorized', status: 535 });
-    });
-
-    it('the Brevo API, which cannot attach inline images, gets the logo as a base64 data URI', async () => {
-        expect(with_data_uris(with_logo.html, logo)).toBe(`<img src="data:image/png;base64,${logo[0].base64}"><p>Hi</p>`);
-        const fetch_impl = vi.fn().mockResolvedValue(json_response(201, { messageId: 'm' }));
-        await new BrevoEmailSender({ api_key: KEY, from: { email: 'f@x.test' }, fetch_impl }).send(with_logo);
-        expect(JSON.parse(String(fetch_impl.mock.calls[0][1].body)).htmlContent).toContain('src="data:image/png;base64,');
     });
 });
 

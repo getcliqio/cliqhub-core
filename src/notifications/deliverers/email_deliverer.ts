@@ -26,7 +26,6 @@ import { EmailDeliveryRepository } from '../../repositories/email_delivery_repos
 import { EmailSendError, mask_email, type EmailAddress, type EmailSender } from '../../lib/email/email_sender.js';
 import { NoopEmailSender } from '../../lib/email/noop_email_sender.js';
 import { render_channel_email, render_event_email, type EventEmailContext } from '../../lib/email/event_emails.js';
-import { email_images_in } from '../../lib/email/layout.js';
 
 const log = get_logger('notify.email');
 
@@ -122,7 +121,6 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 			await this._sender.send({
 				to, cc: addresses(config.cc), bcc: addresses(config.bcc),
 				subject: rendered.subject, html: rendered.html, text: rendered.text, tags: [payload.event],
-				images: email_images_in(rendered.html),
 			});
 		} catch (err) {
 			throw new Error(`email delivery failed: ${failure_reason(err)}`);
@@ -145,7 +143,7 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 				ctx,
 			);
 			const to: EmailAddress = input.to.display_name ? { email: input.to.email, name: input.to.display_name } : { email: input.to.email };
-			const sent = await this._sender.send({ to: [to], subject: rendered.subject, html: rendered.html, text: rendered.text, tags: [input.event], images: email_images_in(rendered.html) });
+			const sent = await this._sender.send({ to: [to], subject: rendered.subject, html: rendered.html, text: rendered.text, tags: [input.event] });
 			result = { sent: true, provider_message_id: sent.message_id, error: null };
 		} catch (err) {
 			result = { sent: false, provider_message_id: null, error: failure_reason(err) };

@@ -9,7 +9,6 @@
  * claiming an email went out.
  */
 
-import type { EmailImage } from './layout.js';
 
 /** One address, with an optional display name. */
 export interface EmailAddress {
@@ -27,8 +26,6 @@ export interface EmailMessage {
     text: string;
     /** Provider tags (Brevo `tags`), e.g. `['invite.org.sent']`. */
     tags?: string[];
-    /** Images the HTML refers to as `cid:<cid>`; the transport puts them inside the message. */
-    images?: EmailImage[];
 }
 
 /** What a successful send returns. */

@@ -1,11 +1,11 @@
 /**
  * Builds the configured {@link EmailSender} from the environment:
  *
- *   SMTP_USER set   → SMTP (images embedded in the message; shows everywhere).
+ *   SMTP_USER set   → SMTP.
  *                     Password from SMTP_PASS, or a Brevo SMTP key (xsmtpsib-…)
  *                     left in BREVO_API_KEY. Server: SMTP_HOST:SMTP_PORT,
  *                     default Brevo's relay smtp-relay.brevo.com:587.
- *   BREVO_API_KEY   → Brevo's API (xkeysib-… key; images as data URIs).
+ *   BREVO_API_KEY   → Brevo's API (xkeysib-… key).
  *   neither         → no-op: nothing is sent and callers return links.
  *
  * A Brevo API key (xkeysib-…) given as SMTP_PASS can't log in to SMTP; that
@@ -51,7 +51,7 @@ export function create_email_sender(
         if (!pass) throw new Error('SMTP_PASS must be set when SMTP_USER is set');
         // A Brevo API key can't log in to SMTP; send through the API with it instead of failing every email.
         if (pass.startsWith('xkeysib-')) {
-            log.error('email_smtp_misconfigured', { reason: 'SMTP_PASS holds a Brevo API key (xkeysib-…); SMTP needs a Brevo SMTP key (xsmtpsib-…). Sending through the Brevo API instead; Gmail will not show the logo.' });
+            log.error('email_smtp_misconfigured', { reason: 'SMTP_PASS holds a Brevo API key (xkeysib-…); SMTP needs a Brevo SMTP key (xsmtpsib-…). Sending through the Brevo API instead.' });
             return new BrevoEmailSender({ api_key: pass, from });
         }
         return new SmtpEmailSender({ host: config.smtp_host?.trim() || BREVO_SMTP_HOST, port: config.smtp_port || 587, user, pass, from });

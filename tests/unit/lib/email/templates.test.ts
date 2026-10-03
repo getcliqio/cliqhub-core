@@ -1,12 +1,12 @@
 /**
- * Email templates: each of the six templates (copy, links, the embedded
- * logo, escaping, plain text), the reminder variant, and how org events
+ * Email templates: each of the six templates (copy, links, the HTML logo,
+ * escaping, plain text), the reminder variant, and how org events
  * map to templates.
  */
 
 import { describe, it, expect } from 'vitest';
 
-import { email_images_in, escape_html, format_email_date } from '../../../../src/lib/email/layout.js';
+import { escape_html, format_email_date, logo_mark } from '../../../../src/lib/email/layout.js';
 import {
     notify_email, org_member_email, owner_new_email, realm_email, reset_password_email, set_password_email,
 } from '../../../../src/lib/email/templates.js';
@@ -22,10 +22,12 @@ const EXPIRES = '2026-10-16T09:30:00.000Z';
 /** Every `src` in the HTML. */
 const image_sources = (html: string) => [...html.matchAll(/<img src="([^"]+)"/g)].map((m) => m[1]);
 
-/** The only image is the CliqHub logo, carried in the message (cid:logo): nothing is fetched when the email opens. */
+/** No images: the logo is drawn in HTML, so nothing is loaded, blocked or attached. */
 function expect_images(html: string, props: boolean) {
-    expect(image_sources(html)).toEqual(['cid:logo', 'cid:logo']);
+    expect(image_sources(html)).toEqual([]);
     expect(html).not.toContain('data:');
+    expect(html).not.toContain('<svg');
+    expect(html.match(/linear-gradient\(135deg,#6366f1,#a855f7\)/g)).toHaveLength(2);
     expect(html.includes('What you can do in CliqHub')).toBe(props);
 }
 
@@ -36,13 +38,10 @@ function expect_cta(html: string, label: string, url: string) {
     expect(html).toContain(`word-break:break-all">${href}</a>`);
 }
 
-describe('embedded images', () => {
-    it('email_images_in returns the logo once, as base64 PNG, for each email that shows it', () => {
-        const e = owner_new_email({ app_url: APP, inviter_name: 'Sapan', org: { slug: 'acme', display_name: 'Acme' }, role: 'owner', expires_at: EXPIRES, accept_url: ACCEPT });
-        const images = email_images_in(e.html);
-        expect(images).toEqual([expect.objectContaining({ cid: 'logo', filename: 'logo.png', content_type: 'image/png' })]);
-        expect(Buffer.from(images[0].base64, 'base64').subarray(1, 4).toString()).toBe('PNG');
-        expect(email_images_in('<img src="cid:nope">')).toEqual([]);
+describe('logo', () => {
+    it('logo_mark draws the tile and the mark at the given size', () => {
+        expect(logo_mark(32)).toContain('width:32px;height:32px;border-radius:8px');
+        expect(logo_mark(32)).toContain('border:2px solid #ffffff');
     });
 });
 

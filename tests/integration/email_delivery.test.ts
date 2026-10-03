@@ -120,9 +120,8 @@ describe.skipIf(!has_postgres)('Email channel delivery', () => {
         expect(stub.sent[0].to).toEqual([{ email }]);
         expect(stub.sent[0].subject).toBe('Reminder: Adam invited you to join Acme on CliqHub');
         expect(stub.sent[0].html).toContain(`${TEST_PUBLIC_APP_URL}/invite/${token}`);
-        // The logo travels inside the message; nothing points at the web app for images.
-        expect(stub.sent[0].html).toContain('src="cid:logo"');
-        expect(stub.sent[0].images).toEqual([expect.objectContaining({ cid: 'logo', content_type: 'image/png' })]);
+        // No images to load: the logo is drawn in HTML.
+        expect(stub.sent[0].html).not.toContain('<img');
         const rows = await rows_for(invite.id);
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({ event: 'invite.org.reminder', ok: true, provider_message_id: '<stub-1@test>', error: null, to: email });

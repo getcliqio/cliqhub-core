@@ -7,12 +7,10 @@
  * monospace slugs) is built from {@link Html} fragments made by
  * {@link bold}, {@link mono}, {@link name_with_slug}, {@link link} and
  * {@link html_join}; a
- * plain string anywhere in the layout input is escaped. The only image is
- * the CliqHub logo, carried inside the message (`cid:logo`): transports embed
- * it from {@link email_images_in}, so nothing is fetched when the email opens.
+ * plain string anywhere in the layout input is escaped. There are no images:
+ * the CliqHub logo is drawn in HTML and CSS ({@link logo_mark}), so it shows
+ * in every mail client and nothing is loaded when the email opens.
  */
-
-import { EMAIL_IMAGES, type EmailImageName } from './images.generated.js';
 
 /** A fragment of HTML whose interpolated values are already escaped. */
 export interface Html {
@@ -106,36 +104,26 @@ export interface LayoutInput {
     footer_note: Copy;
 }
 
-/** Content-ID of the CliqHub logo; the email carries the image itself (see {@link email_images_in}). */
-export const LOGO_CID = 'logo';
-
 /**
- * The images an email's HTML refers to (`cid:<name>`), with their base64
- * content, for the transport to embed in the message.
+ * The CliqHub logo as HTML: the purple tile with the white mark, drawn with a
+ * table cell and a bordered box (no image to load, block or attach).
+ *
+ * @param size - Tile size in px.
  */
-export function email_images_in(html: string): EmailImage[] {
-    const names = new Set([...html.matchAll(/src="cid:([a-z0-9-]+)"/g)].map((m) => m[1]));
-    return [...names].filter((n): n is EmailImageName => n in EMAIL_IMAGES).map((n) => ({ cid: n, ...EMAIL_IMAGES[n] }));
-}
-
-/** An image embedded in an email, referred to from its HTML as `cid:<cid>`. */
-export interface EmailImage {
-    cid: string;
-    filename: string;
-    content_type: string;
-    base64: string;
+export function logo_mark(size: number): string {
+    const inner = Math.round(size * 0.42);
+    const stroke = size >= 28 ? 2 : 1.5;
+    return `<table role="presentation" cellpadding="0" cellspacing="0" style="display:inline-table;vertical-align:middle;border-collapse:separate"><tr><td width="${size}" height="${size}" align="center" valign="middle" style="width:${size}px;height:${size}px;border-radius:${Math.round(size / 4)}px;background:${C.accent};background-image:linear-gradient(135deg,#6366f1,#a855f7);text-align:center;vertical-align:middle;line-height:0;font-size:0"><div style="display:inline-block;width:${inner}px;height:${inner}px;border:${stroke}px solid #ffffff;border-radius:${Math.max(2, Math.round(inner / 4))}px"></div></td></tr></table>`;
 }
 
 /**
- * Renders the shared email page: light, with the CliqHub logo as the only
- * image (embedded in the message, never fetched from a server).
+ * Renders the shared email page: light, with the CliqHub logo drawn in HTML.
  *
  * @param input - Copy, facts and call to action for one email.
  * @returns The complete HTML document.
  */
 export function render_layout(input: LayoutInput): string {
     const { facts, cta } = input;
-    const logo = `cid:${LOGO_CID}`;
     const rows = facts.map(([k, v, is_mono], i) => {
         const border = i === 0 ? 'border-top:0' : `border-top:1px solid ${C.line}`;
         return `
@@ -166,7 +154,7 @@ export function render_layout(input: LayoutInput): string {
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px">
     <tr><td style="padding:0 4px 18px">
       <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-        <td><img src="${logo}" width="32" height="32" alt="CliqHub" style="display:block;border:0;border-radius:8px"></td>
+        <td>${logo_mark(32)}</td>
         <td style="padding-left:10px;font:700 18px/1 ${FONT};color:${C.text};letter-spacing:-.2px">CliqHub</td>
       </tr></table>
     </td></tr>
@@ -189,7 +177,7 @@ export function render_layout(input: LayoutInput): string {
     </td></tr>
     <tr><td class="pad" style="padding:22px 8px 0">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-        <td style="font:13px/1.5 ${FONT};color:${C.muted}"><img src="${logo}" width="18" height="18" alt="" style="display:inline-block;vertical-align:-4px;border:0;border-radius:5px;margin-right:8px"><strong style="color:${C.text}">CliqHub</strong> &middot; AI agent teams, with people in the loop.</td>
+        <td style="font:13px/1.5 ${FONT};color:${C.muted}"><span style="display:inline-block;vertical-align:middle;margin-right:8px">${logo_mark(18)}</span><strong style="color:${C.text}">CliqHub</strong> &middot; AI agent teams, with people in the loop.</td>
       </tr><tr>
         <td style="padding-top:8px;font:12px/1.5 ${FONT};color:${C.muted}">${render(input.footer_note)}</td>
       </tr><tr>

@@ -3,10 +3,6 @@
  * the `api-key` header. Body `{ sender, to, cc?, bcc?, subject, htmlContent,
  * textContent, tags? }`; a 201 answers `{ messageId }`.
  *
- * Brevo's API can't attach images inline (no Content-ID), so images the HTML
- * refers to as `cid:<name>` are written into it as base64 `data:` URIs. Gmail
- * doesn't show `data:` images; the SMTP transport embeds them properly.
- *
  * The key, the recipient addresses and the message bodies are never logged:
  * log lines carry the recipient count, tags, HTTP status and Brevo's error
  * code only.
@@ -21,7 +17,6 @@ import {
     type EmailSender,
     type SentEmail,
 } from './email_sender.js';
-import type { EmailImage } from './layout.js';
 import { EMAIL_SEND_TIMEOUT_MS } from '../../config/identity_lifecycle.js';
 
 const log = get_logger('lib.email.brevo');
@@ -38,11 +33,6 @@ export interface BrevoEmailSenderOptions {
     timeout_ms?: number;
     /** Injected for tests; defaults to the global `fetch`. */
     fetch_impl?: typeof fetch;
-}
-
-/** Replaces each `cid:<name>` image reference with the image as a base64 `data:` URI. */
-export function with_data_uris(html: string, images: EmailImage[]): string {
-    return images.reduce((out, i) => out.split(`src="cid:${i.cid}"`).join(`src="data:${i.content_type};base64,${i.base64}"`), html);
 }
 
 const address = (a: EmailAddress) => (a.name ? { email: a.email, name: a.name } : { email: a.email });
@@ -82,7 +72,7 @@ export class BrevoEmailSender implements EmailSender {
             ...(message.cc?.length ? { cc: message.cc.map(address) } : {}),
             ...(message.bcc?.length ? { bcc: message.bcc.map(address) } : {}),
             subject: message.subject,
-            htmlContent: with_data_uris(message.html, message.images ?? []),
+            htmlContent: message.html,
             textContent: message.text,
             ...(message.tags?.length ? { tags: message.tags } : {}),
         };
