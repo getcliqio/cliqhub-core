@@ -70,7 +70,6 @@ export function owner_new_email(i: InviteEmailInput): RenderedEmail {
     const html = render_layout({
         app_url: i.app_url,
         preheader: `${i.reminder ? 'Reminder: ' : ''}Accept to create the ${org} organization with you as its owner.`,
-        hero: 'hero-owner.png', hero_alt: 'A new CliqHub organization',
         eyebrow: i.reminder ? 'Reminder' : 'Your new organization',
         heading: `${org} is waiting for you`,
         intro: html_join(bold(i.inviter_name), ' invited you to own a new organization on CliqHub. It is created when you accept, with you as its owner. The name ', mono(slug), ' is held for you until then.'),
@@ -99,7 +98,6 @@ export function org_member_email(i: InviteEmailInput): RenderedEmail {
     const html = render_layout({
         app_url: i.app_url,
         preheader: `${i.reminder ? 'Reminder: ' : ''}Join ${org} as ${with_article(i.role.toLowerCase())}.`,
-        hero: 'hero-join.png', hero_alt: 'Join a CliqHub organization',
         eyebrow: i.reminder ? 'Reminder' : 'Team invite',
         heading: `Join ${org} on CliqHub`,
         intro: html_join(bold(i.inviter_name), ' invited you to join the organization ', bold(org), '.'),
@@ -135,7 +133,6 @@ export function realm_email(i: RealmEmailInput): RenderedEmail {
     const html = render_layout({
         app_url: i.app_url,
         preheader: `${i.reminder ? 'Reminder: ' : ''}Join the ${i.realm.slug} realm in ${org}.`,
-        hero: 'hero-realm.png', hero_alt: 'A CliqHub realm',
         eyebrow: i.reminder ? 'Reminder' : 'Realm invite',
         heading: `You’re in for ${realm}`,
         intro: html_join(bold(i.inviter_name), ' invited you to the realm ', bold(realm), ' in ', bold(org), '. Realms are where teams run on your daemons.'),
@@ -179,7 +176,6 @@ export function set_password_email(i: SetPasswordEmailInput): RenderedEmail {
     const html = render_layout({
         app_url: i.app_url,
         preheader: 'Choose a password to start using CliqHub.',
-        hero: 'hero-key.png', hero_alt: 'Set your CliqHub password',
         eyebrow: 'Welcome to CliqHub',
         heading: 'Set your password',
         intro: html_join(bold(i.creator_name), ' created a CliqHub account for you. Choose a password to sign in for the first time.'),
@@ -226,8 +222,7 @@ export function reset_password_email(i: ResetPasswordEmailInput): RenderedEmail 
     const expires = format_email_date(i.expires_at);
     const html = render_layout({
         app_url: i.app_url,
-        preheader: 'Use this link within 24 hours to choose a new password.',
-        hero: 'hero-key.png', hero_alt: 'Reset your CliqHub password', props: false,
+        preheader: 'Use this link within 24 hours to choose a new password.', props: false,
         eyebrow: 'Account security',
         heading: 'Reset your password',
         intro: html_join('We got a request to reset the password for ', bold(i.account_name), '. Choose a new one with the button below.'),
@@ -260,8 +255,6 @@ export interface NotifyEmailInput {
     after_text?: string;
     /** Why the person gets this email. */
     footer_note: string;
-    /** Hero image (default `hero-notify.png`). */
-    hero?: string;
 }
 
 /**
@@ -272,8 +265,7 @@ export interface NotifyEmailInput {
 export function notify_email(n: NotifyEmailInput): RenderedEmail {
     const html = render_layout({
         app_url: n.app_url,
-        preheader: n.preheader,
-        hero: n.hero ?? 'hero-notify.png', hero_alt: 'CliqHub notification', props: false,
+        preheader: n.preheader, props: false,
         eyebrow: n.eyebrow,
         heading: n.heading,
         intro: n.intro,

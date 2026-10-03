@@ -15,8 +15,15 @@ export interface EnvConfig {
     rate_limit_public_rpm: number;
     rate_limit_auth_rpm: number;
     rate_limit_window_ms: number;
-    /** Brevo API key (`BREVO_API_KEY`); without it email is not sent and links are returned instead. */
+    /** Brevo API key (`BREVO_API_KEY`, `xkeysib-…`); used when SMTP is not set up. */
     brevo_api_key?: string;
+    /** SMTP login (`SMTP_USER`; Brevo shows it under SMTP & API, e.g. `8a1b2c001@smtp-brevo.com`). Set → email goes over SMTP. */
+    smtp_user?: string;
+    /** SMTP password (`SMTP_PASS`; Brevo's SMTP key `xsmtpsib-…`). */
+    smtp_pass?: string;
+    /** SMTP server (`SMTP_HOST`, default Brevo's relay) and port (`SMTP_PORT`, default 587). */
+    smtp_host?: string;
+    smtp_port?: number;
     /** Sender address for all email (`EMAIL_FROM_ADDRESS`). */
     email_from_address?: string;
     /** Sender display name (`EMAIL_FROM_NAME`). */
@@ -111,6 +118,10 @@ export function load_env(): EnvConfig {
         rate_limit_auth_rpm: parseInt(process.env.RATE_LIMIT_AUTH_RPM || '120', 10),
         rate_limit_window_ms: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
         brevo_api_key: process.env.BREVO_API_KEY || undefined,
+        smtp_user: process.env.SMTP_USER || undefined,
+        smtp_pass: process.env.SMTP_PASS || undefined,
+        smtp_host: process.env.SMTP_HOST || undefined,
+        smtp_port: process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : undefined,
         email_from_address: process.env.EMAIL_FROM_ADDRESS || undefined,
         email_from_name: process.env.EMAIL_FROM_NAME || undefined,
     };

@@ -2,11 +2,14 @@
  * Outgoing email: the {@link EmailSender} interface every transport
  * implements, the message shape and the typed send error.
  *
- * Transports: BrevoEmailSender (Brevo transactional API) when
- * `BREVO_API_KEY` is set, otherwise NoopEmailSender, which sends nothing
- * and reports `configured: false` so callers return the link instead of
+ * Transports: SmtpEmailSender (any SMTP relay, e.g. Brevo's) when
+ * `SMTP_USER` is set; BrevoEmailSender (Brevo transactional API) when only
+ * `BREVO_API_KEY` is; otherwise NoopEmailSender, which sends nothing and
+ * reports `configured: false` so callers return the link instead of
  * claiming an email went out.
  */
+
+import type { EmailImage } from './layout.js';
 
 /** One address, with an optional display name. */
 export interface EmailAddress {
@@ -24,6 +27,8 @@ export interface EmailMessage {
     text: string;
     /** Provider tags (Brevo `tags`), e.g. `['invite.org.sent']`. */
     tags?: string[];
+    /** Images the HTML refers to as `cid:<cid>`; the transport puts them inside the message. */
+    images?: EmailImage[];
 }
 
 /** What a successful send returns. */
@@ -58,7 +63,7 @@ export class EmailSendError extends Error {
 export interface EmailSender {
     /** False when no transport is set up: nothing is sent and callers return links instead. */
     readonly configured: boolean;
-    /** Transport name for logs (`brevo`, `noop`). */
+    /** Transport name for logs (`smtp`, `brevo`, `noop`). */
     readonly name: string;
     /**
      * Sends one message.

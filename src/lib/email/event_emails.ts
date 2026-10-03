@@ -185,7 +185,6 @@ function password_changed_email(d: UserPasswordChangedData, occurred_at: string,
         after: html_join('Didn’t change it? ', link(forgot, 'Reset your password'), ' right away.'),
         after_text: `Didn't change it? Reset your password right away: ${forgot}`,
         footer_note: 'We send this to the email address on your CliqHub account whenever its password changes.',
-        hero: 'hero-key.png',
     });
 }
 

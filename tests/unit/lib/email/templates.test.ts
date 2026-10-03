@@ -1,12 +1,12 @@
 /**
- * Email templates: each of the six templates (copy, links, absolute image
- * URLs, escaping, plain text), the reminder variant, and how org events
+ * Email templates: each of the six templates (copy, links, the embedded
+ * logo, escaping, plain text), the reminder variant, and how org events
  * map to templates.
  */
 
 import { describe, it, expect } from 'vitest';
 
-import { escape_html, format_email_date } from '../../../../src/lib/email/layout.js';
+import { email_images_in, escape_html, format_email_date } from '../../../../src/lib/email/layout.js';
 import {
     notify_email, org_member_email, owner_new_email, realm_email, reset_password_email, set_password_email,
 } from '../../../../src/lib/email/templates.js';
@@ -22,15 +22,11 @@ const EXPIRES = '2026-10-16T09:30:00.000Z';
 /** Every `src` in the HTML. */
 const image_sources = (html: string) => [...html.matchAll(/<img src="([^"]+)"/g)].map((m) => m[1]);
 
-function expect_images(html: string, hero: string, props: boolean) {
-    const srcs = image_sources(html);
-    expect(srcs.every((s) => s.startsWith(`${APP}/`))).toBe(true);
+/** The only image is the CliqHub logo, carried in the message (cid:logo): nothing is fetched when the email opens. */
+function expect_images(html: string, props: boolean) {
+    expect(image_sources(html)).toEqual(['cid:logo', 'cid:logo']);
     expect(html).not.toContain('data:');
-    expect(srcs.filter((s) => s === `${APP}/brand/cliq-mark.png`)).toHaveLength(2);
-    expect(srcs).toContain(`${APP}/email/${hero}`);
-    const prop_icons = [`${APP}/email/prop-run.png`, `${APP}/email/prop-review.png`, `${APP}/email/prop-publish.png`];
-    if (props) expect(srcs).toEqual(expect.arrayContaining(prop_icons));
-    else expect(srcs.some((s) => prop_icons.includes(s))).toBe(false);
+    expect(html.includes('What you can do in CliqHub')).toBe(props);
 }
 
 function expect_cta(html: string, label: string, url: string) {
@@ -39,6 +35,16 @@ function expect_cta(html: string, label: string, url: string) {
     expect(html).toContain(`${escape_html(label)} &rarr;</a>`);
     expect(html).toContain(`word-break:break-all">${href}</a>`);
 }
+
+describe('embedded images', () => {
+    it('email_images_in returns the logo once, as base64 PNG, for each email that shows it', () => {
+        const e = owner_new_email({ app_url: APP, inviter_name: 'Sapan', org: { slug: 'acme', display_name: 'Acme' }, role: 'owner', expires_at: EXPIRES, accept_url: ACCEPT });
+        const images = email_images_in(e.html);
+        expect(images).toEqual([expect.objectContaining({ cid: 'logo', filename: 'logo.png', content_type: 'image/png' })]);
+        expect(Buffer.from(images[0].base64, 'base64').subarray(1, 4).toString()).toBe('PNG');
+        expect(email_images_in('<img src="cid:nope">')).toEqual([]);
+    });
+});
 
 describe('layout helpers', () => {
     it('escape_html escapes markup and both quote styles', () => {
@@ -64,7 +70,7 @@ describe('owner_new', () => {
         expect(e.html).toContain('@measureone/…');
         expect(e.html).toContain('16 Oct 2026, 09:30 UTC');
         expect_cta(e.html, 'Accept and set up', ACCEPT);
-        expect_images(e.html, 'hero-owner.png', true);
+        expect_images(e.html, true);
         expect(e.html).toContain('What you can do in CliqHub');
     });
 
@@ -97,7 +103,7 @@ describe('org_member', () => {
         expect(e.html).toContain('Join MeasureOne on CliqHub');
         expect(e.html).toMatch(/>Your role<\/td>\s*<td[^>]*>Admin<\/td>/);
         expect_cta(e.html, 'Accept invitation', ACCEPT);
-        expect_images(e.html, 'hero-join.png', true);
+        expect_images(e.html, true);
     });
 
     it('plain text', () => {
@@ -124,7 +130,7 @@ describe('realm', () => {
         expect(e.html).toContain('measureone.prod</span>');
         expect(e.html).toContain('Accepting also adds you to MeasureOne as a member.');
         expect_cta(e.html, 'Accept invitation', ACCEPT);
-        expect_images(e.html, 'hero-realm.png', true);
+        expect_images(e.html, true);
         expect(e.text).toContain('Krupali Patel invited you to the realm Production (measureone.prod) in MeasureOne on CliqHub.');
         expect(e.text).toContain(`Accept: ${ACCEPT}`);
     });
@@ -160,7 +166,7 @@ describe('set_password', () => {
         expect(e.html).toContain('priya@measureone.com');
         expect(e.html).toContain('9 Oct 2026, 10:20 UTC');
         expect_cta(e.html, 'Set my password', SETUP);
-        expect_images(e.html, 'hero-key.png', true);
+        expect_images(e.html, true);
         expect(e.text).toContain(`Set your password: ${SETUP}`);
         expect(e.text).toContain('Username: priya');
     });
@@ -186,7 +192,7 @@ describe('reset_password', () => {
         expect(e.html).toContain('3 Oct 2026, 10:20 UTC');
         expect(e.html).not.toContain('What you can do in CliqHub');
         expect_cta(e.html, 'Choose a new password', RESET);
-        expect_images(e.html, 'hero-key.png', false);
+        expect_images(e.html, false);
         expect(e.text).toContain(`Choose a new password: ${RESET}`);
     });
 
@@ -209,7 +215,7 @@ describe('notify', () => {
         expect(e.html.split(ESCAPED_EVIL).length - 1).toBeGreaterThanOrEqual(6);
         expect_cta(e.html, 'Open', `${APP}/x?a=1&b=2`);
         expect(e.html).toContain('href="https://app.cliqhub.test/x?a=1&amp;b=2"');
-        expect_images(e.html, 'hero-notify.png', false);
+        expect_images(e.html, false);
         expect(e.text).toContain('plain intro');
         expect(e.text).toContain('Event: x.y');
         expect(e.text).toContain(`Open: ${APP}/x?a=1&b=2`);
@@ -271,7 +277,7 @@ describe('render_event_email', () => {
         expect(e.html).toContain(`${APP}/orgs/${ORG_ID}?tab=members`);
         expect(e.html).toContain('the notification channel “Email” in MeasureOne sends to this address');
         expect(e.text).toContain(`Event: ${event}`);
-        expect_images(e.html, 'hero-notify.png', false);
+        expect_images(e.html, false);
     });
 
     it('realm invite outcomes name the realm and its org', () => {
@@ -304,7 +310,7 @@ describe('render_event_email', () => {
         expect_cta(e.html, 'Sign in', `${APP}/login`);
         expect(e.html).toContain(`href="${APP}/forgot-password"`);
         expect(e.text).toContain(`Reset your password right away: ${APP}/forgot-password`);
-        expect_images(e.html, 'hero-key.png', false);
+        expect_images(e.html, false);
         expect(render('user.password.changed', { user, sessions_revoked: 0 }).html).not.toContain('signed you out');
     });
 
