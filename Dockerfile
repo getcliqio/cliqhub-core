@@ -1,7 +1,4 @@
 # Build context: cliqhub-core repo root.
-#
-# @getcliqio/cliq-store is installed from GitHub Packages. Railway must
-# expose GITHUB_TOKEN as a build-time variable (read:packages).
 
 # syntax=docker/dockerfile:1.7
 FROM node:22-alpine AS build
@@ -24,7 +21,6 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/dist ./dist
 
 RUN mkdir -p /app/data/packages \
-    && test -f node_modules/@getcliqio/cliq-store/dist/index.js \
     && test -d node_modules/sequelize
 
 EXPOSE 4000
