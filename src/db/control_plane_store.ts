@@ -28,6 +28,7 @@ import {
 import { migrate_store } from '../store/migrate.js';
 
 import { run_core_api_schema_migrations } from '../models/migrations/control_plane_schema_migrations.js';
+import { move_registry_to_cliq_schema } from '../models/migrations/hub_schema_migrations.js';
 import { init_core_api_models, reset_core_api_models } from '../models/index.js';
 import { get_logger } from '../lib/log.js';
 import { seed_control_plane } from '../models/migrations/control_plane_seed.js';
@@ -62,6 +63,10 @@ export async function init_control_plane_store(
                 db_url: database_url,
                 ssl: should_use_ssl(database_url),
             });
+            // Move registry tables from `public` → `cliq` and rename legacy
+            // daemon-catalog tables BEFORE sequelize.sync() so FK constraints
+            // (e.g. scope_members → scopes) resolve against the registry tables.
+            await move_registry_to_cliq_schema(connection.sequelize);
             await migrate_store(connection.sequelize);
             init_core_api_models(connection.sequelize);
             await run_core_api_schema_migrations(connection.sequelize);
