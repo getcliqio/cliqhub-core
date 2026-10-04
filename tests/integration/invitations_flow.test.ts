@@ -189,7 +189,8 @@ describe.skipIf(!has_postgres)('invitations, orgs/new and the invite sweep', () 
             // Their own account org (seeded) and the org's default realm.
             const account_org = (await Org.findOne({ where: { slug: username }, raw: true }))!;
             expect(account_org).toBeTruthy();
-            expect(await NotificationRule.count({ where: { org_id: account_org.id, system_key: 'user.password_reset.user' } })).toBe(1);
+            // Email + In-app twin.
+            expect(await NotificationRule.count({ where: { org_id: account_org.id, system_key: 'user.password_reset.user' } })).toBe(2);
             expect(await Realm.count({ where: { org_id: org.id, slug: 'default', deleted: false } })).toBe(1);
 
             // Signed in with the returned token, they run their org.

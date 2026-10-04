@@ -91,6 +91,7 @@ describe('route policy coverage', () => {
             "POST /v1/runs/claim",
             "POST /v1/runs/complete",
             "POST /v1/runs/create",
+            "POST /v1/runs/create_rdr",
             "POST /v1/runs/report_activity",
             "POST /v1/runs/report_telemetry",
             "POST /v1/runs/resume",

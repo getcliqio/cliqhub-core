@@ -140,6 +140,7 @@ vi.mock('../../src/lib/sequelize.js', () => ({
 vi.mock('../../src/services/hug_reviews.service.js', () => ({
     HugReviewsService: {
         expire_pending_for_run: vi.fn(async () => undefined),
+        close_reviews_for_ended_run: vi.fn(async () => ({ expired: 0, completed: 0 })),
     },
 }));
 

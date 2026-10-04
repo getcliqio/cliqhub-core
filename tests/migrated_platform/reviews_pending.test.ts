@@ -308,4 +308,91 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		const remind = await HugReviewsService.remind(created.review_id);
 		expect(remind.ok).toBe(false);
 	});
+
+	it('filters: realm_id, org_id and statuses narrow the caller’s own reviews; others see none', async () => {
+		const realm_1 = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'One');
+		const realm_2 = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Two');
+		const org_x = hub_legacy_uuid(901);
+		const org_y = hub_legacy_uuid(902);
+		const make = (realm_id: string, org_id: string, phase: string) => HugReviewsService.create({
+			run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id, org_id,
+			payload: { phase }, timeout_minutes: 60, actor_id: hub_legacy_uuid(1),
+		});
+		const a = await make(realm_1.id, org_x, 'a');
+		const b = await make(realm_2.id, org_y, 'b');
+		const c = await make(realm_2.id, org_y, 'c');
+		const c_notif = (await ReviewNotification.findOne({ where: { review_id: c.review_id } }))!;
+		await HugReviewsService.submit_verdict({
+			review_id: c.review_id, action: 'PASS', reviewer_name: 'Alice',
+			actor_id: hub_legacy_uuid(1), notification_id: c_notif.id, responded_by: hub_legacy_uuid(1),
+		});
+		const ids = async (opts: Partial<Parameters<typeof ReviewPendingService.list_for_user>[0]>) =>
+			(await ReviewPendingService.list_for_user({ user_id: hub_legacy_uuid(1), ...opts })).reviews.map((r) => r.review_id).sort();
+
+		expect(await ids({})).toEqual([a.review_id, b.review_id].sort());
+		expect(await ids({ realm_id: realm_1.id })).toEqual([a.review_id]);
+		expect(await ids({ org_id: org_y })).toEqual([b.review_id]);
+		expect(await ids({ statuses: ['decided'] })).toEqual([c.review_id]);
+		expect(await ids({ org_id: org_y, statuses: ['pending', 'decided'] })).toEqual([b.review_id, c.review_id].sort());
+		expect(await ids({ realm_id: realm_1.id, org_id: org_y })).toEqual([]);
+
+		expect((await ReviewPendingService.list_for_user({ user_id: hub_legacy_uuid(2) })).reviews).toHaveLength(0);
+		expect(await ReviewPendingService.count_pending_for_user({ user_id: hub_legacy_uuid(2) })).toBe(0);
+		expect(await ReviewPendingService.count_pending_for_user({ user_id: hub_legacy_uuid(1), org_id: org_y })).toBe(1);
+	});
+
+	it('an ended run closes its reviews: pending → expired, decided → completed', async () => {
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Ended');
+		const run_id = `run-ended-${uid()}`;
+		const pending = await HugReviewsService.create({
+			run_id, daemon_id: 'daemon-1', realm_id: realm.id,
+			payload: { phase: 'p1' }, timeout_minutes: 60, actor_id: hub_legacy_uuid(1),
+		});
+		const decided = await HugReviewsService.create({
+			run_id, daemon_id: 'daemon-1', realm_id: realm.id,
+			payload: { phase: 'p2' }, timeout_minutes: 60, actor_id: hub_legacy_uuid(1),
+		});
+		const decided_notif = (await ReviewNotification.findOne({ where: { review_id: decided.review_id } }))!;
+		await HugReviewsService.submit_verdict({
+			review_id: decided.review_id, action: 'PASS', reviewer_name: 'Alice',
+			actor_id: hub_legacy_uuid(1), notification_id: decided_notif.id, responded_by: hub_legacy_uuid(1),
+		});
+
+		expect(await HugReviewsService.close_reviews_for_ended_run(run_id)).toEqual({ expired: 1, completed: 1 });
+		expect((await Review.findByPk(pending.review_id))?.status).toBe('expired');
+		const closed = await Review.findByPk(decided.review_id);
+		expect(closed?.status).toBe('completed');
+		expect(closed?.completed_at).toBeTruthy();
+		expect(await HugReviewsService.close_reviews_for_ended_run(run_id)).toEqual({ expired: 0, completed: 0 });
+	});
+
+	it('per-realm badge count matches the pending list (decided reviews are not counted)', async () => {
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Badge');
+		const pending = await HugReviewsService.create({
+			run_id: 'run-badge-pending', daemon_id: 'daemon-1', realm_id: realm.id,
+			payload: { phase: 'p1' }, timeout_minutes: 60, actor_id: hub_legacy_uuid(1),
+		});
+		const decided = await HugReviewsService.create({
+			run_id: 'run-badge-decided', daemon_id: 'daemon-1', realm_id: realm.id,
+			payload: { phase: 'p2' }, timeout_minutes: 60, actor_id: hub_legacy_uuid(1),
+		});
+		const decided_notif = (await ReviewNotification.findOne({ where: { review_id: decided.review_id } }))!;
+		await HugReviewsService.submit_verdict({
+			review_id: decided.review_id, action: 'PASS', reviewer_name: 'Alice',
+			actor_id: hub_legacy_uuid(1), notification_id: decided_notif.id, responded_by: hub_legacy_uuid(1),
+		});
+
+		const by_realm = await ReviewPendingService.count_pending_by_realm_for_user({
+			user_id: hub_legacy_uuid(1), realm_ids: [realm.id],
+		});
+		const list = await ReviewPendingService.list_for_user({ user_id: hub_legacy_uuid(1), realm_id: realm.id });
+		expect(by_realm.get(realm.id)).toBe(1);
+		expect(list.total).toBe(1);
+		expect(list.reviews[0].review_id).toBe(pending.review_id);
+
+		const outsider = await ReviewPendingService.count_pending_by_realm_for_user({
+			user_id: hub_legacy_uuid(2), realm_ids: [realm.id],
+		});
+		expect(outsider.get(realm.id) ?? 0).toBe(0);
+	});
 });

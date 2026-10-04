@@ -204,25 +204,7 @@ export class ReviewPendingService {
         const user_id = opts.user_id.trim();
         if (!user_id) return 0;
 
-        const normalized_user_id = String(user_id);
-        const broadcast_channel_ids = await _resolve_broadcast_channel_ids(user_id);
-
-        const notification_rows = await _review_notif_repo_rp.find_all_q({
-            where: {
-                [Op.or]: [
-                    { user_id: normalized_user_id },
-                    ...(broadcast_channel_ids.length > 0
-                        ? [{
-                            user_id: { [Op.is]: null } as any,
-                            channel_id: { [Op.in]: broadcast_channel_ids },
-                        }]
-                        : []),
-                ],
-            },
-            attributes: ['review_id'],
-        });
-
-        const review_ids = [...new Set(notification_rows.map((r) => r.review_id))];
+        const review_ids = await _actionable_review_ids(user_id);
         if (review_ids.length === 0) return 0;
 
         const where: Record<string, unknown> = {
@@ -235,6 +217,58 @@ export class ReviewPendingService {
 
         return _review_repo_rp.find_count(where as any);
     }
+
+    /**
+     * Per-realm variant of {@link count_pending_for_user} — realm cards must
+     * show the same number as the caller's review list, never every
+     * unresolved review in the realm.
+     */
+    static async count_pending_by_realm_for_user(opts: {
+        user_id: string;
+        realm_ids: string[];
+    }): Promise<Map<string, number>> {
+        log.debug('count_pending_by_realm_for_user', { user_id: opts.user_id, realm_count: opts.realm_ids.length });
+        const counts = new Map<string, number>();
+        const user_id = opts.user_id.trim();
+        if (!user_id || opts.realm_ids.length === 0) return counts;
+
+        const review_ids = await _actionable_review_ids(user_id);
+        if (review_ids.length === 0) return counts;
+
+        const rows = await _review_repo_rp.find_all_q({
+            where: {
+                id: { [Op.in]: review_ids },
+                status: 'pending',
+                realm_id: { [Op.in]: opts.realm_ids },
+            },
+            attributes: ['realm_id'],
+        });
+        for (const row of rows) {
+            if (!row.realm_id) continue;
+            counts.set(row.realm_id, (counts.get(row.realm_id) ?? 0) + 1);
+        }
+        return counts;
+    }
+}
+
+/** Review ids the user is notified about: direct assignment or their realms' broadcast channels. */
+async function _actionable_review_ids(user_id: string): Promise<string[]> {
+    const broadcast_channel_ids = await _resolve_broadcast_channel_ids(user_id);
+    const notification_rows = await _review_notif_repo_rp.find_all_q({
+        where: {
+            [Op.or]: [
+                { user_id },
+                ...(broadcast_channel_ids.length > 0
+                    ? [{
+                        user_id: { [Op.is]: null } as any,
+                        channel_id: { [Op.in]: broadcast_channel_ids },
+                    }]
+                    : []),
+            ],
+        },
+        attributes: ['review_id'],
+    });
+    return [...new Set(notification_rows.map((r) => r.review_id))];
 }
 
 /**

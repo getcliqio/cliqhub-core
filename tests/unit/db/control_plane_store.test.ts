@@ -32,6 +32,12 @@ vi.mock('../../../src/models/index.js', () => ({
     reset_core_api_models: vi.fn(),
 }));
 
+const move_registry_to_cliq_schema = vi.fn(async () => undefined);
+
+vi.mock('../../../src/models/migrations/hub_schema_migrations.js', () => ({
+    move_registry_to_cliq_schema: (...args: unknown[]) => move_registry_to_cliq_schema(...args),
+}));
+
 vi.mock('../../../src/models/migrations/control_plane_schema_migrations.js', () => ({
     run_core_api_schema_migrations: vi.fn(async () => undefined),
 }));
@@ -41,6 +47,7 @@ describe('control_plane_store', () => {
         vi.resetModules();
         connect_store.mockClear();
         migrate_store.mockClear();
+        move_registry_to_cliq_schema.mockClear();
         seed_control_plane.mockClear();
         close.mockClear();
         connect_store.mockImplementation(async () => connection);
@@ -72,6 +79,9 @@ describe('control_plane_store', () => {
             ssl: false,
         });
         expect(migrate_store).toHaveBeenCalledWith(sequelize);
+        expect(move_registry_to_cliq_schema).toHaveBeenCalledWith(sequelize);
+        expect(move_registry_to_cliq_schema.mock.invocationCallOrder[0])
+            .toBeLessThan(migrate_store.mock.invocationCallOrder[0]);
         expect(seed_control_plane).toHaveBeenCalledOnce();
         expect(get_control_plane_store()).toBe(conn);
     });

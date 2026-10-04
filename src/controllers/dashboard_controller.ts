@@ -13,14 +13,12 @@ import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js'
 import { RunRepository } from '../repositories/run_repository.js';
 import { InAppNotificationRepository } from '../repositories/in_app_notification_repository.js';
 import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
-import { ReviewRepository } from '../repositories/review_repository.js';
 import { RealmRepository } from '../repositories/realm_repository.js';
 
 const _dt_repo_dc = new DaemonTeamRepository();
 const _run_repo_dc = new RunRepository();
 const _ian_repo = new InAppNotificationRepository();
 const _realm_member_repo_dc = new RealmMemberRepository();
-const _review_repo_dc = new ReviewRepository();
 const _realm_repo_dc = new RealmRepository();
 import { DaemonService } from '../services/daemon.service.js';
 import { RealmService } from '../services/realm.service.js';
@@ -129,13 +127,7 @@ export class DashboardController extends BaseController {
                     attributes: ['run_id', 'daemon_id', 'state', 'started_at'],
                 })
                 : Promise.resolve([]),
-            _review_repo_dc.find_all_q({
-                where: {
-                    realm_id: { [Op.in]: realm_ids },
-                    status: { [Op.in]: ['pending', 'decided'] },
-                },
-                attributes: ['realm_id'],
-            }),
+            ReviewPendingService.count_pending_by_realm_for_user({ user_id, realm_ids }),
             _ian_repo.find_all_q({
                 where: {
                     realm_id: { [Op.in]: realm_ids },
@@ -193,7 +185,7 @@ export class DashboardController extends BaseController {
                 (max, r) => Math.max(max, as_ms(r.started_at) ?? 0), 0,
             );
 
-            const review_count = pending_reviews.filter((r) => r.realm_id === realm.id).length;
+            const review_count = pending_reviews.get(realm.id) ?? 0;
             const notif_count = recent_notifs.filter((n) => n.realm_id === realm.id).length;
             const latest_notif = recent_notifs
                 .filter((n) => n.realm_id === realm.id)
@@ -328,7 +320,7 @@ export class DashboardController extends BaseController {
         const daemons_online = daemons.daemons.filter((d) => d.status === 'online').length;
         const daemons_stale = daemons.daemons.filter((d) => d.status === 'stale').length;
         const daemons_offline = daemons.daemons.filter((d) => d.status === 'offline').length;
-        const pending_review_count = pending_reviews.reviews.filter((r) => r.status === 'pending').length;
+        const pending_review_count = pending_reviews.total;
 
         const mapped_recent = recent.runs.map((r) => map_run_row(r, realms_by_daemon));
         const mapped_live = live_enriched.map((r) => map_run_row(r, realms_by_daemon));

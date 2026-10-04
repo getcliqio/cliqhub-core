@@ -450,7 +450,7 @@ export class DispatchService {
         });
 
         const { HugReviewsService } = await import('./hug_reviews.service.js');
-        await HugReviewsService.expire_pending_for_run(run_id).catch(() => {});
+        await HugReviewsService.close_reviews_for_ended_run(run_id).catch(() => {});
     }
 
     /**

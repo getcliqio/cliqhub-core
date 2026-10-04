@@ -90,7 +90,7 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
             expect(await columns('notification_channels')).toEqual(expect.arrayContaining(['system_key', 'locked', 'lock_reason']));
             expect(await columns('notification_rules')).toEqual(expect.arrayContaining(['system_key', 'locked', 'lock_reason', 'recipients']));
             expect(await columns('password_resets')).toEqual(expect.arrayContaining(['user_id', 'purpose', 'token_hash', 'token_enc', 'expires_at', 'used_at', 'send_count']));
-            expect(await columns('password_reset_requests')).toEqual(expect.arrayContaining(['email', 'ip', 'created_at']));
+            expect(await columns('password_reset_requests')).toEqual(expect.arrayContaining(['email', 'created_at']));
             expect(await columns('email_deliveries')).toEqual(expect.arrayContaining(['subject_type', 'subject_id', 'event', 'to', 'sent_at', 'ok', 'provider_message_id', 'error']));
         });
 
@@ -146,7 +146,8 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
 
             const rules = await NotificationRule.findAll({ where: { org_id: s.acme, system_key: { [Op.ne]: null } }, raw: true });
             expect(rules).toHaveLength(default_rule_specs(true).length);
-            const sent = rules.find((r) => r.event === 'invite.org.sent')!;
+            const sent = rules.find((r) => r.event === 'invite.org.sent' && r.channel_id === email.id)!;
+            expect(rules.find((r) => r.event === 'invite.org.sent' && r.channel_id === in_app.id)).toMatchObject({ system_key: 'invite.sent.invitee', locked: false });
             expect(sent).toMatchObject({ channel_id: email.id, recipients: ['invitee'], system_key: 'invite.sent.invitee', locked: true, lock_reason: 'Invites must reach the invited person.' });
             expect(rules.filter((r) => r.event === 'invite.owner.accepted').every((r) => !r.locked)).toBe(true);
             expect((await Org.findByPk(s.acme, { raw: true }))!.notifications_seeded_at).toBeTruthy();

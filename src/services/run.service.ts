@@ -1186,9 +1186,8 @@ export class RunService {
         );
         if (count > 0) {
             await this._emit_lifecycle(run_id, `run.${state}` as EventType, { error: error ?? null });
-            // Drop pending input/verdict HUGs so the list and badge clear.
             const { HugReviewsService } = await import('./hug_reviews.service.js');
-            await HugReviewsService.expire_pending_for_run(run_id).catch(() => {});
+            await HugReviewsService.close_reviews_for_ended_run(run_id).catch(() => {});
         }
     }
 
@@ -1523,7 +1522,8 @@ export class RunService {
             field: 'level' | 'daemon_id' | 'team' | 'run_id' | 'workspace_id' | 'concern' | 'realm_id',
         ): Promise<Array<{ value: string; count: number }>> => {
             const facet_where: Record<string, unknown> = { ...where };
-            delete facet_where[field];
+            // realm_id is the search scope, not a drill-down filter — keep it on its own facet.
+            if (field !== 'realm_id') delete facet_where[field];
             const grouped = await _run_log_line_repo.find_all_q({
                 attributes: [
                     field,
@@ -1531,7 +1531,7 @@ export class RunService {
                 ],
                 where: {
                     ...facet_where,
-                    [field]: { [Op.ne]: null },
+                    ...(field in facet_where ? {} : { [field]: { [Op.ne]: null } }),
                 },
                 group: [field],
                 order: [[get_sequelize().literal('count'), 'DESC']],

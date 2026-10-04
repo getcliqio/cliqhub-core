@@ -512,10 +512,11 @@ describe.skipIf(!ready)('Core API 6 — list sorting (integration)', () => {
 
     describe('workspaces/get', () => {
         type Row = { id: string; name: string | null; path: string; created_at: number };
+        // Names sort after "w" so the order is the same under C and en_US collation ("/" is ignored by the latter).
         const seeded = [
             { k: 'b', name: 'zulu', path: '/w/b', age: 2 },
             { k: 'a', name: null, path: '/w/mike', age: 4 },
-            { k: 'd', name: 'alpha', path: '/w/d', age: 2 },
+            { k: 'd', name: 'xray', path: '/w/d', age: 2 },
             { k: 'c', name: null, path: '/w/bravo', age: 1 },
         ];
         let daemon_id = '';

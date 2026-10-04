@@ -386,7 +386,7 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
         });
 
         it('changing or removing a locked rule answers 409 locked; unlocked defaults can be edited', async () => {
-            const locked = (await NotificationRule.findOne({ where: { org_id: s.acme, system_key: 'invite.sent.invitee', event: 'invite.org.sent' }, raw: true }))!;
+            const locked = (await NotificationRule.findOne({ where: { org_id: s.acme, system_key: 'invite.sent.invitee', event: 'invite.org.sent', locked: true }, raw: true }))!;
             const set = await post('/v1/orgs/set_notification_rules', s.token.olivia, { org_id: s.acme, event: locked.event, channel_id: locked.channel_id, priority: 5 });
             expect(set.status).toBe(409);
             expect(err(set)).toMatchObject({ code: 'locked', details: { system_key: 'invite.sent.invitee' } });

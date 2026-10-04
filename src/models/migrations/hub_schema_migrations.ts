@@ -1,5 +1,5 @@
 /**
- * Idempotent Hub (public schema) upgrades for local / e2e / Railway DBs.
+ * Idempotent Hub (`cliq` schema) upgrades for local / e2e / Railway DBs.
  */
 
 import { QueryTypes, type Sequelize, type Transaction } from 'sequelize';
@@ -42,6 +42,8 @@ const REGISTRY_TABLES = [
  * empty copies in `cliq`.
  */
 export async function move_registry_to_cliq_schema(sequelize: Sequelize): Promise<void> {
+    // Runs before migrate_store, so the target schema may not exist yet.
+    await sequelize.query('CREATE SCHEMA IF NOT EXISTS cliq');
     await merge_public_rows_into_empty_cliq_tables(sequelize);
 
     for (const tbl of REGISTRY_TABLES) {
@@ -149,7 +151,7 @@ async function count_rows(
     sequelize: Sequelize,
     schema: string,
     table: string,
-    transaction: Transaction,
+    transaction?: Transaction,
 ): Promise<number> {
     const rows = await sequelize.query<{ n: string }>(
         `SELECT count(*)::text AS n FROM "${schema}"."${table}"`,
@@ -535,4 +537,104 @@ export async function migrate_hub_schema(sequelize: Sequelize): Promise<void> {
     // User / org status and soft delete, pending memberships, tracked invite and
     // password links, system notification rows, email delivery log.
     await migrate_identity_lifecycle(sequelize);
+
+    await align_org_with_realm(sequelize);
+    await close_decided_reviews_of_ended_runs(sequelize);
+    await drop_public_schema(sequelize);
+}
+
+/** Realm-scoped rows whose `org_id` must equal their realm's org. */
+const REALM_SCOPED_TABLES = ['in_app_notifications', 'team_runs', 'reviews'] as const;
+
+/**
+ * The realm's org is the tenancy source of truth. Rows written before a realm
+ * moved org (personal `default` realms → account orgs) kept the old org and
+ * showed up under the wrong org in inbox, runs and review lists.
+ */
+async function align_org_with_realm(sequelize: Sequelize): Promise<void> {
+    for (const tbl of REALM_SCOPED_TABLES) {
+        if (!(await table_exists(sequelize, 'cliq', tbl))) continue;
+        const [, meta] = await sequelize.query(`
+            UPDATE cliq."${tbl}" AS t
+               SET org_id = re.org_id
+              FROM cliq.realms AS re
+             WHERE re.id::text = t.realm_id::text
+               AND re.org_id IS NOT NULL
+               AND t.org_id::text IS DISTINCT FROM re.org_id::text
+        `);
+        const updated = (meta as { rowCount?: number } | undefined)?.rowCount ?? 0;
+        if (updated > 0) log.info('org_aligned_with_realm', { table: tbl, rows: updated });
+    }
+}
+
+/** An ended run never acks a verdict; its `decided` reviews would stay open forever. */
+async function close_decided_reviews_of_ended_runs(sequelize: Sequelize): Promise<void> {
+    if (!(await table_exists(sequelize, 'cliq', 'reviews')) || !(await table_exists(sequelize, 'cliq', 'team_runs'))) return;
+    const [, meta] = await sequelize.query(`
+        UPDATE cliq.reviews AS r
+           SET status = 'completed', completed_at = NOW()
+          FROM cliq.team_runs AS tr
+         WHERE tr.run_id = r.run_id
+           AND r.status = 'decided'
+           AND tr.state NOT IN ('running', 'awaiting_input')
+    `);
+    const updated = (meta as { rowCount?: number } | undefined)?.rowCount ?? 0;
+    if (updated > 0) log.info('decided_reviews_closed', { rows: updated });
+}
+
+/** Leftovers of the public → cliq move that nothing reads any more. */
+const OBSOLETE_PUBLIC_TABLES = ['_hub_uuid_remint_map', 'chat_messages'] as const;
+
+/**
+ * The Hub lives only in `cliq`. Drops the obsolete public tables (only when
+ * empty — rows are kept and logged, never lost), moves pgcrypto into `cliq`,
+ * then drops `public` once nothing is left in it.
+ */
+async function drop_public_schema(sequelize: Sequelize): Promise<void> {
+    const present = await sequelize.query(
+        `SELECT 1 FROM pg_namespace WHERE nspname = 'public'`,
+        { type: QueryTypes.SELECT },
+    );
+    if (present.length === 0) return;
+
+    for (const tbl of OBSOLETE_PUBLIC_TABLES) {
+        if (!(await table_exists(sequelize, 'public', tbl))) continue;
+        const rows = await count_rows(sequelize, 'public', tbl);
+        if (rows > 0) {
+            log.warn('public_table_kept', { table: tbl, rows });
+            continue;
+        }
+        await sequelize.query(`DROP TABLE public."${tbl}"`);
+        log.info('public_table_dropped', { table: tbl });
+    }
+
+    await sequelize.query(`
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+                WHERE e.extname = 'pgcrypto' AND n.nspname = 'public'
+            ) THEN
+                ALTER EXTENSION pgcrypto SET SCHEMA cliq;
+            END IF;
+        END $$
+    `);
+
+    const [left] = await sequelize.query<{ n: string }>(
+        `SELECT ((SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace)
+               + (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace)
+               + (SELECT count(*) FROM pg_type WHERE typnamespace = 'public'::regnamespace))::text AS n`,
+        { type: QueryTypes.SELECT },
+    );
+    const objects = Number(left?.n ?? 0);
+    if (objects > 0) {
+        log.warn('public_schema_kept', { objects });
+        return;
+    }
+    try {
+        await sequelize.query('DROP SCHEMA public');
+        log.info('public_schema_dropped');
+    } catch (err) {
+        log.warn('public_schema_drop_failed', { error: err instanceof Error ? err.message : String(err) });
+    }
 }

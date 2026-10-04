@@ -885,6 +885,20 @@ export class HugReviewsService {
 		return pending.length;
 	}
 
+	/**
+	 * A run reached a terminal state: expire its pending reviews and close
+	 * decided ones — an ended run never acks a verdict, so `decided` would
+	 * otherwise stay open forever.
+	 */
+	static async close_reviews_for_ended_run(run_id: string): Promise<{ expired: number; completed: number }> {
+		const expired = await HugReviewsService.expire_pending_for_run(run_id);
+		const [completed] = await _review_repo_hr.update_where(
+			{ run_id, status: 'decided' } as any,
+			{ status: 'completed', completed_at: new Date() } as any,
+		);
+		return { expired, completed };
+	}
+
 
 	static issue_run_token(params: {
 		user_id: string;

@@ -58,6 +58,7 @@ vi.mock('../../../src/services/command_outbox.service.js', () => ({
 vi.mock('../../../src/services/hug_reviews.service.js', () => ({
     HugReviewsService: {
         expire_pending_for_run: mocks.expire_pending,
+        close_reviews_for_ended_run: mocks.expire_pending,
     },
 }));
 
