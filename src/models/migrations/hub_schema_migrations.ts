@@ -2,11 +2,15 @@
  * Idempotent Hub (public schema) upgrades for local / e2e / Railway DBs.
  */
 
-import { QueryTypes, type Sequelize } from 'sequelize';
+import { QueryTypes, type Sequelize, type Transaction } from 'sequelize';
+import { get_logger } from '../../lib/log.js';
 import { migrate_hub_integer_pks_to_uuid } from './migrate_hub_uuid_pks.js';
 import { migrate_remaining_integer_pks_to_uuid } from './migrate_remaining_int_pks.js';
 import { migrate_hub_remint_legacy_uuids } from './migrate_hub_remint_uuids.js';
 import { migrate_identity_lifecycle } from './migrate_identity_lifecycle.js';
+
+const log = get_logger('boot');
+
 const REGISTRY_TABLES = [
     'users',
     'orgs',
@@ -38,6 +42,8 @@ const REGISTRY_TABLES = [
  * empty copies in `cliq`.
  */
 export async function move_registry_to_cliq_schema(sequelize: Sequelize): Promise<void> {
+    await merge_public_rows_into_empty_cliq_tables(sequelize);
+
     for (const tbl of REGISTRY_TABLES) {
         const in_public = await table_exists(sequelize, 'public', tbl);
         const in_cliq = await table_exists(sequelize, 'cliq', tbl);
@@ -77,6 +83,98 @@ export async function move_registry_to_cliq_schema(sequelize: Sequelize): Promis
 
     // ── Post-migration cleanup: no-op — daemon catalog tables are dropped
     // eagerly above before the registry tables move in.
+}
+
+// Parents before children so FK checks pass while copying.
+const MERGE_ORDER = [
+    'users',
+    'orgs',
+    'org_roles',
+    'org_members',
+    'scopes',
+    'scope_members',
+    'teams',
+    'team_versions',
+    'team_tags',
+    'settings',
+    'tokens',
+    'audit_log',
+    'download_log',
+    'drafts',
+    'org_agent_settings',
+    'account_agent_settings',
+    'account_invites',
+    'realm_invites',
+] as const;
+
+/**
+ * A registry table that exists in both schemas, empty in `cliq` and populated
+ * in `public`, is the result of `sync()` creating the cliq copy before the move
+ * ran. Copy the rows into the cliq table (keeping its current shape and
+ * constraints) and drop the public copy. A table with rows on both sides is
+ * left alone. All-or-nothing: one transaction.
+ */
+async function merge_public_rows_into_empty_cliq_tables(sequelize: Sequelize): Promise<void> {
+    await sequelize.transaction(async (transaction) => {
+        const merged: string[] = [];
+        for (const tbl of MERGE_ORDER) {
+            if (!(await table_exists(sequelize, 'public', tbl))) continue;
+            if (!(await table_exists(sequelize, 'cliq', tbl))) continue;
+            const public_rows = await count_rows(sequelize, 'public', tbl, transaction);
+            const cliq_rows = await count_rows(sequelize, 'cliq', tbl, transaction);
+            if (cliq_rows > 0) {
+                if (public_rows > 0) {
+                    log.warn('registry_table_in_both_schemas', { table: tbl, public_rows, cliq_rows });
+                }
+                continue;
+            }
+            if (public_rows > 0) {
+                const columns = await shared_columns(sequelize, tbl, transaction);
+                const col_list = columns.map((c) => `"${c}"`).join(', ');
+                await sequelize.query(
+                    `INSERT INTO cliq."${tbl}" (${col_list}) SELECT ${col_list} FROM public."${tbl}"`,
+                    { transaction },
+                );
+            }
+            merged.push(tbl);
+            log.info('registry_table_merged', { table: tbl, rows: public_rows });
+        }
+        for (const tbl of merged) {
+            await sequelize.query(`DROP TABLE public."${tbl}" CASCADE`, { transaction });
+        }
+    });
+}
+
+async function count_rows(
+    sequelize: Sequelize,
+    schema: string,
+    table: string,
+    transaction: Transaction,
+): Promise<number> {
+    const rows = await sequelize.query<{ n: string }>(
+        `SELECT count(*)::text AS n FROM "${schema}"."${table}"`,
+        { type: QueryTypes.SELECT, transaction },
+    );
+    return Number(rows[0]?.n ?? 0);
+}
+
+async function shared_columns(
+    sequelize: Sequelize,
+    table: string,
+    transaction: Transaction,
+): Promise<string[]> {
+    const rows = await sequelize.query<{ column_name: string }>(
+        `SELECT c.column_name FROM information_schema.columns c
+         WHERE c.table_schema = 'cliq' AND c.table_name = :table
+           AND EXISTS (
+               SELECT 1 FROM information_schema.columns p
+               WHERE p.table_schema = 'public' AND p.table_name = :table
+                 AND p.column_name = c.column_name
+           )
+         ORDER BY c.ordinal_position`,
+        { replacements: { table }, type: QueryTypes.SELECT, transaction },
+    );
+    return rows.map((r) => r.column_name);
 }
 
 async function table_exists(
