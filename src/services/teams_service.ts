@@ -95,6 +95,24 @@ function build_visibility_where(auth: AuthContext): WhereOptions {
     };
 }
 
+/**
+ * `teams/get` search: `@scope/name` (or `scope/name`) matches the scope and
+ * the name; any other text matches the name, description or scope. Case
+ * insensitive substring matches; null when there is nothing to search.
+ */
+export function team_query_where(raw: string | undefined): WhereOptions | null {
+    const q = (raw ?? '').trim().replace(/^@+/, '');
+    if (!q) return null;
+    const like = (text: string) => ({ [Op.iLike]: `%${escape_like(text)}%` });
+    const slash = q.indexOf('/');
+    if (slash >= 0) {
+        const scope = q.slice(0, slash).trim();
+        const name = q.slice(slash + 1).trim();
+        return { [Op.and]: [...(scope ? [{ scope: like(scope) }] : []), ...(name ? [{ name: like(name) }] : [])] };
+    }
+    return { [Op.or]: [{ name: like(q) }, { description: like(q) }, { scope: like(q) }] };
+}
+
 /** `teams/get` catalog / site-admin sort key → ORDER BY (qualified: the author join also has columns). */
 const TEAM_SORT_COLUMNS: SortColumns<TeamCatalogSortKey> = {
     name: (d) => [[fn('LOWER', col('Team.name')), d]],
@@ -142,15 +160,8 @@ export class TeamsService {
 
         const conditions: WhereOptions[] = [build_visibility_where(auth)];
 
-        if (params.query) {
-            const pattern = `%${escape_like(params.query)}%`;
-            conditions.push({
-                [Op.or]: [
-                    { name: { [Op.iLike]: pattern } },
-                    { description: { [Op.iLike]: pattern } },
-                ],
-            });
-        }
+        const query_where = team_query_where(params.query);
+        if (query_where) conditions.push(query_where);
         if (params.tag) {
             conditions.push(
                 literal(`EXISTS (SELECT 1 FROM team_tags tt WHERE tt.team_id = "Team"."id" AND tt.tag = ${get_sequelize().escape(params.tag)})`) as any,
@@ -262,15 +273,8 @@ export class TeamsService {
     }, limit: number, offset: number) {
         const conditions: WhereOptions[] = [];
 
-        if (params.query) {
-            const pattern = `%${escape_like(params.query)}%`;
-            conditions.push({
-                [Op.or]: [
-                    { name: { [Op.iLike]: pattern } },
-                    { description: { [Op.iLike]: pattern } },
-                ],
-            });
-        }
+        const query_where = team_query_where(params.query);
+        if (query_where) conditions.push(query_where);
         if (params.scope !== undefined) { conditions.push({ scope: params.scope }); }
         if (params.listed !== undefined) { conditions.push({ listed: params.listed ? 1 : 0 }); }
 

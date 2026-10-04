@@ -189,7 +189,7 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'POST /v1/runs/cancel': record('run', RUN, 'operate', { perm: 'teams.cancel' }),
     'POST /v1/runs/supply_inputs': record('run', RUN, 'operate', { perm: 'teams.inputs' }),
     'POST /v1/runs/enqueue': realm(REALM, 'operate', { perm: 'teams.run', handler: 'token scope dispatch' }),
-    'POST /v1/runs/create_rdr': record('run', RUN, 'operate'),
+    'POST /v1/runs/create_rdr': record('run', RUN, null, { daemon: 'write' }),
     'POST /v1/artifacts/get': record('run', RUN, 'view', { perm: 'runs.view' }),
     'POST /v1/artifacts/get_by_id': record('artifact', 'body.artifact_id', 'view', { perm: 'runs.view' }),
     'POST /v1/artifacts/submit': record('run', RUN, null, { daemon: 'write' }),

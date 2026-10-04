@@ -11,13 +11,13 @@ function repos(over: { org?: object | null; scope?: object | null; user?: object
 
 describe('namespace messages (approved wording)', () => {
     it.each([
-        [{ kind: 'org', slug: 'measureone', personal: false }, 'measureone is already an org'],
-        [{ kind: 'org', slug: 'measureone', personal: true, owner_username: 'measureone' }, 'measureone is already an org — the personal org of user measureone'],
-        [{ kind: 'scope', slug: 'measureone', scope_type: 'user', owner_username: 'sapan' }, 'measureone is already a scope (user, owned by user sapan)'],
-        [{ kind: 'scope', slug: 'measureone', scope_type: 'org', org_slug: 'acme' }, 'measureone is already a scope (org, owned by org acme)'],
-        [{ kind: 'scope', slug: 'measureone', scope_type: 'org', org_slug: null }, 'measureone is already a scope (org, not attached to any org)'],
-        [{ kind: 'scope', slug: 'measureone', scope_type: 'user', owner_username: null }, 'measureone is already a scope (user, not attached to any org or user)'],
-        [{ kind: 'user', slug: 'measureone' }, 'measureone is already a username'],
+        [{ kind: 'org', slug: 'measureone', personal: false }, 'The name measureone is already taken.'],
+        [{ kind: 'org', slug: 'measureone', personal: true, owner_username: 'measureone' }, 'The name measureone is already taken.'],
+        [{ kind: 'scope', slug: 'measureone', scope_type: 'user', owner_username: 'sapan' }, 'The name measureone is already taken.'],
+        [{ kind: 'scope', slug: 'measureone', scope_type: 'org', org_slug: 'acme' }, 'The name measureone is already taken.'],
+        [{ kind: 'scope', slug: 'measureone', scope_type: 'org', org_slug: null }, 'The name measureone is already taken.'],
+        [{ kind: 'scope', slug: 'measureone', scope_type: 'user', owner_username: null }, 'The name measureone is already taken.'],
+        [{ kind: 'user', slug: 'measureone' }, 'The name measureone is already taken.'],
     ] as const)('%o → %s', (holder, text) => {
         expect(namespace_message(holder)).toBe(text);
         expect(namespace_conflict(holder)).toMatchObject({ status: 409, code: 'conflict', message: text, details: { ...holder, field: 'slug', holder: { slug: 'measureone' } } });
@@ -31,7 +31,7 @@ describe('namespace_holders / assert_namespace_free', () => {
             { kind: 'user', slug: 'measureone' },
             { kind: 'scope', slug: 'measureone', id: 's', scope_type: 'org', org_slug: 'acme', owner_username: 'sapan', org_id: 'o1', owner_id: 'u1' },
         ]);
-        await expect(assert_namespace_free(r, 'measureone', ['scope'])).rejects.toMatchObject({ message: 'measureone is already a scope (org, owned by org acme)' });
+        await expect(assert_namespace_free(r, 'measureone', ['scope'])).rejects.toMatchObject({ message: 'The name measureone is already taken.' });
         await expect(assert_namespace_free(repos(), 'free-name')).resolves.toBeUndefined();
     });
 
@@ -57,7 +57,7 @@ describe('deleted names (409 deleted)', () => {
     it('a soft-deleted org holds its slug: deleted with was_active from activated_at', async () => {
         const r = repos({ org: { id: 'org-1', slug: 'acme', deleted_at: when, status: 'deleted', activated_at: when } });
         await expect(assert_namespace_free(r, 'acme')).rejects.toMatchObject({
-            status: 409, code: 'deleted', message: 'acme belongs to a deleted org',
+            status: 409, code: 'deleted', message: 'The name acme belongs to a deleted organization.',
             details: { kind: 'org', id: 'org-1', deleted_at: when.toISOString(), was_active: true },
         });
     });

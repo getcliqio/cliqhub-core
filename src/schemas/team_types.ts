@@ -61,7 +61,7 @@ export type TeamCatalogSortKey = typeof TEAM_CATALOG_SORT_KEYS[number];
  */
 export const TeamsGetInput = z.object({
     query: z.string().optional()
-        .describe('Substring match on team name or description'),
+        .describe('Search: `@scope/name` matches scope and name; other text matches name, description or scope'),
     tag: z.string().optional()
         .describe('Filter by tag slug'),
     scope: z.string().optional()

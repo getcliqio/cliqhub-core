@@ -181,7 +181,7 @@ describe('AuthService', () => {
             org_repo.find_by_slug.mockResolvedValueOnce({ id: hub_legacy_uuid(5), slug: 'alice' });
             // The conflict names the holder (lib/namespace.ts).
             await expect(service.signup('alice', 'alice@test.com', 'password123'))
-                .rejects.toMatchObject({ status: 409, code: 'conflict', message: 'alice is already an org', details: { kind: 'org', slug: 'alice' } });
+                .rejects.toMatchObject({ status: 409, code: 'conflict', message: 'The name alice is already taken.', details: { kind: 'org', slug: 'alice' } });
         });
 
         it('rejects password shorter than 8 characters', async () => {

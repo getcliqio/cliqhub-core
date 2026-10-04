@@ -39,7 +39,6 @@ export class OrgsController extends BaseController {
             search: body.query,
             limit: body.limit,
             offset: body.offset,
-            exclude_personal: body.exclude_personal,
             mine: body.mine,
             sort_by: body.sort_by,
             sort_dir: body.sort_dir,

@@ -16,8 +16,6 @@ export const OrgsGetInput = z.object({
         .describe('Substring match on slug or display_name'),
     limit: LimitField,
     offset: OffsetField,
-    exclude_personal: z.boolean().optional()
-        .describe('When true, omit personal orgs (slug matches a username). Site admin only.'),
     mine: z.boolean().optional()
         .describe('When true, return only orgs the caller is a member of (ignores admin privileges)'),
     sort_by: sort_by_field(['slug', 'display_name', 'member_count', 'scope_count', 'created_at'],

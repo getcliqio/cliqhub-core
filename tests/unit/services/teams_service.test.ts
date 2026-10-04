@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
-import { TeamsService } from '../../../src/services/teams_service.js';
+import { Op } from 'sequelize';
+import { TeamsService, team_query_where } from '../../../src/services/teams_service.js';
 import { ALICE, BOB, UNAUTHED, SITE_ADMIN } from '../../helpers/fixtures.js';
 
 vi.mock('../../../src/lib/sequelize.js', () => ({
@@ -272,6 +273,30 @@ describe('TeamsService — get (list)', () => {
             // Default catalog order (most installed), id as tie-breaker.
             [['install_count', 'DESC'], ['id', 'ASC']],
         );
+    });
+});
+
+describe('team_query_where (teams/get search)', () => {
+    const like = (t: string) => ({ [Op.iLike]: `%${t}%` });
+
+    it('plain text matches name, description or scope', () => {
+        const w = team_query_where('  MeasureOne ') as Record<symbol, unknown>;
+        expect(w[Op.or]).toEqual([{ name: like('MeasureOne') }, { description: like('MeasureOne') }, { scope: like('MeasureOne') }]);
+    });
+
+    it('@scope/name (or scope/name) matches the scope and the name', () => {
+        expect((team_query_where('@acme/hello') as Record<symbol, unknown>)[Op.and]).toEqual([{ scope: like('acme') }, { name: like('hello') }]);
+        expect((team_query_where('acme/') as Record<symbol, unknown>)[Op.and]).toEqual([{ scope: like('acme') }]);
+        expect((team_query_where('/hello') as Record<symbol, unknown>)[Op.and]).toEqual([{ name: like('hello') }]);
+    });
+
+    it('nothing to search → null', () => {
+        expect(team_query_where(undefined)).toBeNull();
+        expect(team_query_where('  @ ')).toBeNull();
+    });
+
+    it('escapes LIKE characters', () => {
+        expect((team_query_where('50%') as Record<symbol, unknown>)[Op.or]).toContainEqual({ scope: like('50\\%') });
     });
 });
 

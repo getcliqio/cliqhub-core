@@ -162,29 +162,29 @@ describe.skipIf(!ready)('org lifecycle and the shared name space (integration)',
         await users.new_user(ROOT_AUTH, { username: person, email: `${person}@t.io`, password: 'password123' } as never);
         let res = await post({ slug: person, ...ROOT_OWNER });
         expect(res.status).toBe(409);
-        expect(res.body).toMatchObject({ ok: false, code: 'conflict', error: `${person} is already an org — the personal org of user ${person}`, details: { kind: 'org', slug: person, personal: true, owner_username: person } });
+        expect(res.body).toMatchObject({ ok: false, code: 'conflict', error: `The name ${person} is already taken.`, details: { kind: 'org', slug: person, personal: true, owner_username: person } });
 
         await svc.new_org(ROOT_AUTH, { slug: `${tag}-held`, ...ROOT_OWNER });
         res = await post({ slug: `${tag}-held`, ...ROOT_OWNER });
-        expect(res.body).toMatchObject({ error: `${tag}-held is already an org`, details: { kind: 'org', personal: false } });
+        expect(res.body).toMatchObject({ error: `The name ${tag}-held is already taken.`, details: { kind: 'org', personal: false } });
 
         // An org's scope whose org is gone (org_id cleared, as a raw org delete leaves it).
         await M.Scope.create({ slug: `${tag}-orph`, owner_id: ROOT_ID, scope_type: 'org', org_id: null } as never);
         res = await post({ slug: `${tag}-orph`, ...ROOT_OWNER });
-        expect(res.body).toMatchObject({ error: `${tag}-orph is already a scope (org, not attached to any org)`, details: { kind: 'scope', scope_type: 'org', org_slug: null } });
+        expect(res.body).toMatchObject({ error: `The name ${tag}-orph is already taken.`, details: { kind: 'scope', scope_type: 'org', org_slug: null } });
 
         await M.Scope.create({ slug: `${tag}-sc`, owner_id: ROOT_ID, scope_type: 'user' } as never);
         res = await post({ slug: `${tag}-sc`, ...ROOT_OWNER });
-        expect(res.body).toMatchObject({ error: `${tag}-sc is already a scope (user, owned by user root919)`, details: { kind: 'scope', scope_type: 'user', owner_username: 'root919' } });
+        expect(res.body).toMatchObject({ error: `The name ${tag}-sc is already taken.`, details: { kind: 'scope', scope_type: 'user', owner_username: 'root919' } });
 
         // A username alone (its scope and personal org were removed).
         await M.User.create({ username: `${tag}-uonly`, email: `${tag}-uonly@t.io`, password_hash: 'x' } as never);
         res = await post({ slug: `${tag}-uonly`, ...ROOT_OWNER });
-        expect(res.body).toMatchObject({ error: `${tag}-uonly is already a username`, details: { kind: 'user', slug: `${tag}-uonly` } });
+        expect(res.body).toMatchObject({ error: `The name ${tag}-uonly is already taken.`, details: { kind: 'user', slug: `${tag}-uonly` } });
 
         // Same helper, same messages on admin user create.
         await expect(users.new_user(ROOT_AUTH, { username: `${tag}-held`, email: `${tag}-x@t.io`, password: 'password123' } as never))
-            .rejects.toMatchObject({ status: 409, message: `${tag}-held is already an org` });
+            .rejects.toMatchObject({ status: 409, message: `The name ${tag}-held is already taken.` });
     });
 
     // ── 4. delete_org ───────────────────────────────────────────────────

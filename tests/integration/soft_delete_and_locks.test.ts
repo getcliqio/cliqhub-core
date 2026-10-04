@@ -112,6 +112,19 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
 
     // ── 1. orgs ───────────────────────────────────────────────────────
 
+    describe('orgs/get (site admin)', () => {
+        it('lists every live org, including one named after its user', async () => {
+            const owner = await s.signup('orgsame');
+            const own = (await post('/v1/orgs/get', owner.token, { mine: true })).body.data.orgs as Array<{ id: string; slug: string }>;
+            const account_org = own.find((o) => o.slug === owner.username);
+            expect(account_org, JSON.stringify(own)).toBeTruthy();
+
+            const res = await post('/v1/orgs/get', s.token.sam, { limit: 100, sort_by: 'created_at', sort_dir: 'desc' });
+            expect(res.status, JSON.stringify(res.body)).toBe(200);
+            expect(res.body.data.orgs.map((o: { id: string }) => o.id)).toContain(account_org!.id);
+        });
+    });
+
     describe('orgs/delete and restore_org', () => {
         it('soft-deletes: rows stay, reads hide it, the slug stays taken, and restore brings the same org back', async () => {
             const owner = await s.signup('orgown');

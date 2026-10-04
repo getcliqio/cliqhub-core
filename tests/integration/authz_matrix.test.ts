@@ -221,7 +221,7 @@ const MATRIX: Record<string, Row> = {
     'POST /v1/runs/cancel': { expect: A1_OPERATE },
     'POST /v1/runs/supply_inputs': { expect: A1_OPERATE },
     'POST /v1/runs/enqueue': { expect: A1_OPERATE },
-    'POST /v1/runs/create_rdr': { expect: A1_OPERATE },
+    'POST /v1/runs/create_rdr': { expect: A1_DAEMON_WRITE },
     'POST /v1/artifacts/get': { expect: A1_VIEW },
     'POST /v1/artifacts/get_by_id': { expect: A1_VIEW },
     'POST /v1/artifacts/submit': { expect: A1_DAEMON_WRITE },

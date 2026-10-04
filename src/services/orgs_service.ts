@@ -80,7 +80,7 @@ export class OrgsService {
      * @throws ApiError 400 when `sort_by` is sent with the member list
      */
     async get(auth: AuthContext, params: {
-        search?: string; limit?: number; offset?: number; exclude_personal?: boolean; mine?: boolean;
+        search?: string; limit?: number; offset?: number; mine?: boolean;
         sort_by?: OrgSortKey; sort_dir?: SortDir; status?: OrgStatus; include_deleted?: boolean;
     }) {
         log.debug('get', { user_id: auth.user?.id });
@@ -104,7 +104,7 @@ export class OrgsService {
     }
 
     private async _get_admin(_auth: AuthContext, params: {
-        search?: string; limit?: number; offset?: number; exclude_personal?: boolean;
+        search?: string; limit?: number; offset?: number;
         sort_by?: OrgSortKey; sort_dir?: SortDir; status?: OrgStatus; include_deleted?: boolean;
     }) {
         const limit = Math.min(params.limit || 50, 100);
@@ -116,11 +116,6 @@ export class OrgsService {
                 { slug: { [Op.iLike]: `%${escape_like(params.search)}%` } },
                 { display_name: { [Op.iLike]: `%${escape_like(params.search)}%` } },
             ];
-        }
-        if (params.exclude_personal) {
-            where.id = {
-                [Op.notIn]: literal('(SELECT o.id FROM orgs o INNER JOIN users u ON lower(u.username) = lower(o.slug))'),
-            };
         }
         if (params.status === 'deleted') {
             where.deleted_at = { [Op.ne]: null };

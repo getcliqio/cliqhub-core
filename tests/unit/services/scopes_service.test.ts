@@ -241,7 +241,7 @@ describe('ScopesService — new_scope', () => {
         scope_repo.find_by_slug.mockResolvedValueOnce({ id: hub_legacy_uuid(10), slug: 'taken' });
 
         await expect(service.new_scope(SITE_ADMIN, { slug: 'taken', owner_username: 'alice' }))
-            .rejects.toMatchObject({ status: 409, message: 'taken is already a scope (scope, not attached to any org or user)', details: { kind: 'scope', slug: 'taken' } });
+            .rejects.toMatchObject({ status: 409, message: 'The name taken is already taken.', details: { kind: 'scope', slug: 'taken' } });
     });
 
     it('returns 404 when owner user not found', async () => {

@@ -430,7 +430,7 @@ describe('OrgsService — new_org', () => {
     it('rejects a slug held by a live org with 409 conflict', async () => {
         org_repo.find_by_slug.mockResolvedValueOnce({ id: hub_legacy_uuid(1), slug: 'taken' });
         await expect(service.new_org(SITE_ADMIN, { slug: 'taken', owner: { user_id: OWNER_ID } }))
-            .rejects.toMatchObject({ status: 409, message: 'taken is already an org', details: { kind: 'org', slug: 'taken', personal: false } });
+            .rejects.toMatchObject({ status: 409, message: 'The name taken is already taken.', details: { kind: 'org', slug: 'taken', personal: false } });
         expect(invitations.send_in_transaction).not.toHaveBeenCalled();
     });
 

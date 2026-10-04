@@ -5,13 +5,9 @@
  * A personal org and its user share one name (org slug = username), and every
  * org gets a scope with its slug, so one name can be held by an org, a scope
  * and a user at once. Signup, org create, scope create and admin user create
- * all check the namespace through {@link assert_namespace_free}, so a
- * conflict always names who holds the name:
- *
- *   - `measureone is already an org` (`— the personal org of user measureone`)
- *   - `measureone is already a scope (org, owned by org acme)` /
- *     `(user, owned by user alice)` / `(org, not attached to any org)`
- *   - `measureone is already a username`
+ * all check the namespace through {@link assert_namespace_free}. A conflict
+ * says `The name measureone is already taken.`; who holds the name (org,
+ * scope or user, and its owner) is in `details`.
  *
  * A live holder gives `409 conflict` with the holder in `details`
  * ({@link NamespaceHolder} plus `field` and `holder: { id, slug }`).
@@ -147,20 +143,13 @@ export async function namespace_holders(repos: NamespaceRepos, name: string, kin
     return out;
 }
 
-/** The user-facing sentence for one holder. */
+/**
+ * The user-facing sentence for one holder. Who holds the name travels in
+ * `details`; the sentence only says the name is taken (or deleted).
+ */
 export function namespace_message(h: NamespaceHolder): string {
-    if (h.deleted) return `${h.slug} belongs to a deleted ${h.deleted.kind === 'org' ? 'org' : 'user'}`;
-    if (h.kind === 'org') {
-        return h.personal ? `${h.slug} is already an org — the personal org of user ${h.owner_username ?? h.slug}` : `${h.slug} is already an org`;
-    }
-    if (h.kind === 'user') return `${h.slug} is already a username`;
-    const type = h.scope_type ?? 'scope';
-    if (type === 'org') {
-        return h.org_slug ? `${h.slug} is already a scope (org, owned by org ${h.org_slug})` : `${h.slug} is already a scope (org, not attached to any org)`;
-    }
-    return h.owner_username
-        ? `${h.slug} is already a scope (${type}, owned by user ${h.owner_username})`
-        : `${h.slug} is already a scope (${type}, not attached to any org or user)`;
+    if (h.deleted) return `The name ${h.slug} belongs to a deleted ${h.deleted.kind === 'org' ? 'organization' : 'user'}.`;
+    return `The name ${h.slug} is already taken.`;
 }
 
 /**
