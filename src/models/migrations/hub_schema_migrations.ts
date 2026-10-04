@@ -38,30 +38,6 @@ const REGISTRY_TABLES = [
  * empty copies in `cliq`.
  */
 export async function move_registry_to_cliq_schema(sequelize: Sequelize): Promise<void> {
-    // ── Pre-flight: drop legacy daemon-catalog tables that share names with Hub
-    // registry tables.  These were created by the old cliq-store package
-    // (daemon catalog: scopes/teams with TEXT ids, not UUID).  They are no longer
-    // actively written — daemons manage their own SQLite catalog and re-sync on
-    // reconnect.  Dropping with CASCADE also removes any FK constraints that
-    // reference them (e.g. workspace_teams → cliq.teams).
-    // Detection: daemon `scopes` has an `is_default` column; daemon `teams`
-    // has a `daemon_id` column — neither exists on the Hub registry models.
-    await drop_daemon_catalog_table_if_present(sequelize, 'scopes', 'is_default');
-    await drop_daemon_catalog_table_if_present(sequelize, 'teams', 'daemon_id');
-
-    // Handle partially-migrated state from a previous boot that renamed but
-    // did not drop (the rename approach was abandoned; see git history).
-    await sequelize.query('DROP TABLE IF EXISTS cliq."legacy_catalog_scopes" CASCADE');
-    await sequelize.query('DROP TABLE IF EXISTS cliq."legacy_catalog_teams" CASCADE');
-
-    // `public.reviews` is an orphaned legacy table (minimal columns, ≤ a handful
-    // of rows).  The control-plane `cliq.reviews` (gate reviews) is the live one.
-    // Drop the public remnant so it doesn't block future migrations.
-    const pub_reviews = await table_exists(sequelize, 'public', 'reviews');
-    if (pub_reviews) {
-        await sequelize.query('DROP TABLE IF EXISTS public."reviews" CASCADE');
-    }
-
     for (const tbl of REGISTRY_TABLES) {
         const in_public = await table_exists(sequelize, 'public', tbl);
         const in_cliq = await table_exists(sequelize, 'cliq', tbl);
@@ -116,41 +92,6 @@ async function table_exists(
         { replacements: { schema, table }, type: QueryTypes.SELECT },
     );
     return Boolean(rows[0]?.exists);
-}
-
-async function column_exists(
-    sequelize: Sequelize,
-    schema: string,
-    table: string,
-    column: string,
-): Promise<boolean> {
-    const rows = await sequelize.query<{ exists: boolean }>(
-        `SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = :schema AND table_name = :table AND column_name = :column
-        ) AS exists`,
-        { replacements: { schema, table, column }, type: QueryTypes.SELECT },
-    );
-    return Boolean(rows[0]?.exists);
-}
-
-/**
- * Drop a daemon-catalog table in the `cliq` schema when the given
- * `sentinel_column` exists (proving it is the daemon-format table and not
- * a Hub registry table).  Uses CASCADE to also drop any FK constraints in
- * other tables (e.g. workspace_teams) that reference it.
- * Idempotent — does nothing if the table is absent.
- */
-async function drop_daemon_catalog_table_if_present(
-    sequelize: Sequelize,
-    table: string,
-    sentinel_column: string,
-): Promise<void> {
-    const exists = await table_exists(sequelize, 'cliq', table);
-    if (!exists) return;
-    const has_sentinel = await column_exists(sequelize, 'cliq', table, sentinel_column);
-    if (!has_sentinel) return;
-    await sequelize.query(`DROP TABLE cliq."${table}" CASCADE`);
 }
 
 export async function migrate_hub_schema(sequelize: Sequelize): Promise<void> {
