@@ -38,14 +38,21 @@ const REGISTRY_TABLES = [
  * empty copies in `cliq`.
  */
 export async function move_registry_to_cliq_schema(sequelize: Sequelize): Promise<void> {
-    // ── Pre-flight: rename legacy daemon-catalog tables that share names with Hub
+    // ── Pre-flight: drop legacy daemon-catalog tables that share names with Hub
     // registry tables.  These were created by the old cliq-store package
-    // (daemon catalog: scopes/teams with TEXT ids, not UUID) and are no longer
-    // actively written.  Renaming them unblocks the registry migration below.
+    // (daemon catalog: scopes/teams with TEXT ids, not UUID).  They are no longer
+    // actively written — daemons manage their own SQLite catalog and re-sync on
+    // reconnect.  Dropping with CASCADE also removes any FK constraints that
+    // reference them (e.g. workspace_teams → cliq.teams).
     // Detection: daemon `scopes` has an `is_default` column; daemon `teams`
     // has a `daemon_id` column — neither exists on the Hub registry models.
-    await rename_daemon_catalog_table_if_present(sequelize, 'scopes', 'is_default', 'legacy_catalog_scopes');
-    await rename_daemon_catalog_table_if_present(sequelize, 'teams', 'daemon_id', 'legacy_catalog_teams');
+    await drop_daemon_catalog_table_if_present(sequelize, 'scopes', 'is_default');
+    await drop_daemon_catalog_table_if_present(sequelize, 'teams', 'daemon_id');
+
+    // Handle partially-migrated state from a previous boot that renamed but
+    // did not drop (the rename approach was abandoned; see git history).
+    await sequelize.query('DROP TABLE IF EXISTS cliq."legacy_catalog_scopes" CASCADE');
+    await sequelize.query('DROP TABLE IF EXISTS cliq."legacy_catalog_teams" CASCADE');
 
     // `public.reviews` is an orphaned legacy table (minimal columns, ≤ a handful
     // of rows).  The control-plane `cliq.reviews` (gate reviews) is the live one.
@@ -92,12 +99,8 @@ export async function move_registry_to_cliq_schema(sequelize: Sequelize): Promis
         }
     }
 
-    // ── Post-migration cleanup: drop legacy daemon-catalog tables once the
-    // registry tables are confirmed in cliq with UUID primary keys.
-    // CASCADE drops any FK constraints in other tables (e.g. workspace_teams)
-    // that still reference them — those FKs were daemon-era artifacts.
-    await drop_legacy_catalog_table_if_registry_present(sequelize, 'legacy_catalog_scopes', 'scopes');
-    await drop_legacy_catalog_table_if_registry_present(sequelize, 'legacy_catalog_teams', 'teams');
+    // ── Post-migration cleanup: no-op — daemon catalog tables are dropped
+    // eagerly above before the registry tables move in.
 }
 
 async function table_exists(
@@ -131,68 +134,23 @@ async function column_exists(
     return Boolean(rows[0]?.exists);
 }
 
-async function column_exists_with_type(
-    sequelize: Sequelize,
-    schema: string,
-    table: string,
-    column: string,
-    data_type: string,
-): Promise<boolean> {
-    const rows = await sequelize.query<{ exists: boolean }>(
-        `SELECT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = :schema AND table_name = :table
-              AND column_name = :column AND data_type = :data_type
-        ) AS exists`,
-        { replacements: { schema, table, column, data_type }, type: QueryTypes.SELECT },
-    );
-    return Boolean(rows[0]?.exists);
-}
-
 /**
- * Rename a daemon-catalog table in the `cliq` schema to `new_name` when the
- * given `sentinel_column` exists (proving it is the daemon-format table and
- * not a Hub registry table).  Idempotent — does nothing if the table is
- * absent or the sentinel column is missing.
+ * Drop a daemon-catalog table in the `cliq` schema when the given
+ * `sentinel_column` exists (proving it is the daemon-format table and not
+ * a Hub registry table).  Uses CASCADE to also drop any FK constraints in
+ * other tables (e.g. workspace_teams) that reference it.
+ * Idempotent — does nothing if the table is absent.
  */
-async function rename_daemon_catalog_table_if_present(
+async function drop_daemon_catalog_table_if_present(
     sequelize: Sequelize,
     table: string,
     sentinel_column: string,
-    new_name: string,
 ): Promise<void> {
     const exists = await table_exists(sequelize, 'cliq', table);
     if (!exists) return;
     const has_sentinel = await column_exists(sequelize, 'cliq', table, sentinel_column);
     if (!has_sentinel) return;
-    const already_renamed = await table_exists(sequelize, 'cliq', new_name);
-    if (already_renamed) {
-        // Already renamed in a previous boot — drop the old daemon table if
-        // it still exists (can happen if a prior rename was interrupted).
-        await sequelize.query(`DROP TABLE IF EXISTS cliq."${table}" CASCADE`);
-        return;
-    }
-    await sequelize.query(`ALTER TABLE cliq."${table}" RENAME TO "${new_name}"`);
-}
-
-/**
- * Drop a legacy daemon-catalog table once the corresponding Hub registry
- * table has landed in `cliq` with a UUID primary key.
- * Uses CASCADE so any orphaned FK constraints (e.g. workspace_teams →
- * legacy_catalog_teams) are removed along with the table.
- * Idempotent — does nothing if the legacy table is already gone.
- */
-async function drop_legacy_catalog_table_if_registry_present(
-    sequelize: Sequelize,
-    legacy_table: string,
-    registry_table: string,
-): Promise<void> {
-    const legacy_exists = await table_exists(sequelize, 'cliq', legacy_table);
-    if (!legacy_exists) return;
-    // Only drop once the registry version is confirmed in cliq with UUID id.
-    const registry_is_uuid = await column_exists_with_type(sequelize, 'cliq', registry_table, 'id', 'uuid');
-    if (!registry_is_uuid) return;
-    await sequelize.query(`DROP TABLE IF EXISTS cliq."${legacy_table}" CASCADE`);
+    await sequelize.query(`DROP TABLE cliq."${table}" CASCADE`);
 }
 
 export async function migrate_hub_schema(sequelize: Sequelize): Promise<void> {
