@@ -12,6 +12,7 @@ import { postgres_reachable } from '../migrated_platform/helpers/control_plane_s
 import { open_live_hub_app, close_live_hub_app } from '../migrated_platform/helpers/live_hub_app.js';
 import { seed_authz, type Seed } from '../helpers/authz_seed.js';
 import { Realm, RealmMember } from '../../src/models/index.js';
+import { RealmService } from '../../src/services/realm.service.js';
 
 const has_postgres = await postgres_reachable();
 
@@ -54,8 +55,12 @@ describe.skipIf(!has_postgres)('realms access (Core API 5)', () => {
         it('owner and org admin can administer it', async () => {
             expect((await post('/v1/realms/update', s.token.olivia, { realm_id: s.A1, name: 'A1 renamed' })).status).toBe(200);
             expect((await Realm.findOne({ where: { id: s.A1 }, raw: true }))?.name).toBe('A1 renamed');
-            expect((await post('/v1/realms/add_member', s.token.adam, { realm_id: s.A1, member_type: 'user', member_id: s.user.nora, role: 'member' })).status).toBe(200);
-            expect(await RealmMember.findOne({ where: { realm_id: s.A1, member_id: s.user.nora } })).toBeTruthy();
+            // New people are invited, not added; add_member changes an existing member's role.
+            expect((await post('/v1/realms/add_member', s.token.adam, { realm_id: s.A1, member_type: 'user', member_id: s.user.nora, role: 'member' })).status).toBe(409);
+            expect(await RealmMember.findOne({ where: { realm_id: s.A1, member_id: s.user.nora } })).toBeNull();
+            await RealmService.add_member(s.A1, s.user.adam, { member_type: 'user', member_id: s.user.nora, role: 'member' });
+            expect((await post('/v1/realms/add_member', s.token.adam, { realm_id: s.A1, member_type: 'user', member_id: s.user.nora, role: 'operator' })).status).toBe(200);
+            expect((await RealmMember.findOne({ where: { realm_id: s.A1, member_id: s.user.nora }, raw: true }))?.role).toBe('operator');
             expect((await post('/v1/realms/remove_member', s.token.adam, { realm_id: s.A1, member_type: 'user', member_id: s.user.nora })).status).toBe(200);
             expect((await post('/v1/realms/a2a', s.token.olivia, { realm_id: s.A1, action: 'get' })).status).toBe(200);
         });

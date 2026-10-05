@@ -1139,6 +1139,12 @@ export class RealmService {
             member_type: Realm_member_type;
             member_id: string;
             role?: Realm_member_role;
+            /**
+             * Only change the role of a live member; a new person is refused
+             * (they join through `invitations/create`, which emails them and
+             * adds them to the realm's org when they accept).
+             */
+            existing_only?: boolean;
         },
     ): Promise<Realm_member_dto> {
         // Callers authorized this: realms/add_member (route policy: admin + realms.members.manage).
@@ -1171,6 +1177,12 @@ export class RealmService {
             existing.role = role;
             await existing.save();
             return to_member_dto(existing, username);
+        }
+        if (input.existing_only) {
+            throw ApiError.conflict(
+                `${username ? `@${username}` : 'This user'} is not a member of this realm — invite them with invitations/create (target_type realm)`,
+                'invite_required',
+            );
         }
 
         const row = await _realm_member_repo.create_one({

@@ -26,7 +26,7 @@ import {
     RealmDispatchKey,
 } from '../../src/models/index.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
-import { accept_invite_url, invite_and_accept } from '../helpers/invite_links.js';
+import { accept_invite_url, invite_and_accept, invite_to_realm_and_accept } from '../helpers/invite_links.js';
 import { use_test_link_env } from '../helpers/link_env.js';
 
 const has_postgres = await postgres_reachable();
@@ -239,32 +239,20 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
         expect(create_b.status).toBe(200);
         const realm_b = create_b.body.realm.id as string;
 
-        const invite_bob = await request(app)
+        // add_member never adds a new person (no email, no org membership): they are invited.
+        const direct_bob = await request(app)
             .post('/v1/realms/add_member')
             .set('Authorization', bearer(alice.token))
-            .send({
-                realm_id: realm_a,
-                member_type: 'user',
-                member_id: String(bob.user_id),
-                role: 'operator',
-            });
-        expect(invite_bob.status).toBe(200);
-        expect(invite_bob.body.member).toMatchObject({
-            member_type: 'user',
-            member_id: String(bob.user_id),
-            role: 'operator',
-        });
+            .send({ realm_id: realm_a, member_type: 'user', member_id: String(bob.user_id), role: 'operator' });
+        expect(direct_bob.status).toBe(409);
+        expect(direct_bob.body.code).toBe('invite_required');
 
-        const invite_carol = await request(app)
-            .post('/v1/realms/add_member')
-            .set('Authorization', bearer(alice.token))
-            .send({
-                realm_id: realm_b,
-                member_type: 'user',
-                member_id: String(carol.user_id),
-                role: 'member',
-            });
-        expect(invite_carol.status).toBe(200);
+        await invite_to_realm_and_accept(app, alice.token, bob.token, { realm_id: realm_a, email: bob.email, role: 'operator' });
+        await invite_to_realm_and_accept(app, alice.token, carol.token, { realm_id: realm_b, email: carol.email, role: 'member' });
+
+        // Accepting a realm invite joins the realm's org too.
+        const bob_in_org = await OrgMember.findOne({ where: { org_id: alice.org_id, user_id: bob.user_id }, raw: true });
+        expect(bob_in_org).toMatchObject({ status: 'active' });
 
         const bob_list = await request(app)
             .post('/v1/realms/get')
@@ -337,16 +325,14 @@ describe.skipIf(!has_postgres)('account-owned realms e2e (multi-user)', () => {
             });
         expect(promote.status).toBe(200);
 
+        // Bob is a realm admin but an org Member: managing people needs the org
+        // permission too (the realm role is the ceiling), so Alice invites Carol.
         const bob_invites_carol = await request(app)
-            .post('/v1/realms/add_member')
+            .post('/v1/invitations/create')
             .set('Authorization', bearer(bob.token))
-            .send({
-                realm_id: realm_a,
-                member_type: 'user',
-                member_id: String(carol.user_id),
-                role: 'member',
-            });
-        expect(bob_invites_carol.status).toBe(200);
+            .send({ target_type: 'realm', realm_id: realm_a, email: carol.email, role: 'member' });
+        expect(bob_invites_carol.status).toBe(403);
+        await invite_to_realm_and_accept(app, alice.token, carol.token, { realm_id: realm_a, email: carol.email, role: 'member' });
 
         const revoke_carol = await request(app)
             .post('/v1/realms/remove_member')

@@ -16,6 +16,7 @@ import { Sequelize } from 'sequelize';
 
 import { create_test_app } from '../helpers/test_container.js';
 import { SequelizeAccessStore } from '../../src/auth/route_policy/store.js';
+import { RealmService } from '../../src/services/realm.service.js';
 import { stub_pat_auth, TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
 import { database_url } from '../migrated_platform/helpers/control_plane_store.js';
 
@@ -84,6 +85,11 @@ async function postgres_reachable(): Promise<boolean> {
         try { await probe.close(); } catch { /* ignore */ }
         return false;
     }
+}
+
+/** Puts a user in a realm as an accepted invite would (realms/add_member only changes roles). */
+async function seed_member(realm_id: string, member_id: string, role: 'admin' | 'operator' | 'member'): Promise<void> {
+    await RealmService.add_member(realm_id, ALICE.id, { member_type: 'user', member_id, role });
 }
 
 function bearer_for(user: typeof ALICE): string {
@@ -210,6 +216,15 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
     it('multiple users in one realm — different roles gate admin actions', async () => {
         const realm_id = await create_realm('roles-diff');
 
+        // A new person is invited (invitations/create), never added directly.
+        const direct = await request(app)
+            .post('/v1/realms/add_member')
+            .set('Authorization', bearer_for(ALICE))
+            .send({ realm_id, member_type: 'user', member_id: hub_legacy_uuid(2), role: 'operator' });
+        expect(direct.status).toBe(409);
+        expect(direct.body.error?.code ?? direct.body.code).toBe('invite_required');
+
+        await seed_member(realm_id, hub_legacy_uuid(2), 'member');
         const grant_bob = await request(app)
             .post('/v1/realms/add_member')
             .set('Authorization', bearer_for(ALICE))
@@ -217,11 +232,7 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
         expect(grant_bob.status).toBe(200);
         expect(grant_bob.body.member).toMatchObject({ member_type: 'user', member_id: hub_legacy_uuid(2), role: 'operator' });
 
-        const grant_carol = await request(app)
-            .post('/v1/realms/add_member')
-            .set('Authorization', bearer_for(ALICE))
-            .send({ realm_id, member_type: 'user', member_id: '3', role: 'member' });
-        expect(grant_carol.status).toBe(200);
+        await seed_member(realm_id, '3', 'member');
 
         const members = await request(app)
             .post('/v1/realms/get_members')
@@ -287,14 +298,8 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
     it('multiple users with the same role share the same capabilities', async () => {
         const realm_id = await create_realm('roles-same');
 
-        await request(app)
-            .post('/v1/realms/add_member')
-            .set('Authorization', bearer_for(ALICE))
-            .send({ realm_id, member_type: 'user', member_id: hub_legacy_uuid(2), role: 'operator' });
-        await request(app)
-            .post('/v1/realms/add_member')
-            .set('Authorization', bearer_for(ALICE))
-            .send({ realm_id, member_type: 'user', member_id: '3', role: 'operator' });
+        await seed_member(realm_id, hub_legacy_uuid(2), 'operator');
+        await seed_member(realm_id, '3', 'operator');
 
         const bob_list = await request(app)
             .post('/v1/realms/get_members')
@@ -324,10 +329,7 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
     it('add_member role change upgrades membership; remove_member removes it', async () => {
         const realm_id = await create_realm('role-change');
 
-        await request(app)
-            .post('/v1/realms/add_member')
-            .set('Authorization', bearer_for(ALICE))
-            .send({ realm_id, member_type: 'user', member_id: hub_legacy_uuid(2), role: 'member' });
+        await seed_member(realm_id, hub_legacy_uuid(2), 'member');
 
         const upgraded = await request(app)
             .post('/v1/realms/add_member')
@@ -584,14 +586,8 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
         const realm_id = await create_realm('same-realm-matrix');
 
         // Users with different membership roles in this one realm.
-        await request(app)
-            .post('/v1/realms/add_member')
-            .set('Authorization', bearer_for(ALICE))
-            .send({ realm_id, member_type: 'user', member_id: hub_legacy_uuid(2), role: 'admin' });
-        await request(app)
-            .post('/v1/realms/add_member')
-            .set('Authorization', bearer_for(ALICE))
-            .send({ realm_id, member_type: 'user', member_id: '3', role: 'operator' });
+        await seed_member(realm_id, hub_legacy_uuid(2), 'admin');
+        await seed_member(realm_id, '3', 'operator');
 
         const users = await request(app)
             .post('/v1/realms/get_members')
@@ -698,10 +694,7 @@ describe.skipIf(!ready)('realm membership + token grants (integration)', () => {
         const realm_id = await create_realm('mixed');
         const daemon_id = `mixed-d-${Date.now()}`;
 
-        await request(app)
-            .post('/v1/realms/add_member')
-            .set('Authorization', bearer_for(ALICE))
-            .send({ realm_id, member_type: 'user', member_id: hub_legacy_uuid(2), role: 'operator' });
+        await seed_member(realm_id, hub_legacy_uuid(2), 'operator');
 
         const tok = await request(app)
             .post('/v1/auth/generate_token')

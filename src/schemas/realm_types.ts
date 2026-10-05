@@ -130,7 +130,7 @@ export const RealmAddMemberInput = z.object({
     realm_id: z.string().min(1).describe('Realm UUID'),
     member_type: z.enum(['user', 'daemon', 'group']).default('user')
         .describe('Member kind (daemon enroll is via realm token, not this route)'),
-    member_id: z.string().min(1).describe('Hub user id when member_type=user; daemon/group id otherwise'),
+    member_id: z.string().min(1).describe('Hub user id of an existing realm member when member_type=user (new people: invitations/create); group id otherwise'),
     role: z.enum(['admin', 'operator', 'member']).optional().describe('Grant role'),
 });
 export type RealmAddMemberInput = z.infer<typeof RealmAddMemberInput>;

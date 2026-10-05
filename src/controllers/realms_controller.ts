@@ -263,7 +263,11 @@ export class RealmController extends BaseController {
     }
 
     /**
-     * Add a user/group member (daemon enroll is via realm token).
+     * Change the role of a realm member (or add a group). People join a realm
+     * through `invitations/create`, never here: that emails them and adds them
+     * to the realm's org when they accept. Daemons enroll with a realm token.
+     *
+     * @throws ApiError 409 `invite_required` for a user who is not a member yet.
      *
      * @param req - Body: {@link RealmAddMemberInput}
      * @param res - Flat `{ ok: true, member }`
@@ -293,6 +297,7 @@ export class RealmController extends BaseController {
             member_type: body.member_type,
             member_id,
             role: body.role,
+            existing_only: body.member_type === 'user',
         });
         log.info('member_added', { realm_id: body.realm_id, member_id });
         res.json({ ok: true, member });

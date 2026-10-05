@@ -33,6 +33,24 @@ export async function invite_and_accept(
 }
 
 /**
+ * Invites `email` to a realm and accepts it as the signed-in account
+ * `invitee_token` (joins the realm and, as Member, the realm's org).
+ *
+ * @throws Error when either call fails.
+ */
+export async function invite_to_realm_and_accept(
+    app: Express,
+    inviter_token: string,
+    invitee_token: string,
+    body: { realm_id: string; email: string; role?: string },
+): Promise<void> {
+    const sent = await request(app).post('/v1/invitations/create').set('Authorization', `Bearer ${inviter_token}`)
+        .send({ target_type: 'realm', ...body });
+    if (sent.status !== 200) throw new Error(`realm invite ${body.email}: ${sent.status} ${JSON.stringify(sent.body)}`);
+    await accept_invite_url(app, invitee_token, sent.body.data.invite_url);
+}
+
+/**
  * Accepts the invite behind `invite_url` as the signed-in account `invitee_token`.
  *
  * @throws Error when the accept fails.
