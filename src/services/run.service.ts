@@ -2262,28 +2262,45 @@ export class RunService {
         log.debug('ingest_usage_snapshot', { run_id: snapshot.run_id });
         const sq = get_sequelize();
 
-        // Enrich by_model entries with cost_usd from the pricing catalog.
-        let total_cost_usd = 0;
-        const enriched_by_model: Record<string, unknown> = {};
+        // Price every model entry — the run's and each phase's — from the
+        // pricing catalog. A cost the catalog can't price stays null (not 0),
+        // so "unknown" never reads as "free".
+        const price = (by_model: unknown): { by_model: Record<string, unknown>; cost_usd: number | null } => {
+            let cost_usd: number | null = null;
+            const priced: Record<string, unknown> = {};
+            if (by_model && typeof by_model === 'object') {
+                for (const [key, raw] of Object.entries(by_model as Record<string, Record<string, unknown>>)) {
+                    const resolved = pricing_service.resolve_cost(
+                        String(raw.provider ?? ''),
+                        String(raw.model ?? ''),
+                        Number(raw.tokens_in ?? 0),
+                        Number(raw.tokens_out ?? 0),
+                    );
+                    const cost = resolved?.cost_usd ?? null;
+                    if (cost !== null) cost_usd = (cost_usd ?? 0) + cost;
+                    priced[key] = { ...raw, cost_usd: cost };
+                }
+            }
+            return { by_model: priced, cost_usd: cost_usd === null ? null : Math.round(cost_usd * 1_000_000) / 1_000_000 };
+        };
 
-        for (const [key, model] of Object.entries(snapshot.by_model ?? {})) {
-            const resolved = pricing_service.resolve_cost(
-                model.provider,
-                model.model,
-                model.tokens_in,
-                model.tokens_out,
-            );
-            const cost = resolved?.cost_usd ?? null;
-            if (cost !== null) total_cost_usd += cost;
-            enriched_by_model[key] = { ...model, cost_usd: cost };
+        const run_level = price(snapshot.by_model);
+        const by_phase: Record<string, unknown> = {};
+        for (const [phase_name, phase] of Object.entries(snapshot.by_phase ?? {})) {
+            if (!phase || typeof phase !== 'object') {
+                by_phase[phase_name] = phase;
+                continue;
+            }
+            const priced = price((phase as Record<string, unknown>).by_model);
+            by_phase[phase_name] = { ...(phase as Record<string, unknown>), by_model: priced.by_model, cost_usd: priced.cost_usd };
         }
 
         const enriched = {
             ...snapshot,
-            by_phase: snapshot.by_phase ?? {},
+            by_phase,
             by_agent: snapshot.by_agent ?? {},
-            by_model: enriched_by_model,
-            total_cost_usd,
+            by_model: run_level.by_model,
+            total_cost_usd: run_level.cost_usd,
         };
 
         const snapshot_json = JSON.stringify(enriched);

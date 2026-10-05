@@ -818,7 +818,7 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     // ── model_pricing (observability Phase 1d) ───────────────────────
     // Central table for LLM token → cost resolution. Hub calculates
     // cost_usd from daemon-reported tokens using these rates.
-    // Version-controlled seed: seed/model_pricing.json.
+    // Version-controlled seed: src/data/model_pricing.json (services/model_pricing_seed.ts, at boot).
     await run(`CREATE TABLE IF NOT EXISTS cliq."model_pricing" (
         "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         "provider" TEXT NOT NULL,

@@ -1,0 +1,26 @@
+{
+    "_comment": "List prices in USD per 1M tokens (standard tier, no batch/cache discounts). Seeded into cliq.model_pricing at boot (services/model_pricing_seed.ts): rows are upserted on (provider, model, effective_from), so a price change is a new row with a later effective_from. Model ids are matched after normalising (lower case, date suffix dropped, '.' -> '-', cursor ids like 'claude-4.5-sonnet'), so list the canonical id once. Add newer models here.",
+    "rates": [
+        { "provider": "anthropic", "model": "claude-opus-4-5", "input_per_1m": 5, "output_per_1m": 25, "effective_from": "2025-01-01" },
+        { "provider": "anthropic", "model": "claude-opus-4-1", "input_per_1m": 15, "output_per_1m": 75, "effective_from": "2025-01-01" },
+        { "provider": "anthropic", "model": "claude-opus-4", "input_per_1m": 15, "output_per_1m": 75, "effective_from": "2025-01-01" },
+        { "provider": "anthropic", "model": "claude-sonnet-4-5", "input_per_1m": 3, "output_per_1m": 15, "effective_from": "2025-01-01" },
+        { "provider": "anthropic", "model": "claude-sonnet-4", "input_per_1m": 3, "output_per_1m": 15, "effective_from": "2025-01-01" },
+        { "provider": "anthropic", "model": "claude-3-7-sonnet", "input_per_1m": 3, "output_per_1m": 15, "effective_from": "2025-01-01" },
+        { "provider": "anthropic", "model": "claude-3-5-sonnet", "input_per_1m": 3, "output_per_1m": 15, "effective_from": "2025-01-01" },
+        { "provider": "anthropic", "model": "sonnet", "input_per_1m": 3, "output_per_1m": 15, "effective_from": "2025-01-01" },
+        { "provider": "anthropic", "model": "claude-haiku-4-5", "input_per_1m": 1, "output_per_1m": 5, "effective_from": "2025-01-01" },
+        { "provider": "anthropic", "model": "claude-3-5-haiku", "input_per_1m": 0.8, "output_per_1m": 4, "effective_from": "2025-01-01" },
+        { "provider": "openai", "model": "gpt-5", "input_per_1m": 1.25, "output_per_1m": 10, "effective_from": "2025-01-01" },
+        { "provider": "openai", "model": "gpt-5-mini", "input_per_1m": 0.25, "output_per_1m": 2, "effective_from": "2025-01-01" },
+        { "provider": "openai", "model": "gpt-4-1", "input_per_1m": 2, "output_per_1m": 8, "effective_from": "2025-01-01" },
+        { "provider": "openai", "model": "gpt-4-1-mini", "input_per_1m": 0.4, "output_per_1m": 1.6, "effective_from": "2025-01-01" },
+        { "provider": "openai", "model": "gpt-4-1-nano", "input_per_1m": 0.1, "output_per_1m": 0.4, "effective_from": "2025-01-01" },
+        { "provider": "openai", "model": "gpt-4o", "input_per_1m": 2.5, "output_per_1m": 10, "effective_from": "2025-01-01" },
+        { "provider": "openai", "model": "gpt-4o-mini", "input_per_1m": 0.15, "output_per_1m": 0.6, "effective_from": "2025-01-01" },
+        { "provider": "openai", "model": "o3", "input_per_1m": 2, "output_per_1m": 8, "effective_from": "2025-01-01" },
+        { "provider": "openai", "model": "o4-mini", "input_per_1m": 1.1, "output_per_1m": 4.4, "effective_from": "2025-01-01" },
+        { "provider": "google", "model": "gemini-2-5-pro", "input_per_1m": 1.25, "output_per_1m": 10, "effective_from": "2025-01-01" },
+        { "provider": "google", "model": "gemini-2-5-flash", "input_per_1m": 0.3, "output_per_1m": 2.5, "effective_from": "2025-01-01" }
+    ]
+}

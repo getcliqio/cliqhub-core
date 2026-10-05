@@ -140,10 +140,12 @@ export class ModelPricingService {
      * Returns the row with the latest `effective_from` that is ≤ target_date.
      */
     private _find_rate(provider: string, model: string, target_date: string): PricingRate | null {
+        const want = normalize_model_ref(provider, model);
         let best: PricingRate | null = null;
         for (const rate of this._cache) {
-            if (rate.provider !== provider) continue;
-            if (rate.model !== model) continue;
+            const have = normalize_model_ref(rate.provider, rate.model);
+            if (have.provider !== want.provider) continue;
+            if (have.model !== want.model) continue;
             if (rate.effective_from > target_date) continue;
             if (!best || rate.effective_from > best.effective_from) {
                 best = rate;
@@ -165,4 +167,36 @@ export class ModelPricingService {
         this._last_refresh = Date.now();
         log.debug(`pricing cache refreshed: ${rows.length} rates`);
     }
+}
+
+/** Providers priced in `cliq.model_pricing`; anything else (e.g. `cursor`) is resolved from the model id. */
+const KNOWN_PROVIDERS = new Set(['anthropic', 'openai', 'google']);
+
+/**
+ * The comparable form of a (provider, model) pair, applied to both the
+ * reported usage and the pricing rows:
+ *
+ *   model     lower case; `vendor/` prefix, `-YYYYMMDD` / `-latest` /
+ *             `-thinking` suffixes dropped; `.` → `-`; Claude ids as
+ *             `claude-<family>-<version>` (so `claude-3-5-sonnet`,
+ *             `claude-4.5-sonnet` and `sonnet-4-5` all become
+ *             `claude-sonnet-3-5` / `claude-sonnet-4-5`)
+ *   provider  lower case; a reseller (`cursor`) or unknown provider is
+ *             replaced by the vendor the model id names
+ */
+export function normalize_model_ref(provider: string, model: string): { provider: string; model: string } {
+    let m = (model ?? '').trim().toLowerCase().replace(/^(anthropic|openai|google)\//, '');
+    m = m.replace(/\./g, '-').replace(/-(\d{8}|latest)$/, '').replace(/-(thinking|max)$/, '');
+    const claude_versioned = /^(?:claude-)?(\d+(?:-\d+)?)-(sonnet|opus|haiku)$/.exec(m);
+    const claude_family = /^(?:claude-)?(sonnet|opus|haiku)-(\d+(?:-\d+)?)$/.exec(m);
+    if (claude_versioned) m = `claude-${claude_versioned[2]}-${claude_versioned[1]}`;
+    else if (claude_family) m = `claude-${claude_family[1]}-${claude_family[2]}`;
+
+    let p = (provider ?? '').trim().toLowerCase();
+    if (!KNOWN_PROVIDERS.has(p)) {
+        if (/^claude-|^(sonnet|opus|haiku)$/.test(m)) p = 'anthropic';
+        else if (/^(gpt|o\d|chatgpt|codex)/.test(m)) p = 'openai';
+        else if (/^gemini/.test(m)) p = 'google';
+    }
+    return { provider: p, model: m };
 }

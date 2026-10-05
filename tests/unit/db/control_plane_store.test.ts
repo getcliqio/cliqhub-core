@@ -27,6 +27,11 @@ vi.mock('../../../src/models/migrations/control_plane_seed.js', () => ({
     seed_control_plane: (...args: unknown[]) => seed_control_plane(...args),
 }));
 
+const seed_model_pricing = vi.fn(async () => 0);
+vi.mock('../../../src/services/model_pricing_seed.js', () => ({
+    seed_model_pricing: (...args: unknown[]) => seed_model_pricing(...args),
+}));
+
 vi.mock('../../../src/models/index.js', () => ({
     init_core_api_models: vi.fn(),
     reset_core_api_models: vi.fn(),
@@ -83,6 +88,8 @@ describe('control_plane_store', () => {
         expect(move_registry_to_cliq_schema.mock.invocationCallOrder[0])
             .toBeLessThan(migrate_store.mock.invocationCallOrder[0]);
         expect(seed_control_plane).toHaveBeenCalledOnce();
+        // The model price list is upserted at boot, after the schema migrations.
+        expect(seed_model_pricing).toHaveBeenCalled();
         expect(get_control_plane_store()).toBe(conn);
     });
 

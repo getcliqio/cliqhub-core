@@ -38,6 +38,8 @@ type RootSpanRow = {
      * recorded.
      */
     team_label: string | null;
+    /** The run's priced cost (`team_runs.usage_snapshot.total_cost_usd`); null when unpriced. */
+    run_cost_usd?: number | string | null;
 };
 
 export type SummaryOptions = {
@@ -86,7 +88,8 @@ export class RunTelemetryService {
                         WHEN t."slug" IS NOT NULL AND sc."slug" IS NOT NULL
                             THEN '@' || sc."slug" || '/' || t."slug"
                         ELSE NULL
-                    END                                                            AS "team_label"
+                    END                                                            AS "team_label",
+                    (tr."usage_snapshot" ->> 'total_cost_usd')::numeric            AS "run_cost_usd"
                   FROM cliq."run_spans"  s
                   LEFT JOIN cliq."team_runs" tr ON tr."run_id" = s."run_id"
                   LEFT JOIN cliq."daemon_teams" t  ON t."id"       = tr."team_id"
@@ -137,7 +140,8 @@ export class RunTelemetryService {
 
             const inv = RunTelemetryService.num(attrs['run.usage.total_invocations']);
             const dur = RunTelemetryService.num(attrs['run.usage.total_duration_ms']);
-            const cost = RunTelemetryService.num(attrs['run.usage.total_cost_usd']);
+            // Hub prices runs (usage snapshot); daemons never put cost on spans.
+            const cost = RunTelemetryService.num(row.run_cost_usd ?? attrs['run.usage.total_cost_usd']);
             const fails = RunTelemetryService.num(attrs['run.usage.total_failures']);
             const tin = RunTelemetryService.num(attrs['run.usage.tokens.units_in']);
             const tout = RunTelemetryService.num(attrs['run.usage.tokens.units_out']);

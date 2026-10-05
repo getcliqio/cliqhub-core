@@ -32,6 +32,7 @@ import { move_registry_to_cliq_schema } from '../models/migrations/hub_schema_mi
 import { init_core_api_models, reset_core_api_models } from '../models/index.js';
 import { get_logger } from '../lib/log.js';
 import { seed_control_plane } from '../models/migrations/control_plane_seed.js';
+import { seed_model_pricing } from '../services/model_pricing_seed.js';
 import { should_use_ssl } from './sequelize.js';
 import { init_model_pricing_service, reset_model_pricing_service } from '../services/model_pricing.service.js';
 
@@ -71,6 +72,7 @@ export async function init_control_plane_store(
             init_core_api_models(connection.sequelize);
             await run_core_api_schema_migrations(connection.sequelize);
             await seed_control_plane();
+            await seed_model_pricing(connection.sequelize);
 
             _connection = connection;
             init_model_pricing_service(connection.sequelize);
