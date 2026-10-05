@@ -5,6 +5,7 @@ import { QueryTypes } from 'sequelize';
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
 import { migrate_hub_schema } from '../../src/models/migrations/hub_schema_migrations.js';
+import { run_core_api_schema_migrations } from '../../src/models/migrations/control_plane_schema_migrations.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
 import { InAppNotification, Org, Realm, Review, Run } from '../../src/models/index.js';
@@ -41,6 +42,32 @@ describe.skipIf(!has_postgres)('hub schema cleanup (boot)', () => {
         // Boot again on a cliq-only database is a no-op.
         await migrate_hub_schema(sq);
         expect(await scalar(`SELECT gen_random_uuid()::text AS v`)).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it('control-plane boot migrations keep the cliq.scopes registry and its rows', async () => {
+        const sq = get_sequelize();
+        const slug = uid();
+        await sq.query(
+            `INSERT INTO cliq.scopes (id, slug, display_name, visibility, scope_type, created_at)
+             VALUES (:id, :slug, :slug, 'public', 'user', NOW())`,
+            { replacements: { id: randomUUID(), slug } },
+        );
+        // Production lost the inbound FKs; without them nothing blocks a DROP of the registry.
+        const fks = await sq.query<{ tbl: string; con: string; def: string }>(
+            `SELECT conrelid::regclass::text AS tbl, conname AS con, pg_get_constraintdef(oid) AS def
+               FROM pg_constraint WHERE confrelid = 'cliq.scopes'::regclass`,
+            { type: QueryTypes.SELECT },
+        );
+        for (const fk of fks) await sq.query(`ALTER TABLE ${fk.tbl} DROP CONSTRAINT "${fk.con}"`);
+
+        await run_core_api_schema_migrations(sq);
+        await run_core_api_schema_migrations(sq);
+
+        expect(await scalar(`SELECT table_schema AS v FROM information_schema.tables WHERE table_schema = 'cliq' AND table_name = 'scopes'`)).toBe('cliq');
+        expect(await scalar(`SELECT count(*)::text AS v FROM cliq.scopes WHERE slug = '${slug}'`)).toBe('1');
+        expect(await scalar(`SELECT is_default::text AS v FROM cliq.scopes WHERE slug = 'cliq'`)).toBe('1');
+        await sq.query('DELETE FROM cliq.scopes WHERE slug = :slug', { replacements: { slug } });
+        for (const fk of fks) await sq.query(`ALTER TABLE ${fk.tbl} ADD CONSTRAINT "${fk.con}" ${fk.def}`);
     });
 
     it('keeps a public table that still has rows', async () => {

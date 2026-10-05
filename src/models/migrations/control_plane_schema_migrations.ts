@@ -1309,7 +1309,7 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
         ON CONFLICT DO NOTHING
     `);
 
-    // Add is_default column to public.scopes (registry) so the platform default
+    // Add is_default column to cliq.scopes (registry) so the platform default
     // scope ('cliq') can be identified without a separate control-plane table.
     await run(`ALTER TABLE cliq."scopes" ADD COLUMN IF NOT EXISTS "is_default" INTEGER NOT NULL DEFAULT 0`);
     // Allow owner_id to be NULL for platform-owned scopes.
@@ -1339,9 +1339,7 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
         SET "scope_id" = (SELECT "id" FROM cliq."scopes" WHERE "slug" = 'cliq')
         WHERE dt."scope_id" = '00000000-0000-0000-0000-000000000000'
     `);
-
-    // Drop old cliq.scopes control-plane table now that data is migrated.
-    await run(`DROP TABLE IF EXISTS cliq."scopes"`);
+    // cliq."scopes" is the live registry table (moved out of public); never drop it here.
 }
 
 /**
