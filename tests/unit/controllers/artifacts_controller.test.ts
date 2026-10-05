@@ -100,7 +100,7 @@ describe('ArtifactsController', () => {
             const handler = controller.wrap(controller.get);
             await handler(make_req({ run_id: 'run-1' }), res, next);
 
-            expect(mock_storage.get).toHaveBeenCalledWith('run-1', undefined);
+            expect(mock_storage.get).toHaveBeenCalledWith('run-1', undefined, false);
             expect(res.status).toHaveBeenCalledWith(200);
             expect(res.json).toHaveBeenCalledWith({ ok: true, data: [FAKE_ARTIFACT] });
         });
@@ -110,7 +110,7 @@ describe('ArtifactsController', () => {
             const handler = controller.wrap(controller.get);
             await handler(make_req({ run_id: 'run-1', phase: 'builder' }), res, next);
 
-            expect(mock_storage.get).toHaveBeenCalledWith('run-1', 'builder');
+            expect(mock_storage.get).toHaveBeenCalledWith('run-1', 'builder', false);
         });
 
         it('rejects missing run_id', async () => {

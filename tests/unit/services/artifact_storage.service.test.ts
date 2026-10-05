@@ -186,3 +186,49 @@ describe('ArtifactStorageService', () => {
         });
     });
 });
+
+describe('ArtifactStorageService — one list per run (files + run records)', () => {
+    const REC_ID = '7f1c2a9e-1111-4222-8333-444455556666';
+    const record = (over: Record<string, unknown> = {}) => ({
+        id: REC_ID, run_id: 'run-1', phase: 'build', kind: 'output', name: 'phase_output',
+        content: 'x'.repeat(2500), mime_type: null, created_at: 1700000000500, ...over,
+    });
+    const make = () => {
+        const r2 = fake_r2();
+        const repo = fake_repo();
+        (repo.find_by_run as ReturnType<typeof vi.fn>).mockResolvedValue([fake_row()]);
+        const records = {
+            find_all_q: vi.fn().mockResolvedValue([record()]),
+            find_one_q: vi.fn().mockResolvedValue(record()),
+        };
+        return { service: new ArtifactStorageService({ r2, repo, records: records as never, max_size_mb: 50 }), records };
+    };
+
+    it('without include_records: the stored files only, as before (daemons in the field)', async () => {
+        const { service, records } = make();
+        const list = await service.get('run-1');
+        expect(list).toHaveLength(1);
+        expect(list[0]).toMatchObject({ artifact_id: 'art-001', source: 'file', kind: 'file', content_preview: null });
+        expect(list[0]!.download_url).toContain('https://r2.example.com');
+        expect(records.find_all_q).not.toHaveBeenCalled();
+    });
+
+    it('with include_records: files and records in the order produced; records preview, no link', async () => {
+        const { service, records } = make();
+        const list = await service.get('run-1', 'build', true);
+        expect(records.find_all_q).toHaveBeenCalledWith({ where: { run_id: 'run-1', phase: 'build' }, order: [['created_at', 'ASC']] });
+        expect(list.map((a) => a.artifact_id)).toEqual(['art-001', `rec:${REC_ID}`]);
+        expect(list[1]).toMatchObject({ source: 'record', kind: 'output', phase: 'build', mime_type: 'text/plain', download_url: null, size_bytes: 2500 });
+        expect(list[1]!.content_preview!.length).toBeLessThan(2500);
+        expect(list[1]).not.toHaveProperty('content');
+    });
+
+    it('get_by_id("rec:<id>") returns the whole record; a bad or unknown id is 404', async () => {
+        const { service, records } = make();
+        const full = await service.get_by_id(`rec:${REC_ID}`);
+        expect(full).toMatchObject({ source: 'record', content: 'x'.repeat(2500) });
+        await expect(service.get_by_id('rec:not-a-uuid')).rejects.toMatchObject({ status: 404 });
+        records.find_one_q.mockResolvedValue(null);
+        await expect(service.get_by_id(`rec:${REC_ID}`)).rejects.toMatchObject({ status: 404 });
+    });
+});

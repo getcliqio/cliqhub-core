@@ -6,7 +6,7 @@
 import {
     AccountInvite, CustomEvent, HubEvent, NotificationChannel, NotificationRule,
     Org, OrgMember, OrgRole, Realm, RealmInvite, RealmMember, Review, ReviewNotification, Run,
-    StoredArtifact, Team, Workspace,
+    RunArtifact, StoredArtifact, Team, Workspace,
 } from '../../models/index.js';
 import { DEFAULT_ROLES } from '../permissions.js';
 import type { AccessStore, OrgRoleInfo, RealmInfo, RecordScope, RequestLike } from './engine.js';
@@ -117,6 +117,13 @@ export class SequelizeAccessStore implements AccessStore {
                 return { realm_id: r.realm_id as string | null, org_id: r.org_id as string | null, assigned_user: assigned };
             }
             case 'artifact': {
+                // `rec:<id>` is a run record (artifacts/get with include_records).
+                if (id.startsWith('rec:')) {
+                    const rec_id = id.slice(4);
+                    if (!/^[0-9a-f-]{36}$/i.test(rec_id)) return null;
+                    const r = await RunArtifact.findOne({ where: { id: rec_id }, attributes: ['run_id'], ...raw }) as Row;
+                    return r ? run_scope(String(r.run_id)) : null;
+                }
                 const a = await StoredArtifact.findOne({ where: { id }, attributes: ['run_id'], ...raw }) as Row;
                 return a ? run_scope(String(a.run_id)) : null;
             }

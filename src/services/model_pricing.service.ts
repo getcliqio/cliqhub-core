@@ -18,6 +18,8 @@ interface PricingRate {
     model: string;
     input_per_1m: number;
     output_per_1m: number;
+    /** Cache-read price; null → cached tokens are priced as input. */
+    cached_input_per_1m?: number | null;
     effective_from: string; // ISO date string (YYYY-MM-DD)
 }
 
@@ -100,6 +102,9 @@ export class ModelPricingService {
      * is on or before `as_of_date`. Returns `null` if no matching
      * rate exists (unknown model — cost should be stored as null,
      * not zero).
+     *
+     * `tokens_cached` (cache reads, already counted inside `tokens_in`)
+     * are priced at the model's cache-read rate when it has one.
      */
     resolve_cost(
         provider: string,
@@ -107,6 +112,7 @@ export class ModelPricingService {
         tokens_in: number,
         tokens_out: number,
         as_of_date?: Date,
+        tokens_cached = 0,
     ): ResolvedCost | null {
         const target = as_of_date ?? new Date();
         const target_str = target.toISOString().slice(0, 10);
@@ -117,7 +123,9 @@ export class ModelPricingService {
         const rate = this._find_rate(provider, model, target_str);
         if (!rate) return null;
 
-        const cost_usd = (tokens_in / 1_000_000) * rate.input_per_1m
+        const cached = rate.cached_input_per_1m != null ? Math.min(Math.max(tokens_cached, 0), tokens_in) : 0;
+        const cost_usd = ((tokens_in - cached) / 1_000_000) * rate.input_per_1m
+            + (cached / 1_000_000) * (rate.cached_input_per_1m ?? rate.input_per_1m)
             + (tokens_out / 1_000_000) * rate.output_per_1m;
 
         return {
@@ -158,7 +166,7 @@ export class ModelPricingService {
     private async _refresh_cache(): Promise<void> {
         const [rows] = await this._sq.query(
             `SELECT provider, model, input_per_1m::float, output_per_1m::float,
-                    effective_from::text
+                    cached_input_per_1m::float, effective_from::text
              FROM cliq.model_pricing
              ORDER BY provider, model, effective_from DESC`,
         ) as [PricingRate[], unknown];
@@ -187,14 +195,14 @@ const KNOWN_PROVIDERS = new Set(['anthropic', 'openai', 'google']);
 export function normalize_model_ref(provider: string, model: string): { provider: string; model: string } {
     let m = (model ?? '').trim().toLowerCase().replace(/^(anthropic|openai|google)\//, '');
     m = m.replace(/\./g, '-').replace(/-(\d{8}|latest)$/, '').replace(/-(thinking|max)$/, '');
-    const claude_versioned = /^(?:claude-)?(\d+(?:-\d+)?)-(sonnet|opus|haiku)$/.exec(m);
-    const claude_family = /^(?:claude-)?(sonnet|opus|haiku)-(\d+(?:-\d+)?)$/.exec(m);
+    const claude_versioned = /^(?:claude-)?(\d+(?:-\d+)?)-(sonnet|opus|haiku|fable|mythos)$/.exec(m);
+    const claude_family = /^(?:claude-)?(sonnet|opus|haiku|fable|mythos)-(\d+(?:-\d+)?)$/.exec(m);
     if (claude_versioned) m = `claude-${claude_versioned[2]}-${claude_versioned[1]}`;
     else if (claude_family) m = `claude-${claude_family[1]}-${claude_family[2]}`;
 
     let p = (provider ?? '').trim().toLowerCase();
     if (!KNOWN_PROVIDERS.has(p)) {
-        if (/^claude-|^(sonnet|opus|haiku)$/.test(m)) p = 'anthropic';
+        if (/^claude-|^(sonnet|opus|haiku|fable|mythos)$/.test(m)) p = 'anthropic';
         else if (/^(gpt|o\d|chatgpt|codex)/.test(m)) p = 'openai';
         else if (/^gemini/.test(m)) p = 'google';
     }

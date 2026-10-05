@@ -9,6 +9,7 @@ import type { DaemonTeam } from '../models/daemon_team.model.js';
 import { RealmRepository } from '../repositories/realm_repository.js';
 import { RunRepository } from '../repositories/run_repository.js';
 import { RunArtifactRepository } from '../repositories/run_artifact_repository.js';
+import { StoredArtifactRepository } from '../repositories/stored_artifact_repository.js';
 import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
 import { ScopeRepository } from '../repositories/scope_repository.js';
 
@@ -17,6 +18,7 @@ const log = get_logger('svc.review_enrichment');
 const _realm_repo_re = new RealmRepository();
 const _run_repo_re = new RunRepository();
 const _run_artifact_repo = new RunArtifactRepository();
+const _stored_artifact_repo = new StoredArtifactRepository();
 const _dt_repo_re = new DaemonTeamRepository();
 const _scope_repo_re = new ScopeRepository();
 import { org_slug_by_ids } from './realm.service.js';
@@ -35,7 +37,14 @@ export interface ReviewRunInfo {
 }
 
 export interface ReviewArtifactInfo {
-	id: number;
+	/** The record's id, or `file:<artifact id>` for a stored file. */
+	id: string;
+	/** A run record (text, inline) or a stored file (download via `artifacts/get_by_id`). */
+	source: 'record' | 'file';
+	/** Stored file id for `artifacts/get_by_id` (files only). */
+	artifact_id?: string;
+	/** Stored file size (files only). */
+	size_bytes?: number;
 	phase: string;
 	kind: string;
 	name: string;
@@ -44,6 +53,9 @@ export interface ReviewArtifactInfo {
 	content_preview: string;
 	sequence: number | null;
 }
+
+/** Stored files sort after the run's records in the packet. */
+const FILE_SEQUENCE_BASE = 1_000_000;
 
 const PREVIEW_CHARS = 4_000;
 
@@ -144,17 +156,19 @@ export async function load_artifact_counts(run_ids: string[]): Promise<Map<strin
 export async function load_artifacts_for_run(run_id: string): Promise<ReviewArtifactInfo[]> {
 	log.debug('load_artifacts_for_run', { run_id });
 	if (!run_id) return [];
-	const rows = await _run_artifact_repo.find_all_q({
-		where: { run_id },
-		order: [['id', 'ASC']],
-	});
-	return rows.map((row) => {
+	const [rows, files] = await Promise.all([
+		// Ids are UUIDs: order by when each was produced.
+		_run_artifact_repo.find_all_q({ where: { run_id }, order: [['created_at', 'ASC']] }),
+		_stored_artifact_repo.find_by_run(run_id),
+	]);
+	const records: ReviewArtifactInfo[] = rows.map((row) => {
 		const content = row.content ?? '';
 		const preview = content.length > PREVIEW_CHARS
 			? `${content.slice(0, PREVIEW_CHARS)}\n…`
 			: content;
 		return {
-			id: Number(row.id),
+			id: String(row.id),
+			source: 'record' as const,
 			phase: row.phase,
 			kind: row.kind,
 			name: row.name,
@@ -164,6 +178,21 @@ export async function load_artifacts_for_run(run_id: string): Promise<ReviewArti
 			sequence: row.sequence ?? null,
 		};
 	});
+	// Files earlier phases uploaded (cliq-artifact / submit_artifact): listed, downloaded on demand.
+	const stored: ReviewArtifactInfo[] = files.map((f, i) => ({
+		id: `file:${f.id}`,
+		source: 'file',
+		artifact_id: String(f.id),
+		size_bytes: Number(f.size_bytes),
+		phase: f.phase,
+		kind: 'file',
+		name: f.name,
+		mime_type: f.mime_type,
+		content: '',
+		content_preview: '',
+		sequence: FILE_SEQUENCE_BASE + i,
+	}));
+	return [...records, ...stored];
 }
 
 export function resolve_team(

@@ -10,6 +10,7 @@ import { v4 as uuid_v4 } from 'uuid';
 
 import { R2Client, load_r2_config_from_env } from '../lib/r2_client.js';
 import { StoredArtifactRepository } from '../repositories/stored_artifact_repository.js';
+import { RunArtifactRepository } from '../repositories/run_artifact_repository.js';
 import type { StoredArtifactAttributes } from '../models/stored_artifact.model.js';
 import { ApiError } from '../errors/api_error.js';
 import type { ArtifactsSubmitInput, ArtifactData, ArtifactsSubmitOutput } from '../schemas/artifacts_schemas.js';
@@ -20,11 +21,13 @@ const log = get_logger('svc.artifact_storage');
 export class ArtifactStorageService {
     private readonly _r2: R2Client;
     private readonly _repo: StoredArtifactRepository;
+    private readonly _records: RunArtifactRepository;
     private readonly _max_size_mb: number;
 
-    constructor(opts?: { r2?: R2Client; repo?: StoredArtifactRepository; max_size_mb?: number }) {
+    constructor(opts?: { r2?: R2Client; repo?: StoredArtifactRepository; records?: RunArtifactRepository; max_size_mb?: number }) {
         this._r2 = opts?.r2 ?? new R2Client(load_r2_config_from_env());
         this._repo = opts?.repo ?? new StoredArtifactRepository();
+        this._records = opts?.records ?? new RunArtifactRepository();
         this._max_size_mb = opts?.max_size_mb ?? parseInt(process.env.CLIQ_ARTIFACT_MAX_MB || '50', 10);
     }
 
@@ -88,10 +91,17 @@ export class ArtifactStorageService {
      * List artifacts for a run, optionally filtered by phase.
      * Each entry includes a fresh presigned download URL.
      */
-    async get(run_id: string, phase?: string): Promise<ArtifactData[]> {
-        log.debug('get', { run_id, phase });
-        const rows = await this._repo.find_by_run(run_id, phase);
-        return rows.map(r => this._to_artifact_data(r));
+    async get(run_id: string, phase?: string, include_records = false): Promise<ArtifactData[]> {
+        log.debug('get', { run_id, phase, include_records });
+        const files = (await this._repo.find_by_run(run_id, phase)).map((r) => this._to_artifact_data(r));
+        if (!include_records) return files;
+        const records = await this._records.find_all_q({
+            where: { run_id, ...(phase ? { phase } : {}) },
+            order: [['created_at', 'ASC']],
+        });
+        // One list in the order things were produced; the UI groups it by phase.
+        return [...files, ...records.map((r) => record_to_artifact_data(r, false))]
+            .sort((a, b) => a.created_at - b.created_at);
     }
 
     /**
@@ -100,6 +110,12 @@ export class ArtifactStorageService {
      */
     async get_by_id(artifact_id: string): Promise<ArtifactData> {
         log.debug('get_by_id', { artifact_id });
+        if (artifact_id.startsWith('rec:')) {
+            const id = artifact_id.slice(4);
+            const rec = /^[0-9a-f-]{36}$/i.test(id) ? await this._records.find_one_q({ where: { id } }) : null;
+            if (!rec) throw new ApiError('not_found', `Artifact '${artifact_id}' not found`);
+            return record_to_artifact_data(rec, true);
+        }
         const row = await this._repo.find_by_id(artifact_id);
         if (!row) throw new ApiError('not_found', `Artifact '${artifact_id}' not found`);
 
@@ -135,6 +151,36 @@ export class ArtifactStorageService {
             size_bytes: Number(row.size_bytes),
             download_url: this._r2.is_configured ? this._r2.presigned_get_url(row.storage_key) : '',
             created_at: Number(row.created_at),
+            source: 'file',
+            kind: 'file',
+            content_preview: null,
         };
     }
+}
+
+/** Characters of a record's text shown in a list. */
+const RECORD_PREVIEW_CHARS = 2000;
+
+/** A run record (`cliq.run_artifacts`) as an artifact; `full` adds its whole text. */
+function record_to_artifact_data(
+    row: { id: string; run_id: string; phase: string; kind: string; name: string; content: string | null; mime_type: string | null; created_at: number | string | Date },
+    full: boolean,
+): ArtifactData {
+    const content = row.content ?? '';
+    const created_at = row.created_at instanceof Date ? row.created_at.getTime() : Number(row.created_at);
+    return {
+        artifact_id: `rec:${row.id}`,
+        source: 'record',
+        kind: row.kind,
+        run_id: row.run_id,
+        phase: row.phase,
+        name: row.name,
+        description: null,
+        mime_type: row.mime_type ?? 'text/plain',
+        size_bytes: Buffer.byteLength(content, 'utf8'),
+        download_url: null,
+        content_preview: content.length > RECORD_PREVIEW_CHARS ? `${content.slice(0, RECORD_PREVIEW_CHARS)}\n…` : content,
+        ...(full ? { content } : {}),
+        created_at,
+    };
 }

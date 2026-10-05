@@ -533,7 +533,11 @@ export class HugReviewsService {
 		);
 
 		/** Evaluate policy to decide if the review is fully decided. */
-		const policy_satisfied = await _evaluate_policy(review);
+		// An input pause (an agent's question) is settled by its first answer or decline —
+		// under `any`, a REJECT would otherwise leave it pending until it times out.
+		const is_input_pause = (review.payload as Record<string, unknown> | null)?.['mode'] === 'input_pause'
+			|| (review.policy as Record<string, unknown> | null)?.['mode'] === 'input_pause';
+		const policy_satisfied = (is_input_pause && input.action === 'REJECT') || await _evaluate_policy(review);
 
 		if (!policy_satisfied) {
 			/** Policy not yet satisfied — stay pending. */
@@ -665,6 +669,26 @@ export class HugReviewsService {
 						error: err instanceof Error ? err.message : String(err),
 					});
 				}
+			}
+		}
+
+		// Declining an input pause (the agent's question) ends the wait instead of
+		// parking the run until the review times out: the run is cancelled.
+		if (
+			(payload_mode === 'input_pause' || policy_mode === 'input_pause')
+			&& input.action === 'REJECT'
+			&& review.run_id
+		) {
+			const by = String(input.responded_by ?? input.actor_id ?? '');
+			const comment = input.fields?.['comment'] ? String(input.fields['comment']) : '';
+			try {
+				const { DispatchService } = await import('./dispatch.service.js');
+				await DispatchService.cancel_run(review.run_id, [], by || 'hug', `Input request declined${comment ? `: ${comment}` : ''}`);
+			} catch (err) {
+				log.error('input_pause_decline_cancel_failed', {
+					review_id: input.review_id,
+					error: err instanceof Error ? err.message : String(err),
+				});
 			}
 		}
 

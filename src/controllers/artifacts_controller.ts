@@ -82,7 +82,7 @@ export class ArtifactsController extends BaseController {
     ): Promise<void> {
         const body = this.parse_body(ArtifactsGetInput, req);
         log.debug('get', { run_id: body.run_id });
-        const artifacts = await this._storage.get(body.run_id, body.phase);
+        const artifacts = await this._storage.get(body.run_id, body.phase, body.include_records ?? false);
         this.ok(res, artifacts);
     }
 

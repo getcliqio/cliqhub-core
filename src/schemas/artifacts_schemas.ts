@@ -28,6 +28,8 @@ export type ArtifactsSubmitInput = z.infer<typeof ArtifactsSubmitInput>;
 export const ArtifactsGetInput = z.object({
     run_id: z.string().min(1).describe('Run to list artifacts for'),
     phase: z.string().optional().describe('Filter to a specific phase'),
+    include_records: z.boolean().optional()
+        .describe('Also list the run records (phase outputs, transcripts, attached docs) — the run page and review packet'),
 });
 export type ArtifactsGetInput = z.infer<typeof ArtifactsGetInput>;
 
@@ -47,14 +49,18 @@ export type ArtifactsDeleteInput = z.infer<typeof ArtifactsDeleteInput>;
 
 /** Single artifact metadata returned by all endpoints. */
 export const ArtifactData = z.object({
-    artifact_id: z.string().describe('Artifact UUID'),
+    artifact_id: z.string().describe('Artifact UUID; a run record is `rec:<id>`'),
+    source: z.enum(['file', 'record']).describe('A stored file (R2) or a run record (text)'),
+    kind: z.string().describe("'file' for stored files; the record kind otherwise (output, chat_transcript, review, …)"),
     run_id: z.string().describe('Owning run'),
     phase: z.string().describe('Phase that produced the artifact'),
     name: z.string().describe('Display name / filename'),
     description: z.string().nullable().describe('Human-readable description'),
     mime_type: z.string().describe('MIME type'),
     size_bytes: z.number().describe('File size in bytes'),
-    download_url: z.string().describe('Presigned R2 GET URL (5-min TTL)'),
+    download_url: z.string().nullable().describe('Presigned R2 GET URL (5-min TTL); null for a run record'),
+    content_preview: z.string().nullable().describe('First ~2 KB of a run record; null for a stored file'),
+    content: z.string().optional().describe('Full text of a run record (get_by_id only)'),
     created_at: z.number().describe('Unix timestamp ms'),
 });
 export type ArtifactData = z.infer<typeof ArtifactData>;

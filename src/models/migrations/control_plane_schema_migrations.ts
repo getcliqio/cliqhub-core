@@ -831,6 +831,8 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     )`);
     await run(`CREATE INDEX IF NOT EXISTS "idx_model_pricing_lookup"
                ON cliq."model_pricing" ("provider", "model", "effective_from" DESC)`);
+    // Cache-read price (null: cached tokens are priced as input).
+    await run(`ALTER TABLE cliq."model_pricing" ADD COLUMN IF NOT EXISTS "cached_input_per_1m" NUMERIC(12, 6)`);
 
     // Usage snapshot JSONB columns for durable run/phase usage data.
     await run(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "usage_snapshot" JSONB`);

@@ -2275,6 +2275,8 @@ export class RunService {
                         String(raw.model ?? ''),
                         Number(raw.tokens_in ?? 0),
                         Number(raw.tokens_out ?? 0),
+                        undefined,
+                        Number(raw.tokens_cached ?? 0),
                     );
                     const cost = resolved?.cost_usd ?? null;
                     if (cost !== null) cost_usd = (cost_usd ?? 0) + cost;

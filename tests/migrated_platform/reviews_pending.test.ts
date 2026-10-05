@@ -69,6 +69,39 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		expect(res.status).toBe(401);
 	});
 
+	it('input pause (an agent question): PASS supplies the answer; REJECT cancels the run instead of parking it', async () => {
+		const { DispatchService } = await import('../../src/services/dispatch.service.js');
+		const supply = vi.spyOn(DispatchService, 'supply_inputs').mockResolvedValue(undefined as never);
+		const cancel = vi.spyOn(DispatchService, 'cancel_run').mockResolvedValue({ cancelled: true, mode: 'queued' });
+		try {
+			const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Question');
+			const ask = () => HugReviewsService.create({
+				run_id: 'run-q', daemon_id: 'daemon-1', realm_id: realm.id, mode: 'input_pause',
+				payload: { phase: 'implement', mode: 'input_pause', summary: 'Use Redis?' },
+				timeout_minutes: 60, actor_id: hub_legacy_uuid(1),
+			} as never);
+			const notif = async (review_id: string) => (await ReviewNotification.findOne({ where: { review_id } }))!.id;
+
+			const answered = await ask();
+			await HugReviewsService.submit_verdict({
+				review_id: answered.review_id, action: 'PASS', actor_id: hub_legacy_uuid(1), responded_by: hub_legacy_uuid(1),
+				notification_id: await notif(answered.review_id), fields: { values: { answer: 'DB queue' } },
+			} as never);
+			expect(supply).toHaveBeenCalledWith(expect.objectContaining({ run_id: 'run-q', inputs: { answer: 'DB queue' } }));
+			expect(cancel).not.toHaveBeenCalled();
+
+			const declined = await ask();
+			await HugReviewsService.submit_verdict({
+				review_id: declined.review_id, action: 'REJECT', actor_id: hub_legacy_uuid(1), responded_by: hub_legacy_uuid(1),
+				notification_id: await notif(declined.review_id), fields: { comment: 'out of scope' },
+			} as never);
+			expect(cancel).toHaveBeenCalledWith('run-q', [], hub_legacy_uuid(1), 'Input request declined: out of scope');
+		} finally {
+			supply.mockRestore();
+			cancel.mockRestore();
+		}
+	});
+
 	it('pending review appears; verdict removes from pending list after completed', async () => {
 		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Reviews');
 		const created = await HugReviewsService.create({

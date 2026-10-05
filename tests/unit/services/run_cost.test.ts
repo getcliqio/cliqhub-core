@@ -58,6 +58,39 @@ describe('the seeded price list', () => {
     });
 });
 
+describe('verified prices (official pages, 2026-10-06)', () => {
+    it('current models and the Claude Code aliases', () => {
+        const svc = priced();
+        const cost = (p: string, m: string) => svc.resolve_cost(p, m, 1_000_000, 1_000_000)?.cost_usd;
+        expect(cost('anthropic', 'claude-opus-5-5')).toBe(24);        // 4 + 20
+        expect(cost('anthropic', 'claude-sonnet-5-5')).toBe(12);      // 2 + 10
+        expect(cost('anthropic', 'claude-fable-5-1')).toBe(60);       // 10 + 50
+        expect(cost('anthropic', 'claude-haiku-4-5-20251001')).toBe(6);
+        expect(cost('anthropic', 'sonnet')).toBe(12);                 // alias = Sonnet 5.5
+        expect(cost('anthropic', 'opus')).toBe(24);                   // alias = Opus 5.5
+        expect(cost('openai', 'gpt-6.1-sol')).toBe(12);
+        expect(cost('google', 'gemini-3.5-flash')).toBe(10.5);
+        expect(cost('cursor', 'opus-5.5')).toBe(24);
+        expect(cost('cursor', 'fable-5.1')).toBe(60);
+    });
+
+    it('cache reads are priced at the cache-read rate; without a rate, as input', () => {
+        const svc = priced();
+        // 1M input of which 900K cache reads, Opus 5.5: 0.1M × $4 + 0.9M × $0.20 = $0.58
+        expect(svc.resolve_cost('anthropic', 'claude-opus-5-5', 1_000_000, 0, undefined, 900_000)?.cost_usd).toBe(0.58);
+        // gpt-5-pro lists no cached price: all input at $15
+        expect(svc.resolve_cost('openai', 'gpt-5-pro', 1_000_000, 0, undefined, 900_000)?.cost_usd).toBe(15);
+        // cached can't exceed input
+        expect(svc.resolve_cost('anthropic', 'claude-opus-5-5', 100, 0, undefined, 1_000)?.cost_usd).toBe(0.00002);
+    });
+
+    it('Gemini 3.6–3.8 Flash change price on 2027-01-01', () => {
+        const svc = priced();
+        expect(svc.resolve_cost('google', 'gemini-3.8-flash', 1_000_000, 0, new Date('2026-12-31'))?.cost_usd).toBe(0.75);
+        expect(svc.resolve_cost('google', 'gemini-3.8-flash', 1_000_000, 0, new Date('2027-01-02'))?.cost_usd).toBe(1.5);
+    });
+});
+
 describe('normalize_model_ref', () => {
     it('drops dates and vendor prefixes, and treats . and - alike', () => {
         expect(normalize_model_ref('anthropic', 'claude-sonnet-4-20250514')).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4' });
@@ -102,6 +135,14 @@ describe('RunService.ingest_usage_snapshot', () => {
         expect(stored.by_phase.plan.cost_usd).toBe(4.5);
         expect(stored.by_phase.build.cost_usd).toBe(3.5);
         expect(stored.by_phase.plan.tokens_in).toBe(1);
+    });
+
+    it('uses tokens_cached from the daemon', async () => {
+        await RunService.ingest_usage_snapshot({
+            ...base, snapshot_type: 'run',
+            by_model: { a: { provider: 'anthropic', model: 'claude-opus-5-5', tokens_in: 1_000_000, tokens_out: 0, tokens_cached: 900_000, llm_calls: 1 } },
+        } as never, priced());
+        expect(JSON.parse(String(queries[0]!.replacements!.snapshot)).total_cost_usd).toBe(0.58);
     });
 
     it('nothing priceable: the total is null, not $0', async () => {

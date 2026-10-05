@@ -15,6 +15,7 @@ const model_usage_schema = z.object({
     model: z.string().describe('Model id'),
     tokens_in: z.number().describe('Input token count'),
     tokens_out: z.number().describe('Output token count'),
+    tokens_cached: z.number().optional().describe('Cache-read tokens (already counted in tokens_in), priced at the cache-read rate'),
     llm_calls: z.number().describe('Number of LLM calls'),
 });
 
