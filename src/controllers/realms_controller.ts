@@ -173,7 +173,9 @@ export class RealmController extends BaseController {
 
         // UUID path — membership checked inside RealmService.get; no header org gate.
         if (body.realm_id) {
-            const realm = await this._realm.get(body.realm_id, user.user_id);
+            const realm = AdminCheck.is_site_admin(req)
+                ? await this._realm.get(body.realm_id, user.user_id, { site_admin: true })
+                : await this._realm.get(body.realm_id, user.user_id);
             res.json({ ok: true, realm });
             return;
         }

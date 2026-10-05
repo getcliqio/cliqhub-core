@@ -144,6 +144,8 @@ export class TeamsService {
         limit?: number; offset?: number;
         /** Catalog / site-admin modes only (the controller rejects it elsewhere). */
         sort_by?: TeamCatalogSortKey; sort_dir?: SortDir;
+        /** Site-admin listing only. */
+        org_id?: string; installed_realm_id?: string;
     }) {
         log.debug('get', { scope: params.scope, status: params.status });
         if (params.mine) {
@@ -154,7 +156,7 @@ export class TeamsService {
         const limit = Math.min(params.limit || 50, 100);
         const offset = params.offset || 0;
 
-        if (is_admin && (params.listed !== undefined || params.scope)) {
+        if (is_admin && (params.listed !== undefined || params.scope || params.org_id || params.installed_realm_id)) {
             return this._get_admin(auth, params, limit, offset);
         }
 
@@ -270,13 +272,22 @@ export class TeamsService {
         query?: string; scope?: string; listed?: boolean;
         limit?: number; offset?: number;
         sort_by?: TeamCatalogSortKey; sort_dir?: SortDir;
+        org_id?: string; installed_realm_id?: string;
     }, limit: number, offset: number) {
         const conditions: WhereOptions[] = [];
+        const esc = (v: string) => get_sequelize().escape(v);
 
         const query_where = team_query_where(params.query);
         if (query_where) conditions.push(query_where);
         if (params.scope !== undefined) { conditions.push({ scope: params.scope }); }
         if (params.listed !== undefined) { conditions.push({ listed: params.listed ? 1 : 0 }); }
+        if (params.org_id) {
+            conditions.push(literal(`"Team"."scope" IN (SELECT s.slug FROM scopes s WHERE s.org_id::text = ${esc(params.org_id)})`) as any);
+        }
+        // Installed = a daemon of the realm carries a team with this scope + name.
+        if (params.installed_realm_id) {
+            conditions.push(literal(`EXISTS (SELECT 1 FROM daemon_teams dt JOIN scopes s ON s.id::text = dt.scope_id::text JOIN realm_members rm ON rm.member_id::text = dt.daemon_id::text AND rm.member_type = 'daemon' WHERE rm.realm_id::text = ${esc(params.installed_realm_id)} AND dt.slug = "Team"."name" AND s.slug = "Team"."scope")`) as any);
+        }
 
         const where: WhereOptions = conditions.length > 0 ? { [Op.and]: conditions } : {};
 

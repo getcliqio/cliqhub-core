@@ -192,6 +192,7 @@ export class ScopesService {
             scope_type: s.scope_type,
             owner_id: s.owner_id,
             org_id: s.org_id ?? null,
+            org_slug: s.org_slug ?? null,
             team_count: Number(s.team_count ?? 0),
             owner_username: s.User?.username ?? null,
             created_at: s.created_at instanceof Date ? (s.created_at as Date).toISOString() : s.created_at,

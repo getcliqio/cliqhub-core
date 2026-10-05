@@ -71,7 +71,7 @@ export class OrgsController extends BaseController {
     }
 
     /**
-     * POST /v1/orgs/update, /internal/orgs/update — rename an org.
+     * POST /v1/orgs/update, /internal/orgs/update — rename an org and/or make a member an owner.
      */
     async update(req: Request, res: Response): Promise<void> {
         log.debug('update', { user_id: req.auth?.user?.id });
@@ -79,6 +79,7 @@ export class OrgsController extends BaseController {
         const result = await this._orgs_service.update(req.auth, {
             org_id: body.org_id,
             display_name: body.display_name,
+            owner_id: body.owner_id,
         });
         log.info('org_updated', { org_id: body.org_id });
         this.ok(res, result);

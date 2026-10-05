@@ -737,6 +737,17 @@ export class RealmService {
         return false;
     }
 
+    /** Batch: realm id → its slug and its org's slug (labels for list rows; no access check). */
+    static async slugs_by_ids(realm_ids: string[]): Promise<Map<string, { slug: string; org_slug: string | null }>> {
+        const ids = [...new Set(realm_ids.filter(Boolean))];
+        if (ids.length === 0) return new Map();
+        const [rows] = await get_sequelize().query(
+            'SELECT r.id::text AS id, r.slug, o.slug AS org_slug FROM realms r LEFT JOIN orgs o ON o.id = r.org_id WHERE r.id::text IN (:ids)',
+            { replacements: { ids } },
+        ) as [Array<{ id: string; slug: string; org_slug: string | null }>, unknown];
+        return new Map(rows.map((r) => [r.id, { slug: r.slug, org_slug: r.org_slug }]));
+    }
+
     static async list_daemon_ids_in_realm(realm_id: string): Promise<string[]> {
         const rows = await _realm_member_repo.find_all_q({
             where: { realm_id, member_type: 'daemon' },

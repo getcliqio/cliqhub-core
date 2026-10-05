@@ -66,7 +66,10 @@ async function assert_workspace_visible(req: Request, daemon_id: string | null |
 
 const get_schema = z.object({
     daemon_id: z.string().optional(),
-    realm_id: z.string().optional(),
+    realm_id: z.string().optional()
+        .describe('Only workspaces on a daemon of this realm, or that ran a run in it'),
+    org_id: z.string().uuid().optional()
+        .describe('Only workspaces on a daemon in a realm of this org, or that ran a run in the org (narrows what the caller may already see)'),
     limit: z.number().int().positive().optional(),
     offset: z.number().int().nonnegative().optional(),
     /** Stored list only (400 with daemon_id, which asks the daemon live). */
@@ -127,6 +130,7 @@ export class WorkspaceController {
             }
             const result = await WorkspaceService.list({
                 realm_id: body.realm_id,
+                org_id: body.org_id,
                 daemon_ids,
                 limit: body.limit,
                 offset: body.offset,

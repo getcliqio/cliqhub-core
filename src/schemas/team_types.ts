@@ -74,6 +74,10 @@ export const TeamsGetInput = z.object({
         .describe('Filter by listed flag (public marketplace visibility)'),
     status: z.enum(['draft', 'published']).optional()
         .describe('Filter by team status'),
+    org_id: z.string().uuid().optional()
+        .describe('Site-admin catalog listing: only teams published under a scope of this org (ignored for everyone else)'),
+    installed_realm_id: z.string().min(1).optional()
+        .describe('Site-admin catalog listing: only teams installed on a daemon of this realm (ignored for everyone else)'),
     realm_id: z.string().min(1).optional()
         .describe('Realm mode: return team roster with daemon coverage for this realm'),
     daemon_id: z.string().min(1).optional()
@@ -397,6 +401,10 @@ export const TeamData = z.object({
         .describe('Published by a verified (platform) scope (catalog with_workflow)'),
     author_id: z.string().nullable().optional()
         .describe('UUID of the team author (site-admin catalog listing only)'),
+    org_id: z.string().nullable().optional()
+        .describe('Org that owns the team\'s scope, or null for a personal scope (site-admin catalog listing only)'),
+    org_slug: z.string().nullable().optional()
+        .describe('Slug of that org (site-admin catalog listing only)'),
     created_at: z.number().optional()
         .describe('Team creation time (unix ms)'),
     updated_at: z.number().optional()
@@ -572,6 +580,10 @@ export type TeamListItemDto = {
     version_count?: number;
     /** Site-admin listing only. */
     author_id?: string | null;
+    /** Site-admin listing only. */
+    org_id?: string | null;
+    /** Site-admin listing only. */
+    org_slug?: string | null;
 };
 
 /** @deprecated Use PascalCase `*Vo` names. */

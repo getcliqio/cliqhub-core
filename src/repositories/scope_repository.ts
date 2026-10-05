@@ -17,6 +17,7 @@ export class ScopeRepository extends BaseRepository<Scope> {
             attributes: [
                 'id', 'slug', 'display_name', 'owner_id', 'org_id', 'visibility', 'scope_type', 'created_at',
                 [literal('(SELECT count(*) FROM teams t WHERE t.scope = "Scope"."slug")'), 'team_count'],
+                [literal('(SELECT o.slug FROM orgs o WHERE o.id = "Scope"."org_id")'), 'org_slug'],
             ],
             include: [{ model: User, attributes: ['username'], required: false }],
             order: opts.order ?? [['created_at', 'DESC']],

@@ -445,4 +445,35 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
             await NotificationRule.destroy({ where: { id: as_owner.body.data.id } });
         });
     });
+
+    describe('owners', () => {
+        it('an ownerless org gets owners through orgs/update owner_id: site admin or owner only, active members only, several allowed', async () => {
+            const org = await Org.create({ slug: `nobody${Date.now()}`, display_name: 'Nobody owns me', activated_at: new Date() } as never);
+            const org_id = org.get('id') as string;
+            made_orgs.push(org_id);
+            await seed_default_roles_for_org(org_id);
+            const role = async (slug: string) => (await OrgRole.findOne({ where: { org_id, slug }, attributes: ['id'], raw: true }) as unknown as { id: string }).id;
+            await OrgMember.create({ org_id, user_id: s.user.adam, role: 'admin', role_id: await role('admin') } as never);
+            await OrgMember.create({ org_id, user_id: s.user.mia, role: 'member', role_id: await role('member') } as never);
+            const owner_role = await role('owner');
+            const role_of = async (user_id: string) => (await OrgMember.findOne({ where: { org_id, user_id }, attributes: ['role_id'], raw: true }) as unknown as { role_id: string }).role_id;
+
+            const by_admin = await post('/v1/orgs/update', s.token.adam, { org_id, owner_id: s.user.adam });
+            expect(by_admin.status).toBe(403);
+            expect(err(by_admin).message).toMatch(/Only an owner/);
+            expect((await post('/v1/orgs/update', s.token.sam, { org_id })).status).toBe(422);
+            expect((await post('/v1/orgs/update', s.token.sam, { org_id, owner_id: s.user.ben })).status).toBe(404);
+
+            const first = await post('/v1/orgs/update', s.token.sam, { org_id, owner_id: s.user.adam });
+            expect(first.status, JSON.stringify(first.body)).toBe(200);
+            expect(await role_of(s.user.adam)).toBe(owner_role);
+            expect((await Org.findByPk(org_id, { raw: true }) as unknown as { owner_id: string }).owner_id).toBe(s.user.adam);
+
+            // The new owner may name another; the primary owner stays.
+            const second = await post('/v1/orgs/update', s.token.adam, { org_id, owner_id: s.user.mia });
+            expect(second.status, JSON.stringify(second.body)).toBe(200);
+            expect(await role_of(s.user.mia)).toBe(owner_role);
+            expect((await Org.findByPk(org_id, { raw: true }) as unknown as { owner_id: string }).owner_id).toBe(s.user.adam);
+        });
+    });
 });

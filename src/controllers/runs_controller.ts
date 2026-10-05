@@ -121,8 +121,13 @@ export class RunController extends BaseController {
             },
         );
 
+        const items = this.map_runs(result.runs);
+        const slugs = await RealmService.slugs_by_ids(items.map((r) => r.realm_id ?? ''));
         const data: PagedData<RunData> = {
-            items: this.map_runs(result.runs),
+            items: items.map((r) => {
+                const s = r.realm_id ? slugs.get(r.realm_id) : undefined;
+                return { ...r, realm_slug: s?.slug ?? null, org_slug: s?.org_slug ?? null };
+            }),
             total: result.total,
             offset: filters.offset ?? 0,
             limit: filters.limit ?? 20,

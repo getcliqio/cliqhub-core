@@ -24,6 +24,8 @@ export const ScopeData = z.object({
         .describe('Number of users with publish access (included on detail views)'),
     team_count: z.number().int().optional()
         .describe('Number of teams published under this scope (included on detail views)'),
+    org_slug: z.string().nullable().optional()
+        .describe('Slug of the owning org (site-admin catalog listing)'),
     created_at: z.string()
         .describe('ISO timestamp of scope creation'),
 });

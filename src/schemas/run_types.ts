@@ -378,6 +378,8 @@ export const RunData = z.object({
     team_id: z.string().describe('Team UUID'),
     daemon_id: z.string().nullable().describe('Daemon id executing the run, or null'),
     realm_id: z.string().nullable().describe('Realm id snapshotted at create'),
+    realm_slug: z.string().nullable().optional().describe('Slug of that realm (runs/get list rows)'),
+    org_slug: z.string().nullable().optional().describe('Slug of the realm\'s org (runs/get list rows)'),
     parent_run_id: z.string().nullable().describe('Parent run id for nested runs'),
     parent_phase: z.string().nullable().describe('Parent phase that spawned this run'),
     root_run_id: z.string().nullable().describe('Top-level ancestor run id'),

@@ -10,7 +10,8 @@ import {
 } from '../lib/namespace.js';
 import { normalize_email } from '../lib/account_fields.js';
 import { get_sequelize } from '../db/sequelize.js';
-import { AccountInvite, Org as OrgModel, User as UserModel } from '../models/index.js';
+import { AccountInvite, Org as OrgModel, OrgMember as OrgMemberModel, OrgRole as OrgRoleModel, User as UserModel } from '../models/index.js';
+import { org_standing } from '../auth/route_policy/visible.js';
 import type { OrgStatus } from '../models/org.model.js';
 import { UserRepository, user_list_status, type UserListStatus } from '../repositories/user_repository.js';
 import { ScopeRepository } from '../repositories/scope_repository.js';
@@ -453,12 +454,39 @@ export class OrgsService {
 
     // ─── Update org ─────────────────────────────────────────────────
 
-    async update(auth: AuthContext, params: { org_id: string; display_name: string }) {
+    /**
+     * Renames an org and/or makes an active member an owner.
+     *
+     * @throws ApiError 403 when a non-owner (and non site admin) names an owner;
+     *   404 when `owner_id` is not an active member; 409 when the org has no owner role.
+     */
+    async update(auth: AuthContext, params: { org_id: string; display_name?: string; owner_id?: string }) {
         log.debug('update', { org_id: params.org_id, user_id: auth.user?.id });
         // Route policy: org.settings in org_id.
-        await this._org_repo.update_display_name(params.org_id, params.display_name);
-        log.info('org_updated', { org_id: params.org_id });
+        if (params.owner_id) await this._make_owner(auth, params.org_id, params.owner_id);
+        if (params.display_name !== undefined) await this._org_repo.update_display_name(params.org_id, params.display_name);
+        log.info('org_updated', { org_id: params.org_id, owner_id: params.owner_id });
         return { updated: true };
+    }
+
+    private async _make_owner(auth: AuthContext, org_id: string, user_id: string): Promise<void> {
+        if (auth.user!.role !== 'admin') {
+            const standing = await org_standing(org_id, auth.user!.id);
+            if (!standing?.is_system) throw new ApiError('forbidden', 'Only an owner of the org can make an owner', 403);
+        }
+        const member = await OrgMemberModel.findOne({ where: { org_id, user_id, status: 'active', deleted_at: null }, attributes: ['role_id'], raw: true }) as { role_id: string | null } | null;
+        if (!member) throw new ApiError('not_found', 'Not an active member of this org', 404);
+        const owner_role = await OrgRoleModel.findOne({ where: { org_id, is_system: true }, attributes: ['id'], raw: true }) as { id: string } | null;
+        if (!owner_role) throw new ApiError('conflict', 'This org has no owner role', 409);
+
+        await get_sequelize().transaction(async (transaction) => {
+            await OrgMemberModel.update({ role_id: owner_role.id, role: 'admin' } as never, { where: { org_id, user_id }, transaction });
+            await OrgModel.update({ owner_id: user_id } as never, { where: { id: org_id, owner_id: null }, transaction });
+            if (this._audit_repo) {
+                await this._audit_repo.create(auth.user!.id, 'org.make_owner', 'org', org_id, { user_id, from_role_id: member.role_id }, transaction);
+            }
+        });
+        log.info('org_owner_added', { org_id, user_id });
     }
 
     // ─── Delete org ───────

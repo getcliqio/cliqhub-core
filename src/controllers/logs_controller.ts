@@ -10,6 +10,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { RunService } from '../services/run.service.js';
+import { RealmService } from '../services/realm.service.js';
 import { ApiError } from '../lib/api_error.js';
 import { AdminCheck } from '../lib/site_admin.js';
 import { get_logger } from '../lib/log.js';
@@ -77,9 +78,14 @@ export class LogsController {
                 ...body,
                 ...(realm_id ? { realm_id } : {}),
             });
+            const lines = result.lines as Array<Record<string, unknown>>;
+            const slugs = await RealmService.slugs_by_ids(lines.map((l) => String(l.realm_id ?? '')));
             res.json({
                 ok: true,
-                lines: result.lines,
+                lines: lines.map((l) => {
+                    const s = l.realm_id ? slugs.get(String(l.realm_id)) : undefined;
+                    return { ...l, realm_slug: s?.slug ?? null, org_slug: s?.org_slug ?? null };
+                }),
                 total: result.total,
                 facets: result.facets,
                 realm: result.realm,

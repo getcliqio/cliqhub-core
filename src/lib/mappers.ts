@@ -41,6 +41,10 @@ export function to_team_list_item_dto(
         version_count?: number;
         /** Site-admin listing only. */
         author_id?: string | null;
+        /** Site-admin listing only. */
+        org_id?: string | null;
+        /** Site-admin listing only. */
+        org_slug?: string | null;
     },
     tags: string[],
 ): TeamListItemDto {
@@ -48,6 +52,8 @@ export function to_team_list_item_dto(
     return {
         ...(row.version_count !== undefined ? { version_count: Number(row.version_count) } : {}),
         ...(row.author_id !== undefined ? { author_id: row.author_id } : {}),
+        ...(row.org_id !== undefined ? { org_id: row.org_id === null ? null : String(row.org_id) } : {}),
+        ...(row.org_slug !== undefined ? { org_slug: row.org_slug ?? null } : {}),
         id: row.id,
         name: row.name,
         scope: row.scope,

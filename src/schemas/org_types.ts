@@ -67,8 +67,12 @@ export type OrgsNewInput = z.infer<typeof OrgsNewInput>;
 export const OrgInput = z.object({
     org_id: z.string().uuid()
         .describe('Org UUID'),
-    display_name: z.string().min(1)
+    display_name: z.string().min(1).optional()
         .describe('Human-readable org name'),
+    owner_id: z.string().uuid().optional()
+        .describe('Active member to make an owner of the org (site admin or an existing owner only). Orgs may have several owners; the first one becomes the org\'s primary owner.'),
+}).refine((b) => b.display_name !== undefined || b.owner_id !== undefined, {
+    message: 'At least one of display_name or owner_id is required',
 });
 
 export type OrgInput = z.infer<typeof OrgInput>;

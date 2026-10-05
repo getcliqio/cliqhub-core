@@ -56,6 +56,8 @@ export class TeamRepository extends BaseRepository<Team> {
                 'created_at', 'updated_at',
                 [literal(LATEST_VERSION_SUBQUERY), 'latest_version'],
                 [literal('(SELECT count(*)::int FROM team_versions tv WHERE tv.team_id = "Team"."id")'), 'version_count'],
+                [literal('(SELECT s.org_id FROM scopes s WHERE s.slug = "Team"."scope")'), 'org_id'],
+                [literal('(SELECT o.slug FROM scopes s JOIN orgs o ON o.id = s.org_id WHERE s.slug = "Team"."scope")'), 'org_slug'],
             ],
             include: [{ model: User, as: 'author', attributes: ['username'] }],
             where,
