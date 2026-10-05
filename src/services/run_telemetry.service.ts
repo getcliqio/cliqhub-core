@@ -89,8 +89,8 @@ export class RunTelemetryService {
                     END                                                            AS "team_label"
                   FROM cliq."run_spans"  s
                   LEFT JOIN cliq."team_runs" tr ON tr."run_id" = s."run_id"
-                  LEFT JOIN cliq."teams"     t  ON t."id"      = tr."team_id"
-                  LEFT JOIN cliq."scopes"    sc ON sc."id"     = t."scope_id"
+                  LEFT JOIN cliq."daemon_teams" t  ON t."id"       = tr."team_id"
+                  LEFT JOIN cliq."scopes"       sc ON sc."id"::text = t."scope_id"
                  WHERE s."name" = 'run.execute'
                    AND s."parent_span_id" IS NULL
                    AND s."realm_id" = ANY($1::text[])

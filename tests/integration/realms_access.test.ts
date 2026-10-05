@@ -41,7 +41,12 @@ describe.skipIf(!has_postgres)('realms access (Core API 5)', () => {
             expect(got.status).toBe(200);
             expect(got.body.realm.id).toBe(s.A1);
             expect((await post('/v1/realms/get_by_id', s.token.olivia, { slug: `a1${s.stamp}`, org_id: s.acme })).status).toBe(200);
-            expect((await post('/v1/realms/get_members', s.token.olivia, { realm_id: s.A1 })).status).toBe(200);
+            const members = await post('/v1/realms/get_members', s.token.olivia, { realm_id: s.A1 });
+            expect(members.status).toBe(200);
+            const users = ((members.body.members ?? members.body.data?.members ?? []) as Array<{ member_type: string; username: string | null }>)
+                .filter((m) => m.member_type === 'user');
+            expect(users.length).toBeGreaterThan(0);
+            expect(users.every((m) => typeof m.username === 'string' && m.username.length > 0)).toBe(true);
             const listed = await post('/v1/realms/get', s.token.olivia, { org_id: s.acme });
             expect(ids(listed)).toEqual(expect.arrayContaining([s.A1, s.A2]));
         });

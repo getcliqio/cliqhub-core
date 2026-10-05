@@ -1114,7 +1114,7 @@ export class RealmService {
         });
 
         const user_ids = rows
-            .filter((r) => r.member_type === 'user' && /^\d+$/.test(r.member_id))
+            .filter((r) => r.member_type === 'user')
             .map((r) => r.member_id);
 
         const username_map = new Map<string, string>();
