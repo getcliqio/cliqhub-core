@@ -540,7 +540,62 @@ export async function migrate_hub_schema(sequelize: Sequelize): Promise<void> {
 
     await align_org_with_realm(sequelize);
     await close_decided_reviews_of_ended_runs(sequelize);
+    await wire_scope_foreign_keys(sequelize);
     await drop_public_schema(sequelize);
+}
+
+/** child table, column, ON DELETE — as declared on the registry models. */
+const SCOPE_INBOUND_FKS = [
+    ['scope_members', 'scope_id', 'CASCADE'],
+    ['orgs', 'default_scope_id', 'SET NULL'],
+] as const;
+
+/**
+ * Scopes that were dropped and recreated lost their inbound FKs, leaving
+ * memberships and org defaults pointing at scope ids that no longer exist.
+ * Repoints dangling org defaults to the org's scope, drops dangling
+ * memberships, then restores the FKs so `cliq.scopes` cannot be dropped
+ * out from under them again.
+ */
+async function wire_scope_foreign_keys(sequelize: Sequelize): Promise<void> {
+    if (!(await table_exists(sequelize, 'cliq', 'scopes'))) return;
+    const [, repointed] = await sequelize.query(`
+        UPDATE cliq.orgs AS o
+           SET default_scope_id = (SELECT s.id FROM cliq.scopes s WHERE s.org_id = o.id ORDER BY s.created_at LIMIT 1)
+         WHERE o.default_scope_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM cliq.scopes s WHERE s.id = o.default_scope_id)
+    `);
+    const [, dropped] = await sequelize.query(`
+        DELETE FROM cliq.scope_members AS sm
+         WHERE NOT EXISTS (SELECT 1 FROM cliq.scopes s WHERE s.id = sm.scope_id)
+    `);
+    const defaults_repointed = (repointed as { rowCount?: number } | undefined)?.rowCount ?? 0;
+    const memberships_dropped = (dropped as { rowCount?: number } | undefined)?.rowCount ?? 0;
+    if (defaults_repointed > 0 || memberships_dropped > 0) {
+        log.info('dangling_scope_refs_repaired', { defaults_repointed, memberships_dropped });
+    }
+
+    for (const [child, column, on_delete] of SCOPE_INBOUND_FKS) {
+        if (!(await table_exists(sequelize, 'cliq', child))) continue;
+        const existing = await sequelize.query<{ n: number }>(`
+            SELECT count(*)::int AS n
+              FROM pg_constraint c
+              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+             WHERE c.contype = 'f'
+               AND c.conrelid = 'cliq.${child}'::regclass
+               AND c.confrelid = 'cliq.scopes'::regclass
+               AND a.attname = :column`,
+            { type: QueryTypes.SELECT, replacements: { column } },
+        );
+        if ((existing[0]?.n ?? 0) > 0) continue;
+        await sequelize.query(`
+            ALTER TABLE cliq."${child}"
+              ADD CONSTRAINT "${child}_${column}_fkey"
+              FOREIGN KEY ("${column}") REFERENCES cliq.scopes(id)
+              ON UPDATE CASCADE ON DELETE ${on_delete}
+        `);
+        log.info('scope_fk_restored', { table: child, column });
+    }
 }
 
 /** Realm-scoped rows whose `org_id` must equal their realm's org. */

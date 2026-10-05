@@ -25,14 +25,16 @@ beforeAll(async () => {
     test_org_id = org.id;
 });
 
+// DELETE, not TRUNCATE ... CASCADE: orgs.default_scope_id references scopes,
+// so a cascading truncate would empty orgs too.
 beforeEach(async () => {
     if (!has_postgres) return;
-    await Scope.destroy({ where: {}, truncate: true, cascade: true });
+    await Scope.destroy({ where: {} });
 });
 
 afterAll(async () => {
     if (!has_postgres) return;
-    await Scope.destroy({ where: {}, truncate: true, cascade: true });
+    await Scope.destroy({ where: {} });
     await close_test_control_plane_store();
 });
 

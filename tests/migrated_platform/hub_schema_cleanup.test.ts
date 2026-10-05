@@ -70,6 +70,58 @@ describe.skipIf(!has_postgres)('hub schema cleanup (boot)', () => {
         for (const fk of fks) await sq.query(`ALTER TABLE ${fk.tbl} ADD CONSTRAINT "${fk.con}" ${fk.def}`);
     });
 
+    it('control-plane boot migrations leave cliq.teams registry rows alone', async () => {
+        const sq = get_sequelize();
+        const id = randomUUID();
+        const name = uid();
+        await sq.query(
+            `INSERT INTO cliq.teams (id, name, created_at, updated_at) VALUES (:id, :name, NOW(), NOW())`,
+            { replacements: { id, name } },
+        );
+
+        await run_core_api_schema_migrations(sq);
+        await run_core_api_schema_migrations(sq);
+
+        expect(await scalar(`SELECT table_schema AS v FROM information_schema.tables WHERE table_schema = 'cliq' AND table_name = 'teams'`)).toBe('cliq');
+        expect(await scalar(`SELECT name AS v FROM cliq.teams WHERE id = '${id}'`)).toBe(name);
+        await sq.query('DELETE FROM cliq.teams WHERE id = :id', { replacements: { id } });
+    });
+
+    it('repairs dangling scope refs and restores the inbound scope FKs', async () => {
+        const sq = get_sequelize();
+        const user_id = await scalar(`SELECT id::text AS v FROM cliq.users ORDER BY created_at LIMIT 1`);
+        expect(user_id).toBeTruthy();
+        const org = await Org.create({ slug: uid(), display_name: 'Scoped' } as never);
+        const org_id = org.get('id') as string;
+        const scope_id = randomUUID();
+        await sq.query(
+            `INSERT INTO cliq.scopes (id, slug, display_name, org_id, visibility, scope_type, created_at)
+             VALUES (:scope_id, :slug, :slug, :org_id, 'public', 'org', NOW())`,
+            { replacements: { scope_id, slug: uid(), org_id } },
+        );
+        const inbound = async () => sq.query<{ tbl: string; con: string; def: string }>(
+            `SELECT conrelid::regclass::text AS tbl, conname AS con, pg_get_constraintdef(oid) AS def
+               FROM pg_constraint WHERE confrelid = 'cliq.scopes'::regclass ORDER BY 1`,
+            { type: QueryTypes.SELECT },
+        );
+        for (const fk of await inbound()) await sq.query(`ALTER TABLE ${fk.tbl} DROP CONSTRAINT "${fk.con}"`);
+        const gone = randomUUID();
+        await sq.query('UPDATE cliq.orgs SET default_scope_id = :gone WHERE id = :org_id', { replacements: { gone, org_id } });
+        await sq.query('INSERT INTO cliq.scope_members (scope_id, user_id) VALUES (:gone, :user_id)', { replacements: { gone, user_id } });
+
+        await migrate_hub_schema(sq);
+        await migrate_hub_schema(sq);
+
+        expect(await scalar(`SELECT default_scope_id::text AS v FROM cliq.orgs WHERE id = '${org_id}'`)).toBe(scope_id);
+        expect(await scalar(`SELECT count(*)::text AS v FROM cliq.scope_members WHERE scope_id = '${gone}'`)).toBe('0');
+        const restored = (await inbound()).map((fk) => `${fk.tbl} ${fk.def}`);
+        expect(restored).toEqual([
+            expect.stringMatching(/^(cliq\.)?orgs FOREIGN KEY \(default_scope_id\) REFERENCES (cliq\.)?scopes\(id\).*ON DELETE SET NULL/),
+            expect.stringMatching(/^(cliq\.)?scope_members FOREIGN KEY \(scope_id\) REFERENCES (cliq\.)?scopes\(id\).*ON DELETE CASCADE/),
+        ]);
+        await expect(sq.query(`DROP TABLE cliq.scopes`)).rejects.toThrow(/depend/);
+    });
+
     it('keeps a public table that still has rows', async () => {
         const sq = get_sequelize();
         await sq.query('CREATE SCHEMA IF NOT EXISTS public');

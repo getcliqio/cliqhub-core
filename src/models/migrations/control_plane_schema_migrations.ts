@@ -29,16 +29,6 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "daemon_id" TEXT`);
     await run(`ALTER TABLE cliq."containers" ADD COLUMN IF NOT EXISTS "daemon_id" TEXT`);
 
-    await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "daemon_id" TEXT`);
-    await run(`ALTER TABLE cliq."teams" DROP CONSTRAINT IF EXISTS "teams_scope_id_slug_key"`);
-    await run(`DROP INDEX IF EXISTS cliq."teams_scope_id_slug"`);
-    await run(`CREATE UNIQUE INDEX IF NOT EXISTS "teams_daemon_scope_slug_uniq"
-               ON cliq."teams" ("daemon_id", "scope_id", "slug")
-               WHERE "daemon_id" IS NOT NULL`);
-    await run(`CREATE UNIQUE INDEX IF NOT EXISTS "teams_scope_slug_legacy_uniq"
-               ON cliq."teams" ("scope_id", "slug")
-               WHERE "daemon_id" IS NULL`);
-
     await run(`ALTER TABLE cliq."daemon_config" ADD COLUMN IF NOT EXISTS "daemon_id" TEXT DEFAULT '__global__'`);
     await run(`UPDATE cliq."daemon_config" SET "daemon_id" = '__global__' WHERE "daemon_id" IS NULL`);
     await run(`ALTER TABLE cliq."daemon_config" DROP CONSTRAINT IF EXISTS "daemon_config_pkey"`);
@@ -428,44 +418,6 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
 
     // Heartbeat team sync: hash for dedup, cleanup of legacy template rows.
     await run(`ALTER TABLE cliq."daemons" ADD COLUMN IF NOT EXISTS "teams_hash" TEXT`);
-
-    // Claim NULL-daemon team rows that have runs referencing them:
-    // assign them to the daemon that actually ran those runs.
-    await run(`
-        UPDATE cliq."teams" t
-        SET "daemon_id" = sub."daemon_id"
-        FROM (
-            SELECT DISTINCT ON (r."team_id") r."team_id", r."daemon_id"
-            FROM cliq."team_runs" r
-            WHERE r."daemon_id" IS NOT NULL
-              AND r."team_id" IN (
-                SELECT id FROM cliq."teams" WHERE "daemon_id" IS NULL
-              )
-            ORDER BY r."team_id", r."started_at" DESC
-        ) sub
-        WHERE t."id" = sub."team_id"
-          AND t."daemon_id" IS NULL
-    `);
-
-    // Delete remaining NULL-daemon rows that no longer have FK references.
-    await run(`DELETE FROM cliq."teams" WHERE "daemon_id" IS NULL
-               AND "id" NOT IN (SELECT "team_id" FROM cliq."team_runs")`);
-
-    // Drop the legacy partial unique index (no longer needed).
-    await run(`DROP INDEX IF EXISTS cliq."teams_scope_slug_legacy_uniq"`);
-
-    // Phase 3 revised: keep daemon_id nullable.
-    //
-    // The prior migration tightened this to NOT NULL, but the app-level
-    // team.controller / team.service intentionally treat daemon_id as
-    // nullable — hub-catalog teams (created via /v1/control/teams/create)
-    // and legacy clients both write null. Enforcing NOT NULL at the DB
-    // meant fresh test schemas rejected those writes while long-lived
-    // prod DBs (which had null rows and were skipped by the DO block)
-    // continued to accept them. The result: green in prod, red in tests.
-    // Rolling the constraint back matches app behaviour and is idempotent
-    // on both new and old DBs.
-    await run(`ALTER TABLE cliq."teams" ALTER COLUMN "daemon_id" DROP NOT NULL`);
 
     // Realm dispatch queue — exclusive (run/claim) + fan-out audit (install, …).
     await run(`CREATE TABLE IF NOT EXISTS cliq."realm_dispatch_queue" (
@@ -1231,51 +1183,8 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`CREATE INDEX IF NOT EXISTS "stored_artifacts_run_id_idx"
                ON cliq."stored_artifacts" ("run_id")`);
 
-    // Rename cliq.teams → cliq.daemon_teams to distinguish daemon-installed team
-    // cache rows from hub registry team package definitions (public.teams).
-    // Idempotent: handles 3 states:
-    //   a) teams exists, daemon_teams does not → simple rename
-    //   b) both exist → migrate data, fix FKs, drop old table
-    //   c) teams does not exist → already done
-    await run(`
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.tables
-                WHERE table_schema = 'cliq' AND table_name = 'teams'
-            ) THEN
-                IF NOT EXISTS (
-                    SELECT 1 FROM information_schema.tables
-                    WHERE table_schema = 'cliq' AND table_name = 'daemon_teams'
-                ) THEN
-                    -- Simple rename: daemon_teams does not yet exist
-                    ALTER TABLE cliq."teams" RENAME TO "daemon_teams";
-                    -- Drop old scope_id FK (pointed to cliq.scopes which is being dropped)
-                    ALTER TABLE cliq."daemon_teams" DROP CONSTRAINT IF EXISTS "teams_scope_id_fkey";
-                    -- Fix workspace_teams FK to reference renamed table
-                    ALTER TABLE cliq."workspace_teams"
-                        DROP CONSTRAINT IF EXISTS "workspace_teams_team_id_fkey";
-                    ALTER TABLE cliq."workspace_teams"
-                        ADD CONSTRAINT "workspace_teams_team_id_fkey"
-                        FOREIGN KEY (team_id) REFERENCES cliq."daemon_teams"(id)
-                        ON UPDATE CASCADE ON DELETE CASCADE;
-                ELSE
-                    -- Both tables exist (sequelize.sync created daemon_teams before migration ran):
-                    -- copy any existing rows from old teams into daemon_teams, then fix FKs and drop.
-                    INSERT INTO cliq."daemon_teams"
-                        SELECT * FROM cliq."teams"
-                        ON CONFLICT (id) DO NOTHING;
-                    ALTER TABLE cliq."workspace_teams"
-                        DROP CONSTRAINT IF EXISTS "workspace_teams_team_id_fkey";
-                    ALTER TABLE cliq."workspace_teams"
-                        ADD CONSTRAINT "workspace_teams_team_id_fkey"
-                        FOREIGN KEY (team_id) REFERENCES cliq."daemon_teams"(id)
-                        ON UPDATE CASCADE ON DELETE CASCADE;
-                    DROP TABLE cliq."teams";
-                END IF;
-            END IF;
-        END $$
-    `);
+    // cliq."teams" is the registry's team catalog (daemon installs live in
+    // cliq."daemon_teams"); boot must never rename, merge or drop it.
 
     // Fork lineage: the team (and version) a team was forked from.
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "forked_from_team_id" UUID`);
