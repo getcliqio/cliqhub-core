@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import { SignJWT } from 'jose';
 import type { Request, Response, NextFunction } from 'express';
 
@@ -167,5 +168,42 @@ describe('create_daemon_auth middleware', () => {
         await expect(
             middleware(req, make_res(), next),
         ).rejects.toMatchObject({ status: 401, code: 'invalid_token' });
+    });
+});
+
+describe('create_daemon_auth — opaque realm/daemon tokens (cliq_dt_…)', () => {
+    const TOKEN = 'cliq_dt_test_realm_token';
+    const HASH = createHash('sha256').update(TOKEN).digest('hex');
+    const req_with = (body: Record<string, unknown> = { daemon_id: 'd-1' }) =>
+        ({ headers: { authorization: `Bearer ${TOKEN}` }, body, daemon_auth: undefined } as unknown as Request);
+    const pool_returning = (rows: unknown[] | Error) => ({
+        query: vi.fn(async () => { if (rows instanceof Error) throw rows; return { rows }; }),
+    });
+
+    it("looks the token up in Core's cliq.tokens by hash, realm/daemon types only", async () => {
+        const pool = pool_returning([{ permissions: { domains: { realms: ['realm-1'] } }, revoked_at: null }]);
+        const req = req_with();
+        const next = vi.fn();
+        await create_daemon_auth(make_config(), pool as never)(req, make_res(), next);
+        const [sql, params] = pool.query.mock.calls[0] as unknown as [string, unknown[]];
+        expect(sql).toMatch(/FROM cliq\.tokens\b/);
+        expect(sql).toContain("type IN ('realm', 'daemon')");
+        expect(params).toEqual([HASH]);
+        expect(next).toHaveBeenCalled();
+        expect(req.daemon_auth).toEqual({ daemon_id: 'd-1', realm_id: 'realm-1', scope_id: 'realm-1' });
+    });
+
+    it('unknown or revoked token → 401 invalid_token (revoked message)', async () => {
+        for (const rows of [[], [{ permissions: { domains: { realms: ['realm-1'] } }, revoked_at: '2026-10-01' }]]) {
+            await expect(create_daemon_auth(make_config(), pool_returning(rows) as never)(req_with(), make_res(), vi.fn()))
+                .rejects.toMatchObject({ status: 401, code: 'invalid_token', message: 'Invalid or revoked daemon token' });
+        }
+    });
+
+    it('a token with no realm scope → 401; a missing daemon_id → 400', async () => {
+        await expect(create_daemon_auth(make_config(), pool_returning([{ permissions: { domains: { realms: '*' } }, revoked_at: null }]) as never)(req_with(), make_res(), vi.fn()))
+            .rejects.toMatchObject({ status: 401, message: 'Token has no realm scope' });
+        await expect(create_daemon_auth(make_config(), pool_returning([{ permissions: { domains: { realms: ['realm-1'] } }, revoked_at: null }]) as never)(req_with({}), make_res(), vi.fn()))
+            .rejects.toMatchObject({ status: 400, code: 'missing_daemon_id' });
     });
 });

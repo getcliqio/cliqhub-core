@@ -59,7 +59,9 @@ export function create_daemon_auth(config: SyncEnvConfig, pool: pg.Pool) {
 }
 
 /**
- * Resolve an opaque `cliq_dt_` token by hashing and looking up in the tokens table.
+ * Resolve an opaque `cliq_dt_` token by hashing and looking up in Core's `cliq.tokens`
+ * (schema-qualified like every other sync query: the pool sets no search_path, so a bare
+ * `tokens` read the wrong table and every realm token failed with `invalid_token`).
  * Extracts realm_id from the token's permissions. daemon_id comes from the request body.
  */
 async function _resolve_daemon_token(
@@ -73,7 +75,7 @@ async function _resolve_daemon_token(
         permissions: Record<string, unknown> | null;
         revoked_at: string | null;
     }>(`
-        SELECT permissions, revoked_at FROM tokens
+        SELECT permissions, revoked_at FROM cliq.tokens
         WHERE token_hash = $1 AND type IN ('realm', 'daemon')
         LIMIT 1
     `, [token_hash]);
