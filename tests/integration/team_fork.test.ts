@@ -146,6 +146,28 @@ describe.skipIf(!has_postgres)('forking a team', () => {
         expect(empty.status).toBe(422);
     });
 
+    it("save_as 'discard' drops the working copy and mints nothing", async () => {
+        const fork = await Team.findOne({ where: { name: 'my-pipeline', scope: forker.username }, attributes: ['id', 'description'], raw: true });
+        const versions_before = await TeamVersion.count({ where: { team_id: fork!.id } });
+        const draft = await post('/v1/teams/update', forker.token, { team_id: fork!.id, manifest: MANIFEST('my-pipeline'), description: 'wip', save_as: 'draft' });
+        expect(draft.status, JSON.stringify(draft.body)).toBe(200);
+
+        const theirs = await post('/v1/teams/update', author.token, { team_id: fork!.id, save_as: 'discard' });
+        expect(theirs.status).not.toBe(200);
+        expect((await post('/v1/teams/get_by_id', forker.token, { team_id: fork!.id })).body.data.draft).not.toBeNull();
+
+        const discard = await post('/v1/teams/update', forker.token, { team_id: fork!.id, save_as: 'discard' });
+        expect(discard.status, JSON.stringify(discard.body)).toBe(200);
+        expect(discard.body.data).toMatchObject({ version: null, draft_saved_at: null });
+        const after = await post('/v1/teams/get_by_id', forker.token, { team_id: fork!.id });
+        expect(after.body.data.draft).toBeNull();
+        expect(after.body.data.description).toBe(fork!.description);
+        expect(await TeamVersion.count({ where: { team_id: fork!.id } })).toBe(versions_before);
+
+        const again = await post('/v1/teams/update', forker.token, { team_id: fork!.id, save_as: 'discard' });
+        expect(again.status).toBe(200);
+    });
+
     it('publishing a package supersedes the working copy; a status-only publish keeps the tags it is given', async () => {
         const fork = await Team.findOne({ where: { name: 'my-pipeline', scope: forker.username }, attributes: ['id'], raw: true });
         const draft = await post('/v1/teams/update', forker.token, { team_id: fork!.id, manifest: MANIFEST('my-pipeline'), save_as: 'draft' });

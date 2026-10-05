@@ -561,7 +561,7 @@ export class TeamsService {
         description?: string;
         manifest?: string | Record<string, unknown>; team_json?: string;
         bump?: 'minor' | 'major';
-        save_as?: 'draft' | 'version';
+        save_as?: 'draft' | 'version' | 'discard';
         changelog?: string;
     }) {
         log.debug('update', { team_id: params.team_id, name: params.name, scope: params.scope });
@@ -570,6 +570,18 @@ export class TeamsService {
 
         const team = await this._resolve_team_for_write(auth, params);
         const sent_manifest = resolve_manifest_yaml(params);
+
+        if (params.save_as === 'discard') {
+            await this._team_repo.clear_draft(team.id);
+            return {
+                id: team.id,
+                name: team.name,
+                scope: team.scope,
+                status: team_status(team.visibility),
+                version: null,
+                draft_saved_at: null,
+            };
+        }
 
         if (params.save_as === 'draft') {
             if (!sent_manifest) throw new ApiError('invalid_params', 'A draft needs a manifest', 422, { field: 'manifest' });

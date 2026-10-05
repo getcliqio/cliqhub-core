@@ -188,9 +188,10 @@ export const TeamsUpdateInput = z.object({
         .describe('Updated SPA builder canvas JSON string'),
     bump: z.enum(['minor', 'major']).optional()
         .describe('Bump magnitude when updating manifest; omit for patch (default)'),
-    save_as: z.enum(['draft', 'version']).optional()
+    save_as: z.enum(['draft', 'version', 'discard']).optional()
         .describe("'draft': keep the manifest as the team's working copy without minting a version; "
-            + "'version' (default): mint the next version from the manifest, or from the working copy when no manifest is sent, and clear the working copy"),
+            + "'version' (default): mint the next version from the manifest, or from the working copy when no manifest is sent, and clear the working copy; "
+            + "'discard': drop the working copy (no version, nothing else changes)"),
     changelog: z.string().max(2000).optional()
         .describe('What changed in the version being minted'),
 }).refine(
