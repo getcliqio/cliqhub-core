@@ -1159,7 +1159,7 @@ export class RealmService {
 
         /** Resolve username for user members so the returned DTO is display-ready. */
         let username: string | null = null;
-        if (input.member_type === 'user' && /^\d+$/.test(member_id)) {
+        if (input.member_type === 'user') {
             const u = await _user_repo.find_by_id(member_id, { attributes: ['username'], raw: true });
             if (u) username = u.username;
         }
@@ -1180,7 +1180,7 @@ export class RealmService {
         }
         if (input.existing_only) {
             throw ApiError.conflict(
-                `${username ? `@${username}` : 'This user'} is not a member of this realm — invite them with invitations/create (target_type realm)`,
+                `${username ? `@${username}` : 'This person'} isn't in this realm yet. Send them an invite instead: they get an email and join when they accept.`,
                 'invite_required',
             );
         }
