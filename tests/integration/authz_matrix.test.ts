@@ -34,6 +34,7 @@ interface Row { expect: string; body?: Body }
 // Common rows (see header for codes).
 const ALL = 'YYYYYYYYYYY';
 const SIGNED_IN = '1YYYYYYY333';
+const SIGNED_IN_DAEMON_READ = '1YYYYYYYYYY'; // users and daemon tokens
 const SITE_ADMIN = '1Y333333333';
 const SITE_ADMIN_DAEMON_READ = '1Y333333YYY';
 const A1_VIEW = '1YYYYY44333';
@@ -89,7 +90,7 @@ const MATRIX: Record<string, Row> = {
     'POST /v1/account/mesh/update': { expect: SIGNED_IN },
     'POST /v1/auth/generate_token': { expect: SIGNED_IN },
     'POST /v1/auth/get_tokens': { expect: SIGNED_IN },
-    'POST /v1/auth/validate_token': { expect: SIGNED_IN },
+    'POST /v1/auth/validate_token': { expect: SIGNED_IN_DAEMON_READ },
     'POST /v1/auth/revoke_token': { expect: SIGNED_IN },
     'POST /v1/auth/rotate_token': { expect: SIGNED_IN },
     'POST /v1/users/get': { expect: SIGNED_IN },

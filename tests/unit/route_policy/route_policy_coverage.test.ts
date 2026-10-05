@@ -78,6 +78,7 @@ describe('route policy coverage', () => {
           [
             "POST /v1/artifacts/submit",
             "POST /v1/auth/acl",
+            "POST /v1/auth/validate_token",
             "POST /v1/daemons/ack_command",
             "POST /v1/daemons/deregister",
             "POST /v1/daemons/heartbeat",

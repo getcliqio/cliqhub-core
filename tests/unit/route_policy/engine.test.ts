@@ -153,6 +153,13 @@ describe('tokens and callers', () => {
         expect(await check('POST /v1/runs/cancel', 'daemon_a1', { run_id: 'r-a1' })).toMatchObject({ status: 403, reason: 'daemon_not_allowed' });
         expect(await status('POST /v1/orgs/update', 'daemon_a1', { org_id: 'acme' })).toBe(403);
     });
+    it('daemon token may validate a token presented to it (cliqd checking a CLI user), nothing else on auth/*', async () => {
+        expect(await status('POST /v1/auth/validate_token', 'daemon_a1')).toBe(200);
+        expect(await status('POST /v1/auth/validate_token', 'sam_daemon')).toBe(200);
+        expect(await status('POST /v1/auth/validate_token', 'anon')).toBe(401);
+        expect(await check('POST /v1/auth/generate_token', 'daemon_a1')).toMatchObject({ status: 403, reason: 'daemon_not_allowed' });
+        expect(await check('POST /v1/auth/get_tokens', 'daemon_a1')).toMatchObject({ status: 403, reason: 'daemon_not_allowed' });
+    });
     it('daemon reads a review in its realm only', async () => {
         expect(await status('POST /v1/reviews/get_by_id', 'daemon_a1', { review_id: 'rv-a1' })).toBe(200);
         expect(await status('POST /v1/reviews/get_by_id', 'daemon_b1', { review_id: 'rv-a1' })).toBe(404);

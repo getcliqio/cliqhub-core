@@ -55,7 +55,8 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'POST /v1/account/mesh/update': signed_in(),
     'POST /v1/auth/generate_token': signed_in({ handler: 'cannot mint wider than the calling token' }),
     'POST /v1/auth/get_tokens': signed_in(),
-    'POST /v1/auth/validate_token': signed_in(),
+    // A daemon on a realm token checks the PAT a CLI presents to it (cliqd auth middleware).
+    'POST /v1/auth/validate_token': signed_in({ daemon: 'read', handler: 'daemon: resolves a token presented to it' }),
     'POST /v1/auth/revoke_token': signed_in({ handler: 'own tokens only' }),
     'POST /v1/auth/rotate_token': signed_in({ handler: 'own tokens only' }),
     'POST /v1/users/get': signed_in({ handler: 'site admin: all; org admin: members; else self' }),
