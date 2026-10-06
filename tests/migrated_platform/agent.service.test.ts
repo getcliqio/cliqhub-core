@@ -287,3 +287,48 @@ describe.skipIf(!has_postgres)('AgentService.deregister', () => {
         expect(result).toBe(false);
     });
 });
+
+// ── MCP settings ─────────────────────────────────────────────────────
+
+describe.skipIf(!has_postgres)('AgentService MCP settings', () => {
+    const MCP = { transports: ['http'], allow_custom: false, presets: [{ name: 'linear', label: 'Linear', transport: 'http', url: 'https://mcp.linear.app/mcp', secrets: [{ key: 'LINEAR_API_KEY', description: 'Linear personal API key' }] }] };
+    const LINEAR = JSON.stringify({ linear: { url: 'https://mcp.linear.app/mcp', headers: { Authorization: 'Bearer ${LINEAR_API_KEY}' } } });
+
+    async function mcp_agent(): Promise<string> {
+        const name = uid();
+        await service.register(ORG_A, { name, manifest: { name, entry: './agent.js', agent_type: 'llm', mcp: MCP }, description: 'llm' });
+        const row = await AgentCatalog.findOne({ where: { name } });
+        return row!.id;
+    }
+
+    it('accepts mcp.servers, then requires a secret per placeholder until it is set', async () => {
+        const id = await mcp_agent();
+        await service.update_settings(ORG_A, id, { values: { 'mcp.servers': LINEAR } });
+
+        const before = await service.get_settings(ORG_A, id);
+        expect(before.mcp).toEqual(MCP);
+        expect(before.settings.optional.find((d) => d.key === 'mcp.servers')?.type).toBe('mcp_servers');
+        expect(before.settings.required.map((d) => d.key)).toEqual(['mcp.secrets.LINEAR_API_KEY']);
+        expect(before.all_required_configured).toBe(false);
+
+        await service.update_settings(ORG_A, id, { values: { 'mcp.secrets.LINEAR_API_KEY': 'lin_api_123' } });
+        const after = await service.get_settings(ORG_A, id);
+        expect(after.all_required_configured).toBe(true);
+        expect(after.configured['mcp.secrets.LINEAR_API_KEY']).toBe(true);
+    });
+
+    it('rejects a server list that does not fit the manifest, and MCP keys on agents without mcp', async () => {
+        const id = await mcp_agent();
+        const custom = JSON.stringify({ mine: { url: 'https://example.com/mcp' } });
+        await expect(service.update_settings(ORG_A, id, { values: { 'mcp.servers': custom } }))
+            .rejects.toThrow(/not a preset, and this agent does not allow custom servers/);
+        await expect(service.update_settings(ORG_A, id, { values: { 'mcp.servers': '{oops' } }))
+            .rejects.toThrow(/not valid JSON/);
+
+        const plain_name = uid();
+        await register_agent(ORG_A, plain_name);
+        const plain_id = (await AgentCatalog.findOne({ where: { name: plain_name } }))!.id;
+        await expect(service.update_settings(ORG_A, plain_id, { values: { 'mcp.servers': LINEAR } }))
+            .rejects.toThrow(/is not valid for agent/);
+    });
+});

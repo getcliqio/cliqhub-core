@@ -13,6 +13,7 @@
 const SECRET_SEGMENTS = new Set(['key', 'apikey', 'token', 'secret', 'password', 'passwd', 'pat', 'credentials']);
 
 export function is_secret_key(key: string, def?: { secret?: boolean } | null): boolean {
+    if (key.startsWith('mcp.secrets.')) return true; // MCP placeholder secrets, whatever their name
     if (def?.secret === true) return true;
     if (def?.secret === false) return false;
     const last = key.toLowerCase().split(/[._-]/).filter(Boolean).pop() ?? '';

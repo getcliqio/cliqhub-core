@@ -14,6 +14,7 @@ export const SettingDef = z.object({
 	default: z.unknown().optional().describe('Default value when unset'),
 	when: z.record(z.string(), z.string()).optional().describe('Conditional visibility map (key → required value)'),
 	secret: z.boolean().optional().describe('True for credentials (API keys, tokens). Values are masked in get_settings without agents.reveal'),
+	type: z.enum(['text', 'secret', 'mcp_servers']).optional().describe('How the UI edits the value: text (default), secret, or mcp_servers (JSON server list edited with the manifest mcp block)'),
 });
 export type SettingDef = z.infer<typeof SettingDef>;
 
@@ -40,6 +41,7 @@ export const SettingsData = z.object({
 	optional_total: z.number().describe('Count of optional keys'),
 	optional_configured: z.number().describe('Count of optional keys that are configured'),
 	all_required_configured: z.boolean().describe('True when every required key is configured'),
+	mcp: z.unknown().optional().describe("The agent manifest's mcp block (transports, allow_custom, presets) when the agent supports MCP servers"),
 });
 export type SettingsData = z.infer<typeof SettingsData>;
 

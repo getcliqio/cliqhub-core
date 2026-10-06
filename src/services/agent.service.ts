@@ -32,6 +32,7 @@ import type { SettingsData, SettingDef } from '../schemas/settings_types.js';
 import type { AgentsRegisterInput } from '../schemas/agent_types.js';
 import { to_agent_data } from '../lib/mappers.js';
 import { get_logger } from '../lib/log.js';
+import { MCP_SERVERS_KEY, is_mcp_key, mcp_block, mcp_setting_defs, parse_mcp_servers } from '../lib/mcp_settings.js';
 
 const log = get_logger('svc.agent');
 
@@ -331,11 +332,10 @@ export class AgentService {
 
         const name = agent.name;
         const manifest = agent.manifest ?? {};
-        const { required, optional } = resolve_agent_settings(manifest);
-        const all_keys = [...required, ...optional].map((s) => s.key);
-
         const org_values = await this._read_org_values(org_id, name);
         const realm_values = realm_id ? await this._read_realm_values(realm_id, name) : {};
+        const { required, optional } = this._settings_schema(manifest, org_values, realm_values);
+        const all_keys = [...required, ...optional].map((s) => s.key);
 
         // Realm wins over org when both are set; org under a realm context counts as inherited.
         const maps = this.empty_settings_maps(all_keys);
@@ -365,6 +365,7 @@ export class AgentService {
             settings: { required, optional },
             ...maps,
             ...counts,
+            ...(mcp_block(manifest) ? { mcp: mcp_block(manifest) } : {}),
         };
     }
 
@@ -389,11 +390,10 @@ export class AgentService {
         const summaries: SettingsData[] = [];
         for (const agent of agents) {
             const manifest = agent.manifest ?? {};
-            const { required, optional } = resolve_agent_settings(manifest);
-            const all_keys = [...required, ...optional].map((s) => s.key);
-
             const org_values = await this._read_org_values(org_id, agent.name);
             const realm_values = realm_id ? await this._read_realm_values(realm_id, agent.name) : {};
+            const { required, optional } = this._settings_schema(manifest, org_values, realm_values);
+            const all_keys = [...required, ...optional].map((s) => s.key);
 
             const maps = this.empty_settings_maps(all_keys);
             for (const key of all_keys) {
@@ -415,10 +415,26 @@ export class AgentService {
                 settings: { required, optional },
                 ...maps,
                 ...counts,
+                ...(mcp_block(manifest) ? { mcp: mcp_block(manifest) } : {}),
             });
         }
 
         return summaries;
+    }
+
+    /**
+     * Declared settings plus the agent's MCP keys: `mcp.servers` and one
+     * required secret per placeholder in the effective server list (realm
+     * value, else org value).
+     */
+    private _settings_schema(
+        manifest: Record<string, unknown>,
+        org_values: Record<string, string>,
+        realm_values: Record<string, string>,
+    ): { required: SettingDef[]; optional: SettingDef[] } {
+        const { required, optional } = resolve_agent_settings(manifest);
+        const mcp = mcp_setting_defs(manifest, realm_values[MCP_SERVERS_KEY] ?? org_values[MCP_SERVERS_KEY]);
+        return { required: [...required, ...mcp.required], optional: [...optional, ...mcp.optional] };
     }
 
     /**
@@ -442,9 +458,16 @@ export class AgentService {
 
         const all_keys = [...Object.keys(settings.values ?? {}), ...(settings.clear ?? [])];
         for (const key of all_keys) {
-            if (!allowed.has(key)) {
+            if (!allowed.has(key) && !is_mcp_key(manifest, key)) {
                 throw new ApiError(422, `setting key '${key}' is not valid for agent '${name}'`);
             }
+        }
+        // The MCP server list must parse and fit the manifest (transports, presets, custom servers).
+        const servers_value = settings.values?.[MCP_SERVERS_KEY];
+        const mcp = mcp_block(manifest);
+        if (servers_value !== undefined && mcp) {
+            const parsed = parse_mcp_servers(servers_value, mcp);
+            if ('errors' in parsed) throw new ApiError(422, `invalid MCP servers for agent '${name}': ${parsed.errors.join('; ')}`);
         }
 
         // Empty mutation is a no-op (BooleanData false).
