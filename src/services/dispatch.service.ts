@@ -261,6 +261,12 @@ export class DispatchService {
             notify_channels: input.notify_channels,
         });
 
+        // The daemon names the run with the name stored here (generated when none
+        // was given), so CliqHub and the daemon show the same run name.
+        const run_name = input.run_name
+            ?? ((await _run_repo.find_by_id(run_id)) as Run | null)?.run_name
+            ?? undefined;
+
         const team_scope_slug = team
             ? (await _scope_repo.find_by_id(team.scope_id))?.slug
             : undefined;
@@ -273,7 +279,7 @@ export class DispatchService {
             team_id: input.team_id,
             ...(team_scope_slug && team ? { scope: team_scope_slug, slug: team.slug } : {}),
             run_context: input.reviewers ? { ...input.run_context, reviewers: input.reviewers } : input.run_context,
-            run_name: input.run_name,
+            run_name,
             execution_type: input.execution_type ?? 'local',
             ...(input.queue_item_id ? { queue_item_id: input.queue_item_id } : {}),
         });

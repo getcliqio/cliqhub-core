@@ -339,6 +339,21 @@ describe('DispatchService.dispatch_run', () => {
         expect(payload.run_id).toBe('run-001');
     });
 
+    it('sends the run name CliqHub generated, so the daemon shows the same name', async () => {
+        vi.mocked(Run.findByPk).mockResolvedValueOnce({ run_name: 'steadfast-cobalt-ridge' } as never);
+        await DispatchService.dispatch_run(make_dispatch_input());
+
+        const payload = mock_enqueue.mock.calls[0][2] as Record<string, unknown>;
+        expect(payload.run_name).toBe('steadfast-cobalt-ridge');
+    });
+
+    it('sends a run name the caller chose as is', async () => {
+        await DispatchService.dispatch_run(make_dispatch_input({ run_name: 'nightly-parsers' }));
+
+        const payload = mock_enqueue.mock.calls[0][2] as Record<string, unknown>;
+        expect(payload.run_name).toBe('nightly-parsers');
+    });
+
     it('uses team manifest when manifest_yaml not provided', async () => {
         await DispatchService.dispatch_run(make_dispatch_input());
 
