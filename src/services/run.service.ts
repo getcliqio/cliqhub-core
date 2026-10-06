@@ -535,6 +535,8 @@ export class RunService {
             realm_id?: string;
             /** Runs of this team only. Narrows; the realm gate still applies. */
             team_id?: string;
+            /** Runs of any install of this team (scope/slug, uninstalled included). Narrows. */
+            team?: { scope: string; slug: string };
             offset?: number;
             since_ms?: number;
             until_ms?: number;
@@ -570,6 +572,18 @@ export class RunService {
         }
         if (filters?.team_id) {
             where.team_id = filters.team_id;
+        }
+        if (filters?.team) {
+            // Runs carry the team's install id (one per daemon), not a published team id.
+            const scope = await _scope_repo_rs.find_one_q({ where: { slug: filters.team.scope }, attributes: ['id'] });
+            const installs = scope
+                ? await _dt_repo_rs.find_all_any({ where: { scope_id: String(scope.id), slug: filters.team.slug }, attributes: ['id'] })
+                : [];
+            if (installs.length === 0) return { runs: [], total: 0 };
+            const ids = installs.map((t) => String(t.id));
+            where.team_id = filters.team_id
+                ? (ids.includes(filters.team_id) ? filters.team_id : '__none__')
+                : { [Op.in]: ids };
         }
         // Realm gate (S5): every filter — realm_id, daemon_id, workspace_id,
         // parent_run_id, team_id — stays inside the realms the caller can see

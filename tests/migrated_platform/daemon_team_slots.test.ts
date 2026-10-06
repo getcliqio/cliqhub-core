@@ -162,4 +162,28 @@ describe.skipIf(!has_postgres)('daemon team slots', () => {
         expect((await slot(d, t.slug))!.get('uninstalled_at')).not.toBeNull();
         expect(await Run.findByPk(run_id)).not.toBeNull();
     });
+
+    it('runs/get { team: scope/slug } lists runs of every install of the team, uninstalled ones included', async () => {
+        const d1 = await new_daemon();
+        const d2 = await new_daemon();
+        const name = `named-${uid()}`;
+        const a = team(name);
+        const b = team(name);
+        const other = team(`other-${uid()}`);
+        await TeamService.register_from_daemon(d1, [a, other], true);
+        await TeamService.register_from_daemon(d2, [b], true);
+        const r1 = await RunService.create(workspace_id, a.id, { daemon_id: d1 });
+        const r2 = await RunService.create(workspace_id, b.id, { daemon_id: d2 });
+        const r3 = await RunService.create(workspace_id, other.id, { daemon_id: d1 });
+        await TeamService.register_from_daemon(d2, [], true); // d2's install uninstalled
+
+        const { runs, total } = await RunService.list_recent(50, undefined, { team: { scope: scope_slug, slug: name }, site_admin: true });
+        expect(runs.map((r: { run_id: string }) => r.run_id).sort()).toEqual([r1, r2].sort());
+        expect(total).toBe(2);
+        expect(runs.some((r: { run_id: string }) => r.run_id === r3)).toBe(false);
+
+        const none = await RunService.list_recent(50, undefined, { team: { scope: scope_slug, slug: 'no-such-team' }, site_admin: true });
+        expect(none.total).toBe(0);
+    });
 });
+

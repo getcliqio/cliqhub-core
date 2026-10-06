@@ -35,6 +35,15 @@ export const RunsGetInput = z.object({
      */
     team_id: z.string().uuid().optional(),
     /**
+     * Restrict to runs of this team by name — any install of it on any daemon
+     * (uninstalled ones included). Use this for a published team: its id is
+     * not the id runs carry. Narrowing only; the realm gate still applies.
+     */
+    team: z.object({
+        scope: z.string().min(1).describe('Scope slug'),
+        slug: z.string().min(1).describe('Team slug (name)'),
+    }).optional().describe('Runs of any install of this team (scope/slug)'),
+    /**
      * Organization UUID. Required for org-scoped recent list when
      * realm_id / daemon_id / workspace_id / parent_run_id are omitted.
      * Never invent from X-Org-Id.
