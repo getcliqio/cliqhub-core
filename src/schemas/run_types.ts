@@ -72,15 +72,15 @@ export const RunsGetInput = z.object({
     if (v.workspace_id?.trim()) return;
     if (v.realm_id?.trim()) return;
     if (v.daemon_id?.trim()) return;
-    // Team filter: realm gate over all the caller's realms (no org needed).
-    if (v.team_id) return;
+    // Team filter (by id or by name): realm gate over all the caller's realms (no org needed).
+    if (v.team_id || v.team) return;
     // Site-admin hub-wide list (controller ignores `all` for everyone else → 422 there).
     if (v.all) return;
     // Org-scoped recent list — body org_id is invent SoT.
     if (!v.org_id) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: 'org_id is required when listing recent runs without realm_id, daemon_id, workspace_id, parent_run_id, or team_id',
+            message: 'org_id is required when listing recent runs without realm_id, daemon_id, workspace_id, parent_run_id, team_id or team',
             path: ['org_id'],
         });
     }
