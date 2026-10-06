@@ -468,7 +468,8 @@ export class RunService {
                 attributes: ['id', 'slug', 'scope_id'],
             },
             {
-                model: Workspace,
+                // A run keeps its workspace after the workspace is deleted.
+                model: Workspace.unscoped(),
                 as: 'workspace',
                 attributes: ['id', 'path', 'name'],
             },

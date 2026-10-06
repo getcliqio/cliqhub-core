@@ -12,7 +12,7 @@ import { TeamService } from '../../src/services/teams_install_service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
 import { DaemonTeamCacheService } from '../../src/services/daemon_team_cache.service.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
-import { Daemon, DaemonTeam, Run } from '../../src/models/index.js';
+import { Daemon, DaemonTeam, Run, Workspace } from '../../src/models/index.js';
 
 const has_postgres = await postgres_reachable();
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -184,6 +184,28 @@ describe.skipIf(!has_postgres)('daemon team slots', () => {
 
         const none = await RunService.list_recent(50, undefined, { team: { scope: scope_slug, slug: 'no-such-team' }, site_admin: true });
         expect(none.total).toBe(0);
+    });
+
+    it('deleting a workspace keeps its runs (marked deleted, hidden); registering the path again brings it back', async () => {
+        const d = await new_daemon();
+        const t = team(`ws-${uid()}`);
+        await TeamService.register_from_daemon(d, [t], false);
+        const path = `/tmp/ws-delete-${uid()}`;
+        const { record } = await WorkspaceService.upsert_by_path(path, 'del', d);
+        const run_id = await RunService.create(String(record.id), t.id, { daemon_id: d });
+
+        expect(await WorkspaceService.remove(String(record.id))).toBe(true);
+        expect(await Run.findByPk(run_id)).not.toBeNull();
+        expect(await Workspace.findByPk(String(record.id))).toBeNull();
+        expect((await Workspace.unscoped().findByPk(String(record.id)))?.get('deleted_at')).not.toBeNull();
+        const { runs } = await RunService.list_recent(50, undefined, { workspace_id: String(record.id), site_admin: true });
+        expect((runs[0] as { workspace_name?: string } | undefined)?.workspace_name).toBe('del');
+
+        const again = await WorkspaceService.upsert_by_path(path, null, d);
+        expect(String(again.record.id)).toBe(String(record.id));
+        expect(await Workspace.findByPk(String(record.id))).not.toBeNull();
+        await Run.destroy({ where: { workspace_id: String(record.id) } });
+        await Workspace.unscoped().destroy({ where: { id: String(record.id) } });
     });
 });
 

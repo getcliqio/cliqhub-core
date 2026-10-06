@@ -344,13 +344,15 @@ export class WorkspaceService {
         const now = Date.now();
         const requested_id = id?.trim() || '';
 
+        // A deleted workspace (same id or path) comes back rather than being re-created.
         if (requested_id) {
-            const by_id = await _ws_repo_w.find_by_id(requested_id);
+            const by_id = await _ws_repo_w.find_by_id_any(requested_id);
             if (by_id) {
                 const name_next = name ?? by_id.get('name');
                 const updates: Record<string, unknown> = {
                     path,
                     name: name_next,
+                    deleted_at: null,
                     updated_at: now,
                 };
                 if (daemon_id) updates.daemon_id = daemon_id;
@@ -360,10 +362,10 @@ export class WorkspaceService {
             }
         }
 
-        const existing = await _ws_repo_w.find_one_q({ where: { path } });
+        const existing = await _ws_repo_w.find_one_any({ where: { path } });
         if (existing) {
             const name_next = name ?? existing.get('name');
-            const updates: Record<string, unknown> = { name: name_next, updated_at: now };
+            const updates: Record<string, unknown> = { name: name_next, deleted_at: null, updated_at: now };
             if (daemon_id) updates.daemon_id = daemon_id;
             await existing.update(updates);
             const enriched = await WorkspaceService._enrich_single(existing);
@@ -400,21 +402,22 @@ export class WorkspaceService {
         const path = input.path.trim();
         if (!id || !path) return;
 
-        const by_id = await _ws_repo_w.find_by_id(id);
+        const by_id = await _ws_repo_w.find_by_id_any(id);
         if (by_id) {
             await by_id.update({
                 path,
                 name: input.name ?? by_id.get('name'),
                 daemon_id: input.daemon_id,
+                deleted_at: null,
                 updated_at: now,
             });
             return;
         }
 
-        const by_daemon_path = await _ws_repo_w.find_one_q({
+        const by_daemon_path = await _ws_repo_w.find_one_any({
             where: { daemon_id: input.daemon_id, path },
         });
-        const by_path = by_daemon_path ?? await _ws_repo_w.find_one_q({ where: { path } });
+        const by_path = by_daemon_path ?? await _ws_repo_w.find_one_any({ where: { path } });
 
         if (by_path && by_path.id !== id) {
             await _wst_repo.update_where(
@@ -465,18 +468,32 @@ export class WorkspaceService {
         }
     }
 
+    /**
+     * Delete a workspace: marked deleted (hidden) with its team links dropped —
+     * never removed, so its runs (which reference it) are kept.
+     */
     static async remove(id: string): Promise<boolean> {
         log.debug('remove', { id });
-        const deleted = await _ws_repo_w.delete_where({ id } as any);
-        if (deleted > 0) log.info('workspace_removed', { id });
-        return deleted > 0;
+        const ws = await _ws_repo_w.find_by_id(id);
+        if (!ws) return false;
+        await WorkspaceService._mark_deleted(ws);
+        log.info('workspace_removed', { id });
+        return true;
     }
 
+    /** {@link remove} by path. */
     static async remove_by_path(path: string): Promise<boolean> {
         log.debug('remove_by_path', { path });
-        const deleted = await _ws_repo_w.delete_where({ path } as any);
-        if (deleted > 0) log.info('workspace_removed_by_path', { path });
-        return deleted > 0;
+        const rows = await _ws_repo_w.find_all_q({ where: { path } });
+        for (const ws of rows) await WorkspaceService._mark_deleted(ws);
+        if (rows.length > 0) log.info('workspace_removed_by_path', { path });
+        return rows.length > 0;
+    }
+
+    private static async _mark_deleted(ws: Workspace): Promise<void> {
+        const now = Date.now();
+        await _wst_repo.delete_where({ workspace_id: ws.id } as any);
+        await ws.update({ deleted_at: now, updated_at: now });
     }
 
     static async add_team(workspace_id: string, team_id: string): Promise<boolean> {

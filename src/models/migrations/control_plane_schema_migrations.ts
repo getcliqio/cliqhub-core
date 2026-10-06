@@ -838,6 +838,8 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     // keeps the id). Rows detached by the old prune (daemon_id NULL) count as
     // uninstalled and are never claimed again.
     await run(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "uninstalled_at" BIGINT`);
+    // Deleted workspaces are kept (marked) so their runs are never cascade-deleted.
+    await run(`ALTER TABLE cliq."workspaces" ADD COLUMN IF NOT EXISTS "deleted_at" BIGINT`);
     await run(`UPDATE cliq."daemon_teams" SET "uninstalled_at" = "updated_at"
                WHERE "daemon_id" IS NULL AND "uninstalled_at" IS NULL`);
 

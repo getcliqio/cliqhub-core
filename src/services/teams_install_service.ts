@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { Op } from 'sequelize';
 
 import { get_logger } from '../lib/log.js';
-import type { Scope } from '../models/scope.model.js';
 import type { DaemonTeam } from '../models/daemon_team.model.js';
 import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
 import { WorkspaceTeamRepository } from '../repositories/workspace_team_repository.js';
@@ -17,33 +16,6 @@ const _run_repo_ti = new RunRepository();
 const _scope_repo_ti = new ScopeRepository();
 import { ApiError } from '../lib/api_error.js';
 import { get_sequelize } from '../lib/sequelize.js';
-
-
-/**
- * Payload from daemon `/v1/teams/upsert`. The daemon knows its local
- * scope by slug, not Hub's `scope_id`, so `scope_slug` is the required
- * key and `scope_id` is optional (older callers). Missing scopes are
- * auto-created — the daemon has already validated the install locally,
- * so refusing here would just make Hub the bottleneck.
- */
-export type TeamUpsertFromDaemonPayload = {
-    id: string;
-    scope_slug: string;
-    slug: string;
-    version: string | null;
-    description: string | null;
-    manifest: string;
-    dockerfile: string | null;
-    dependencies: string | null;
-    daemon_id: string | null;
-};
-
-export type TeamRemoveFromDaemonPayload = {
-    team_id?: string;
-    scope_slug: string;
-    slug: string;
-    daemon_id: string | null;
-};
 
 
 export class TeamService {
@@ -369,114 +341,6 @@ export class TeamService {
 
     static async count_by_scope(scope_id: string): Promise<number> {
         return _dt_repo_ti.find_count({ scope_id } as any);
-    }
-
-    /**
-     * Resolve scope by slug, auto-creating if missing.
-     *
-     * The daemon has already authorized the install locally (either via
-     * Hub login for scoped installs, or offline for `default`/`local`).
-     * If we hit an unknown scope here it means the daemon-side scope row
-     * exists but the Hub row was never seeded, or the scope was created
-     * during boot before Hub sync came online. Auto-create keeps the
-     * two catalogs in step without a separate scope-sync round trip.
-     */
-    private static async _resolve_scope_by_slug(scope_slug: string): Promise<Scope> {
-        let scope = await _scope_repo_ti.find_one_q({ where: { slug: scope_slug } });
-        if (scope) return scope;
-
-        scope = await _scope_repo_ti.create_one({
-            id: randomUUID(),
-            slug: scope_slug,
-            display_name: scope_slug === 'cliq' ? 'Cliq' : scope_slug,
-            owner_id: null,
-            org_id: null,
-            scope_type: 'platform',
-            visibility: 'public',
-            is_default: 0,
-        });
-        return scope;
-    }
-
-    /**
-     * Idempotent team upsert driven by the daemon outbox.
-     *
-     * First checks for an existing row by `(daemon_id, scope_id, slug)`,
-     * which may have been Hub-minted by `DispatchService.install_team`
-     * with a different PK. If found, updates in place to avoid a unique
-     * index conflict on `teams_daemon_scope_slug_uniq`. Falls back to
-     * PK-based upsert for the common case where daemon minted the row.
-     */
-    static async upsert_from_daemon(
-        payload: TeamUpsertFromDaemonPayload,
-    ): Promise<{ team: DaemonTeam; created: boolean }> {
-        log.debug('upsert_from_daemon', { scope_slug: payload.scope_slug, slug: payload.slug, daemon_id: payload.daemon_id });
-        const scope = await TeamService._resolve_scope_by_slug(payload.scope_slug);
-        const now = Date.now();
-
-        /** Check for an existing row by natural key (daemon + scope + slug). */
-        if (payload.daemon_id) {
-            const by_natural_key = await _dt_repo_ti.find_one_q({
-                where: {
-                    daemon_id: payload.daemon_id,
-                    scope_id: scope.id,
-                    slug: payload.slug,
-                },
-            });
-
-            if (by_natural_key) {
-                await by_natural_key.update({
-                    version: payload.version,
-                    description: payload.description,
-                    manifest: payload.manifest,
-                    dockerfile: payload.dockerfile ?? by_natural_key.dockerfile,
-                    dependencies: payload.dependencies ?? by_natural_key.dependencies,
-                    updated_at: now,
-                });
-                return { team: by_natural_key, created: false };
-            }
-        }
-
-        /** No existing row by natural key — PK-based upsert (daemon-minted id). */
-        const existing = await _dt_repo_ti.find_by_id(payload.id);
-        const [team, created] = await _dt_repo_ti.upsert_one({
-            id: payload.id,
-            daemon_id: payload.daemon_id ?? null,
-            scope_id: scope.id,
-            slug: payload.slug,
-            version: payload.version,
-            description: payload.description,
-            manifest: payload.manifest,
-            dockerfile: payload.dockerfile,
-            dependencies: payload.dependencies,
-            created_at: existing?.get('created_at') as number | undefined ?? now,
-            updated_at: now,
-        });
-        if (created ?? !existing) {
-            log.info('team_upserted_from_daemon', { team_id: team.id, scope_slug: payload.scope_slug, slug: payload.slug });
-        }
-        return { team, created: created ?? !existing };
-    }
-
-    /**
-     * Idempotent remove driven by the daemon outbox. Accepts either the
-     * concrete team_id or the (scope_slug, slug) pair — daemon sends
-     * both so Hub can locate the row even if the id mapping drifted.
-     */
-    static async remove_from_daemon(payload: TeamRemoveFromDaemonPayload): Promise<boolean> {
-        log.debug('remove_from_daemon', { scope_slug: payload.scope_slug, slug: payload.slug, team_id: payload.team_id });
-        let team: DaemonTeam | null = null;
-        if (payload.team_id) {
-            team = await _dt_repo_ti.find_by_id(payload.team_id);
-        }
-        if (!team) {
-            const scope = await _scope_repo_ti.find_one_q({ where: { slug: payload.scope_slug } });
-            if (!scope) return false;
-            team = await _dt_repo_ti.find_one_q({ where: { scope_id: scope.id, slug: payload.slug } });
-        }
-        if (!team) return false;
-
-        return TeamService._mark_uninstalled(team);
     }
 
     /**

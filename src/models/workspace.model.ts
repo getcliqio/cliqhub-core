@@ -17,6 +17,8 @@ export class Workspace extends BaseModel {
     declare scope_id: string | null;
     declare team_id: string | null;
     declare daemon_id: string | null;
+    /** When the workspace was deleted (ms); null while registered. Its runs stay. */
+    declare deleted_at: number | null;
     declare created_at: number;
     declare updated_at: number;
 
@@ -28,10 +30,14 @@ export class Workspace extends BaseModel {
             scope_id: { type: DataTypes.TEXT },
             team_id: { type: DataTypes.TEXT },
             daemon_id: { type: DataTypes.TEXT, allowNull: true },
+            deleted_at: { type: DataTypes.BIGINT, allowNull: true },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
             updated_at: { type: DataTypes.BIGINT, allowNull: false },
         }, ModelConfig.table_options(sequelize, 'workspaces', {
             indexes: [{ unique: true, fields: ['daemon_id', 'path'] }],
+            // Deleted workspaces are kept (their runs reference them) but hidden;
+            // `Workspace.unscoped()` reads them (run labels, revival).
+            defaultScope: { where: { deleted_at: null } },
         }));
     }
 }
