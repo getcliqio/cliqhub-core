@@ -15,6 +15,7 @@ import { Op } from 'sequelize';
 import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
 import { ScopeRepository } from '../repositories/scope_repository.js';
 import { RealmDispatchQueueRepository } from '../repositories/realm_dispatch_queue_repository.js';
+import { TeamService } from './teams_install_service.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('daemon-team-cache');
@@ -37,18 +38,18 @@ export interface HeartbeatTeamEntry {
 export class DaemonTeamCacheService {
 
     /**
-     * Sync daemon roster to Hub state. Hub is authoritative:
-     * - Teams already in Hub → update metadata
-     * - Teams NOT in Hub but with a recent uninstall → reject and re-dispatch
-     * - Teams NOT in Hub and no recent uninstall → accept (new CLI install)
-     * - Hub rows not in daemon roster → prune
+     * Sync daemon roster to Hub state:
+     * - Teams with a recent Hub uninstall → reject and re-dispatch the uninstall
+     * - Every other team → `TeamService.settle_slot` (one slot per daemon/scope/slug;
+     *   an existing slot keeps its id, a new one takes the daemon's id)
+     * - Slots not in the daemon roster → marked uninstalled (kept for their runs)
      */
     static async sync(daemon_id: string, teams: HeartbeatTeamEntry[], realm_id?: string): Promise<void> {
         const scope_slugs = [...new Set(teams.map((t) => t.scope).filter(Boolean))];
         const scope_map = await DaemonTeamCacheService._resolve_scopes(scope_slugs);
         const rejected = await DaemonTeamCacheService._recently_uninstalled(realm_id);
 
-        const live_keys = new Set<string>();
+        const live_ids = new Set<string>();
         const now = Date.now();
 
         for (const t of teams) {
@@ -69,61 +70,28 @@ export class DaemonTeamCacheService {
                 continue;
             }
 
-            const composite_key = `${scope_id}\0${t.slug}`;
-            live_keys.add(composite_key);
-
-            let existing = await daemon_team_repo.find_one({ daemon_id, scope_id, slug: t.slug });
-            if (!existing) {
-                existing = await daemon_team_repo.find_one({
-                    daemon_id: { [Op.is]: null } as any, scope_id, slug: t.slug,
-                });
-            }
-
-            if (existing) {
-                if (existing.id !== t.id) {
-                    // Hub id is authoritative for Hub-managed rows. Log drift;
-                    // next force-install rebinds the daemon to Hub's id.
-                    log.warn(
-                        `team id drift daemon=${daemon_id} ${team_label}: hub=${existing.id} daemon=${t.id}`,
-                    );
-                }
-                await existing.update({
-                    daemon_id,
-                    version: t.version ?? existing.version,
-                    description: t.description ?? existing.description,
-                    manifest: t.manifest ?? existing.manifest,
-                    updated_at: now,
-                });
-            } else {
-                // Prefer the daemon-reported id for CLI-originated installs so
-                // Hub and daemon share one PK. Hub-driven installs mint first
-                // and pass that id down, so heartbeat usually hits the branch above.
-                await daemon_team_repo.create_one({
-                    id: t.id || randomUUID(),
-                    daemon_id,
-                    scope_id,
-                    slug: t.slug,
-                    version: t.version ?? null,
-                    description: t.description ?? null,
-                    manifest: t.manifest ?? '',
-                    dockerfile: t.dockerfile ?? null,
-                    dependencies: t.dependencies ?? null,
-                    created_at: t.created_at ?? now,
-                    updated_at: now,
-                });
-            }
+            // Same rule as register: one slot per (daemon, scope, slug) for life.
+            // Never claims another row; an id mismatch moves this daemon's runs
+            // to the slot id instead of only logging it.
+            const settled = await TeamService.settle_slot({
+                daemon_id,
+                scope_id,
+                slug: t.slug,
+                proposed_id: t.id || null,
+                version: t.version ?? null,
+                description: t.description ?? null,
+                manifest: t.manifest ?? '',
+                dockerfile: t.dockerfile ?? null,
+                dependencies: t.dependencies ?? null,
+            });
+            live_ids.add(settled.id);
         }
 
-        // Prune Hub rows the daemon no longer reports.
-        const all_rows = await daemon_team_repo.find_all({ daemon_id });
-        for (const row of all_rows) {
-            const key = `${row.scope_id}\0${row.slug}`;
-            if (!live_keys.has(key)) {
-                try {
-                    await row.destroy();
-                } catch {
-                    await row.update({ daemon_id: null } as any);
-                }
+        // Slots the daemon no longer reports are uninstalled (kept for their runs).
+        const installed = await daemon_team_repo.find_all_q({ where: { daemon_id } });
+        for (const row of installed) {
+            if (!live_ids.has(row.id)) {
+                await row.update({ uninstalled_at: now, updated_at: now });
             }
         }
     }

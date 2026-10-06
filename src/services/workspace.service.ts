@@ -81,7 +81,9 @@ export class WorkspaceService {
                 model: WorkspaceTeam,
                 as: 'workspace_teams',
                 include: [{
-                    model: DaemonTeam,
+                    // Unscoped: a default-scope `where` would turn this into an inner join
+                    // (uninstalled slots lose their workspace links anyway).
+                    model: DaemonTeam.unscoped(),
                     as: 'team',
                     attributes: ['id', 'slug', 'scope_id'],
                 }],
@@ -276,7 +278,9 @@ export class WorkspaceService {
             _wst_repo.find_all_q({
                 where: { workspace_id: ws.id },
                 include: [{
-                    model: DaemonTeam,
+                    // Unscoped: a default-scope `where` would turn this into an inner join
+                    // (uninstalled slots lose their workspace links anyway).
+                    model: DaemonTeam.unscoped(),
                     as: 'team',
                     attributes: ['id', 'slug', 'scope_id'],
                 }],

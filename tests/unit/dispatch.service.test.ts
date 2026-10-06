@@ -21,6 +21,8 @@ vi.mock('../../src/models/index.js', () => ({
         findAll: vi.fn(),
         create: vi.fn(),
         update: vi.fn(),
+        /** Uninstalled slots are read through unscoped(); the mock is one table. */
+        unscoped() { return this; },
     },
     Daemon: { findByPk: vi.fn(), findAll: vi.fn() },
     Scope: { findByPk: vi.fn(), findOne: vi.fn() },

@@ -8,6 +8,17 @@ import { WorkspaceService } from '../../src/services/workspace.service.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
 import { Daemon, Run, RunEvent, RunLog, RunLogLine, RunPhase, RunArtifact } from '../../src/models/index.js';
 import { randomUUID } from 'node:crypto';
+import { QueryTypes } from 'sequelize';
+import { get_sequelize } from '../../src/lib/sequelize.js';
+
+/** `previous_attempts` is written by raw SQL and not on the model — read it the same way. */
+async function previous_attempts(run_id: string, phase: string): Promise<Array<Record<string, unknown>>> {
+    const rows = await get_sequelize().query<{ previous_attempts: Array<Record<string, unknown>> | null }>(
+        'SELECT "previous_attempts" FROM cliq."team_run_phases" WHERE "run_id" = :run_id AND "phase" = :phase',
+        { replacements: { run_id, phase }, type: QueryTypes.SELECT },
+    );
+    return rows[0]?.previous_attempts ?? [];
+}
 
 let workspace_id: string;
 let team_id: string;
@@ -686,6 +697,33 @@ describe.skipIf(!has_postgres)('RunService — Phases', () => {
             const phase = await RunService.find_phase(run_id, 'build');
             expect(phase!.get('status')).toBe('running');
             expect(phase!.get('dispatched_at')).not.toBeNull();
+            expect(phase!.get('started_at')).not.toBeNull();
+        });
+
+        it('a second running (the phase starting after dispatch) is the same attempt: started_at set, no history', async () => {
+            const run_id = await create_run();
+            await RunService.create_phases(run_id, [{ name: 'build' }]);
+            await RunService.update_phase_status(run_id, 'build', 'running');
+            await RunService.update_phase_status(run_id, 'build', 'running', { started_at: 1_700_000_000_000 });
+
+            const phase = await RunService.find_phase(run_id, 'build');
+            expect(Number(phase!.get('started_at'))).toBe(1_700_000_000_000);
+            expect(await previous_attempts(run_id, 'build')).toEqual([]);
+        });
+
+        it('running again after a finished attempt keeps that attempt in history', async () => {
+            const run_id = await create_run();
+            await RunService.create_phases(run_id, [{ name: 'build' }]);
+            await RunService.update_phase_status(run_id, 'build', 'running');
+            await RunService.update_phase_status(run_id, 'build', 'failed', { error: 'boom' });
+            await RunService.update_phase_status(run_id, 'build', 'running');
+
+            const phase = await RunService.find_phase(run_id, 'build');
+            const history = await previous_attempts(run_id, 'build');
+            expect(history).toHaveLength(1);
+            expect(history[0]).toMatchObject({ status: 'failed', error: 'boom' });
+            expect(phase!.get('error')).toBeNull();
+            expect(phase!.get('started_at')).not.toBeNull();
         });
 
         it('updates status to done (sets completed_at)', async () => {

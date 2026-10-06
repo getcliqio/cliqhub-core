@@ -462,7 +462,8 @@ export class RunService {
     private static get _run_includes() {
         return [
             {
-                model: DaemonTeam,
+                // A run keeps its team after the team is uninstalled.
+                model: DaemonTeam.unscoped(),
                 as: 'team',
                 attributes: ['id', 'slug', 'scope_id'],
             },
@@ -642,7 +643,7 @@ export class RunService {
             // run_id (the primary key) breaks remaining ties so equal values page stably.
             if (sort_by === 'run_name') return [[seq.fn('LOWER', seq.col('Run.run_name')), sort_dir], ['started_at', 'DESC'], ['run_id', 'ASC']];
             if (sort_by === 'state') return [['state', sort_dir], ['started_at', 'DESC'], ['run_id', 'ASC']];
-            if (sort_by === 'team') return [[{ model: DaemonTeam, as: 'team' }, 'slug', sort_dir], ['started_at', 'DESC'], ['run_id', 'ASC']];
+            if (sort_by === 'team') return [['team', 'slug', sort_dir], ['started_at', 'DESC'], ['run_id', 'ASC']];
             if (sort_by === 'started_at') return [['started_at', sort_dir], ['run_id', 'ASC']];
             return [
                 [seq.fn('COALESCE', seq.col('Run.completed_at'), seq.col('Run.started_at')), sort_dir],
@@ -848,7 +849,7 @@ export class RunService {
                     return;
                 }
             }
-            const team = await _dt_repo_rs.find_by_id(team_id, { attributes: ['manifest'] });
+            const team = await _dt_repo_rs.find_by_id_any(team_id, { attributes: ['manifest'] });
             const names = phase_names_from_manifest(team?.manifest);
             if (names.length > 0) {
                 await this.create_phases(
@@ -1399,7 +1400,7 @@ export class RunService {
         const workspace_id = run?.workspace_id ?? null;
         let team: string | null = null;
         if (run?.team_id) {
-            const team_row = await _dt_repo_rs.find_by_id(run.team_id, {
+            const team_row = await _dt_repo_rs.find_by_id_any(run.team_id, {
                 attributes: ['id', 'slug', 'scope_id'],
             });
             if (team_row) {
@@ -1799,7 +1800,7 @@ export class RunService {
                     if (specs.length > 0) return specs;
                 }
             }
-            const team = await _dt_repo_rs.find_by_id(team_id, { attributes: ['manifest'] });
+            const team = await _dt_repo_rs.find_by_id_any(team_id, { attributes: ['manifest'] });
             const specs = phase_specs_from_manifest(team?.manifest);
             if (specs.length > 0) return specs;
         }
@@ -1991,28 +1992,34 @@ export class RunService {
         },
     ) {
         log.debug('update_phase_status', { run_id, phase, status });
-        // Snapshot the prior attempt into previous_attempts whenever we
-        // start a *new* attempt (pending → running) after a terminal
-        // one. Without this the chart loses everything the previous
-        // run recorded the moment the daemon reissues `dispatched_at`.
-        if (status === 'running') {
-            await RunService._snapshot_prior_attempt(run_id, phase);
-        }
-
         const updates: Record<string, unknown> = { status };
         if (['done', 'failed', 'skipped'].includes(status)) {
             updates.completed_at = Date.now();
         }
         if (status === 'running') {
-            updates.dispatched_at = Date.now();
-            // Fresh attempt: null out started_at/completed_at/exit_code/error
-            // so a stale "failed" summary doesn't leak into the running row.
-            updates.started_at = null;
-            updates.completed_at = null;
-            updates.exit_code = null;
-            updates.error = null;
+            // The daemon reports `running` twice per attempt: when it dispatches the
+            // phase and when the phase starts. A `running` on a running phase is that
+            // start — same attempt: record started_at, keep the history as it is.
+            const current = await _run_phase_repo_rs.find_one_q({ where: { run_id, phase }, attributes: ['status', 'started_at'] });
+            if (current?.get('status') === 'running') {
+                updates.started_at = extra?.started_at ?? Date.now();
+            } else {
+                // A new attempt: snapshot the prior one into previous_attempts (the
+                // chart keeps every attempt), then clear its timing and result so a
+                // stale "failed" summary doesn't leak into the running row.
+                await RunService._snapshot_prior_attempt(run_id, phase);
+                updates.dispatched_at = Date.now();
+                updates.started_at = extra?.started_at ?? Date.now();
+                updates.completed_at = null;
+                updates.exit_code = null;
+                updates.error = null;
+            }
         }
-        if (extra) Object.assign(updates, extra);
+        if (extra) {
+            const { started_at: _started_at, ...rest } = extra;
+            Object.assign(updates, rest);
+            if (status !== 'running' && _started_at !== undefined) updates.started_at = _started_at;
+        }
 
         const [affected] = await _run_phase_repo_rs.update_where({ run_id, phase } as any, updates as any);
         // First status for a phase that wasn't seeded (edge case): insert then apply.

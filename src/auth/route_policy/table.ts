@@ -168,6 +168,7 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     // ── Daemons ─────────────────────────────────────────────────────
     'POST /v1/daemons/register': daemon_only(),
     'POST /v1/daemons/heartbeat': daemon_only('daemon must be in the token realm'),
+    'POST /v1/daemons/register_teams': daemon_only('daemon must be in the token realm'),
     'POST /v1/daemons/deregister': daemon_only('daemon must be in the token realm'),
     'POST /v1/daemons/ack_command': daemon_only('daemon in the token realm; command addressed to it'),
     'POST /v1/auth/acl': daemon_only(),

@@ -31,6 +31,29 @@ export const DaemonHeartbeatInput = z.object({
 });
 export type DaemonHeartbeatInput = z.infer<typeof DaemonHeartbeatInput>;
 
+/** POST /v1/daemons/register_teams — the daemon asks for (and registers) its team ids. */
+export const DaemonRegisterTeamsInput = z.object({
+    daemon_id: z.string().min(1).describe('Daemon id (must be in the token realm)'),
+    teams: z.array(z.object({
+        id: z.string().uuid().nullable().optional().describe('The id the daemon has or proposes for this team'),
+        scope: z.string().min(1).describe('Scope slug'),
+        slug: z.string().min(1).describe('Team slug'),
+        version: z.string().nullable().optional(),
+        description: z.string().nullable().optional(),
+        manifest: z.string().nullable().optional().describe('Team manifest (YAML)'),
+        dockerfile: z.string().nullable().optional(),
+        dependencies: z.string().nullable().optional(),
+    })).max(500).describe('Teams to register (batch)'),
+    complete: z.boolean().optional()
+        .describe("The list is the daemon's whole roster: its other installed teams are marked uninstalled"),
+});
+export type DaemonRegisterTeamsInput = z.infer<typeof DaemonRegisterTeamsInput>;
+
+/** `daemons/register_teams` data: the id the daemon must use per team (null + error when refused). */
+export interface DaemonRegisterTeamsData {
+    teams: Array<{ scope: string; slug: string; id: string | null; error?: string; reason?: 'not_in_realm' | 'unknown_scope' }>;
+}
+
 /** POST /v1/daemons/deregister */
 export const DaemonDeregisterInput = z.object({
     daemon_id: z.string().describe('Daemon id to deregister'),

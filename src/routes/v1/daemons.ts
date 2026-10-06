@@ -3,6 +3,7 @@
  *
  * POST   /v1/daemons/register
  * POST   /v1/daemons/heartbeat
+ * POST   /v1/daemons/register_teams
  * POST   /v1/daemons/deregister
  * POST   /v1/daemons/get
  * POST   /v1/daemons/get_by_id
@@ -20,6 +21,7 @@ export function register_daemons_routes(router: Router): void {
 
     router.post('/daemons/register', daemons.wrap(daemons.register));
     router.post('/daemons/heartbeat', daemons.wrap(daemons.heartbeat));
+    router.post('/daemons/register_teams', daemons.wrap(daemons.register_teams));
     router.post('/daemons/deregister', daemons.wrap(daemons.deregister));
     router.post('/daemons/get', daemons.wrap(daemons.get));
     router.post('/daemons/get_by_id', daemons.wrap(daemons.get_by_id));

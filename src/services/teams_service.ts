@@ -286,7 +286,7 @@ export class TeamsService {
         }
         // Installed = a daemon of the realm carries a team with this scope + name.
         if (params.installed_realm_id) {
-            conditions.push(literal(`EXISTS (SELECT 1 FROM daemon_teams dt JOIN scopes s ON s.id::text = dt.scope_id::text JOIN realm_members rm ON rm.member_id::text = dt.daemon_id::text AND rm.member_type = 'daemon' WHERE rm.realm_id::text = ${esc(params.installed_realm_id)} AND dt.slug = "Team"."name" AND s.slug = "Team"."scope")`) as any);
+            conditions.push(literal(`EXISTS (SELECT 1 FROM daemon_teams dt JOIN scopes s ON s.id::text = dt.scope_id::text JOIN realm_members rm ON rm.member_id::text = dt.daemon_id::text AND rm.member_type = 'daemon' WHERE rm.realm_id::text = ${esc(params.installed_realm_id)} AND dt.uninstalled_at IS NULL AND dt.slug = "Team"."name" AND s.slug = "Team"."scope")`) as any);
         }
 
         const where: WhereOptions = conditions.length > 0 ? { [Op.and]: conditions } : {};

@@ -83,6 +83,7 @@ describe('route policy coverage', () => {
             "POST /v1/daemons/deregister",
             "POST /v1/daemons/heartbeat",
             "POST /v1/daemons/register",
+            "POST /v1/daemons/register_teams",
             "POST /v1/events/submit",
             "POST /v1/reviews/ack",
             "POST /v1/reviews/create",

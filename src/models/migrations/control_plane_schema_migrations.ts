@@ -834,6 +834,13 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     // Cache-read price (null: cached tokens are priced as input).
     await run(`ALTER TABLE cliq."model_pricing" ADD COLUMN IF NOT EXISTS "cached_input_per_1m" NUMERIC(12, 6)`);
 
+    // Daemon team slots outlive an uninstall (runs keep their team; a reinstall
+    // keeps the id). Rows detached by the old prune (daemon_id NULL) count as
+    // uninstalled and are never claimed again.
+    await run(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "uninstalled_at" BIGINT`);
+    await run(`UPDATE cliq."daemon_teams" SET "uninstalled_at" = "updated_at"
+               WHERE "daemon_id" IS NULL AND "uninstalled_at" IS NULL`);
+
     // Usage snapshot JSONB columns for durable run/phase usage data.
     await run(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "usage_snapshot" JSONB`);
     await run(`ALTER TABLE cliq."team_run_phases" ADD COLUMN IF NOT EXISTS "usage_snapshot" JSONB`);

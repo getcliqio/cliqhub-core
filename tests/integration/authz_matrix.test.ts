@@ -200,6 +200,7 @@ const MATRIX: Record<string, Row> = {
     // daemons
     'POST /v1/daemons/register': { expect: DAEMON_ONLY },
     'POST /v1/daemons/heartbeat': { expect: DAEMON_ONLY },
+    'POST /v1/daemons/register_teams': { expect: DAEMON_ONLY },
     'POST /v1/daemons/deregister': { expect: DAEMON_ONLY },
     'POST /v1/daemons/ack_command': { expect: DAEMON_ONLY },
     'POST /v1/auth/acl': { expect: DAEMON_ONLY },

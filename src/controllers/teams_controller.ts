@@ -110,7 +110,8 @@ export class TeamsController extends BaseController {
             where.daemon_id = { [Op.in]: realm_daemon_ids };
         }
 
-        await _dt_repo_tc.delete_where(where as any);
+        // Mark the slots uninstalled (kept: their runs keep the team; a reinstall keeps the id).
+        await _dt_repo_tc.update_where(where as any, { uninstalled_at: Date.now(), updated_at: Date.now() } as any);
     }
 
     // ─── Read handlers ───────────────────────────────────────────────────────

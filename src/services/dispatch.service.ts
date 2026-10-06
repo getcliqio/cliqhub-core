@@ -1952,7 +1952,7 @@ export class DispatchService {
         manifest: string;
         dockerfile?: string | null;
         dependencies?: string | null;
-        /** Prefer this id when claiming an existing unbound/same-daemon row. */
+        /** The id to use when the daemon has no slot for this team yet. */
         preferred_id?: string;
     }): Promise<{ id: string }> {
         const scope = await _scope_repo.find_one({ slug: input.scope_slug } as any);
@@ -1960,55 +1960,20 @@ export class DispatchService {
             throw ApiError.not_found(`Scope '${input.scope_slug}' not found`);
         }
 
-        const existing = await TeamService.find(scope.id, input.slug, {
+        // One slot per (daemon, scope, slug) for life: an existing slot — even an
+        // uninstalled one — keeps its id, so a reinstall doesn't orphan runs.
+        const settled = await TeamService.settle_slot({
             daemon_id: input.daemon_id,
+            scope_id: String(scope.id),
+            slug: input.slug,
+            proposed_id: input.preferred_id ?? null,
+            version: input.version,
+            description: input.description,
+            manifest: input.manifest,
+            dockerfile: input.dockerfile ?? null,
+            dependencies: input.dependencies ?? null,
         });
-        if (existing) {
-            await existing.update({
-                version: input.version,
-                description: input.description,
-                manifest: input.manifest,
-                dockerfile: input.dockerfile ?? existing.dockerfile,
-                dependencies: input.dependencies ?? existing.dependencies,
-                updated_at: Date.now(),
-            });
-            return { id: existing.id };
-        }
-
-        if (input.preferred_id) {
-            const preferred = await _dt_repo.find_by_id(input.preferred_id);
-            if (
-                preferred
-                && preferred.scope_id === scope.id
-                && preferred.slug === input.slug
-                && (!preferred.daemon_id || preferred.daemon_id === input.daemon_id)
-            ) {
-                await preferred.update({
-                    daemon_id: input.daemon_id,
-                    version: input.version,
-                    description: input.description,
-                    manifest: input.manifest,
-                    dockerfile: input.dockerfile ?? preferred.dockerfile,
-                    dependencies: input.dependencies ?? preferred.dependencies,
-                    updated_at: Date.now(),
-                });
-                return { id: preferred.id };
-            }
-        }
-
-        const created = await TeamService.create(
-            scope.id,
-            input.slug,
-            input.version,
-            input.description,
-            input.manifest,
-            {
-                daemon_id: input.daemon_id,
-                dockerfile: input.dockerfile ?? null,
-                dependencies: input.dependencies ?? null,
-            },
-        );
-        return { id: created.id };
+        return { id: settled.id };
     }
 
     /**

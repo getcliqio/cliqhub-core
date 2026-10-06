@@ -23,8 +23,11 @@ import {
     DaemonGetInput,
     DaemonHeartbeatInput,
     DaemonRegisterInput,
+    DaemonRegisterTeamsInput,
     DaemonRemoveInput,
 } from '../schemas/daemon_types.js';
+import { TeamService } from '../services/teams_install_service.js';
+import { Realm } from '../models/index.js';
 import { get_logger } from '../lib/log.js';
 
 function bearer_plaintext(req: Request): string {
@@ -120,6 +123,37 @@ export class DaemonController extends BaseController {
             // Heartbeat is pure liveness — team roster sync is handled by
             // the outbox protocol. No state payload processed here.
             res.json({ ok: true });
+        } catch (err) {
+            if (respond_hub_error(err, res)) return;
+            throw err;
+        }
+    }
+
+    /**
+     * POST /v1/daemons/register_teams — settle the daemon's team ids: per team
+     * the id it must use (an existing slot keeps its id; a new one takes the
+     * daemon's). With `complete`, teams missing from the list are uninstalled.
+     */
+    async register_teams(req: Request, res: Response): Promise<void> {
+        try {
+            log.debug('register_teams', { realm_id: req.auth?.realm_id, daemon_id: (req.body as Record<string, unknown>)?.daemon_id });
+            // Route policy: daemon token only.
+            assert_access(req.auth, 'daemons', 'write');
+
+            const { daemon_id, teams, complete } = this.parse_body(DaemonRegisterTeamsInput, req);
+            const realm_id = req.auth!.realm_id;
+            if (!realm_id) {
+                res.status(403).json({ ok: false, error: 'Daemon token has no primary realm' });
+                return;
+            }
+            assert_realm_domain(req.auth!, realm_id);
+            await RealmService.assert_daemon_in_realm(realm_id, daemon_id);
+            // Only teams on the realm's list may be on its daemons (PLAN-team-ids rule 7).
+            const realm = await Realm.findByPk(realm_id, { attributes: ['team_list'] });
+            const realm_teams = new Set(((realm?.team_list ?? []) as Array<{ scope: string; slug: string }>).map((e) => `${e.scope}/${e.slug}`));
+            const settled = await TeamService.register_from_daemon(daemon_id, teams, Boolean(complete), realm_teams);
+            log.info('daemon_teams_registered', { daemon_id, count: settled.length, complete: Boolean(complete) });
+            res.json({ ok: true, data: { teams: settled } });
         } catch (err) {
             if (respond_hub_error(err, res)) return;
             throw err;

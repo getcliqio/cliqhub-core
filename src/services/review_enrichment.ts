@@ -113,7 +113,7 @@ export async function load_run_info_map(run_ids: string[]): Promise<Map<string, 
 	const team_ids = [...new Set(runs.map((r) => r.team_id).filter(Boolean))];
 	const teams = team_ids.length === 0
 		? []
-		: await _dt_repo_re.find_all_q({
+		: await _dt_repo_re.find_all_any({
 			where: { id: { [Op.in]: team_ids } },
 		});
 

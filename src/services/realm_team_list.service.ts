@@ -530,8 +530,12 @@ export class RealmTeamListService {
 
         const scope_row = await _scope_repo_rtl.find_one_q({ where: { slug: scope_slug }, attributes: ['id'] });
         if (scope_row) {
-            await _dt_repo_rtl.delete_where_q({ where: { scope_id: (scope_row as any).id, slug: team_slug } } as any);
-            log.info(`cascade purge cliq.teams: ${key}`);
+            // Slots are marked uninstalled, not deleted: their runs keep the team.
+            await _dt_repo_rtl.update_where(
+                { scope_id: (scope_row as any).id, slug: team_slug } as any,
+                { uninstalled_at: Date.now(), updated_at: Date.now() } as any,
+            );
+            log.info(`cascade uninstall daemon team slots: ${key}`);
         }
     }
 }
