@@ -90,6 +90,8 @@ export type RunsGetInput = z.infer<typeof RunsGetInput>;
 /** POST /v1/runs/get_by_id */
 export const RunsGetByIdInput = z.object({
     run_id: z.string(),
+    with_history: z.boolean().optional()
+        .describe('Also return `history`: started / resume requested (by whom) / resumed / failed / completed, oldest first'),
 });
 export type RunsGetByIdInput = z.infer<typeof RunsGetByIdInput>;
 
@@ -423,6 +425,16 @@ export const RunData = z.object({
         .describe('When daemon reported run_not_found (unix ms)'),
     team_version_id: z.string().nullable().optional()
         .describe('Published team version id when known'),
+    history: z.array(z.object({
+        type: z.string().describe('run.started, run.resume_requested, run.resumed, run.completed, run.failed, run.crashed or run.cancelled'),
+        at: z.number().describe('Unix ms'),
+        from_phase: z.string().nullable().describe('Phase a resume started from'),
+        phase: z.string().nullable().describe('Phase current at the time'),
+        error: z.string().nullable(),
+        actor: z.object({ id: z.string(), username: z.string().nullable(), display_name: z.string().nullable() }).nullable()
+            .describe('Who did it, when a person did (resume requests)'),
+    })).optional()
+        .describe('Only with `with_history: true`'),
 }).describe('Run resource on the wire');
 export type RunData = z.infer<typeof RunData>;
 

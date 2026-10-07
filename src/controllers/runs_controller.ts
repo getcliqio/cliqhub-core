@@ -9,6 +9,7 @@
  */
 
 import { BaseController } from './base_controller.js';
+import { RunHistoryService } from '../services/run_history.service.js';
 import { get_logger } from '../lib/log.js';
 import { RunService } from '../services/run.service.js';
 import { DispatchService } from '../services/dispatch.service.js';
@@ -142,7 +143,7 @@ export class RunController extends BaseController {
         res: ApiOkResponse<RunData | null>,
     ): Promise<void> {
         log.debug('get_by_id', { user_id: req.auth?.user?.id });
-        const { run_id } = this.parse_body(RunsGetByIdInput, req);
+        const { run_id, with_history } = this.parse_body(RunsGetByIdInput, req);
         const run = await RunService.get(run_id);
         if (!run) {
             this.ok(res, null);
@@ -163,6 +164,7 @@ export class RunController extends BaseController {
             state_lost_at,
             team_version_id,
         });
+        if (with_history) data.history = await RunHistoryService.history(run_id);
         this.ok(res, data);
     }
 
@@ -249,6 +251,7 @@ export class RunController extends BaseController {
                 req.auth?.user?.id,
             );
             log.info('run_resumed', { run_id, from_phase });
+            await RunHistoryService.record_resume_request(run_id, from_phase, req.auth?.user?.id);
             const data: RunResumeData = {
                 resumed: result.resumed,
                 from_phase: result.from_phase,

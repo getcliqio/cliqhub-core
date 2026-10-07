@@ -70,6 +70,7 @@ export type CustomEventData = z.infer<typeof CustomEventData>;
 export const EVENT_TYPES = [
 	'run.started',
 	'run.resumed',
+	'run.resume_requested',
 	'run.completed',
 	'run.failed',
 	'run.crashed',
@@ -159,6 +160,7 @@ export function is_event_type(value: string): value is EventType {
 export const EVENT_TYPE_SEVERITY: Record<EventType, EventSeverity> = {
 	'run.started': 'info',
 	'run.resumed': 'info',
+	'run.resume_requested': 'info',
 	'run.completed': 'info',
 	'run.failed': 'error',
 	'run.crashed': 'critical',
