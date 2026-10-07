@@ -131,6 +131,36 @@ describe('realm levels', () => {
     });
 });
 
+describe('daemon-targeted writes (no realm_id): judged on the daemon\'s realm', () => {
+    it('a realm viewer cannot install, uninstall or run by naming a daemon', async () => {
+        expect(await check('POST /v1/teams/install', 'mia', { team_id: 't', daemon_ids: ['d-a1'] })).toMatchObject({ status: 403, reason: 'level_too_low' });
+        expect(await status('POST /v1/teams/uninstall', 'mia', { team_id: 't', daemon_id: 'd-a1' })).toBe(403);
+        expect(await status('POST /v1/teams/uninstall', 'mia', { team_id: 't', daemon_ids: ['d-a1'] })).toBe(403);
+        expect(await status('POST /v1/runs/enqueue', 'mia', { team_id: 't', daemon_id: 'd-a1' })).toBe(403);
+    });
+    it('a realm operator can', async () => {
+        expect(await status('POST /v1/teams/install', 'omar', { team_id: 't', daemon_ids: ['d-a1'] })).toBe(200);
+        expect(await status('POST /v1/teams/uninstall', 'omar', { team_id: 't', daemon_id: 'd-a1' })).toBe(200);
+        expect(await status('POST /v1/runs/enqueue', 'omar', { team_id: 't', daemon_id: 'd-a1' })).toBe(200);
+    });
+    it('a daemon in a realm you cannot see, or one that does not exist, is 404', async () => {
+        expect(await status('POST /v1/teams/install', 'ben', { team_id: 't', daemon_ids: ['d-a1'] })).toBe(404);
+        expect(await status('POST /v1/teams/install', 'omar', { team_id: 't', daemon_ids: ['d-nope'] })).toBe(404);
+    });
+    it('a daemon serving several realms: best standing wins; every listed daemon must pass', async () => {
+        expect(await status('POST /v1/teams/install', 'ben', { team_id: 't', daemon_ids: ['d-multi'] })).toBe(200);
+        expect(await status('POST /v1/teams/install', 'ben', { team_id: 't', daemon_ids: ['d-multi', 'd-a1'] })).toBe(404);
+        expect(await status('POST /v1/teams/install', 'omar', { team_id: 't', daemon_ids: ['d-a1', 'd-multi'] })).toBe(200);
+    });
+    it('the org permission still applies (org role without teams.install)', async () => {
+        expect(await status('POST /v1/teams/install', 'nick', { team_id: 't', daemon_ids: ['d-a1'] })).toBe(403);
+    });
+    it('realm_id, when sent, is used as before', async () => {
+        expect(await status('POST /v1/teams/install', 'mia', { team_id: 't', realm_id: 'A1' })).toBe(403);
+        expect(await status('POST /v1/teams/install', 'omar', { team_id: 't', realm_id: 'A1' })).toBe(200);
+    });
+});
+
 describe('tokens and callers', () => {
     it('no token → 401 on signed-in routes', async () => {
         expect(await status('POST /v1/runs/get_by_id', 'anon', { run_id: 'r-a1' })).toBe(401);

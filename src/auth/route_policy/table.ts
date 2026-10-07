@@ -190,7 +190,7 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'POST /v1/runs/report_telemetry': record('run', RUN, null, { daemon: 'write' }),
     'POST /v1/runs/cancel': record('run', RUN, 'operate', { perm: 'teams.cancel' }),
     'POST /v1/runs/supply_inputs': record('run', RUN, 'operate', { perm: 'teams.inputs' }),
-    'POST /v1/runs/enqueue': realm(REALM, 'operate', { perm: 'teams.run', handler: 'token scope dispatch' }),
+    'POST /v1/runs/enqueue': realm(REALM, 'operate', { perm: 'teams.run', daemons: 'body.daemon_id', handler: 'token scope dispatch' }),
     'POST /v1/runs/create_rdr': record('run', RUN, null, { daemon: 'write' }),
     'POST /v1/artifacts/get': record('run', RUN, 'view', { perm: 'runs.view' }),
     'POST /v1/artifacts/get_by_id': record('artifact', 'body.artifact_id', 'view', { perm: 'runs.view' }),
@@ -218,6 +218,6 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'POST /v1/teams/unpublish': record('team', ['body.team_id', 'body.name'], 'view', { handler: 'author or teams.publish.delete' }),
     'POST /v1/teams/delete': record('team', ['body.team_id', 'body.name'], 'view', { handler: 'author or teams.publish.delete' }),
     'POST /v1/teams/delete_version': record('team', ['body.team_id', 'body.name'], 'view', { handler: 'author or teams.publish.delete' }),
-    'POST /v1/teams/install': realm(REALM, 'operate', { perm: 'teams.install' }),
-    'POST /v1/teams/uninstall': realm(REALM, 'operate', { perm: 'teams.install' }),
+    'POST /v1/teams/install': realm(REALM, 'operate', { perm: 'teams.install', daemons: 'body.daemon_ids' }),
+    'POST /v1/teams/uninstall': realm(REALM, 'operate', { perm: 'teams.install', daemons: ['body.daemon_id', 'body.daemon_ids'] }),
 };

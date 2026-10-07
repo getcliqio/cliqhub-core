@@ -113,6 +113,18 @@ export function read_field(req: RequestLike, ref: FieldRef): string | undefined 
     return undefined;
 }
 
+/** Ids from fields that hold one id or an array of ids (`daemon_id`, `daemon_ids`), de-duplicated. */
+function read_ids(req: RequestLike, refs: FieldRef | FieldRef[]): string[] {
+    const out = new Set<string>();
+    for (const ref of Array.isArray(refs) ? refs : [refs]) {
+        const [where, ...rest] = ref.split('.');
+        const src = (where === 'body' ? req.body : where === 'query' ? req.query : req.params) as Record<string, unknown> | undefined;
+        const v = src?.[rest.join('.')];
+        for (const x of Array.isArray(v) ? v : [v]) if (typeof x === 'string' && x.trim()) out.add(x.trim());
+    }
+    return [...out];
+}
+
 function first_field(req: RequestLike, refs: FieldRef | FieldRef[]): { ref: FieldRef; value: string } | undefined {
     for (const ref of Array.isArray(refs) ? refs : [refs]) {
         const value = read_field(req, ref);
@@ -207,6 +219,31 @@ async function judge_realm(
     const d = judge_standing(s, need, perm, auth);
     if (d) return d;
     return allow({ ...base, level: s.level });
+}
+
+/** A daemon may serve several realms: the caller's best standing across them wins (as for daemon records). */
+async function judge_daemon_realms(
+    store: AccessStore,
+    req: RequestLike,
+    daemon_id: string,
+    need: Level | null,
+    perm: string | undefined,
+    daemon: 'read' | 'write' | 'only' | undefined,
+    opts: EngineOptions,
+): Promise<Decision> {
+    const record = { kind: 'daemon' as RecordKind, id: daemon_id };
+    const scope = await store.record('daemon', daemon_id, req);
+    const realm_ids = scope ? scope.realm_ids ?? (scope.realm_id ? [scope.realm_id] : []) : [];
+    if (realm_ids.length === 0) {
+        return is_site_admin(req.auth) ? allow({ level: 'admin', record }) : deny(404, 'not_found_or_hidden', { record });
+    }
+    let last: Decision | null = null;
+    for (const rid of realm_ids) {
+        const d = await judge_realm(store, req, await store.realm(rid), need, perm, daemon, opts);
+        if (d.allow) return { ...d, access: { ...d.access, record } };
+        if (!last || rank_deny(d) > rank_deny(last)) last = d;
+    }
+    return { ...last!, access: { ...last!.access, record } };
 }
 
 async function judge_org(store: AccessStore, auth: AuthContext, org_id: string | null, perm: string): Promise<Decision> {
@@ -306,7 +343,18 @@ export async function decide(policy: Policy, req: RequestLike, store: AccessStor
             if (!signed) return deny(401, 'no_token');
             if (is_daemon(auth) && !policy.daemon) return deny(403, 'daemon_not_allowed');
             const f = first_field(req, policy.from);
-            if (!f) return allow({}, 'realm id missing; handler validates');
+            if (!f) {
+                // Targeting daemons instead of a realm: judge the caller on every daemon's realm.
+                const ids = policy.daemons ? read_ids(req, policy.daemons) : [];
+                if (ids.length === 0) return allow({}, 'realm id missing; handler validates');
+                let first: Decision | null = null;
+                for (const id of ids) {
+                    const d = await judge_daemon_realms(store, req, id, policy.level, policy.perm, policy.daemon, opts);
+                    if (!d.allow) return d;
+                    first ??= d;
+                }
+                return first!;
+            }
             const r = await resolve_realm(store, req, f.ref, f.value);
             return judge_realm(store, req, r, policy.level, policy.perm, policy.daemon, opts);
         }

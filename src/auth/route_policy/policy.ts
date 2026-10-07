@@ -74,8 +74,12 @@ export type Policy =
         otherwise: 'none' | 'required';
         daemon?: DaemonRule;
     }
-    /** Realm named in the request. `level: null` = daemon push with no user level. */
-    | Base & { kind: 'realm'; from: FieldRef | FieldRef[]; level: Level | null; perm?: Permission; daemon?: DaemonRule }
+    /**
+     * Realm named in the request. `level: null` = daemon push with no user level.
+     * `daemons`: fields holding a daemon id or an array of them, used when the request targets
+     * daemons instead of naming a realm — the caller then needs `level`/`perm` on each daemon's realm.
+     */
+    | Base & { kind: 'realm'; from: FieldRef | FieldRef[]; level: Level | null; perm?: Permission; daemon?: DaemonRule; daemons?: FieldRef | FieldRef[] }
     /** Record named in the request; the caller needs `level` on the record's realm. */
     | Base & {
         kind: 'record';
@@ -111,7 +115,7 @@ export const org = (from: FieldRef | FieldRef[], perm: Permission | 'member', ha
 export const realm = (
     from: FieldRef | FieldRef[],
     level: Level | null,
-    opts: { perm?: Permission; daemon?: DaemonRule; handler?: string } = {},
+    opts: { perm?: Permission; daemon?: DaemonRule; handler?: string; daemons?: FieldRef | FieldRef[] } = {},
 ): Policy => ({ kind: 'realm', from, level, ...opts });
 export const record = (
     kind: RecordKind,
