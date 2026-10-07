@@ -144,7 +144,7 @@ export class DaemonController extends BaseController {
             const { daemon_id, teams, complete } = this.parse_body(DaemonRegisterTeamsInput, req);
             const realm_id = req.auth!.realm_id;
             if (!realm_id) {
-                res.status(403).json({ ok: false, error: 'Daemon token has no primary realm' });
+                res.status(403).json({ ok: false, error: 'Daemon token has no primary realm', code: 'forbidden' });
                 return;
             }
             assert_realm_domain(req.auth!, realm_id);
