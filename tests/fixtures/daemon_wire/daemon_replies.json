@@ -47,15 +47,15 @@
             "request": { "path": "/v1/install", "body": { "scope": "acme", "slug": "contract", "manifest": "phases: []", "version": "1.0.0", "description": "contract" } },
             "status": 500,
             "exact": true,
-            "body": { "ok": false, "error": { "code": "INTERNAL_ERROR", "message": "disk full" } },
-            "core": { "delivered": false, "retryable": true, "run_not_found": false, "error_msg": "HTTP 500: INTERNAL_ERROR: disk full" }
+            "body": { "ok": false, "error": { "code": "INTERNAL_ERROR", "message": "cliqd hit an unexpected error (request core-wire). Details are in the cliqd log." } },
+            "core": { "delivered": false, "retryable": true, "run_not_found": false, "error_msg": "HTTP 500: INTERNAL_ERROR: cliqd hit an unexpected error (request core-wire). Details are in the cliqd log." }
         },
         "settings_set_rejected_value": {
             "request": { "path": "/v1/settings/set", "body": { "workspace_dir": null, "key": "a.b", "value": 1 } },
             "status": 400,
             "exact": true,
-            "body": { "ok": false, "error": { "code": "SETTING_VALUE_INVALID", "message": "Non-daemon key \"a.b\" requires a workspace (omit --global)" } },
-            "core": { "delivered": false, "retryable": false, "run_not_found": false, "error_msg": "HTTP 400: SETTING_VALUE_INVALID: Non-daemon key \"a.b\" requires a workspace (omit --global)" }
+            "body": { "ok": false, "error": { "code": "SETTING_VALUE_INVALID", "message": "Non-daemon key \"a.b\" requires a workspace: run it inside a workspace directory" } },
+            "core": { "delivered": false, "retryable": false, "run_not_found": false, "error_msg": "HTTP 400: SETTING_VALUE_INVALID: Non-daemon key \"a.b\" requires a workspace: run it inside a workspace directory" }
         }
     },
     "query": {
