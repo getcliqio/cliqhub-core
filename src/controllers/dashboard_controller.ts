@@ -91,7 +91,7 @@ export class DashboardController extends BaseController {
         log.debug('realms_summary', { user_id: req.auth?.user?.id, org_id: (req.body as Record<string, unknown>)?.org_id });
         const user_id = req.auth?.user?.id;
         if (!user_id) {
-            res.status(401).json({ ok: false, error: 'Unauthorized' } as never);
+            res.status(401).json({ ok: false, error: 'Unauthorized', code: 'unauthorized' } as never);
             return;
         }
 
@@ -244,7 +244,7 @@ export class DashboardController extends BaseController {
         log.debug('summary', { user_id: req.auth?.user?.id, org_id: (req.body as Record<string, unknown>)?.org_id });
         const user_id = req.auth?.user?.id;
         if (!user_id) {
-            res.status(401).json({ ok: false, error: 'Unauthorized' } as never);
+            res.status(401).json({ ok: false, error: 'Unauthorized', code: 'unauthorized' } as never);
             return;
         }
 

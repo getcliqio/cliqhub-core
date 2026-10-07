@@ -607,6 +607,7 @@ describe('TeamsService — publish', () => {
         });
 
         expect(result.version).toBe('2.0.0');
+        expect(result.id).toBe(PUBLIC_TEAM.id);
         expect(team_repo.update).toHaveBeenCalled();
         // Same transaction as update — avoids row-lock deadlock on republish.
         expect(team_repo.update_listed).toHaveBeenCalledWith(PUBLIC_TEAM.id, 1, expect.anything());
@@ -864,8 +865,7 @@ describe('TeamsService — rename_team', () => {
 
         const result = await service.rename_team(ALICE, { name: 'my-team', scope: 'alice', new_name: 'renamed' });
 
-        expect(result.name).toBe('renamed');
-        expect(result.scope).toBe('alice');
+        expect(result).toEqual({ id: hub_legacy_uuid(1), name: 'renamed', scope: 'alice' });
         expect(team_repo.update_name).toHaveBeenCalledWith(hub_legacy_uuid(1), 'renamed');
     });
 });

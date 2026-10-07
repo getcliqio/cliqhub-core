@@ -36,10 +36,10 @@ function bearer_plaintext(req: Request): string {
     return auth_header.slice(7).trim();
 }
 
-/** Map HubApiError to flat `{ ok: false, error }` (daemon write paths). */
+/** Map HubApiError to flat `{ ok: false, error, code }` (daemon write paths). */
 function respond_hub_error(err: unknown, res: Response): boolean {
     if (!(err instanceof HubApiError)) return false;
-    res.status(err.status).json({ ok: false, error: err.message });
+    res.status(err.status).json({ ok: false, error: err.message, code: err.code });
     return true;
 }
 
@@ -59,7 +59,7 @@ export class DaemonController extends BaseController {
 
             const api_key = bearer_plaintext(req);
             if (!api_key) {
-                res.status(401).json({ ok: false, error: 'Missing or invalid Authorization header' } as never);
+                res.status(401).json({ ok: false, error: 'Missing or invalid Authorization header', code: 'unauthorized' } as never);
                 return;
             }
 
@@ -75,6 +75,7 @@ export class DaemonController extends BaseController {
                 res.status(403).json({
                     ok: false,
                     error: err instanceof Error ? err.message : 'Realm grant denied',
+                    code: 'forbidden',
                 } as never);
                 return;
             }
@@ -113,7 +114,7 @@ export class DaemonController extends BaseController {
             const { daemon_id } = this.parse_body(DaemonHeartbeatInput, req);
             const realm_id = req.auth!.realm_id;
             if (!realm_id) {
-                res.status(403).json({ ok: false, error: 'Daemon token has no primary realm' } as never);
+                res.status(403).json({ ok: false, error: 'Daemon token has no primary realm', code: 'forbidden' } as never);
                 return;
             }
             assert_realm_domain(req.auth!, realm_id);
@@ -172,7 +173,7 @@ export class DaemonController extends BaseController {
             const { daemon_id } = this.parse_body(DaemonDeregisterInput, req);
             const realm_id = req.auth!.realm_id;
             if (!realm_id) {
-                res.status(403).json({ ok: false, error: 'Daemon token has no primary realm' } as never);
+                res.status(403).json({ ok: false, error: 'Daemon token has no primary realm', code: 'forbidden' } as never);
                 return;
             }
             assert_realm_domain(req.auth!, realm_id);

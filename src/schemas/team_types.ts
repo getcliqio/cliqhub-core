@@ -452,6 +452,14 @@ export const TeamMutationData = z.object({
 });
 export type TeamMutationData = z.infer<typeof TeamMutationData>;
 
+/** Response data for rename: the team and its new name. */
+export const TeamRenameData = z.object({
+    id: z.string().describe('Team UUID'),
+    name: z.string().describe('New team name'),
+    scope: z.string().describe('Scope (publisher) slug'),
+});
+export type TeamRenameData = z.infer<typeof TeamRenameData>;
+
 // ─── Version / phases ────────────────────────────────────────────────────────
 
 /** One version entry in a team's version history. */

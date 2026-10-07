@@ -40,7 +40,7 @@ const _scope_repo_tc = new ScopeRepository();
 import type { TeamsService } from '../services/teams_service.js';
 import type { BuilderService } from '../services/builder_service.js';
 import type { ApiOkResponse, ApiRequest, PagedData } from '../types/api_response.js';
-import type { TeamData, TeamMutationData, TeamsGetVersionsData, TeamsGetPhasesData, TeamsInstallData, TeamsUninstallData } from '../schemas/team_types.js';
+import type { TeamData, TeamMutationData, TeamRenameData, TeamsGetVersionsData, TeamsGetPhasesData, TeamsInstallData, TeamsUninstallData } from '../schemas/team_types.js';
 import {
     TeamsGetInput,
     TeamsGetByIdInput,
@@ -332,11 +332,11 @@ export class TeamsController extends BaseController {
     }
 
     /**
-     * Publish a draft version. Returns HTTP 201 on first publish, 200 on overwrite.
+     * Publish a draft version. Answers HTTP 200, on first publish and on overwrite alike.
      * `visibility` must be `public` or `private`; `draft` is rejected.
      *
      * @param req - Body: {@link TeamsPublishInput}
-     * @param res - `{ ok: true, data: TeamMutationData }` — HTTP 201 create / 200 overwrite
+     * @param res - `{ ok: true, data: TeamMutationData }`
      */
     async publish(
         req: ApiRequest<TeamsPublishInput, TeamMutationData>,
@@ -421,17 +421,17 @@ export class TeamsController extends BaseController {
      * Rename a team within its scope. The old name is freed immediately.
      *
      * @param req - Body: {@link TeamsRenameInput}
-     * @param res - `{ ok: true, data: TeamMutationData }`
+     * @param res - `{ ok: true, data: TeamRenameData }`
      */
     async rename(
-        req: ApiRequest<TeamsRenameInput, TeamMutationData>,
-        res: ApiOkResponse<TeamMutationData>,
+        req: ApiRequest<TeamsRenameInput, TeamRenameData>,
+        res: ApiOkResponse<TeamRenameData>,
     ): Promise<void> {
         log.debug('rename', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsRenameInput, req);
         const result = await this._teams_service.rename_team(req.auth!, body);
         log.info('team_renamed', { scope: body.scope, name: body.name, new_name: body.new_name });
-        this.ok(res, result as TeamMutationData);
+        this.ok(res, result);
     }
 
     // ─── Builder ─────────────────────────────────────────────────────────────

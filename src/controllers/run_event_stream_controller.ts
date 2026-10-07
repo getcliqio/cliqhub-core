@@ -103,7 +103,7 @@ export class RunEventStreamController {
             : (req.params as Record<string, string | undefined>)['run_id'];
         const run_id = Array.isArray(run_id_raw) ? run_id_raw[0] : run_id_raw;
         if (!run_id?.trim()) {
-            res.status(400).json({ error: 'missing_run_id' });
+            res.status(400).json({ ok: false, error: 'run_id is required', code: 'missing_run_id' });
             return;
         }
 

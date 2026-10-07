@@ -106,7 +106,7 @@ export class WorkspaceController {
                 if (body.sort_by) throw ApiError.bad_request('sort_by applies to the stored workspace list, not a live daemon_id read', 'invalid_params');
                 const user_id = req.auth?.user?.id;
                 if (!user_id) {
-                    res.status(401).json({ ok: false, error: 'Authentication required' });
+                    res.status(401).json({ ok: false, error: 'Authentication required', code: 'unauthorized' });
                     return;
                 }
                 const { live_workspaces_from_daemon } = await import(

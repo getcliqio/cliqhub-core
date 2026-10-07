@@ -718,6 +718,7 @@ export class TeamsService {
                 );
             }
             return {
+                id: team.id,
                 name: team.name,
                 scope: team.scope,
                 version: latest,
@@ -785,6 +786,7 @@ export class TeamsService {
         const pkg_path = this._packages_path ? package_path(this._packages_path, name, resolved_version) : pkg_key;
         if (this._storage) await this._storage.write(pkg_key, zip_buffer);
 
+        let published_team_id = '';
         await get_sequelize().transaction(async (t) => {
             let effective_team_id: string;
 
@@ -816,9 +818,11 @@ export class TeamsService {
                     await this._tag_repo.create(effective_team_id, tag, t);
                 }
             }
+            published_team_id = effective_team_id;
         });
 
         return {
+            id: published_team_id,
             name,
             scope,
             version: resolved_version,
@@ -938,7 +942,7 @@ export class TeamsService {
         if (existing) throw new ApiError('conflict', `Team @${params.scope}/${new_name} already exists`, 409);
 
         await this._team_repo.update_name(team.id, new_name);
-        return { name: new_name, scope: params.scope };
+        return { id: team.id, name: new_name, scope: params.scope };
     }
 
     // ─── Private helpers ────────────────────────────────────────────

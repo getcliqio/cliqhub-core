@@ -37,6 +37,7 @@ export class DaemonAclController {
                 res.status(403).json({
                     ok: false,
                     error: err instanceof Error ? err.message : 'Realm grant denied',
+                    code: 'forbidden',
                 });
                 return;
             }
@@ -52,7 +53,7 @@ export class DaemonAclController {
             });
         } catch (err) {
             if (err instanceof HubApiError) {
-                res.status(err.status).json({ ok: false, error: err.message });
+                res.status(err.status).json({ ok: false, error: err.message, code: err.code });
                 return;
             }
             next(err);
