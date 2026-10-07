@@ -358,7 +358,9 @@ export class DaemonService {
      * we know the team roster was actually written to the DB.
      */
     static async deregister(daemon_id: string): Promise<void> {
-        const [count] = await _daemon_repo_ds.update_where({ id: daemon_id } as any, { status: 'offline' } as any);
+        // A clean goodbye (scale-down, docker stop, cliqd quitting) means gone, not offline:
+        // autoscaled pods don't pile up as offline. Its next register or heartbeat revives it.
+        const [count] = await _daemon_repo_ds.update_where({ id: daemon_id } as any, { status: 'removed' } as any);
         if (count === 0) {
             throw new Error(`Daemon '${daemon_id}' not found`);
         }

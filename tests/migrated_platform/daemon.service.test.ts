@@ -170,7 +170,10 @@ describe.skipIf(!has_postgres)('DaemonService', () => {
         await DaemonService.heartbeat(daemon_id);
         expect((await DaemonService.get(daemon_id))?.status).toBe('online');
 
+        // A clean goodbye means gone (not offline); the next heartbeat revives it.
         await DaemonService.deregister(daemon_id);
-        expect((await DaemonService.get(daemon_id))?.status).toBe('offline');
+        expect((await DaemonService.get(daemon_id))?.status).toBe('removed');
+        await DaemonService.heartbeat(daemon_id);
+        expect((await DaemonService.get(daemon_id))?.status).toBe('online');
     });
 });
