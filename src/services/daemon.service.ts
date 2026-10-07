@@ -459,11 +459,8 @@ export class DaemonService {
 
         const where: Record<string, unknown> = {};
         if (daemon_ids) where.id = { [Op.in]: daemon_ids };
-        if (status_filter) {
-            where.status = status_filter;
-        } else if (!filters?.site_admin) {
-            where.status = { [Op.in]: ['online', 'stale'] };
-        }
+        // Removed daemons are history: listed only when asked for. Offline ones show so they can be removed.
+        where.status = status_filter ?? { [Op.ne]: 'removed' };
         if (query_clause) Object.assign(where, query_clause);
 
         const limit = filters?.limit != null
@@ -480,7 +477,7 @@ export class DaemonService {
     static async list_by_ids(daemon_ids: string[]): Promise<DaemonInfo[]> {
         await DaemonService._mark_stale();
         if (daemon_ids.length === 0) return [];
-        const rows = await _daemon_repo_ds.find_all_q({ where: { id: { [Op.in]: daemon_ids } }, order: [['last_registered_at', 'DESC']] });
+        const rows = await _daemon_repo_ds.find_all_q({ where: { id: { [Op.in]: daemon_ids }, status: { [Op.ne]: 'removed' } }, order: [['last_registered_at', 'DESC']] });
         return with_realms(rows.map(to_info));
     }
 
@@ -506,7 +503,9 @@ export class DaemonService {
     static async remove(daemon_id: string): Promise<void> {
         const row = await _daemon_repo_ds.find_by_id(daemon_id);
         if (!row) return;
-        await row.destroy();
+        // Tombstone (history keeps the id) and leave every realm, so its heartbeats are refused.
+        await _daemon_repo_ds.update_where({ id: daemon_id } as any, { status: 'removed' } as any);
+        await RealmService.remove_daemon_memberships(daemon_id);
         log.info(`daemon removed: ${daemon_id}`);
     }
 
@@ -517,12 +516,11 @@ export class DaemonService {
 
         await _daemon_repo_ds.update_where({ status: 'online', last_heartbeat: { [Op.lt]: stale_cutoff } } as any, { status: 'stale' } as any);
 
-        try {
-            await _daemon_repo_ds.delete_where_q({ where: { status: { [Op.in]: ['stale', 'offline'] }, last_heartbeat: { [Op.lt]: deregister_cutoff } } });
-        } catch (err) {
-            log.debug('daemon_team_cleanup_conflict', { error: err instanceof Error ? err.message : String(err) });
-            // FK cascade on teams may hit unique constraint for orphaned rows;
-            // non-fatal — stale daemons stay until data is cleaned up.
-        }
+        // Not seen for an hour: tombstone, never delete — runs/workspaces keep their daemon_id
+        // (a delete would SET NULL them through the FK). A heartbeat or re-register revives it.
+        await _daemon_repo_ds.update_where(
+            { status: { [Op.in]: ['stale', 'offline'] }, last_heartbeat: { [Op.lt]: deregister_cutoff } } as any,
+            { status: 'removed' } as any,
+        );
     }
 }

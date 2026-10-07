@@ -147,6 +147,8 @@ export class DashboardController extends BaseController {
         const realm_daemon_ids = new Map<string, string[]>();
         for (const m of daemon_members) {
             daemon_to_realm.set(m.member_id, m.realm_id);
+            // Count only daemons that exist and aren't removed (no ghosts from churned pods).
+            if (!daemon_status_map.has(m.member_id)) continue;
             const list = realm_daemon_ids.get(m.realm_id) ?? [];
             list.push(m.member_id);
             realm_daemon_ids.set(m.realm_id, list);

@@ -1028,7 +1028,8 @@ export class RealmService {
             if (runs > 0) return `Realm ${realm.slug} has ${runs} run(s) in progress — finish or cancel them first`;
             const jobs = await _rdq_repo.find_count({ realm_id: realm.id, status: { [Op.in]: ['queued', 'offered', 'claimed', 'running', 'dispatching'] } } as any);
             if (jobs > 0) return `Realm ${realm.slug} has ${jobs} active dispatch job(s) — wait for them or cancel them first`;
-            const daemons = await _realm_member_repo.find_count({ realm_id: realm.id, member_type: 'daemon' } as any);
+            const daemon_ids = (await _realm_member_repo.find_all_q({ where: { realm_id: realm.id, member_type: 'daemon' }, attributes: ['member_id'] }) as Array<{ member_id: string }>).map((m) => m.member_id);
+            const daemons = daemon_ids.length ? await _daemon_repo_r.find_count({ id: { [Op.in]: daemon_ids }, status: { [Op.ne]: 'removed' } } as any) : 0;
             if (daemons > 0) return `Realm ${realm.slug} still has ${daemons} daemon(s) — remove them from the realm first`;
         }
         return null;
@@ -1398,6 +1399,11 @@ export class RealmService {
      * leave the daemon visible in both places.
      * @returns realm ids the daemon left
      */
+    /** A daemon leaves every realm (manual Remove): its heartbeats are refused from then on. */
+    static async remove_daemon_memberships(daemon_id: string): Promise<void> {
+        await _realm_member_repo.delete_where_q({ where: { member_type: 'daemon', member_id: daemon_id } });
+    }
+
     static async bind_daemon_to_realm(realm_id: string, daemon_id: string): Promise<string[]> {
         const existing = await _realm_member_repo.find_all_q({
             where: { member_type: 'daemon', member_id: daemon_id },
