@@ -68,6 +68,9 @@ vi.mock('../../../src/auth/permissions.js', async (importOriginal) => {
     };
 });
 
+// The caller's org permissions (route_policy/visible.ts) — none in these tests.
+vi.mock('../../../src/auth/route_policy/visible.js', () => ({ org_permissions: vi.fn(async () => new Map()) }));
+
 vi.mock('../../../src/models/index.js', () => ({
     User: { findOne: vi.fn(), findByPk: vi.fn(), create: vi.fn(), findAll: vi.fn().mockResolvedValue([]) },
     Scope: { create: vi.fn(), findAll: vi.fn().mockResolvedValue([]), findOne: vi.fn().mockResolvedValue(null), destroy: vi.fn(), count: vi.fn().mockResolvedValue(0) },
@@ -220,7 +223,7 @@ describe('OrgsService — get (regular user)', () => {
 
         const result = await service.get(ALICE, {});
 
-        expect(result.orgs).toEqual([{ id: hub_legacy_uuid(1), slug: 'acme', status: 'active', owner: null, deleted_at: null }]);
+        expect(result.orgs).toEqual([{ id: hub_legacy_uuid(1), slug: 'acme', status: 'active', permissions: [], owner: null, deleted_at: null }]);
         expect(org_member_repo.list_my_orgs).toHaveBeenCalledWith(hub_legacy_uuid(1));
     });
 });

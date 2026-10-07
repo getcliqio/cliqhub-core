@@ -16,6 +16,9 @@ vi.mock('../../../src/models/index.js', () => ({
     Review: { findAll: vi.fn(async () => []) },
 }));
 
+// The caller's realm levels (route_policy/visible.ts): admin everywhere in these tests.
+vi.mock('../../../src/auth/route_policy/visible.js', () => ({ realm_levels: vi.fn(async () => new Map()) }));
+
 vi.mock('../../../src/services/daemon.service.js', () => ({
     DaemonService: {
         list: vi.fn(),
