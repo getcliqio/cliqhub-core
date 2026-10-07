@@ -12,7 +12,7 @@
 import { Op } from 'sequelize';
 
 import { OrgMember, OrgRole, Realm, RealmMember } from '../../models/index.js';
-import { DEFAULT_ROLES } from '../permissions.js';
+import { ALL_PERMISSIONS, DEFAULT_ROLES } from '../permissions.js';
 import { LEVEL_RANK, type Level, type Permission } from './policy.js';
 
 const ROLE_LEVEL: Record<string, Level> = { admin: 'admin', operator: 'operate', member: 'view' };
@@ -47,11 +47,29 @@ async function org_roles_for_user(user_id: string): Promise<Map<string, OrgRoleR
     return out;
 }
 
-export async function visible_realm_ids(
+/**
+ * The caller's level in every realm they can see (optionally one org): realm role, realm owner,
+ * or org owner/admin (admin on every realm in that org). Same rules as the route policy engine.
+ */
+export async function realm_levels(user_id: string, opts: { org_id?: string } = {}): Promise<Map<string, Level>> {
+    const { levels } = await realm_standings(user_id, opts);
+    return levels;
+}
+
+/**
+ * The caller's effective org permissions per org: an owner (system role) holds every permission;
+ * any other role holds its own list.
+ */
+export async function org_permissions(user_id: string): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    for (const [org_id, r] of await org_roles_for_user(user_id)) out.set(org_id, r.is_system ? [...ALL_PERMISSIONS] : [...r.permissions]);
+    return out;
+}
+
+async function realm_standings(
     user_id: string,
-    opts: { org_id?: string; need?: Level; perm?: Permission } = {},
-): Promise<string[]> {
-    const need = opts.need ?? 'view';
+    opts: { org_id?: string },
+): Promise<{ levels: Map<string, Level>; realms: Array<{ id: string; org_id: string | null }>; org_roles: Map<string, OrgRoleRow> }> {
     const [memberships, org_roles, owned] = await Promise.all([
         RealmMember.findAll({ where: { member_type: 'user', member_id: user_id }, attributes: ['realm_id', 'role'], raw: true }) as unknown as
             Promise<Array<{ realm_id: string; role: string }>>,
@@ -75,7 +93,7 @@ export async function visible_realm_ids(
     const where_or: Array<Record<string, unknown>> = [];
     if (candidate_ids.length) where_or.push({ id: { [Op.in]: candidate_ids } });
     if (admin_orgs.length) where_or.push({ org_id: { [Op.in]: admin_orgs } });
-    if (where_or.length === 0) return [];
+    if (where_or.length === 0) return { levels: new Map(), realms: [], org_roles };
 
     const realms = await Realm.findAll({
         where: {
@@ -87,10 +105,24 @@ export async function visible_realm_ids(
         raw: true,
     }) as unknown as Array<{ id: string; org_id: string | null }>;
 
-    const out: string[] = [];
+    const levels = new Map<string, Level>();
     for (const r of realms) {
         if (r.org_id && admin_orgs.includes(r.org_id)) bump(r.id, 'admin');
         const l = level.get(r.id);
+        if (l) levels.set(r.id, l);
+    }
+    return { levels, realms, org_roles };
+}
+
+export async function visible_realm_ids(
+    user_id: string,
+    opts: { org_id?: string; need?: Level; perm?: Permission } = {},
+): Promise<string[]> {
+    const need = opts.need ?? 'view';
+    const { levels, realms, org_roles } = await realm_standings(user_id, opts);
+    const out: string[] = [];
+    for (const r of realms) {
+        const l = levels.get(r.id);
         if (!l || LEVEL_RANK[l] < LEVEL_RANK[need]) continue;
         if (opts.perm && r.org_id) {
             const role = org_roles.get(r.org_id);

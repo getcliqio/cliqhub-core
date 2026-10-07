@@ -7,6 +7,7 @@
  */
 
 import type { Request } from 'express';
+import { realm_levels } from '../auth/route_policy/visible.js';
 import { Op } from 'sequelize';
 import { BaseController } from './base_controller.js';
 import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
@@ -154,6 +155,10 @@ export class DashboardController extends BaseController {
         let total_online = 0;
         let total_active_runs = 0;
 
+        // The caller's level per realm (view / operate / admin), so the app can grey out what they can't do.
+        const is_site_admin = req.auth?.user?.role === 'admin';
+        const levels = await realm_levels(user_id, { org_id });
+
         const realms = member_realms.map((realm) => {
             const d_ids = realm_daemon_ids.get(realm.id) ?? [];
             let online = 0;
@@ -198,6 +203,7 @@ export class DashboardController extends BaseController {
                 slug: realm.slug,
                 org_slug: realm.org_slug ?? null,
                 name: realm.name,
+                level: is_site_admin ? 'admin' : levels.get(realm.id) ?? 'view',
                 last_activity_at,
                 daemons: { online, stale, offline, total: d_ids.length },
                 runs: { active: active_count, awaiting_input: awaiting_count },

@@ -1,4 +1,5 @@
 import { ApiError } from '../errors/api_error.js';
+import { org_permissions } from '../auth/route_policy/visible.js';
 import { get_logger } from '../lib/log.js';
 import { RESERVED_SCOPES, SLUG_PATTERN } from '../config/env.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
@@ -96,10 +97,11 @@ export class OrgsService {
         }
 
         const rows = await this._org_member_repo.list_my_orgs(auth.user!.id);
-        const owners = await this._owners_by_id(rows.map((r) => r.owner_id));
+        const [owners, perms] = await Promise.all([this._owners_by_id(rows.map((r) => r.owner_id)), org_permissions(auth.user!.id)]);
         const orgs = rows.map(({ owner_id, ...row }) => {
             const owner = owner_id ? owners.get(owner_id) : undefined;
-            return { ...row, owner: owner ? { username: owner.username, status: owner.status } : null };
+            // The caller's effective permissions in this org (owners hold all), so the app can grey out what they can't do.
+            return { ...row, permissions: perms.get(row.id) ?? [], owner: owner ? { username: owner.username, status: owner.status } : null };
         });
         return { orgs };
     }

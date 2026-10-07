@@ -9,7 +9,8 @@ const m = vi.hoisted(() => ({
 }));
 vi.mock('../../../src/models/index.js', () => m);
 
-import { visible_realm_ids } from '../../../src/auth/route_policy/visible.js';
+import { org_permissions, realm_levels, visible_realm_ids } from '../../../src/auth/route_policy/visible.js';
+import { ALL_PERMISSIONS } from '../../../src/auth/permissions.js';
 
 const REALMS = [
     { id: 'A1', org_id: 'acme' }, { id: 'A2', org_id: 'acme' }, { id: 'B1', org_id: 'beta' }, { id: 'P', org_id: null },
@@ -70,5 +71,30 @@ describe('visible_realm_ids', () => {
     it('no standing anywhere → empty, without a realm query', async () => {
         setup({});
         expect(await visible_realm_ids('u')).toEqual([]);
+    });
+});
+
+describe('realm_levels and org_permissions (what the app greys out)', () => {
+    it('level per visible realm: realm role, org owner/admin = admin, filtered by org', async () => {
+        setup({
+            members: [{ org_id: 'beta', role: 'admin', role_id: 'r-admin' }],
+            roles: [{ id: 'r-admin', slug: 'admin', is_system: false, permissions: ['realms.view'] }],
+            realm_members: [{ realm_id: 'A1', role: 'member' }, { realm_id: 'A2', role: 'operator' }],
+            owned: ['P'],
+        });
+        const all = await realm_levels('u');
+        expect(Object.fromEntries(all)).toEqual({ A1: 'view', A2: 'operate', B1: 'admin', P: 'admin' });
+        expect(Object.fromEntries(await realm_levels('u', { org_id: 'acme' }))).toEqual({ A1: 'view', A2: 'operate' });
+    });
+
+    it('org permissions: an owner holds everything; other roles their own list; no membership → absent', async () => {
+        setup({
+            members: [{ org_id: 'acme', role: 'admin', role_id: 'r-owner' }, { org_id: 'beta', role: 'member', role_id: 'r-op' }],
+            roles: [{ id: 'r-owner', slug: 'owner', is_system: true, permissions: [] }, { id: 'r-op', slug: 'operator', is_system: false, permissions: ['teams.run', 'realms.view'] }],
+        });
+        const perms = await org_permissions('u');
+        expect(perms.get('acme')).toEqual([...ALL_PERMISSIONS]);
+        expect(perms.get('beta')).toEqual(['teams.run', 'realms.view']);
+        expect(perms.has('gamma')).toBe(false);
     });
 });
