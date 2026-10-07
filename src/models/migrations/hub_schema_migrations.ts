@@ -663,6 +663,8 @@ async function drop_public_schema(sequelize: Sequelize): Promise<void> {
         log.info('public_table_dropped', { table: tbl });
     }
 
+    // Moving an extension needs its owner. Where pgcrypto was created by another role (e.g. a
+    // superuser on a dev database), it stays in `public` — it works there — and boot carries on.
     await sequelize.query(`
         DO $$
         BEGIN
@@ -672,8 +674,17 @@ async function drop_public_schema(sequelize: Sequelize): Promise<void> {
             ) THEN
                 ALTER EXTENSION pgcrypto SET SCHEMA cliq;
             END IF;
+        EXCEPTION WHEN insufficient_privilege THEN
+            RAISE NOTICE 'pgcrypto left in public: not its owner';
         END $$
     `);
+    const [moved] = await sequelize.query<{ moved: boolean }>(`
+        SELECT NOT EXISTS (
+            SELECT 1 FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+            WHERE e.extname = 'pgcrypto' AND n.nspname = 'public'
+        ) AS moved
+    `, { type: QueryTypes.SELECT });
+    if (moved && !moved.moved) log.warn('pgcrypto_kept_in_public', { reason: 'the database role is not the extension owner' });
 
     const [left] = await sequelize.query<{ n: string }>(
         `SELECT ((SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace)
