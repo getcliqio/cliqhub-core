@@ -10,8 +10,7 @@
         "dev": "tsc --watch & node --env-file=.env --watch dist/server.js",
         "test": "vitest run",
         "test:watch": "vitest",
-        "test:coverage": "vitest run --coverage",
-        "dev:link": "npm link @getcliqio/cliq-store"
+        "test:coverage": "vitest run --coverage"
     },
     "engines": {
         "node": ">=20"

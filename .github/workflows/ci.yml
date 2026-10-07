@@ -17,7 +17,5 @@ jobs:
           scope: '@getcliqio'
           cache: npm
       - run: npm ci
-      - name: Assert cliq-store installed
-        run: test -f node_modules/@getcliqio/cliq-store/dist/index.js
       - run: npm test
       - run: npm run build --if-present
