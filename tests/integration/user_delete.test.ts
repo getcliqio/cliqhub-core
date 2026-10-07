@@ -219,10 +219,19 @@ describe.skipIf(!has_postgres)('users/delete (live Postgres)', () => {
         const [realm_id] = await alive_realms(u.org_id);
         const now = Date.now();
 
+        // A real daemon in the realm blocks; a membership whose daemon is gone or removed (a ghost) doesn't.
         const daemon = randomUUID();
-        await M.RealmMember.create({ id: daemon, realm_id, member_type: 'daemon', member_id: `udd${stamp}`, role: 'operator', created_at: now } as never);
+        const live = `udg${stamp}`;
+        await M.Daemon.create({ id: live, api_key_hash: 'x', status: 'online', created_at: now, last_registered_at: now } as never);
+        await M.RealmMember.create({ id: daemon, realm_id, member_type: 'daemon', member_id: live, role: 'operator', created_at: now } as never);
         await expect_refused(u, /daemon/);
-        await M.RealmMember.destroy({ where: { id: daemon } });
+        await M.Daemon.update({ status: 'removed' } as never, { where: { id: live } });
+        const ghost = randomUUID();
+        await M.RealmMember.create({ id: ghost, realm_id, member_type: 'daemon', member_id: `udx${stamp}`, role: 'operator', created_at: now } as never);
+        const { RealmService } = await import('../../src/services/realm.service.js');
+        expect(await RealmService.org_delete_blocker(u.org_id)).toBeNull();
+        await M.RealmMember.destroy({ where: { id: [daemon, ghost] } });
+        await M.Daemon.destroy({ where: { id: live } });
 
         const run_id = `udr${stamp}`;
         const machine = `udd${stamp}`;

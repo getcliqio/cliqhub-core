@@ -48,6 +48,20 @@ describe('error_handler', () => {
         expect(res.status).toHaveBeenCalledWith(409);
     });
 
+    it('control-plane ApiError keeps its own code (e.g. run/stranded) instead of a generic one', () => {
+        const res = mock_res();
+        const core_err = Object.assign(new Error('Run has no daemon assignment'), { name: 'ApiError', status_code: 409, code: 'run/stranded' });
+        error_handler(core_err, mock_req, res, mock_next);
+        expect(res.status).toHaveBeenCalledWith(409);
+        expect(res.json).toHaveBeenCalledWith({ ok: false, error: { code: 'run/stranded', message: 'Run has no daemon assignment' } });
+    });
+
+    it('control-plane ApiError with an unusual status and no code falls back to "error"', () => {
+        const res = mock_res();
+        error_handler(Object.assign(new Error('Teapot'), { name: 'ApiError', status_code: 418 }), mock_req, res, mock_next);
+        expect(res.json).toHaveBeenCalledWith({ ok: false, error: { code: 'error', message: 'Teapot' } });
+    });
+
     it('returns status_code for core control-plane ApiError shape', () => {
         const res = mock_res();
         const core_err = Object.assign(new Error('Realm admin role required'), {
@@ -58,7 +72,7 @@ describe('error_handler', () => {
         expect(res.status).toHaveBeenCalledWith(403);
         expect(res.json).toHaveBeenCalledWith({
             ok: false,
-            error: { code: 'error', message: 'Realm admin role required' },
+            error: { code: 'forbidden', message: 'Realm admin role required' },
         });
     });
 
