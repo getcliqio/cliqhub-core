@@ -184,12 +184,14 @@ describe.skipIf(!ready)('core_api control + dispatch paths (postgres)', () => {
         expect(res.status).toBe(404);
     });
 
-    it('POST /v1/auth/get_dispatch_public_key without realm_id returns 400', async () => {
+    it('POST /v1/auth/get_dispatch_public_key without realm_id returns 422 invalid_params', async () => {
         const res = await request(app)
             .post('/v1/auth/get_dispatch_public_key')
             .set('Authorization', hub_bearer())
             .send({});
-        expect(res.status).toBe(400);
+        expect(res.status).toBe(422);
+        expect(res.body.code).toBe('invalid_params');
+        expect(res.body.details.issues[0].field).toBe('realm_id');
     });
 
     it('POST /v1/auth/get_dispatch_public_key with realm_id returns 200', async () => {

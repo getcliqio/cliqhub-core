@@ -1,4 +1,5 @@
 const STATUS_MAP: Record<string, number> = {
+    invalid_request: 400,
     unauthorized: 401,
     sign_in_required: 401,
     forbidden: 403,
@@ -15,6 +16,7 @@ const STATUS_MAP: Record<string, number> = {
     expired: 410,
     invalid_params: 422,
     rate_limited: 429,
+    storage_not_configured: 503,
 };
 
 export function status_for_code(code: string): number {

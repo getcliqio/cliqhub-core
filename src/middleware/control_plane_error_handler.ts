@@ -1,6 +1,9 @@
 /**
- * Core control-plane error envelope: `{ ok: false, error: string }`.
- * Mounted on the core_api router only — does not change Hub registry errors.
+ * Core control-plane error envelope: `{ ok: false, error: string, code, details? }`.
+ * Mounted at the end of every `/v1` and `/a2a` router. Every reply carries a
+ * `code`: the error's own, else the one for its status (`error_handler.ts`).
+ * A body that fails a route's zod schema is 422 `invalid_params` with the
+ * failing fields in `details.issues`.
  */
 
 import type { Request, Response, NextFunction } from 'express';
@@ -10,6 +13,7 @@ import { ApiError } from '../lib/api_error.js';
 import { ApiError as BaseApiError } from '../errors/api_error.js';
 import { get_logger } from '../lib/log.js';
 import { log_request_error, public_error_message } from './error_logging.js';
+import { code_for } from './error_handler.js';
 
 const log = get_logger('errors');
 
@@ -20,8 +24,13 @@ export function core_api_error_handler(
     _next: NextFunction,
 ): void {
     if (err instanceof ZodError) {
-        log_request_error(req, 400, err);
-        res.status(400).json({ ok: false, error: err.errors.map(e => e.message).join(', ') });
+        log_request_error(req, 422, err);
+        res.status(422).json({
+            ok: false,
+            error: err.errors.map(e => e.message).join(', '),
+            code: 'invalid_params',
+            details: { issues: err.errors.map(e => ({ field: e.path.join('.'), message: e.message })) },
+        });
         return;
     }
 
@@ -33,13 +42,8 @@ export function core_api_error_handler(
     }
 
     if (err instanceof ApiError) {
-        const body: { ok: false; error: string; code?: string } = {
-            ok: false,
-            error: err.message,
-        };
-        if (err.code) body.code = err.code;
         log_request_error(req, err.status_code, err);
-        res.status(err.status_code).json(body);
+        res.status(err.status_code).json({ ok: false, error: err.message, code: code_for(err.code, err.status_code) });
         return;
     }
 
@@ -53,7 +57,7 @@ export function core_api_error_handler(
     ) {
         const message = err instanceof Error ? err.message : 'Validation error';
         log_request_error(req, 400, err);
-        res.status(400).json({ ok: false, error: message });
+        res.status(400).json({ ok: false, error: message, code: 'bad_request' });
         return;
     }
 
@@ -69,10 +73,10 @@ export function core_api_error_handler(
             path: req.originalUrl || req.url,
             error: message,
         });
-        res.status(409).json({ ok: false, error: message });
+        res.status(409).json({ ok: false, error: message, code: 'conflict' });
         return;
     }
 
     log_request_error(req, 500, err);
-    res.status(500).json({ ok: false, error: public_error_message(err) });
+    res.status(500).json({ ok: false, error: public_error_message(err), code: 'internal_error' });
 }

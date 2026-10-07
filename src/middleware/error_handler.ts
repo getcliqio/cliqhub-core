@@ -3,10 +3,16 @@ import { ApiError } from '../errors/api_error.js';
 import { log_request_error, public_error_message } from './error_logging.js';
 
 /** A code for a status when the error carries none (the same words the older ApiError uses). */
-const CODE_FOR_STATUS: Record<number, string> = {
+export const CODE_FOR_STATUS: Record<number, string> = {
     400: 'bad_request', 401: 'unauthorized', 403: 'forbidden', 404: 'not_found',
-    409: 'conflict', 410: 'expired', 422: 'invalid_params', 429: 'rate_limited',
+    409: 'conflict', 410: 'expired', 413: 'payload_too_large', 422: 'invalid_params', 429: 'rate_limited',
+    500: 'internal_error', 503: 'service_unavailable',
 };
+
+/** The error's own code, else the one for its status, else `error`. */
+export function code_for(own: unknown, status: number): string {
+    return typeof own === 'string' && own.trim() ? own : CODE_FOR_STATUS[status] ?? 'error';
+}
 
 export function error_handler(
     err: unknown,
@@ -31,8 +37,7 @@ export function error_handler(
         && typeof (err as { status_code?: unknown }).status_code === 'number'
     ) {
         const status = (err as unknown as { status_code: number }).status_code;
-        const own = (err as { code?: unknown }).code;
-        const code = typeof own === 'string' && own.trim() ? own : CODE_FOR_STATUS[status] ?? 'error';
+        const code = code_for((err as { code?: unknown }).code, status);
         log_request_error(req, status, err);
         res.status(status).json({
             ok: false,

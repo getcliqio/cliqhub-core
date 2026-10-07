@@ -172,8 +172,10 @@ describe.skipIf(!ready)('Core API 6 — list sorting (integration)', () => {
         expect((await post(path, { ...extra, sort_dir: 'sideways' })).status).toBe(status);
     });
 
-    it('/v1/workspaces/get: an unknown sort_by is refused (400: this route validates with Zod directly)', async () => {
-        expect((await post('/v1/workspaces/get', { sort_by: 'path' })).status).toBe(400);
+    it('/v1/workspaces/get: an unknown sort_by is refused (422 invalid_params, like every validated route)', async () => {
+        const bad = await post('/v1/workspaces/get', { sort_by: 'path' });
+        expect(bad.status).toBe(422);
+        expect(bad.code).toBe('invalid_params');
         const live = await post('/v1/workspaces/get', { daemon_id: 'd-x', sort_by: 'name' });
         expect(live.status).toBe(400);
         expect(live.code).toBe('invalid_params');

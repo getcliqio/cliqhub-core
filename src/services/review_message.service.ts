@@ -140,7 +140,7 @@ export class ReviewMessageService {
                 daemon_id,
                 warnings: filter_result.warnings,
             });
-            throw new ApiError(422, 'Message blocked by content filter');
+            throw new ApiError(422, 'Message blocked by content filter', 'content_blocked');
         }
 
         const filtered_text = filter_result.text;
