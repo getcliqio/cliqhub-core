@@ -532,12 +532,15 @@ export class HugReviewsService {
 			} as any,
 		);
 
-		/** Evaluate policy to decide if the review is fully decided. */
-		// An input pause (an agent's question) is settled by its first answer or decline —
-		// under `any`, a REJECT would otherwise leave it pending until it times out.
-		const is_input_pause = (review.payload as Record<string, unknown> | null)?.['mode'] === 'input_pause'
-			|| (review.policy as Record<string, unknown> | null)?.['mode'] === 'input_pause';
-		const policy_satisfied = (is_input_pause && input.action === 'REJECT') || await _evaluate_policy(review);
+		/**
+		 * Is the review decided? Anything but an approval (REJECT, ROUTE:<phase>) decides it at
+		 * once: under `any` the first response decides, and under `all` one reject or send-back
+		 * settles it — nobody waits for an approval that can't change the outcome. An approval
+		 * decides once every group's policy is met (`any`: one approval, `all`: all of them).
+		 * Before, a REJECT under `any` was recorded and ignored until someone approved or the
+		 * review timed out, so the run failed as "timed out" instead of "rejected".
+		 */
+		const policy_satisfied = input.action !== 'PASS' || await _evaluate_policy(review);
 
 		if (!policy_satisfied) {
 			/** Policy not yet satisfied — stay pending. */
@@ -1037,9 +1040,8 @@ async function _evaluate_policy(
 	}
 
 	/**
-	 * Check each group's policy.
-	 *   any  — at least one PASS (rejects don't satisfy; review
-	 *          stays pending until someone approves or it times out).
+	 * Whether approvals meet every group's policy (non-approvals decide in `submit_verdict`):
+	 *   any  — at least one PASS.
 	 *   all  — every destination must respond with PASS.
 	 */
 	for (let i = 0; i < groups.length; i++) {

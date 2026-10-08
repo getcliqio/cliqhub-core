@@ -279,6 +279,48 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		).rejects.toMatchObject({ status_code: 403 });
 	});
 
+	it('a REJECT decides at once: first response under `any`; one reject under `all` (no waiting for approvals)', async () => {
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Verdicts');
+		const channel = async () => {
+			const name = `rv-${uid()}`.slice(0, 30);
+			await NotificationChannel.create({ id: `ch-${uid()}`, realm_id: null, org_id: hub_legacy_uuid(1), user_id: null, name, enabled: 1, created_at: Date.now(), updated_at: Date.now() });
+			return name;
+		};
+		const review_for = async (policy: 'any' | 'all') => {
+			const created = await HugReviewsService.create({
+				run_id: `run-${policy}-${uid()}`, daemon_id: 'd-verdict', realm_id: realm.id, org_id: hub_legacy_uuid(1),
+				payload: { phase: 'hug-lld' }, timeout_minutes: 30,
+				reviewers: [{ policy, channels: [await channel(), await channel()] }],
+			});
+			const notifs = await ReviewNotification.findAll({ where: { review_id: created.review_id }, order: [['channel_target', 'ASC']] });
+			expect(notifs).toHaveLength(2);
+			return { id: created.review_id, notifs };
+		};
+		const respond = (review_id: string, notification_id: string, action: string) => HugReviewsService.submit_verdict({
+			review_id, action, notification_id, actor_id: hub_legacy_uuid(1), responded_by: hub_legacy_uuid(1), fields: { comment: 'not ready' },
+		} as never);
+		const status = async (id: string) => (await Review.findByPk(id))!;
+
+		// `any`: one REJECT from one of two reviewers decides it (it used to wait for an approval, then time out).
+		const any = await review_for('any');
+		expect(await respond(any.id, any.notifs[0].id, 'REJECT')).toEqual({ status: 'decided' });
+		expect((await status(any.id)).status).toBe('decided');
+		expect((await status(any.id)).verdict).toMatchObject({ action: 'REJECT', comment: 'not ready' });
+
+		// `all`: one approval of two waits; a REJECT from the other decides it straight away.
+		const all = await review_for('all');
+		expect(await respond(all.id, all.notifs[0].id, 'PASS')).toEqual({ status: 'pending' });
+		expect(await respond(all.id, all.notifs[1].id, 'REJECT')).toEqual({ status: 'decided' });
+		expect((await status(all.id)).verdict).toMatchObject({ action: 'REJECT' });
+
+		// `all` still passes only when everyone approves; a send-back decides like a reject.
+		const both = await review_for('all');
+		expect(await respond(both.id, both.notifs[0].id, 'PASS')).toEqual({ status: 'pending' });
+		expect(await respond(both.id, both.notifs[1].id, 'PASS')).toEqual({ status: 'decided' });
+		const back = await review_for('any');
+		expect(await respond(back.id, back.notifs[1].id, 'ROUTE:design')).toEqual({ status: 'decided' });
+	});
+
 	it('review with explicit reviewers does NOT get the broadcast fallback', async () => {
 		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Explicit');
 		/** Seed a named org-scoped channel so reviewer resolution succeeds
