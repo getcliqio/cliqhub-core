@@ -103,7 +103,8 @@ export function to_dto(
 /**
  * Two sources report a run starting: Core when the run registers (no actor or team) and the
  * daemon when it dispatches (with both; sub-team runs get only Core's). Within this window a
- * second `run.started` for the same run is the same start, not a new one.
+ * second `run.started` for the same run is the same start, not a new one — unless the run ended
+ * in between (a resume starts a new attempt).
  */
 const RUN_STARTED_SAME_START_MS = 10 * 60_000;
 
@@ -156,7 +157,12 @@ export class EventSubmitService {
 				{ type: 'run.started', run_id, created_at: { [Op.gte]: now - RUN_STARTED_SAME_START_MS } },
 				{ order: [['created_at', 'DESC']] },
 			);
-			if (first) {
+			// A run that ended since then is being resumed: that start is a new attempt, kept.
+			const ended = first && await _hub_event_repo.find_one(
+				{ run_id, type: { [Op.in]: ['run.completed', 'run.failed', 'run.crashed', 'run.cancelled'] }, created_at: { [Op.gte]: first.created_at } },
+				{ attributes: ['id'] },
+			);
+			if (first && !ended) {
 				const fill: Partial<HubEvent> = {};
 				if (!first.actor_id && input.actor_id) fill.actor_id = input.actor_id;
 				if (!first.team && body.team?.trim()) fill.team = body.team.trim();

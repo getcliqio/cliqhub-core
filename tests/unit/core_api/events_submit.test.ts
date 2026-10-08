@@ -86,6 +86,13 @@ describe.skipIf(!has_pg)('EventSubmitService', () => {
 		expect(await HubEvent.count({ where: { type: 'run.failed', run_id: 'run-s' } })).toBe(2);
 	});
 
+	it('a run.started after the run ended is a new attempt (resume), not merged', async () => {
+		await EventSubmitService.submit({ type: 'run.started', realm_id: 'realm-1', run_id: 'run-r', daemon_id: 'daemon-1' });
+		await EventSubmitService.submit({ type: 'run.failed', realm_id: 'realm-1', run_id: 'run-r', daemon_id: 'daemon-1' });
+		await EventSubmitService.submit({ type: 'run.started', realm_id: 'realm-1', run_id: 'run-r', daemon_id: 'daemon-1' });
+		expect(await HubEvent.count({ where: { type: 'run.started', run_id: 'run-r' } })).toBe(2);
+	});
+
 	it('rejects run.failed without required fields via Zod', async () => {
 		await expect(EventSubmitService.submit({ type: 'run.failed' }))
 			.rejects.toBeInstanceOf(ZodError);
