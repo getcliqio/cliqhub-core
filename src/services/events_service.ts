@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Op } from 'sequelize';
 
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
@@ -100,6 +101,13 @@ export function to_dto(
 }
 
 /**
+ * Two sources report a run starting: Core when the run registers (no actor or team) and the
+ * daemon when it dispatches (with both; sub-team runs get only Core's). Within this window a
+ * second `run.started` for the same run is the same start, not a new one.
+ */
+const RUN_STARTED_SAME_START_MS = 10 * 60_000;
+
+/**
  * Accept a typed event onto the Hub event bus.
  * Persists the event, then dispatches notification handlers by EventType registry.
  */
@@ -138,6 +146,28 @@ export class EventSubmitService {
 				const realm = await _realm_repo_ev.find_by_id(body.realm_id.trim(), { attributes: ['org_id'] });
 				if (realm?.org_id) resolved_org_id = String(realm.org_id);
 			} catch (err) { log.warn('event_org_lookup_failed', { error: err instanceof Error ? err.message : String(err) }); /* best-effort */ }
+		}
+
+		// One run.started per start: a second report fills in what the first lacked (actor,
+		// team, daemon) and is not routed again, so rules and Jira hear it once.
+		const run_id = body.run_id?.trim() || null;
+		if (type === 'run.started' && run_id) {
+			const first = await _hub_event_repo.find_one(
+				{ type: 'run.started', run_id, created_at: { [Op.gte]: now - RUN_STARTED_SAME_START_MS } },
+				{ order: [['created_at', 'DESC']] },
+			);
+			if (first) {
+				const fill: Partial<HubEvent> = {};
+				if (!first.actor_id && input.actor_id) fill.actor_id = input.actor_id;
+				if (!first.team && body.team?.trim()) fill.team = body.team.trim();
+				if (!first.daemon_id && body.daemon_id?.trim()) fill.daemon_id = body.daemon_id.trim();
+				if (Object.keys(fill).length) {
+					await _hub_event_repo.update_by_id(first.id, fill);
+					Object.assign(first, fill);
+				}
+				log.info(`event merged: run.started run=${run_id} into id=${first.id}`);
+				return { ...to_dto(first, 'deferred'), notifications: 'skipped' };
+			}
 		}
 
 		const row = await _hub_event_repo.create_one({

@@ -67,6 +67,25 @@ describe.skipIf(!has_pg)('EventSubmitService', () => {
 		expect(loaded.run_id).toBe('run-1');
 	});
 
+	it('a second run.started for the same start fills in the first instead of adding another', async () => {
+		// Core reports the start first (no actor, no team); the daemon's report follows.
+		const first = await EventSubmitService.submit({ type: 'run.started', realm_id: 'realm-1', run_id: 'run-s', daemon_id: 'daemon-1' });
+		const second = await EventSubmitService.submit({
+			type: 'run.started', realm_id: 'realm-1', run_id: 'run-s', daemon_id: 'daemon-1', team: '@acme/architect', actor_id: 'user-1',
+		});
+		expect(second.id).toBe(first.id);
+		expect(second.notifications).toBe('skipped');
+		const rows = await HubEvent.findAll({ where: { type: 'run.started', run_id: 'run-s' } });
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({ team: '@acme/architect', actor_id: 'user-1' });
+		// Other runs and other event types are untouched.
+		await EventSubmitService.submit({ type: 'run.started', realm_id: 'realm-1', run_id: 'run-t', daemon_id: 'daemon-1' });
+		await EventSubmitService.submit({ type: 'run.failed', realm_id: 'realm-1', run_id: 'run-s', daemon_id: 'daemon-1' });
+		await EventSubmitService.submit({ type: 'run.failed', realm_id: 'realm-1', run_id: 'run-s', daemon_id: 'daemon-1' });
+		expect(await HubEvent.count({ where: { type: 'run.started' } })).toBe(2);
+		expect(await HubEvent.count({ where: { type: 'run.failed', run_id: 'run-s' } })).toBe(2);
+	});
+
 	it('rejects run.failed without required fields via Zod', async () => {
 		await expect(EventSubmitService.submit({ type: 'run.failed' }))
 			.rejects.toBeInstanceOf(ZodError);
