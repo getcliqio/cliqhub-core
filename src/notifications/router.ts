@@ -52,6 +52,11 @@ async function maybe_create_input_pause_review(event: SubmittedEvent): Promise<v
 	if (!realm_id || !run_id || !daemon_id) return;
 
 	const { HugReviewsService } = await import('../services/hug_reviews.service.js');
+	const { Run } = await import('../models/index.js');
+
+	// Look up the run's origin so we can surface it on the review card.
+	const run_row = await Run.findOne({ where: { run_id }, attributes: ['origin'], raw: true }) as { origin: string | null } | null;
+
 	const bundle = event.payload ?? {};
 	const fields = Array.isArray(bundle.fields) ? bundle.fields : [];
 	await HugReviewsService.create({
@@ -71,6 +76,7 @@ async function maybe_create_input_pause_review(event: SubmittedEvent): Promise<v
 			fields,
 			artifacts: bundle.artifacts,
 			inputs_schema: fields,
+			...(run_row?.origin ? { origin: run_row.origin } : {}),
 		},
 	});
 }

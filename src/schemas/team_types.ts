@@ -82,8 +82,8 @@ export const TeamsGetInput = z.object({
         .describe('Realm mode: return team roster with daemon coverage for this realm'),
     daemon_id: z.string().min(1).optional()
         .describe('Daemon mode: return live installed teams from this daemon'),
-    origin: z.enum(['published', 'local']).optional()
-        .describe('Realm mode: filter by team origin (published catalog vs local)'),
+    origin: z.enum(['hub', 'cli']).optional()
+        .describe('Realm mode: filter by team origin (Hub catalog vs CLI-installed)'),
     coverage: z.enum(['full', 'partial', 'none']).optional()
         .describe('Realm mode: filter by coverage status across realm daemons'),
     sort_by: z.enum([...TEAM_REALM_SORT_KEYS, ...TEAM_CATALOG_SORT_KEYS]).optional()
@@ -422,8 +422,8 @@ export const TeamData = z.object({
         .describe('Human-readable coverage summary (e.g. "2/3 daemons")'),
     missing_agents: z.array(z.string()).optional()
         .describe('Agent names referenced by this team that are not registered in the org'),
-    origin: z.enum(['published', 'local']).optional()
-        .describe('Whether the team came from the published catalog or a local install'),
+    origin: z.enum(['hub', 'cli']).optional()
+        .describe('Whether the team was installed via Hub catalog or CLI'),
     in_team_list: z.boolean().optional()
         .describe('Whether this team is in the realm team list'),
     last_run_at: z.number().nullable().optional()

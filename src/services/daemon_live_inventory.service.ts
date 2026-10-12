@@ -33,6 +33,7 @@ export async function live_teams_from_daemon(
             scope: t.scope,
             slug: t.slug,
             version: t.version ?? null,
+            origin: t.origin ?? null,
             description: t.description ?? null,
             manifest: t.manifest ?? '',
             dockerfile: t.dockerfile ?? null,

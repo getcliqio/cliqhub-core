@@ -78,6 +78,11 @@ export const reviews_ack_schema = z.object({
     run_id: z.string().min(1).optional(),
 });
 
+/** POST /v1/reviews/remind — daemon nudges reviewers of a pending review. */
+export const reviews_remind_schema = z.object({
+    review_id: z.string().min(1),
+});
+
 /** POST /v1/reviews/get_messages — list chat messages for a review. */
 export const reviews_get_messages_schema = z.object({
     review_id: z.string().min(1),
@@ -112,6 +117,8 @@ export const ReviewsVerdictInput = reviews_verdict_schema;
 export type ReviewsVerdictInput = z.infer<typeof reviews_verdict_schema>;
 export const ReviewsAckInput = reviews_ack_schema;
 export type ReviewsAckInput = z.infer<typeof reviews_ack_schema>;
+export const ReviewsRemindInput = reviews_remind_schema;
+export type ReviewsRemindInput = z.infer<typeof reviews_remind_schema>;
 export const ReviewsGetMessagesInput = reviews_get_messages_schema;
 export type ReviewsGetMessagesInput = z.infer<typeof reviews_get_messages_schema>;
 export const ReviewsSendMessageInput = reviews_send_message_schema;

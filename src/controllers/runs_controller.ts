@@ -119,6 +119,7 @@ export class RunController extends BaseController {
                 parent_run_id: filters.parent_run_id,
                 workspace_id: filters.workspace_id,
                 active_only: filters.active_only,
+                origin: filters.origin,
                 ...(site_admin ? { site_admin: true } : {}),
             },
         );
@@ -189,6 +190,7 @@ export class RunController extends BaseController {
             external_id: body.external_id,
             context_labels: body.context_labels,
             execution_type: body.execution_type,
+            origin: body.origin,
         });
         const data: RunCreateData = { run_id };
         log.info('run_created', { run_id });

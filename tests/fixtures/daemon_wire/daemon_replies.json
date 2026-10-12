@@ -99,7 +99,7 @@
             "body": { "ok": true, "data": { "artifact_id": "art-1", "name": "plan.md", "mime_type": "text/markdown", "size_bytes": 5, "download_url": "https://dl/art-1" } }
         },
         "hug_poll": {
-            "request": { "path": "/v1/hug/inbox/poll", "body": { "review_id": "<review>" } },
+            "request": { "path": "/v1/hug/poll_verdict", "body": { "review_id": "<review>" } },
             "status": 200,
             "exact": false,
             "body": { "ok": true, "data": { "entries": [{ "type": "verdict", "role": "user", "payload": { "action": "approve", "comment": "ship it" } }] } }

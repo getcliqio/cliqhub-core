@@ -5,7 +5,7 @@
  * Pins:
  *  - realm-mode teams/get rows carry their scope and, for published teams,
  *    the catalog team id (also for roster teams no daemon has yet);
- *  - origin published/local comes from the catalog (`cliq.teams`), not
+ *  - origin hub/cli comes from the catalog (`cliq.teams`), not
  *    daemon_teams (regression from the repository refactor);
  *  - /v1/teams/install accepts that catalog UUID;
  *  - site-admin `listed` / `scope` filters return rows with version_count.
@@ -137,28 +137,28 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
         await close_test_control_plane_store();
     });
 
-    it('coverage rows: scope, origin from the catalog, catalog team_id for published teams', async () => {
+    it('coverage rows: scope, origin from the catalog, catalog team_id for hub teams', async () => {
         const { rows } = await RealmService.list_team_coverage({ realm_id }, user_id);
         const by = Object.fromEntries(rows.map((r) => [r.slug, r]));
 
         expect(by.alpha).toMatchObject({
-            scope: scope_slug, origin: 'published', team_id: alpha_id,
+            scope: scope_slug, origin: 'hub', team_id: alpha_id,
             sample_team_id: alpha_dt_id, installed_daemon_ids: [d1], in_team_list: true,
         });
         // On the roster, on no daemon: still installable by its catalog id.
         expect(by.beta).toMatchObject({
-            scope: scope_slug, origin: 'published', team_id: beta_id,
+            scope: scope_slug, origin: 'hub', team_id: beta_id,
             sample_team_id: null, installed_daemon_ids: [],
         });
         // Never published: nothing to install from.
-        expect(by.gamma).toMatchObject({ scope: scope_slug, origin: 'local', team_id: null, sample_team_id: null });
+        expect(by.gamma).toMatchObject({ scope: scope_slug, origin: 'cli', team_id: null, sample_team_id: null });
     });
 
     it('teams/get realm mode: rows carry scope and the catalog id', async () => {
         const data = await call('get', { realm_id });
         const by = Object.fromEntries(data.items.map((t: any) => [t.slug, t]));
-        expect(by.alpha).toMatchObject({ id: alpha_id, scope: scope_slug, origin: 'published' });
-        expect(by.beta).toMatchObject({ id: beta_id, scope: scope_slug, origin: 'published' });
+        expect(by.alpha).toMatchObject({ id: alpha_id, scope: scope_slug, origin: 'hub' });
+        expect(by.beta).toMatchObject({ id: beta_id, scope: scope_slug, origin: 'hub' });
         expect(by.gamma.id).toBeUndefined();
         expect(by.gamma.scope).toBe(scope_slug);
     });

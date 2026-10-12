@@ -66,6 +66,8 @@ export const RunsGetInput = z.object({
     /** Column to sort by. Default: last_updated_at DESC. */
     sort_by: z.enum(['run_name', 'state', 'team', 'started_at', 'last_updated_at']).optional(),
     sort_dir: z.enum(['asc', 'desc']).optional(),
+    /** Filter by origin: `'cli'` or `'hub'`. */
+    origin: z.enum(['cli', 'hub']).optional(),
 }).superRefine((v, ctx) => {
     // Keyed scopes bound tenancy without body org_id.
     if (v.parent_run_id?.trim()) return;
@@ -131,6 +133,8 @@ export const RunsCreateInput = z.object({
     external_id: z.string().max(256).optional(),
     context_labels: z.record(z.string(), z.string()).optional(),
     execution_type: z.string().optional(),
+    /** Who initiated this run: `'cli'` (local) or `'hub'` (Hub-dispatched). */
+    origin: z.enum(['cli', 'hub']).optional(),
 });
 export type RunsCreateInput = z.infer<typeof RunsCreateInput>;
 
@@ -425,6 +429,8 @@ export const RunData = z.object({
         .describe('When daemon reported run_not_found (unix ms)'),
     team_version_id: z.string().nullable().optional()
         .describe('Published team version id when known'),
+    /** Who initiated this run: `'cli'` or `'hub'`, or null for pre-refactor runs. */
+    origin: z.string().nullable().optional().describe('Run origin: cli or hub'),
     history: z.array(z.object({
         type: z.string().describe('run.started, run.resume_requested, run.resumed, run.completed, run.failed, run.crashed or run.cancelled'),
         at: z.number().describe('Unix ms'),

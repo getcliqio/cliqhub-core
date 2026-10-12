@@ -26,6 +26,7 @@ import {
     ReviewsCreateInput,
     ReviewsVerdictInput,
     ReviewsAckInput,
+    ReviewsRemindInput,
     ReviewsGetMessagesInput,
     ReviewsSendMessageInput,
     ReviewsStreamMessagesQuery,
@@ -98,7 +99,7 @@ export class ReviewsController extends BaseController {
         const org_id = realm?.org_id ?? null;
 
         // The run must live in that realm, and a daemon token may only name its own daemons.
-        const run = await Run.findOne({ where: { run_id: body.run_id }, attributes: ['realm_id'], raw: true }) as { realm_id: string | null } | null;
+        const run = await Run.findOne({ where: { run_id: body.run_id }, attributes: ['realm_id', 'origin'], raw: true }) as { realm_id: string | null; origin: string | null } | null;
         if (!run || run.realm_id !== body.realm_id) throw ApiError.not_found('Run not found in this realm');
         if (req.auth?.auth_via === 'daemon_token') {
             await RealmService.assert_daemon_in_realm(body.realm_id, body.daemon_id);
@@ -108,7 +109,7 @@ export class ReviewsController extends BaseController {
             run_id: body.run_id,
             daemon_id: body.daemon_id,
             realm_id: body.realm_id,
-            payload: body.payload,
+            payload: { ...body.payload, ...(run?.origin ? { origin: run.origin } : {}) },
             route_targets: body.route_targets,
             timeout_minutes: body.timeout_minutes ?? 240,
             remind_every_minutes: body.remind_every_minutes ?? null,
@@ -196,6 +197,26 @@ export class ReviewsController extends BaseController {
         const run_id = body.run_id ?? review.run_id;
         const data = await HugReviewsService.ack(body.review_id, run_id);
         log.info('review_acked', { review_id: body.review_id });
+        res.json({ ok: true, data });
+    }
+
+    /**
+     * POST /v1/reviews/remind — daemon nudges reviewers of a pending review.
+     *
+     * @param req - Body: {@link ReviewsRemindInput}
+     * @param res - Flat `{ ok: true, data }`
+     */
+    async remind(
+        req: FlatApiRequest<ReviewsRemindInput, ReviewsFields>,
+        res: FlatApiOkResponse<ReviewsFields>,
+    ): Promise<void> {
+        log.debug('remind', { user_id: req.auth?.user?.id });
+        const user_id = req.auth?.user?.id?.trim();
+        if (!user_id) throw ApiError.unauthorized('Authentication required');
+
+        const body = this.parse_body(ReviewsRemindInput, req);
+        const data = await HugReviewsService.remind(body.review_id);
+        log.info('review_reminded', { review_id: body.review_id });
         res.json({ ok: true, data });
     }
 

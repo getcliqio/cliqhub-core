@@ -204,6 +204,7 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'GET /v1/reviews/stream_messages': record('review', 'query.review_id', 'view', { perm: 'reviews.view' }),
     'POST /v1/reviews/verdict': record('review', 'body.review_id', 'operate', { perm: 'reviews.verdict', handler: 'notification holder' }),
     'POST /v1/reviews/send_message': record('review', 'body.review_id', 'operate', { daemon: 'write' }),
+    'POST /v1/reviews/remind': record('review', 'body.review_id', null, { daemon: 'write' }),
     'POST /v1/reviews/ack': record('review', 'body.review_id', null, { daemon: 'write' }),
 
     // ── Teams ───────────────────────────────────────────────────────
