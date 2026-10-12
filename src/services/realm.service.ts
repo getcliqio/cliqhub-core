@@ -1666,7 +1666,7 @@ export class RealmService {
         params: {
             realm_id: string;
             query?: string;
-            origin?: 'published' | 'local';
+            origin?: 'hub' | 'cli';
             coverage?: 'full' | 'partial' | 'none';
             sort_by?: 'team' | 'origin' | 'coverage';
             sort_dir?: 'asc' | 'desc';
@@ -1685,9 +1685,9 @@ export class RealmService {
             coverage_label: string;
             version: string | null;
             sample_team_id: string | null;
-            /** Catalog (`cliq.teams`) id of a published team — what `/v1/teams/install` takes; null for local teams. */
+            /** Catalog (`cliq.teams`) id of a Hub-published team — what `/v1/teams/install` takes; null for CLI-installed teams. */
             team_id: string | null;
-            origin: 'published' | 'local';
+            origin: 'hub' | 'cli';
             in_team_list: boolean;
             last_run_at: number | null;
             /** Agent names referenced by this team's workflow that are not registered in the org. */
@@ -1814,9 +1814,9 @@ export class RealmService {
         }
 
         // Bulk catalog lookup — one query for all (scope, name) pairs against
-        // the published registry (`cliq.teams`). Classifies origin (published
-        // vs. local) and gives each published row its catalog team id, which
-        // is what `/v1/teams/install` takes — also for teams no daemon has yet.
+        // the Hub registry (`cliq.teams`). Classifies origin (hub vs. cli) and
+        // gives each Hub-published row its catalog team id, which is what
+        // `/v1/teams/install` takes — also for teams no daemon has yet.
         const registry_id_by_key = new Map<string, string>();
         if (agg.size > 0) {
             const pairs = [...agg.values()].map((r) => ({ scope: r.scope, name: r.slug }));
@@ -1936,7 +1936,7 @@ export class RealmService {
         let rows = [...agg.values()].map((r) => {
             const installed_count = [...r.installed_daemon_ids].filter((id) => online_daemon_ids.has(id)).length;
             const key = `${r.scope}/${r.slug}`;
-            const origin: 'published' | 'local' = published_set.has(key) ? 'published' : 'local';
+            const origin: 'hub' | 'cli' = published_set.has(key) ? 'hub' : 'cli';
             const coverage_label = _coverage_label(installed_count, online_daemon_count);
             const last_run_at = r.sample_team_id ? (last_run_map.get(r.sample_team_id) ?? null) : null;
             return {

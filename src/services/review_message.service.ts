@@ -84,15 +84,14 @@ export class ReviewMessageService {
             created_at: new Date(),
         });
 
-        /** Push the message to the daemon via unified HUG inbox. */
+        /** Push the message to the daemon via the verdict/chat route. */
         if (review.daemon_id) {
             try {
                 const { command_outbox_enqueue } = await import('./command_outbox.service.js');
-                await command_outbox_enqueue(review.daemon_id, '/v1/hug/inbox', {
+                await command_outbox_enqueue(review.daemon_id, '/v1/hug/verdict', {
                     review_id,
                     run_id: review.run_id ?? '',
                     type: 'chat',
-                    role: 'user',
                     payload: { text, sender_id: user_id },
                 });
             } catch (err) {

@@ -44,6 +44,8 @@ export class Run extends BaseModel {
      * Null = no lease (legacy rows / completed).
      */
     declare lease_expires_at: number | null;
+    /** Who initiated this run: `'cli'` (local) or `'hub'` (Hub-dispatched). */
+    declare origin: string | null;
     declare started_at: number;
     declare completed_at: number | null;
 
@@ -73,6 +75,7 @@ export class Run extends BaseModel {
             reviewers: { type: DataTypes.TEXT, allowNull: true },
             notify_channels: { type: DataTypes.TEXT, allowNull: true },
             lease_expires_at: { type: DataTypes.BIGINT, allowNull: true },
+            origin: { type: DataTypes.TEXT, allowNull: true },
             started_at: { type: DataTypes.BIGINT, allowNull: false },
             completed_at: { type: DataTypes.BIGINT },
         }, ModelConfig.table_options(sequelize, 'team_runs'));
@@ -104,6 +107,8 @@ export type RunAttributes = {
     reviewers?: string | null;
     notify_channels?: string | null;
     lease_expires_at: number | null;
+    /** Who initiated this run: `'cli'` (local) or `'hub'` (Hub-dispatched). */
+    origin: string | null;
     started_at: number;
     completed_at: number | null;
 };

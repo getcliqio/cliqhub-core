@@ -47,10 +47,10 @@ async function seed_review(opts?: {
         run_id: `run-${uid()}`,
         daemon_id: `daemon-${uid()}`,
         realm_id: realm.id,
-        payload: { phase: 'chat-phase' },
+        payload: { phase: 'chat-phase', mode: opts?.mode ?? 'input_pause' },
         timeout_minutes: 60,
         actor_id: hub_legacy_uuid(1),
-        mode: opts?.mode,
+        mode: opts?.mode ?? 'input_pause',
         initial_message: opts?.initial_message,
     });
     return { review_id: created.review_id, realm_id: realm.id };

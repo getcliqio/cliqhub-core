@@ -6,18 +6,13 @@ import { ApiError } from '../lib/api_error.js';
 import { EventSubmitService } from './events_service.js';
 import { ReviewRepository } from '../repositories/review_repository.js';
 import { ReviewNotificationRepository } from '../repositories/review_notification_repository.js';
-import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
 import { RunRepository } from '../repositories/run_repository.js';
 import { RunEventRepository } from '../repositories/run_event_repository.js';
-import { UserRepository } from '../repositories/user_repository.js';
 
 const _review_repo_hr = new ReviewRepository();
 const _review_notif_repo_hr = new ReviewNotificationRepository();
-const _realm_member_repo_hr = new RealmMemberRepository();
 const _run_repo_hr = new RunRepository();
 const _run_event_repo = new RunEventRepository();
-const _user_repo_hr = new UserRepository();
-import { ensure_per_user_channel } from './per_user_channel.service.js';
 import { load_env } from '../config/env.js';
 import {
 	load_artifacts_for_run,
@@ -277,58 +272,14 @@ export class HugReviewsService {
 		}
 
 		/**
-		 * Realm-broadcast fallback: no explicit reviewers configured — fan
-		 * out to every user member of the realm. Each gets their own
-		 * notification row with a real user_id so the frontend can match
-		 * and policy evaluation works correctly.
+		 * No implicit fallback — reviewers must be explicit for verdict-mode
+		 * reviews. Input-pause and chat reviews are single-responder interactions
+		 * routed to the actor, not to reviewer groups.
 		 */
-		if (resolved_groups.length === 0 && input.realm_id) {
-			const realm_members = await _realm_member_repo_hr.find_all_q({
-				where: { realm_id: input.realm_id, member_type: 'user' },
-				attributes: ['member_id'],
-			});
-
-			const destinations: Array<{
-				target: string;
-				user_id: string | null;
-				channel_id: string | null;
-				named_channel_id: string | null;
-			}> = [];
-
-			for (const rm of realm_members) {
-				const user_id = String(rm.member_id);
-				const user = await _user_repo_hr.find_by_id(user_id, { attributes: ['id', 'username'] });
-				if (!user) continue;
-
-				let channel_id: string | null = null;
-				if (input.org_id) {
-					try {
-						channel_id = await ensure_per_user_channel(user_id, input.org_id, user.username);
-					} catch {
-						log.warn('realm_broadcast_ensure_channel_failed', { user_id, org_id: input.org_id });
-					}
-				}
-
-				destinations.push({
-					target: user.username,
-					user_id,
-					channel_id,
-					named_channel_id: null,
-				});
-			}
-
-			if (destinations.length === 0) {
-				throw ApiError.bad_request(
-					'No reviewers configured and realm has no user members — cannot create review',
-				);
-			}
-
-			resolved_groups = [{ policy: 'any', destinations }];
-			log.info('review_realm_broadcast_fanout', {
-				review_id: id,
-				realm_id: input.realm_id,
-				user_count: destinations.length,
-			});
+		if (resolved_groups.length === 0 && mode !== 'input_pause' && mode !== 'chat') {
+			throw ApiError.bad_request(
+				'No reviewers specified — add a reviewers block to the gate phase',
+			);
 		}
 
 		/** Build the policy JSONB for storage. */
@@ -776,7 +727,7 @@ export class HugReviewsService {
 		}
 	}
 
-	/** Push verdict to the daemon via the unified HUG inbox. */
+	/** Push verdict to the daemon via the dedicated verdict route. */
 	static async push_verdict_to_daemon(
 		daemon_id: string | null,
 		body: { review_id: string; run_id: string; verdict: Record<string, unknown> },
@@ -784,11 +735,10 @@ export class HugReviewsService {
 		if (!daemon_id) return;
 
 		const { command_outbox_enqueue } = await import('./command_outbox.service.js');
-		await command_outbox_enqueue(daemon_id, '/v1/hug/inbox', {
+		await command_outbox_enqueue(daemon_id, '/v1/hug/verdict', {
 			review_id: body.review_id,
 			run_id: body.run_id,
 			type: 'verdict',
-			role: 'user',
 			payload: body.verdict,
 		});
 	}

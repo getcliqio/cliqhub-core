@@ -19,6 +19,8 @@ export async function migrate_store(sequelize: Sequelize): Promise<void> {
 	await ensure_workspace_team_config_snapshot_column(sequelize);
 	await ensure_run_hierarchy_columns(sequelize);
 	await ensure_run_iteration_key_column(sequelize);
+	await ensure_run_origin_column(sequelize);
+	await ensure_daemon_team_origin_column(sequelize);
 	await migrate_run_leaf_integer_pks_to_uuid(sequelize);
 }
 
@@ -240,6 +242,10 @@ async function postgres_convert_int_pk_to_uuid(
 	await sequelize.query(`ALTER TABLE "${schema}"."${table}" DROP COLUMN "${column}"`);
 	await sequelize.query(`ALTER TABLE "${schema}"."${table}" RENAME COLUMN "${new_col}" TO "${column}"`);
 	await sequelize.query(`ALTER TABLE "${schema}"."${table}" ADD PRIMARY KEY ("${column}")`);
+
+	/* Safety: ensure the DEFAULT survives the rename — some Postgres versions
+	   drop it when the column is renamed. Idempotent. */
+	await sequelize.query(`ALTER TABLE "${schema}"."${table}" ALTER COLUMN "${column}" SET DEFAULT gen_random_uuid()`);
 }
 
 /**
@@ -471,4 +477,42 @@ async function sqlite_has_column(
 	const rows = Array.isArray(result) ? result[0] : result;
 	if (!Array.isArray(rows)) return false;
 	return rows.some((r) => (r as { name?: string }).name === column);
+}
+
+/**
+ * Additive: team_runs.origin — who initiated the run (`'cli'` or `'hub'`).
+ * Existing rows are backfilled as NULL (pre-refactor runs have unknown origin).
+ */
+async function ensure_run_origin_column(sequelize: Sequelize): Promise<void> {
+	const dialect = sequelize.getDialect();
+	if (dialect === 'sqlite') {
+		if (await sqlite_has_column(sequelize, 'team_runs', 'origin')) return;
+		await sequelize.query(`ALTER TABLE team_runs ADD COLUMN origin TEXT`);
+		return;
+	}
+
+	if (dialect === 'postgres') {
+		await sequelize.query(
+			`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "origin" TEXT`,
+		);
+	}
+}
+
+/**
+ * Additive: daemon_teams.origin — who placed this installation (`'cli'` or `'hub'`).
+ * Existing rows are backfilled as NULL (pre-refactor installs have unknown origin).
+ */
+async function ensure_daemon_team_origin_column(sequelize: Sequelize): Promise<void> {
+	const dialect = sequelize.getDialect();
+	if (dialect === 'sqlite') {
+		if (await sqlite_has_column(sequelize, 'daemon_teams', 'origin')) return;
+		await sequelize.query(`ALTER TABLE daemon_teams ADD COLUMN origin TEXT`);
+		return;
+	}
+
+	if (dialect === 'postgres') {
+		await sequelize.query(
+			`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "origin" TEXT`,
+		);
+	}
 }

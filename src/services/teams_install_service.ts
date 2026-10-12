@@ -109,6 +109,8 @@ export class TeamService {
         /** The id the daemon has (or would like) for this team. */
         proposed_id?: string | null;
         version: string | null;
+        /** Who placed this installation: `'cli'` or `'hub'`. */
+        origin?: string | null;
         description: string | null;
         manifest: string;
         dockerfile?: string | null;
@@ -122,6 +124,7 @@ export class TeamService {
         if (slot) {
             await slot.update({
                 version: input.version,
+                origin: input.origin ?? slot.origin,
                 description: input.description,
                 manifest: input.manifest,
                 dockerfile: input.dockerfile ?? slot.dockerfile,
@@ -157,6 +160,7 @@ export class TeamService {
             await taken.update({
                 daemon_id: input.daemon_id,
                 version: input.version,
+                origin: input.origin ?? taken.origin,
                 description: input.description,
                 manifest: input.manifest,
                 dockerfile: input.dockerfile ?? taken.dockerfile,
@@ -172,6 +176,7 @@ export class TeamService {
             scope_id: input.scope_id,
             slug: input.slug,
             version: input.version,
+            origin: input.origin ?? null,
             description: input.description,
             manifest: input.manifest,
             dockerfile: input.dockerfile ?? null,
@@ -230,6 +235,7 @@ export class TeamService {
                 slug: t.slug,
                 proposed_id: t.id ?? null,
                 version: t.version ?? null,
+                origin: (t as unknown as { origin?: string }).origin ?? null,
                 description: t.description ?? null,
                 manifest: t.manifest ?? '',
                 dockerfile: t.dockerfile ?? null,

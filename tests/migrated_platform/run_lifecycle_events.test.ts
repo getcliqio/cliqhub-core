@@ -229,6 +229,34 @@ describe.skipIf(!has_postgres)('RunService lifecycle events', () => {
         expect(crashed_a[0].payload.error).toBe('daemon restarted');
     });
 
+    it('lifecycle event payload includes origin when set on the run', async () => {
+        const run_id = await RunService.create(workspace_id, team_id, {
+            realm_id, daemon_id, run_name: 'lc-origin-hub', origin: 'hub',
+        });
+        const evs = await events_for(run_id);
+        const started = evs.find((e) => e.type === 'run.started');
+        expect(started).toBeTruthy();
+        expect(started!.payload.origin).toBe('hub');
+
+        // Complete and verify the terminal event carries origin too.
+        await RunService.complete(run_id, 'completed');
+        const after = await events_for(run_id);
+        const completed = after.find((e) => e.type === 'run.completed');
+        expect(completed).toBeTruthy();
+        expect(completed!.payload.origin).toBe('hub');
+    });
+
+    it('lifecycle event payload omits origin when run has no origin', async () => {
+        const run_id = await RunService.create(workspace_id, team_id, {
+            realm_id, daemon_id, run_name: 'lc-no-origin',
+        });
+        const evs = await events_for(run_id);
+        const started = evs.find((e) => e.type === 'run.started');
+        expect(started).toBeTruthy();
+        // origin is conditionally included — absent when null.
+        expect(started!.payload).not.toHaveProperty('origin');
+    });
+
     it('reaper emits run.crashed when it collects lease-expired rows', async () => {
         const { _reap_for_tests } = await import(
             '../../src/services/run_reaper.service.js'

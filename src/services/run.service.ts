@@ -465,7 +465,7 @@ export class RunService {
                 // A run keeps its team after the team is uninstalled.
                 model: DaemonTeam.unscoped(),
                 as: 'team',
-                attributes: ['id', 'slug', 'scope_id'],
+                attributes: ['id', 'slug', 'scope_id', 'version'],
             },
             {
                 // A run keeps its workspace after the workspace is deleted.
@@ -495,6 +495,7 @@ export class RunService {
         return {
             ...plain,
             team_label: team ? `@${scope_slug}/${team.slug}` : null,
+            team_version: team?.version ?? null,
             workspace_name: ws?.name ?? ws?.path?.split('/').pop() ?? null,
             workspace_dir: ws?.path ?? null,
             last_updated_at,
@@ -558,6 +559,8 @@ export class RunService {
             workspace_id?: string;
             /** Constrain to running state only; overrides `state` filter. */
             active_only?: boolean;
+            /** Filter by origin: `'cli'` or `'hub'`. */
+            origin?: string;
         },
     ): Promise<{ runs: ReturnType<typeof RunService._enrich_run>[]; total: number }> {
         log.debug('list_recent', { daemon_id, realm_id: filters?.realm_id, user_id: filters?.user_id });
@@ -614,6 +617,9 @@ export class RunService {
             where.state = Array.isArray(filters.state)
                 ? { [Op.in]: filters.state }
                 : filters.state;
+        }
+        if (filters?.origin) {
+            where.origin = filters.origin;
         }
         if (filters?.since_ms != null || filters?.until_ms != null) {
             const started: Record<string | symbol, number> = {};
@@ -973,6 +979,7 @@ export class RunService {
                 run_name: row.run_name,
                 team_id: row.team_id,
             };
+            if (row.origin) payload.origin = row.origin;
             if (row.current_phase) payload.phase = row.current_phase;
             if (extra?.error) payload.error = extra.error;
             if (extra?.payload) Object.assign(payload, extra.payload);
@@ -1024,6 +1031,8 @@ export class RunService {
             reviewers?: Record<string, string[]>;
             /** Notification channels chosen at run start. */
             notify_channels?: string[];
+            /** Who initiated this run: `'cli'` (local) or `'hub'` (Hub-dispatched). */
+            origin?: string;
         },
     ): Promise<string> {
         log.debug('create', { workspace_id, team_id, daemon_id: opts?.daemon_id });
@@ -1090,6 +1099,7 @@ export class RunService {
                 context_labels: context_labels_json ?? existing.context_labels,
                 reviewers: reviewers_json ?? existing.reviewers,
                 notify_channels: notify_channels_json ?? existing.notify_channels,
+                origin: opts?.origin ?? existing.origin ?? null,
                 error: null,
                 completed_at: null,
                 started_at: existing.started_at ?? now,
@@ -1133,6 +1143,7 @@ export class RunService {
             started_at: now,
             completed_at: null,
             error: null,
+            origin: opts?.origin ?? null,
             lease_expires_at: lease_deadline('running'),
         });
 

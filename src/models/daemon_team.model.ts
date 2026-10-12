@@ -22,6 +22,8 @@ export class DaemonTeam extends BaseModel {
     declare scope_id: string;
     declare slug: string;
     declare version: string | null;
+    /** Who placed this installation: `'cli'` or `'hub'`. */
+    declare origin: string | null;
     declare description: string | null;
     declare manifest: string;
     declare dockerfile: string | null;
@@ -38,6 +40,7 @@ export class DaemonTeam extends BaseModel {
             scope_id: { type: DataTypes.TEXT, allowNull: false },
             slug: { type: DataTypes.TEXT, allowNull: false },
             version: { type: DataTypes.TEXT },
+            origin: { type: DataTypes.TEXT, allowNull: true },
             description: { type: DataTypes.TEXT },
             manifest: { type: DataTypes.TEXT, allowNull: false },
             dockerfile: { type: DataTypes.TEXT },
@@ -46,7 +49,7 @@ export class DaemonTeam extends BaseModel {
             created_at: { type: DataTypes.BIGINT, allowNull: false },
             updated_at: { type: DataTypes.BIGINT, allowNull: false },
         }, ModelConfig.table_options(sequelize, 'daemon_teams', {
-            indexes: [{ unique: true, fields: ['daemon_id', 'scope_id', 'slug'] }],
+            indexes: [{ unique: true, fields: ['daemon_id', 'scope_id', 'slug', 'version'] }],
             defaultScope: { where: { uninstalled_at: null } },
         }));
     }
@@ -58,6 +61,8 @@ export type DaemonTeamAttributes = {
     scope_id: string;
     slug: string;
     version: string | null;
+    /** Who placed this installation: `'cli'` or `'hub'`. */
+    origin: string | null;
     description: string | null;
     manifest: string;
     dockerfile: string | null;

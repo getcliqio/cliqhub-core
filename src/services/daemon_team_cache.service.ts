@@ -28,6 +28,8 @@ export interface HeartbeatTeamEntry {
     scope: string;
     slug: string;
     version: string | null;
+    /** Who placed this installation: `'cli'` or `'hub'`. */
+    origin: string | null;
     description: string | null;
     manifest: string;
     dockerfile?: string | null;
@@ -79,6 +81,7 @@ export class DaemonTeamCacheService {
                 slug: t.slug,
                 proposed_id: t.id || null,
                 version: t.version ?? null,
+                origin: t.origin ?? null,
                 description: t.description ?? null,
                 manifest: t.manifest ?? '',
                 dockerfile: t.dockerfile ?? null,

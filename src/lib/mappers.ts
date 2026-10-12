@@ -174,6 +174,7 @@ export function to_run_data(
         workspace_name: plain.workspace_name == null ? null : String(plain.workspace_name),
         workspace_dir: plain.workspace_dir == null ? null : String(plain.workspace_dir),
         last_updated_at: last_updated,
+        origin: plain.origin == null ? null : String(plain.origin),
     };
 
     if (detail?.pending_control !== undefined) data.pending_control = detail.pending_control;

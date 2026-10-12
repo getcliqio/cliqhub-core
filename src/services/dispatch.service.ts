@@ -259,6 +259,7 @@ export class DispatchService {
             execution_type: input.execution_type,
             reviewers: input.reviewers,
             notify_channels: input.notify_channels,
+            origin: 'hub',
         });
 
         // The daemon names the run with the name stored here (generated when none
@@ -271,6 +272,8 @@ export class DispatchService {
             ? (await _scope_repo.find_by_id(team.scope_id))?.slug
             : undefined;
 
+        const team_version = team?.version ?? undefined;
+
         // Enqueue the execute command for durable delivery via the outbox.
         await command_outbox_enqueue(daemon.id, '/v1/execute', {
             run_id,
@@ -278,6 +281,7 @@ export class DispatchService {
             manifest_yaml,
             team_id: input.team_id,
             ...(team_scope_slug && team ? { scope: team_scope_slug, slug: team.slug } : {}),
+            ...(team_version ? { version: team_version } : {}),
             run_context: input.reviewers ? { ...input.run_context, reviewers: input.reviewers } : input.run_context,
             run_name,
             execution_type: input.execution_type ?? 'local',

@@ -293,6 +293,54 @@ describe.skipIf(!has_postgres)('RunService — Core CRUD', () => {
             result.runs.forEach((r: any) => expect(r.workspace_id).toBe(workspace_id));
         });
     });
+
+    describe.skipIf(!has_postgres)('list_recent — enriched run includes team_version', () => {
+        it('enriched run carries team_version from the joined DaemonTeam row', async () => {
+            const run_id = await create_run({ daemon_id });
+            const { runs } = await RunService.list_recent(50, undefined, { site_admin: true, workspace_id });
+            const run = runs.find((r: any) => r.run_id === run_id) as any;
+            expect(run).toBeTruthy();
+            // The DaemonTeam fixture was created with version '1.0' (see beforeAll).
+            expect(run.team_version).toBe('1.0');
+        });
+
+        it('team_version is null when run has no team join', async () => {
+            const orphan_team_id = randomUUID();
+            const run_id = await RunService.create(workspace_id, orphan_team_id, { daemon_id });
+            const { runs } = await RunService.list_recent(50, undefined, { site_admin: true, workspace_id });
+            const run = runs.find((r: any) => r.run_id === run_id) as any;
+            expect(run).toBeTruthy();
+            // No matching DaemonTeam row → team_version falls back to null.
+            expect(run.team_version).toBeNull();
+        });
+    });
+
+    describe.skipIf(!has_postgres)('list_recent — origin filter', () => {
+        it('filters runs by origin value', async () => {
+            const cli_run = await create_run({ daemon_id, origin: 'cli' });
+            const hub_run = await create_run({ daemon_id, origin: 'hub' });
+
+            const cli_list = await RunService.list_recent(50, undefined, { site_admin: true, workspace_id, origin: 'cli' });
+            const cli_ids = cli_list.runs.map((r: any) => r.run_id);
+            expect(cli_ids).toContain(cli_run);
+            expect(cli_ids).not.toContain(hub_run);
+
+            const hub_list = await RunService.list_recent(50, undefined, { site_admin: true, workspace_id, origin: 'hub' });
+            const hub_ids = hub_list.runs.map((r: any) => r.run_id);
+            expect(hub_ids).toContain(hub_run);
+            expect(hub_ids).not.toContain(cli_run);
+        });
+
+        it('returns all runs when origin filter is omitted', async () => {
+            const cli_run = await create_run({ daemon_id, origin: 'cli' });
+            const hub_run = await create_run({ daemon_id, origin: 'hub' });
+
+            const all = await RunService.list_recent(50, undefined, { site_admin: true, workspace_id });
+            const ids = all.runs.map((r: any) => r.run_id);
+            expect(ids).toContain(cli_run);
+            expect(ids).toContain(hub_run);
+        });
+    });
 });
 
 describe.skipIf(!has_postgres)('RunService — State transitions', () => {

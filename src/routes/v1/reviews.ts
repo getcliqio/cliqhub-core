@@ -4,6 +4,7 @@
  * POST   /v1/reviews/get
  * POST   /v1/reviews/get_by_id
  * POST   /v1/reviews/create
+ * POST   /v1/reviews/remind
  * POST   /v1/reviews/verdict
  * POST   /v1/reviews/ack
  * POST   /v1/reviews/get_messages
@@ -20,6 +21,7 @@ export function register_reviews_routes(router: Router): void {
     router.post('/reviews/get', reviews.wrap(reviews.get));
     router.post('/reviews/get_by_id', reviews.wrap(reviews.get_by_id));
     router.post('/reviews/create', with_dedup(reviews.wrap(reviews.create)));
+    router.post('/reviews/remind', reviews.wrap(reviews.remind));
     router.post('/reviews/verdict', reviews.wrap(reviews.verdict));
     router.post('/reviews/ack', reviews.wrap(reviews.ack));
     router.post('/reviews/get_messages', reviews.wrap(reviews.get_messages));
