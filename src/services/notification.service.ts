@@ -343,6 +343,20 @@ export class NotificationService {
 		return NotificationService.to_channel_record(ch);
 	}
 
+	/**
+	 * An email destination with `account: true` sends to the channel owner's account email, so only
+	 * a personal channel (one with an owner) can have it.
+	 *
+	 * @throws ApiError 400 when `owner_id` is null and a destination uses `account: true`
+	 */
+	static assert_account_email_owner(destinations: unknown[], owner_id: string | null): void {
+		if (owner_id) return;
+		const uses_account = destinations.some((d) => (d as { type?: unknown; account?: unknown }).type === 'email' && (d as { account?: unknown }).account === true);
+		if (uses_account) {
+			throw new ApiError('bad_request', "Invalid destinations: account: true is only for a person's own channel; give an address", 400);
+		}
+	}
+
 	static async create_channel(data: {
 		realm_id?: string | null;
 		/** Org owning this channel (for org-level channels where realm_id is null). */
@@ -359,6 +373,8 @@ export class NotificationService {
 		if (!data.destinations || data.destinations.length === 0) {
 			throw new ApiError('bad_request', 'At least one destination is required', 400);
 		}
+		// Channels made here have no owner, so there is no account email to send to.
+		NotificationService.assert_account_email_owner(data.destinations, null);
 
 		if (realm_id) {
 			const realm = await realm_repo.find_by_id(realm_id);
@@ -446,6 +462,7 @@ export class NotificationService {
 		}
 
 		if (data.destinations !== undefined) {
+			NotificationService.assert_account_email_owner(data.destinations, existing.user_id ?? null);
 			/** Replace all destination rows. */
 			const { ChannelDestination } = await import('../models/index.js');
 			await ChannelDestination.destroy({ where: { channel_id: data.id } });

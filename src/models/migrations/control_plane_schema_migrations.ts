@@ -4,7 +4,7 @@
  */
 
 import { get_logger } from '../../lib/log.js';
-import type { Sequelize } from 'sequelize';
+import { QueryTypes, type Sequelize } from 'sequelize';
 import yaml from 'js-yaml';
 
 const _mig_log = get_logger('migrations');
@@ -1338,17 +1338,18 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
             )
         `);
 
-        /** Insert default cliqhub destination for any channel missing one. */
+        /** A personal channel with no destinations (just created above) gets the defaults: in-app and account email. */
         await sq.query(`
             INSERT INTO cliq."channel_destinations"
                 ("id", "channel_id", "type", "config", "created_at")
             SELECT
                 gen_random_uuid()::TEXT,
                 nc."id",
-                'cliqhub',
-                '{}',
+                d."type",
+                d."config"::jsonb,
                 EXTRACT(EPOCH FROM NOW()) * 1000
             FROM cliq."notification_channels" nc
+            CROSS JOIN (VALUES ('cliqhub', '{}'), ('email', '{"account": true}')) AS d("type", "config")
             WHERE nc."user_id" IS NOT NULL
               AND NOT EXISTS (
                 SELECT 1 FROM cliq."channel_destinations" cd
@@ -1357,6 +1358,51 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
         `);
     } catch (err) {
         _mig_log.error('backfill_per_user_channels_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+    await backfill_personal_channel_email(sq);
+}
+
+/** `cliq.settings` key marking the one-time email backfill as done. */
+export const PERSONAL_EMAIL_BACKFILL_KEY = 'backfill.personal_channel_email_2026_10';
+
+/**
+ * One time (Oct 2026): every personal channel without an email destination gets one that sends
+ * to the owner's account email. Tagged `added_by: 'backfill-2026-10'` so it can be found and
+ * removed. Runs once — the `cliq.settings` key {@link PERSONAL_EMAIL_BACKFILL_KEY} records it —
+ * so an email destination someone removes later is not put back on the next boot.
+ */
+export async function backfill_personal_channel_email(sq: Sequelize): Promise<void> {
+    try {
+        const [table] = await sq.query(`SELECT to_regclass('cliq.settings') AS t`, { type: QueryTypes.SELECT }) as Array<{ t: string | null }>;
+        if (!table?.t) {
+            _mig_log.info('personal_channel_email_backfill_deferred', { reason: 'cliq.settings not created yet' });
+            return;
+        }
+        await sq.transaction(async (t) => {
+            // Take the marker first: a second Core booting at the same time waits here, then sees it.
+            const claimed = await sq.query(
+                `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW())
+                 ON CONFLICT ("key") DO NOTHING RETURNING "key"`,
+                { replacements: { key: PERSONAL_EMAIL_BACKFILL_KEY, value: new Date().toISOString() }, transaction: t, type: QueryTypes.SELECT },
+            );
+            if (claimed.length === 0) return;
+            const added = await sq.query(`
+                INSERT INTO cliq."channel_destinations" ("id", "channel_id", "type", "config", "created_at")
+                SELECT gen_random_uuid()::TEXT, nc."id", 'email',
+                       '{"account": true, "added_by": "backfill-2026-10"}'::jsonb,
+                       EXTRACT(EPOCH FROM NOW()) * 1000
+                FROM cliq."notification_channels" nc
+                WHERE nc."user_id" IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM cliq."channel_destinations" cd
+                    WHERE cd."channel_id" = nc."id" AND cd."type" = 'email'
+                  )
+                RETURNING "id"
+            `, { transaction: t, type: QueryTypes.SELECT });
+            _mig_log.info('personal_channel_email_backfilled', { channels: added.length });
+        });
+    } catch (err) {
+        _mig_log.error('personal_channel_email_backfill_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }
 

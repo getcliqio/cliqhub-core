@@ -16,6 +16,7 @@ import { OrgRepository } from '../repositories/org_repository.js';
 import { OrgRoleRepository } from '../repositories/org_role_repository.js';
 import { assert_access, assert_admin_access } from '../auth/assert_grant.js';
 import { RealmService } from '../services/realm.service.js';
+import { ensure_per_user_channel } from '../services/per_user_channel.service.js';
 import { get_sequelize as get_db_sequelize } from '../db/sequelize.js';
 import { orgs_blocking_user_delete, soft_delete_user, user_delete_blocker } from './namespace_removal.js';
 import { assert_email_free, assert_namespace_free, deleted_user_error, on_name_race } from '../lib/namespace.js';
@@ -414,6 +415,12 @@ export class UsersService {
             role,
         });
         if (!restore_id) await RealmService.ensure_personal_realm(String(user.id), user.username);
+        // Their personal channel in their account org (best effort; the boot backfill catches a miss).
+        try {
+            await ensure_per_user_channel(String(user.id), account_org_id, user.username);
+        } catch (err) {
+            log.warn('per_user_channel_failed', { user_id: user.id, error: err instanceof Error ? err.message : String(err) });
+        }
 
         const { email_sent } = await pending.result;
         const setup_url = email_sent ? null : (await resolve_delivery_links({ kind: 'password', reset_id: link.id })).setup_url ?? null;

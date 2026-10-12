@@ -49,9 +49,14 @@ const slack_destination = z.object({
 	webhook_url: z.string().url(),
 });
 
+/**
+ * Email to `address`, or — on a personal channel — to the channel owner's
+ * current account address (`account: true`, resolved when sending).
+ */
 const email_destination = z.object({
 	type: z.literal('email'),
-	address: z.string().min(1),
+	address: z.string().min(1).optional(),
+	account: z.literal(true).optional().describe("Send to the channel owner's account email (personal channels)"),
 	cc: z.string().optional(),
 	bcc: z.string().optional(),
 });
@@ -94,7 +99,12 @@ export const destination_schema = z.discriminatedUnion('type', [
 	jira_destination,
 	channel_ref_destination,
 	cliqhub_destination,
-]);
+]).superRefine((d, ctx) => {
+	// An email destination names its address, or uses the owner's account email — exactly one.
+	if (d.type === 'email' && Boolean(d.address) === Boolean(d.account)) {
+		ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['address'], message: 'Give either address or account: true' });
+	}
+});
 
 export type Destination = z.infer<typeof destination_schema>;
 

@@ -27,7 +27,7 @@ import { EmailDelivery, Org, OrgMember, Realm, RealmMember, Scope, ScopeMember, 
 import { hash_password } from '../auth/password.js';
 import { org_standing } from '../auth/route_policy/visible.js';
 import { get_sequelize } from '../db/sequelize.js';
-import { assert_namespace_free, deleted_user_error, on_name_race, type NamespaceRepos } from '../lib/namespace.js';
+import { assert_namespace_free, deleted_user_error, normalize_name, on_name_race, type NamespaceRepos } from '../lib/namespace.js';
 import { assert_password_rules, normalize_email, normalize_username } from '../lib/account_fields.js';
 import { issue_token } from '../lib/secure_token.js';
 import { get_logger } from '../lib/log.js';
@@ -627,6 +627,11 @@ export class InvitationsService {
         const steps: Array<[string, () => Promise<unknown>]> = [
             ['org_default_realm', async () => { if (invite.target === 'org') await RealmService.ensure_org_default_realm(ctx.org.slug, user.user_id, user.user_id); }],
             ['member_channel', () => ensure_per_user_channel(user.user_id, invite.org_id, user.username)],
+            ['account_channel', async () => {
+                // Their personal channel in their own account org too (a new person just got one).
+                const own = await Org.findOne({ where: { slug: normalize_name(user.username) }, attributes: ['id'], raw: true });
+                if (own && String(own.id) !== invite.org_id) await ensure_per_user_channel(user.user_id, String(own.id), user.username);
+            }],
             ['account_default_realm', () => RealmService.ensure_personal_realm(user.user_id, user.username)],
         ];
         for (const [step, work] of steps) {

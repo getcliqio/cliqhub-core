@@ -8,13 +8,15 @@
  *     records the attempt in `email_deliveries` and reports `sent`, which
  *     the org event's `email_sent` is built from.
  *   - {@link EmailDeliverer.deliver} sends any event to a channel's fixed
- *     addresses (`to` / `cc` / `bcc` in the destination config).
+ *     addresses (`to` / `cc` / `bcc` in the destination config), or, for a
+ *     personal channel's `account: true` destination, to the owner's current
+ *     account email.
  *
  * Send failures are reported, never thrown, by `deliver_message`. Links,
  * bodies, full recipient addresses and the provider key are never logged.
  */
 
-import { AbstractChannelDeliverer } from './abstract_channel_deliverer.js';
+import { AbstractChannelDeliverer, type DeliveryContext } from './abstract_channel_deliverer.js';
 import type { NotificationPayload } from '../types.js';
 import type { EmailSubjectType } from '../../models/email_delivery.model.js';
 import type { DeliveryLinks, EventActor, OrgEventData, OrgEventType } from '../org_events.js';
@@ -67,6 +69,21 @@ function addresses(value: unknown): EmailAddress[] {
 }
 
 /**
+ * The current email of a personal channel's owner, read when sending so an
+ * address change follows. Empty when the channel has no owner, or the owner is
+ * deleted, suspended or has no address.
+ */
+async function account_address(channel_id: string | undefined): Promise<EmailAddress[]> {
+	if (!channel_id) return [];
+	const channel = await NotificationChannel.findByPk(channel_id, { attributes: ['user_id'], raw: true }) as { user_id: string | null } | null;
+	if (!channel?.user_id) return [];
+	const user = await User.findByPk(channel.user_id, { attributes: ['email', 'status', 'deleted_at'], raw: true }) as
+		{ email: string | null; status: string | null; deleted_at: Date | null } | null;
+	if (!user?.email || user.deleted_at || user.status === 'suspended') return [];
+	return [{ email: user.email }];
+}
+
+/**
  * A short failure reason for a send error (no key, link, body or address):
  * an {@link EmailSendError} message is built from the provider's status and
  * code only; other errors are this service's own (configuration, database).
@@ -96,20 +113,28 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 	}
 
 	/**
-	 * Sends an event to a channel's fixed addresses. Without a configured
+	 * Sends an event to a channel's fixed addresses, or with `account: true` to
+	 * the channel owner's current account email. Without a configured
 	 * transport it sends nothing and returns.
 	 *
-	 * @param config - `{ to, cc?, bcc? }` from the email destination.
+	 * @param config - `{ to, cc?, bcc? }` or `{ account: true }` from the email destination.
 	 * @param payload - The notification payload.
+	 * @param context - The channel being delivered (needed for `account: true`).
 	 * @throws Error when the transport refuses or fails to send.
 	 */
 	async deliver(
 		config: Record<string, unknown>,
 		payload: NotificationPayload,
+		context?: DeliveryContext,
 	): Promise<void> {
-		const to = addresses(config.to);
+		let to = addresses(config.to);
+		if (to.length === 0 && config.account === true) {
+			to = await account_address(context?.channel_id);
+		}
 		if (to.length === 0) {
-			log.warn('email_destination_without_to', { event: payload.event });
+			log.warn(config.account === true ? 'email_account_without_address' : 'email_destination_without_to', {
+				event: payload.event, channel_id: context?.channel_id ?? null,
+			});
 			return;
 		}
 		if (!this._sender.configured) {
