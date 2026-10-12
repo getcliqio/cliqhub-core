@@ -144,3 +144,28 @@ export interface NotificationPayload {
 	daemon_id?: string | null;
 	[key: string]: unknown;
 }
+
+/** Readable names for event types people see as notification titles (the rest are worded from the type). */
+const EVENT_TITLES: Record<string, string> = {
+	'phase.input_required': 'Input needed',
+	'phase.inputs_supplied': 'Input supplied',
+	'phase.idle': 'Phase idle',
+	'phase.timed_out': 'Phase timed out',
+	'hug.review_requested': 'Review requested',
+	'hug.review_reminded': 'Review reminder',
+	'hug.review_resolved': 'Review resolved',
+	'hug.review_responded': 'Review answered',
+	'hug.review_expired': 'Review expired',
+	'hug.routing_requested': 'Routing requested',
+};
+
+/**
+ * A readable title for an event type: "run.failed" → "Run failed", "phase.timed_out" →
+ * "Phase timed out", with a few names set in {@link EVENT_TITLES}.
+ */
+export function event_title(type: string): string {
+	const known = EVENT_TITLES[type];
+	if (known) return known;
+	const words = type.replace(/[._]+/g, ' ').trim();
+	return words ? words[0].toUpperCase() + words.slice(1) : type;
+}

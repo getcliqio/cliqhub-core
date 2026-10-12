@@ -109,9 +109,10 @@ function members_url(ctx: EventEmailContext): string {
 }
 
 function channel_footer(ctx: EventEmailContext): string {
-    const channel = ctx.channel_name ?? 'Email';
     const org = ctx.org_display_name ? ` in ${ctx.org_display_name}` : '';
-    return `You get this email because the notification channel “${channel}”${org} sends to this address. Manage it in Org settings › Notifications.`;
+    // Built-in invite and account messages have no channel: they always go to the people involved.
+    if (!ctx.channel_name) return `CliqHub sends this email to the people an invite or account change is about${org}.`;
+    return `You get this email because the notification channel “${ctx.channel_name}”${org} sends to this address. Manage it in Org settings › Notifications.`;
 }
 
 function invite_notify_email(event: OrgEventType, action: InviteAction, d: InviteEventData, ctx: EventEmailContext): RenderedEmail {

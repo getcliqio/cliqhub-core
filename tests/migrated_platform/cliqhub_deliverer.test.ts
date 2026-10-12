@@ -89,7 +89,7 @@ describe.skipIf(!has_postgres)('CliqHubDeliverer — persist in-app notification
 
 	it('submit run.failed with realm rule creates a row', async () => {
 		const realm = await RealmService.create(test_user_id, `c-${uid()}`.slice(0, 40), 'CliqHub');
-		const channel = await NotificationService.ensure_realm_cliqhub_channel(realm.id);
+		const channel = await NotificationService.ensure_realm_members_channel(realm.id);
 		await NotificationService.set_rule({
 			realm_id: realm.id,
 			event: 'run.failed',
@@ -113,18 +113,31 @@ describe.skipIf(!has_postgres)('CliqHubDeliverer — persist in-app notification
 		expect(rows[0].message).toBe('failed in test');
 	});
 
-	it('submit run.failed without rules falls back to realm:all_users in-app', async () => {
-		const realm = await RealmService.create(test_user_id, `c-${uid()}`.slice(0, 40), 'Empty');
-		await NotificationRule.destroy({ where: { realm_id: realm.id } });
+	it('a new realm sends run.failed to "All realm members" through its default rule', async () => {
+		const realm = await RealmService.create(test_user_id, `c-${uid()}`.slice(0, 40), 'Defaults');
 		const event = await EventSubmitService.submit({
 			type: 'run.failed',
 			realm_id: realm.id,
 			run_id: 'run-cliqhub-2',
 			daemon_id: 'daemon-cliqhub-2',
 		});
-		/** Yamazaki default-notify: absent rules → realm:all_users (cliqhub dest). */
 		expect(event.notifications).toBe('dispatched');
-		expect(await InAppNotification.count()).toBe(1);
+		const rows = await InAppNotification.findAll({ raw: true });
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({ realm_id: realm.id, user_id: null });
+	});
+
+	it('with the default rules removed nothing is sent (no hidden all-users fallback)', async () => {
+		const realm = await RealmService.create(test_user_id, `c-${uid()}`.slice(0, 40), 'Empty');
+		await NotificationRule.destroy({ where: { realm_id: realm.id } });
+		const event = await EventSubmitService.submit({
+			type: 'run.failed',
+			realm_id: realm.id,
+			run_id: 'run-cliqhub-3',
+			daemon_id: 'daemon-cliqhub-3',
+		});
+		expect(event.notifications).toBe('skipped');
+		expect(await InAppNotification.count()).toBe(0);
 	});
 
 	it('submit team.published with global rule creates row without realm', async () => {

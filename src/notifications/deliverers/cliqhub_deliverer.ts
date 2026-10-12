@@ -11,9 +11,12 @@ const channel_repo = new NotificationChannelRepository();
  * CliqHub in-app channel deliverer — persists a notification row.
  *
  * In-app delivery is a destination type like any other (Slack, email,
- * webhook). When the owning channel has a `user_id`, the resulting
- * in_app_notification row gets `user_id` set so it appears in that
- * user's inbox. Otherwise the notification is broadcast (realm-scoped).
+ * webhook). Who sees it follows the channel that owns it:
+ *   - a personal channel (`user_id`) → that person's inbox;
+ *   - a realm channel (`realm_id`) → every member of that realm;
+ *   - an org channel → every member of the org (the org "In-app" channel).
+ * Realm and org audiences are worked out when people read their inbox, so
+ * they follow joins and leaves.
  */
 export class CliqHubDeliverer extends AbstractChannelDeliverer {
     readonly provider = 'cliqhub';
@@ -23,19 +26,18 @@ export class CliqHubDeliverer extends AbstractChannelDeliverer {
         payload: NotificationPayload,
         context?: DeliveryContext,
     ): Promise<void> {
-        /** Read user_id from the channel row for targeted inbox delivery. */
-        let target_user_id: string | null = null;
-        const channel_id = context?.channel_id;
-        if (channel_id) {
-            const channel = await channel_repo.find_by_id(channel_id);
-            if (channel?.user_id) {
-                target_user_id = channel.user_id;
-            }
+        const channel = context?.channel_id ? await channel_repo.find_by_id(context.channel_id) : null;
+        let row;
+        if (channel?.user_id) {
+            row = await InAppNotificationService.create_from_payload(payload, channel.user_id);
+        } else if (channel?.realm_id) {
+            row = await InAppNotificationService.create_from_payload({ ...payload, realm_id: channel.realm_id }, null);
+        } else if (channel?.org_id) {
+            row = await InAppNotificationService.create_from_payload({ ...payload, realm_id: null }, null, String(channel.org_id));
+        } else {
+            // No channel context (legacy callers): the event's own realm.
+            row = await InAppNotificationService.create_from_payload(payload, null);
         }
-
-        const row = await InAppNotificationService.create_from_payload(
-            payload, target_user_id,
-        );
-        log.info(`cliqhub notification id=${row.id} event=${row.event} user_id=${target_user_id ?? 'broadcast'}`);
+        log.info('cliqhub_notification', { id: row.id, event: row.event, audience: channel?.user_id ? 'person' : channel?.realm_id ? 'realm' : channel?.org_id ? 'org' : 'event_realm' });
     }
 }

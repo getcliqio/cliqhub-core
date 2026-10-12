@@ -341,7 +341,7 @@ export class RealmService {
             role: 'admin',
             created_at: ts,
         });
-        await NotificationService.ensure_realm_cliqhub_channel(realm.id);
+        await NotificationService.ensure_realm_members_channel(realm.id);
 
         // Snapshot org-level agent credentials into the fresh realm so
         // it starts pre-populated with sensible defaults.

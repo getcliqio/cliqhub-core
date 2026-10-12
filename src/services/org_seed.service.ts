@@ -61,19 +61,19 @@ export interface DefaultRuleSpec {
 }
 
 /**
- * Version of the default rules. 1: Email rules, in-app for invite outcomes
+ * Version of the org defaults. 1: Email rules, in-app for invite outcomes
  * and abandoned orgs. 2: in-app copies of the invite and account email rules
- * (except the set-password email: that person cannot sign in yet).
+ * (except the set-password email: that person cannot sign in yet). 3: those
+ * are built-in messages, not rules; only the In-app channel is created.
  */
-export const DEFAULTS_VERSION = 2;
+export const DEFAULTS_VERSION = 3;
 
+/**
+ * The channels a new org starts with: just "In-app", an ordinary org channel (its in-app goes to
+ * every member of the org). Invite and account messages are built in (see {@link default_rule_specs}),
+ * not rules on a system Email channel.
+ */
 const CHANNELS: readonly ChannelSpec[] = [
-    {
-        system_key: ORG_EMAIL_CHANNEL_KEY,
-        name: 'Email',
-        lock_reason: 'Invites and account emails are sent through this channel.',
-        destination: { type: 'email', config: { provider: 'brevo' } },
-    },
     {
         system_key: ORG_IN_APP_CHANNEL_KEY,
         name: 'In-app',
@@ -134,9 +134,8 @@ export interface SeedResult {
  */
 export class OrgSeedService {
     /**
-     * Creates whatever default channels and rules `org_id` is missing and marks
-     * the org seeded. Locked rows are created locked; unlocked defaults stay
-     * editable.
+     * Creates the default channel (`In-app`) if `org_id` is missing it and marks the org seeded.
+     * There are no default rules: invite and account messages are built in.
      *
      * @param org_id - The org.
      * @param opts.account - Whether it is a user's account org (adds account email rules).
@@ -165,19 +164,6 @@ export class OrgSeedService {
             await ChannelDestination.create({ id: randomUUID(), channel_id: id, type: spec.destination.type, config: spec.destination.config, created_at: now }, { transaction });
             channel_ids.set(spec.system_key, id);
             result.channels_created += 1;
-        }
-
-        for (const spec of default_rule_specs(opts.account).filter((r) => r.version > (opts.since_version ?? 0))) {
-            const channel_id = channel_ids.get(spec.channel)!;
-            const existing = await NotificationRule.findOne({ where: { org_id, system_key: spec.system_key, event: spec.event, channel_id }, attributes: ['id'], transaction });
-            if (existing) continue;
-            await NotificationRule.create({
-                realm_id: null, org_id, team_slug: null, event: spec.event, channel_id, priority: 0,
-                created_at: now, updated_at: now,
-                recipients: spec.recipients, system_key: spec.system_key,
-                locked: spec.lock_reason !== null, lock_reason: spec.lock_reason,
-            }, { transaction });
-            result.rules_created += 1;
         }
 
         await Org.update({ notifications_seeded_at: new Date() }, { where: { id: org_id, notifications_seeded_at: { [Op.is]: null } }, transaction });
@@ -253,6 +239,15 @@ export class OrgSeedService {
             }
         }
         return { orgs_upgraded };
+    }
+
+    /** True when `org_id` is a user's account org (one of its members has the org's slug as username). */
+    static async is_account_org(org_id: string): Promise<boolean> {
+        const [row] = await Org.sequelize!.query<{ account: boolean }>(
+            `SELECT ${ACCOUNT_ORG_SQL} AS account FROM orgs o WHERE o.id = :org_id`,
+            { type: QueryTypes.SELECT, replacements: { org_id } },
+        );
+        return Boolean(row?.account);
     }
 
     /** `name`, or `name (system)` when the org already has a channel called `name`. */

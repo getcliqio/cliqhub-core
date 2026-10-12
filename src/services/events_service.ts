@@ -108,6 +108,16 @@ export function to_dto(
  */
 const RUN_STARTED_SAME_START_MS = 10 * 60_000;
 
+/** Events that end a run. */
+const RUN_END_TYPES = ['run.completed', 'run.failed', 'run.crashed', 'run.cancelled'];
+
+/**
+ * Two sources also report a run ending: Core when the daemon reports the run finished (no actor)
+ * and the daemon's own event (with actor and the error detail). Within this window a second report
+ * of the same end for the same run is the same end — unless the run started again in between.
+ */
+const RUN_ENDED_SAME_END_MS = 10 * 60_000;
+
 /**
  * Accept a typed event onto the Hub event bus.
  * Persists the event, then dispatches notification handlers by EventType registry.
@@ -172,6 +182,32 @@ export class EventSubmitService {
 					Object.assign(first, fill);
 				}
 				log.info(`event merged: run.started run=${run_id} into id=${first.id}`);
+				return { ...to_dto(first, 'deferred'), notifications: 'skipped' };
+			}
+		}
+
+		// One event per run end: a second report fills in what the first lacked (actor, message,
+		// team) and is not routed again, so rules — and people's inboxes — hear it once.
+		if (RUN_END_TYPES.includes(type) && run_id) {
+			const first = await _hub_event_repo.find_one(
+				{ type, run_id, created_at: { [Op.gte]: now - RUN_ENDED_SAME_END_MS } },
+				{ order: [['created_at', 'DESC']] },
+			);
+			// A run that started (or resumed) again since then ended again: that end is kept.
+			const again = first && await _hub_event_repo.find_one(
+				{ run_id, type: { [Op.in]: ['run.started', 'run.resumed'] }, created_at: { [Op.gte]: first.created_at } },
+				{ attributes: ['id'] },
+			);
+			if (first && !again) {
+				const fill: Partial<HubEvent> = {};
+				if (!first.actor_id && input.actor_id) fill.actor_id = input.actor_id;
+				if (!first.message && body.message) fill.message = body.message;
+				if (!first.team && body.team?.trim()) fill.team = body.team.trim();
+				if (Object.keys(fill).length) {
+					await _hub_event_repo.update_by_id(first.id, fill);
+					Object.assign(first, fill);
+				}
+				log.info(`event merged: ${type} run=${run_id} into id=${first.id}`);
 				return { ...to_dto(first, 'deferred'), notifications: 'skipped' };
 			}
 		}

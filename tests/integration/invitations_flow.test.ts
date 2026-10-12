@@ -130,7 +130,8 @@ describe.skipIf(!has_postgres)('invitations, orgs/new and the invite sweep', () 
             expect(invited).toMatchObject({ status: 'invited', username: null, password_hash: null, display_name: 'Pat Owner', id: org.owner.user_id });
             expect(await Org.findByPk(org.id, { raw: true })).toMatchObject({ status: 'waiting_for_owner', activated_at: null, owner_id: invited.id });
             expect(await membership(org.id, invited.id)).toMatchObject({ status: 'pending', role_id: await role_id(org.id, 'owner'), joined_at: null });
-            expect(await NotificationRule.count({ where: { org_id: org.id, system_key: { [Op.ne]: null } } })).toBeGreaterThan(0);
+            // Seeded: its In-app channel (invite and account messages are built in, not rules).
+            expect(await NotificationChannel.count({ where: { org_id: org.id, system_key: 'org.in_app' } })).toBe(1);
             expect(await Realm.count({ where: { org_id: org.id } })).toBe(0);
 
             // The sent event: stored without the token; the invitee's email carries the link.
@@ -189,8 +190,9 @@ describe.skipIf(!has_postgres)('invitations, orgs/new and the invite sweep', () 
             // Their own account org (seeded) and the org's default realm.
             const account_org = (await Org.findOne({ where: { slug: username }, raw: true }))!;
             expect(account_org).toBeTruthy();
-            // Email + In-app twin.
-            expect(await NotificationRule.count({ where: { org_id: account_org.id, system_key: 'user.password_reset.user' } })).toBe(2);
+            // Seeded with its In-app channel; the password emails are built in (not rules).
+            expect(await NotificationChannel.count({ where: { org_id: account_org.id, system_key: 'org.in_app' } })).toBe(1);
+            expect(await NotificationRule.count({ where: { org_id: account_org.id, system_key: { [Op.ne]: null } } })).toBe(0);
             expect(await Realm.count({ where: { org_id: org.id, slug: 'default', deleted: false } })).toBe(1);
 
             // Signed in with the returned token, they run their org.

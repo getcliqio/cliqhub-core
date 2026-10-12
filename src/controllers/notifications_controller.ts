@@ -190,7 +190,7 @@ export class NotificationsController extends BaseController {
                 this.ok(res, await NotificationService.list_effective_rules(realm_id));
                 return;
             }
-            this.ok(res, await NotificationService.list_rules({ realm_id, team_slug: body.team_slug }));
+            this.ok(res, await NotificationService.list_rules({ realm_id }));
             return;
         }
 
@@ -215,11 +215,9 @@ export class NotificationsController extends BaseController {
             const rule = await NotificationService.set_rule({
                 realm_id,
                 org_id: null,
-                team_slug: data.team_slug || null,
                 event: data.event,
                 channel_id: data.channel_id,
                 priority: data.priority,
-                recipients: data.recipients,
             });
             log.info('rule_set', { id: rule.id });
             this.ok(res, rule);
@@ -230,11 +228,9 @@ export class NotificationsController extends BaseController {
         const rule = await NotificationService.set_rule({
             realm_id: null,
             org_id: data.org_id!,
-            team_slug: data.team_slug || null,
             event: data.event,
             channel_id: data.channel_id,
             priority: data.priority,
-            recipients: data.recipients,
         });
         log.info('rule_set', { id: rule.id });
         this.ok(res, rule);

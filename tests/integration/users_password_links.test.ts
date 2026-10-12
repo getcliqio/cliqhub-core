@@ -129,8 +129,9 @@ describe.skipIf(!has_postgres)('password links (users/new, reset_password, chang
             const owner = await OrgMember.findOne({ where: { org_id: org.id, user_id: user.id }, raw: true });
             const owner_role = await OrgRole.findOne({ where: { org_id: org.id, slug: 'owner' }, raw: true });
             expect(owner?.role_id).toBe(owner_role?.id);
-            const rule_keys = (await NotificationRule.findAll({ where: { org_id: org.id }, raw: true })).map((r) => r.system_key);
-            expect(rule_keys).toEqual(expect.arrayContaining(['user.setup.user', 'user.password_reset.user', 'user.password_changed.user']));
+            // The account org is seeded with its In-app channel; the setup / reset / changed emails are built in.
+            expect(await NotificationChannel.count({ where: { org_id: org.id, system_key: 'org.in_app' } })).toBe(1);
+            expect(await NotificationRule.count({ where: { org_id: org.id } })).toBe(0);
 
             const token = token_of(setup.setup_url);
             const link = (await PasswordReset.findOne({ where: { user_id: user.id }, raw: true }))!;

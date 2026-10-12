@@ -1,7 +1,7 @@
 /**
  * Tests for v2 notification rules:
  * - build_matching_selectors (wildcard expansion)
- * - resolve_rules (three-tier lookup with replace semantics)
+ * - resolve_rules (realm rules replace org rules for that realm)
  * - list_rules, list_effective_rules
  * - set_rule, remove_rule
  */
@@ -92,7 +92,7 @@ function seed_rules(rows: Array<{
 }
 
 
-describe('resolve_rules — three-tier lookup', () => {
+describe('resolve_rules — realm, else org', () => {
 
     beforeEach(() => {
         seed_rules([]);
@@ -106,7 +106,7 @@ describe('resolve_rules — three-tier lookup', () => {
         expect(result).toEqual([]);
     });
 
-    it('resolves global rules when no realm/team rules exist', async () => {
+    it('resolves global rules when no realm rules exist', async () => {
         seed_rules([
             { event: 'run.*', channel_id: 'ch-global' },
         ]);
@@ -124,31 +124,6 @@ describe('resolve_rules — three-tier lookup', () => {
         const result = await NotificationService.resolve_rules({
             event: 'run.failed',
             realm_id: 'realm-1',
-        });
-        expect(result).toEqual(['ch-realm']);
-    });
-
-    it('team-in-realm rules replace realm rules', async () => {
-        seed_rules([
-            { realm_id: 'realm-1', event: 'run.*', channel_id: 'ch-realm' },
-            { realm_id: 'realm-1', team_slug: 'enrichment', event: 'run.*', channel_id: 'ch-team' },
-        ]);
-        const result = await NotificationService.resolve_rules({
-            event: 'run.failed',
-            realm_id: 'realm-1',
-            team_slug: 'enrichment',
-        });
-        expect(result).toEqual(['ch-team']);
-    });
-
-    it('falls back to realm when team has no matching rule', async () => {
-        seed_rules([
-            { realm_id: 'realm-1', event: 'run.*', channel_id: 'ch-realm' },
-        ]);
-        const result = await NotificationService.resolve_rules({
-            event: 'run.failed',
-            realm_id: 'realm-1',
-            team_slug: 'enrichment',
         });
         expect(result).toEqual(['ch-realm']);
     });

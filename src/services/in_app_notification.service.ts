@@ -187,8 +187,8 @@ export class InAppNotificationService {
 	}
 
 	/**
-	 * Visibility: realm-wide rows of the caller's realms, rows with no realm
-	 * and no user, and rows addressed to the caller. A row addressed to one
+	 * Visibility: realm-wide rows of the caller's realms, org-wide rows (no
+	 * realm, no user) of the caller's orgs, and rows addressed to the caller. A row addressed to one
 	 * user (`user_id`) is shown to that user only.
 	 */
 	static async list_for_user(opts: {
@@ -225,6 +225,14 @@ export class InAppNotificationService {
 			{ attributes: ['realm_id'] },
 		);
 		const member_realm_ids = memberships.map((m) => m.realm_id);
+		// Org-wide rows (no realm, no person, an org) are for the members of that org only;
+		// rows with no org at all (account-wide announcements) stay visible to everyone.
+		const { OrgMember } = await import('../models/index.js');
+		const member_org_ids = (await OrgMember.findAll({
+			where: { user_id, status: 'active', deleted_at: null },
+			attributes: ['org_id'],
+			raw: true,
+		})).map((m) => String(m.org_id));
 
 		// Accept either legacy single `realm_id` or the newer multi-select
 		// `realms` array (facet). Intersect with membership so unauthorized
@@ -239,8 +247,8 @@ export class InAppNotificationService {
 			return { notifications: [], total: 0 };
 		}
 
-		// Visibility: realm-wide rows of the caller's realms, rows with no
-		// realm and no user, and rows addressed to the caller only.
+		// Visibility: realm-wide rows of the caller's realms, org-wide rows
+		// (no realm, no user) of the caller's orgs, and rows addressed to the caller.
 		const shared = { user_id: { [Op.is]: null } };
 		const realm_clause = allowed.length > 0
 			? {
@@ -251,7 +259,7 @@ export class InAppNotificationService {
 			}
 			: {
 				[Op.or]: [
-					{ realm_id: { [Op.is]: null }, ...shared },
+					{ realm_id: { [Op.is]: null }, ...shared, [Op.or]: [{ org_id: { [Op.is]: null } }, { org_id: { [Op.in]: member_org_ids } }] },
 					{ user_id },
 					...(member_realm_ids.length > 0
 						? [{ realm_id: { [Op.in]: member_realm_ids }, ...shared }]

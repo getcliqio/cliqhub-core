@@ -166,6 +166,22 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 		expect(recipients(stub.sent[0])).toEqual(['kai@cliq.test']);
 	});
 
+	it('Send test on an email address destination sends to that address', async () => {
+		const ch = await NotificationService.create_channel({ org_id: ORG, name: `test-mail-${uid()}`, destinations: [{ type: 'cliqhub' }, { type: 'email', address: 'ops@cliq.test' }] });
+		const res = await NotificationService.test_channel(ch.id);
+		expect(res).toEqual({ delivered: 2, errors: [] });
+		expect(stub.sent).toHaveLength(1);
+		expect(recipients(stub.sent[0])).toEqual(['ops@cliq.test']);
+	});
+
+	it('Send test on a personal channel’s account email sends to the owner', async () => {
+		const id = await ensure_per_user_channel(KAI, ORG, KAI_NAME);
+		const res = await NotificationService.test_channel(id);
+		expect(res.errors).toEqual([]);
+		expect(stub.sent).toHaveLength(1);
+		expect(recipients(stub.sent[0])).toEqual(['kai@cliq.test']);
+	});
+
 	it('account: true is only for a personal channel; an email destination needs exactly one of address / account', async () => {
 		await expect(NotificationService.create_channel({ org_id: ORG, name: 'shared-mail', destinations: [{ type: 'email', account: true }] }))
 			.rejects.toMatchObject({ status: 400 });

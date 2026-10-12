@@ -30,7 +30,7 @@ import { postgres_reachable } from '../migrated_platform/helpers/control_plane_s
 import { open_live_hub_app, close_live_hub_app } from '../migrated_platform/helpers/live_hub_app.js';
 import { seed_authz, type Seed } from '../helpers/authz_seed.js';
 import {
-    AccountInvite, ApiToken, NotificationChannel, NotificationRule, Org, OrgMember, OrgRole,
+    AccountInvite, ApiToken, ChannelDestination, NotificationChannel, NotificationRule, Org, OrgMember, OrgRole,
     Realm, Scope, ScopeMember, User,
 } from '../../src/models/index.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
@@ -39,7 +39,7 @@ import { OrgSeedService } from '../../src/services/org_seed.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { ReactivationService } from '../../src/services/reactivation.service.js';
 import { remove_org_rows } from '../helpers/remove_org_rows.js';
-import { ADMIN_PERMISSIONS, OWNER_ONLY_PERMISSIONS } from '../../src/auth/permissions.js';
+import { ADMIN_PERMISSIONS, MEMBER_PERMISSIONS, OPERATOR_PERMISSIONS, OWNER_ONLY_PERMISSIONS } from '../../src/auth/permissions.js';
 import type { AuthContext } from '../../src/schemas/auth_types.js';
 
 const has_postgres = await postgres_reachable();
@@ -369,51 +369,59 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
     // ── 5. locks ──────────────────────────────────────────────────────
 
     describe('locked rules and channels', () => {
-        it('rule and channel reads carry recipients, system_key, locked and lock_reason', async () => {
+        /** Nothing is seeded locked any more (invite/account messages are built in); locking still works for rows that are. */
+        async function locked_rule_and_channel() {
+            const now = Date.now();
+            const key = `test.locked.${now}.${Math.random().toString(36).slice(2, 6)}`;
+            const channel = await NotificationChannel.create({
+                id: randomUUID(), realm_id: null, org_id: s.acme, user_id: null, name: `locked-${s.stamp}-${now}`,
+                secret: null, enabled: 1, created_at: now, updated_at: now, system_key: key, locked: true, lock_reason: 'Kept for a test.',
+            } as never);
+            await ChannelDestination.create({ id: randomUUID(), channel_id: channel.id, type: 'cliqhub', config: {}, created_at: now } as never);
+            const rule = await NotificationRule.create({
+                realm_id: null, org_id: s.acme, team_slug: null, event: 'team.published', channel_id: channel.id, priority: 0,
+                created_at: now, updated_at: now, system_key: key, locked: true, lock_reason: 'Kept for a test.',
+            } as never);
+            return { channel, rule, key };
+        }
+
+        it('rule and channel reads carry system_key, locked and lock_reason (rules have no recipients)', async () => {
+            const { rule, channel, key } = await locked_rule_and_channel();
             const rules = await post('/v1/orgs/get_notification_rules', s.token.olivia, { org_id: s.acme });
             expect(rules.status).toBe(200);
-            const locked = rules.body.data.find((r: { system_key: string | null; event: string }) => r.system_key === 'invite.sent.invitee' && r.event === 'invite.org.sent');
-            expect(locked).toMatchObject({ locked: true, recipients: ['invitee'] });
-            expect(locked.lock_reason).toEqual(expect.any(String));
+            const locked = rules.body.data.find((r: { id: string }) => r.id === rule.id);
+            expect(locked).toMatchObject({ locked: true, system_key: key, lock_reason: 'Kept for a test.' });
+            expect(locked).not.toHaveProperty('recipients');
             const custom = rules.body.data.find((r: { id: string }) => r.id === s.rule_acme);
-            expect(custom).toMatchObject({ locked: false, system_key: null, recipients: null, lock_reason: null });
+            expect(custom).toMatchObject({ locked: false, system_key: null, lock_reason: null });
 
             const channels = await post('/v1/notification_channels/get', s.token.olivia, { org_id: s.acme, account: true });
-            const email = channels.body.data.find((c: { system_key: string | null }) => c.system_key === 'org.email');
-            expect(email).toMatchObject({ locked: true, enabled: 1 });
-            const in_app = channels.body.data.find((c: { system_key: string | null }) => c.system_key === 'org.in_app');
-            expect(in_app).toMatchObject({ locked: false });
+            expect(channels.body.data.find((c: { id: string }) => c.id === channel.id)).toMatchObject({ locked: true, enabled: 1 });
+            expect(channels.body.data.find((c: { system_key: string | null }) => c.system_key === 'org.in_app')).toMatchObject({ locked: false });
+            expect(channels.body.data.find((c: { system_key: string | null }) => c.system_key === 'org.email')).toBeUndefined();
         });
 
-        it('changing or removing a locked rule answers 409 locked; unlocked defaults can be edited', async () => {
-            const locked = (await NotificationRule.findOne({ where: { org_id: s.acme, system_key: 'invite.sent.invitee', event: 'invite.org.sent', locked: true }, raw: true }))!;
+        it('changing or removing a locked rule answers 409 locked', async () => {
+            const { rule: locked, key } = await locked_rule_and_channel();
             const set = await post('/v1/orgs/set_notification_rules', s.token.olivia, { org_id: s.acme, event: locked.event, channel_id: locked.channel_id, priority: 5 });
             expect(set.status).toBe(409);
-            expect(err(set)).toMatchObject({ code: 'locked', details: { system_key: 'invite.sent.invitee' } });
+            expect(err(set)).toMatchObject({ code: 'locked', details: { system_key: key } });
             for (const path of ['/v1/orgs/remove_notification_rules', '/v1/realms/remove_notification_rules']) {
                 const rm = await post(path, s.token.olivia, { id: locked.id });
                 expect(rm.status, path).toBe(409);
                 expect(err(rm).code).toBe('locked');
             }
             expect(await NotificationRule.count({ where: { id: locked.id } })).toBe(1);
-            expect((await NotificationRule.findByPk(locked.id, { raw: true }))!.priority).toBe(locked.priority);
-
-            const open = (await NotificationRule.findOne({ where: { org_id: s.acme, system_key: 'invite.accepted.notify', event: 'invite.org.accepted', locked: false }, raw: true }))!;
-            const edit = await post('/v1/orgs/set_notification_rules', s.token.olivia, { org_id: s.acme, event: open.event, channel_id: open.channel_id, recipients: ['org_owners'] });
-            expect(edit.status, JSON.stringify(edit.body)).toBe(200);
-            expect(edit.body.data).toMatchObject({ id: open.id, recipients: ['org_owners'], locked: false });
-            const bad = await post('/v1/orgs/set_notification_rules', s.token.olivia, { org_id: s.acme, event: open.event, channel_id: open.channel_id, recipients: ['everyone'] });
-            expect(bad.status).toBe(422);
         });
 
-        it('updating or removing a locked channel answers 409 locked', async () => {
-            const email = (await NotificationChannel.findOne({ where: { org_id: s.acme, system_key: 'org.email' }, raw: true }))!;
-            const upd = await post('/v1/notification_channels/update', s.token.olivia, { id: email.id, enabled: false });
+        it('updating or removing a locked channel answers 409 locked; the In-app channel is editable', async () => {
+            const { channel: locked, key } = await locked_rule_and_channel();
+            const upd = await post('/v1/notification_channels/update', s.token.olivia, { id: locked.id, enabled: false });
             expect(upd.status).toBe(409);
-            expect(err(upd)).toMatchObject({ code: 'locked', details: { system_key: 'org.email' } });
-            const rm = await post('/v1/notification_channels/remove', s.token.olivia, { id: email.id });
+            expect(err(upd)).toMatchObject({ code: 'locked', details: { system_key: key } });
+            const rm = await post('/v1/notification_channels/remove', s.token.olivia, { id: locked.id });
             expect(rm.status).toBe(409);
-            expect((await NotificationChannel.findByPk(email.id, { raw: true }))!.enabled).toBe(1);
+            expect((await NotificationChannel.findByPk(locked.id, { raw: true }))!.enabled).toBe(1);
 
             const in_app = (await NotificationChannel.findOne({ where: { org_id: s.acme, system_key: 'org.in_app' }, raw: true }))!;
             const ok = await post('/v1/notification_channels/update', s.token.olivia, { id: in_app.id, name: in_app.name });
@@ -421,28 +429,42 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
         });
     });
 
-    // ── 6. owner-only rules ──────────────────────────────────────────
+    // ── 6. org-wide rules follow the rules.manage permission ─────────
 
-    describe('owner-only org rules', () => {
-        it('rules.manage is owner-only and no admin role holds it', async () => {
-            expect(OWNER_ONLY_PERMISSIONS).toContain('rules.manage');
-            expect(ADMIN_PERMISSIONS).not.toContain('rules.manage');
-            const admin_role = (await OrgRole.findOne({ where: { org_id: s.acme, slug: 'admin' }, raw: true }))!;
-            expect(admin_role.permissions).not.toContain('rules.manage');
-            expect(admin_role.permissions).toContain('rules.manage.realm');
+    describe('org-wide rules: rules.manage', () => {
+        it('rules.manage is an ordinary permission in the default Admin role, not Operator or Member', async () => {
+            expect(OWNER_ONLY_PERMISSIONS).not.toContain('rules.manage');
+            expect(ADMIN_PERMISSIONS).toContain('rules.manage');
+            expect(OPERATOR_PERMISSIONS).not.toContain('rules.manage');
+            expect(MEMBER_PERMISSIONS).not.toContain('rules.manage');
         });
 
-        it('an org admin can read the rules but not change them; the owner can', async () => {
-            const read = await post('/v1/orgs/get_notification_rules', s.token.adam, { org_id: s.acme });
-            expect(read.status).toBe(200);
+        it('an org admin (who holds rules.manage) can change org-wide rules, as can the owner', async () => {
+            const admin_role = (await OrgRole.findOne({ where: { org_id: s.acme, slug: 'admin' }, raw: true }))!;
+            if (!admin_role.permissions.includes('rules.manage')) {
+                await OrgRole.update({ permissions: [...admin_role.permissions, 'rules.manage'] }, { where: { id: admin_role.id } });
+            }
             const channel = s.channel_acme;
             const as_admin = await post('/v1/orgs/set_notification_rules', s.token.adam, { org_id: s.acme, event: 'run.failed', channel_id: channel });
-            expect(as_admin.status).toBe(403);
-            const rm_admin = await post('/v1/orgs/remove_notification_rules', s.token.adam, { id: s.rule_acme });
-            expect(rm_admin.status).toBe(403);
+            expect(as_admin.status, JSON.stringify(as_admin.body)).toBe(200);
+            const rm_admin = await post('/v1/orgs/remove_notification_rules', s.token.adam, { id: as_admin.body.data.id });
+            expect(rm_admin.status, JSON.stringify(rm_admin.body)).toBe(200);
             const as_owner = await post('/v1/orgs/set_notification_rules', s.token.olivia, { org_id: s.acme, event: 'run.failed', channel_id: channel });
             expect(as_owner.status, JSON.stringify(as_owner.body)).toBe(200);
             await NotificationRule.destroy({ where: { id: as_owner.body.data.id } });
+        });
+
+        it('without rules.manage the same admin is refused', async () => {
+            const admin_role = (await OrgRole.findOne({ where: { org_id: s.acme, slug: 'admin' }, raw: true }))!;
+            await OrgRole.update({ permissions: admin_role.permissions.filter((p) => p !== 'rules.manage') }, { where: { id: admin_role.id } });
+            try {
+                const read = await post('/v1/orgs/get_notification_rules', s.token.adam, { org_id: s.acme });
+                expect(read.status).toBe(200);
+                const as_admin = await post('/v1/orgs/set_notification_rules', s.token.adam, { org_id: s.acme, event: 'run.failed', channel_id: s.channel_acme });
+                expect(as_admin.status).toBe(403);
+            } finally {
+                await OrgRole.update({ permissions: admin_role.permissions }, { where: { id: admin_role.id } });
+            }
         });
     });
 

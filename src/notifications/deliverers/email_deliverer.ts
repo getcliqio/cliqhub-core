@@ -42,7 +42,8 @@ export interface EmailMessageInput {
 	event_id: string;
 	org_id: string;
 	realm_id: string | null;
-	channel_id: string;
+	/** The channel of a rule people added; null for a built-in message. */
+	channel_id: string | null;
 	occurred_at: string;
 	actor: EventActor;
 	data: OrgEventData;
@@ -207,7 +208,7 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 		const [org, actor, channel] = await Promise.all([
 			Org.findByPk(input.org_id, { attributes: ['id', 'display_name', 'status'], raw: true }),
 			actor_id ? User.findByPk(actor_id, { attributes: ['id', 'display_name', 'username'], raw: true }) : null,
-			NotificationChannel.findByPk(input.channel_id, { attributes: ['id', 'name'], raw: true }),
+			input.channel_id ? NotificationChannel.findByPk(input.channel_id, { attributes: ['id', 'name'], raw: true }) : null,
 		]);
 		return {
 			app_url,

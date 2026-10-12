@@ -1360,6 +1360,9 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
         _mig_log.error('backfill_per_user_channels_failed', { error: (err as Error)?.message ?? String(err) });
     }
     await backfill_personal_channel_email(sq);
+    await migrate_realm_members_channels(sq);
+    await migrate_built_in_messages(sq);
+    await grant_admin_rules_manage(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -1525,3 +1528,162 @@ async function repair_capability_required_flags(sq: Sequelize): Promise<void> {
 
 
 
+
+/** `cliq.settings` key marking the one-time realm channel migration as done. */
+export const REALM_MEMBERS_MIGRATION_KEY = 'migrate.realm_members_channels_2026_10';
+
+/**
+ * One time (Oct 2026), explicit channels:
+ *   1. rules people created on channels with no destinations (they delivered nothing) and those
+ *      empty shared channels are deleted;
+ *   2. the hidden per-realm `realm:all_users` channels are deleted (their fallback is gone);
+ *   3. every realm gets its "All realm members" channel (the legacy `cliqhub` realm channel is
+ *      renamed) with the default rules that replace that fallback, so what reaches members stays
+ *      the same.
+ * Runs once — the `cliq.settings` key {@link REALM_MEMBERS_MIGRATION_KEY} is recorded after every
+ * step succeeded — so default rules someone removes later are not put back.
+ */
+export async function migrate_realm_members_channels(sq: Sequelize): Promise<void> {
+    try {
+        const [table] = await sq.query(`SELECT to_regclass('cliq.settings') AS t`, { type: QueryTypes.SELECT }) as Array<{ t: string | null }>;
+        if (!table?.t) {
+            _mig_log.info('realm_members_migration_deferred', { reason: 'cliq.settings not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: REALM_MEMBERS_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        // Every step below is safe to repeat; the key is recorded only once all of them succeeded.
+        const empty = `SELECT c."id" FROM cliq."notification_channels" c
+            WHERE c."user_id" IS NULL AND c."system_key" IS NULL
+              AND NOT EXISTS (SELECT 1 FROM cliq."channel_destinations" d WHERE d."channel_id" = c."id")`;
+        const dead_rules = await sq.query(
+            `DELETE FROM cliq."notification_rules" WHERE "channel_id" IN (${empty}) RETURNING "id"`, { type: QueryTypes.SELECT });
+        const empty_channels = await sq.query(
+            `DELETE FROM cliq."notification_channels" WHERE "id" IN (${empty}) RETURNING "id"`, { type: QueryTypes.SELECT });
+        const all_users = `SELECT "id" FROM cliq."notification_channels" WHERE "name" = 'realm:all_users' OR "id" LIKE 'all_users-%'`;
+        await sq.query(`DELETE FROM cliq."notification_rules" WHERE "channel_id" IN (${all_users})`);
+        await sq.query(`DELETE FROM cliq."channel_destinations" WHERE "channel_id" IN (${all_users})`);
+        const all_users_channels = await sq.query(
+            `DELETE FROM cliq."notification_channels" WHERE "id" IN (${all_users}) RETURNING "id"`, { type: QueryTypes.SELECT });
+
+        const { NotificationService, REALM_DEFAULT_RULE_EVENTS } = await import('../../services/notification.service.js');
+        const realms = await sq.query(
+            `SELECT "id" FROM cliq."realms" WHERE COALESCE("deleted", false) = false`, { type: QueryTypes.SELECT }) as Array<{ id: string }>;
+        let default_rules = 0;
+        for (const { id: realm_id } of realms) {
+            const channel = await NotificationService.ensure_realm_members_channel(realm_id);
+            for (const event of REALM_DEFAULT_RULE_EVENTS) {
+                const added = await sq.query(
+                    `INSERT INTO cliq."notification_rules"
+                        ("id", "realm_id", "org_id", "team_slug", "event", "channel_id", "priority", "recipients",
+                         "system_key", "locked", "lock_reason", "created_at", "updated_at")
+                     SELECT gen_random_uuid(), :realm_id, NULL, NULL, :event, :channel_id, 0, NULL,
+                            :system_key, false, NULL, EXTRACT(EPOCH FROM NOW()) * 1000, EXTRACT(EPOCH FROM NOW()) * 1000
+                     WHERE NOT EXISTS (
+                        SELECT 1 FROM cliq."notification_rules"
+                        WHERE "realm_id" = :realm_id AND "team_slug" IS NULL AND "event" = :event AND "channel_id" = :channel_id
+                     )
+                     RETURNING "id"`,
+                    { replacements: { realm_id, event, channel_id: channel.id, system_key: `realm.members.${event}` }, type: QueryTypes.SELECT },
+                );
+                default_rules += added.length;
+            }
+        }
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: REALM_MEMBERS_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('realm_members_channels_migrated', {
+            dead_rules_deleted: dead_rules.length,
+            empty_channels_deleted: empty_channels.length,
+            all_users_channels_deleted: all_users_channels.length,
+            realms: realms.length,
+            default_rules_added: default_rules,
+        });
+    } catch (err) {
+        _mig_log.error('realm_members_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+/** `cliq.settings` key marking the one-time move to built-in invite/account messages as done. */
+export const BUILT_IN_MESSAGES_MIGRATION_KEY = 'migrate.built_in_messages_2026_10';
+
+/**
+ * One time (Oct 2026): invite and account messages are built in, not rules. Deletes the seeded org
+ * rules (org-level rules with a `system_key`; a realm's default rules stay), each org's system
+ * Email channel (and anything pointing at it), and unlocks the org "In-app" channel, which stays as
+ * an ordinary org channel. Steps are safe to repeat; the key is recorded once all succeeded.
+ */
+export async function migrate_built_in_messages(sq: Sequelize): Promise<void> {
+    try {
+        const [table] = await sq.query(`SELECT to_regclass('cliq.settings') AS t`, { type: QueryTypes.SELECT }) as Array<{ t: string | null }>;
+        if (!table?.t) {
+            _mig_log.info('built_in_messages_migration_deferred', { reason: 'cliq.settings not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: BUILT_IN_MESSAGES_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const seeded_rules = await sq.query(
+            `DELETE FROM cliq."notification_rules" WHERE "realm_id" IS NULL AND "system_key" IS NOT NULL RETURNING "id"`,
+            { type: QueryTypes.SELECT });
+        const email = `SELECT "id" FROM cliq."notification_channels" WHERE "system_key" = 'org.email'`;
+        const email_rules = await sq.query(`DELETE FROM cliq."notification_rules" WHERE "channel_id" IN (${email}) RETURNING "id"`, { type: QueryTypes.SELECT });
+        await sq.query(`DELETE FROM cliq."channel_destinations" WHERE "channel_id" IN (${email})`);
+        const email_channels = await sq.query(`DELETE FROM cliq."notification_channels" WHERE "id" IN (${email}) RETURNING "id"`, { type: QueryTypes.SELECT });
+        const unlocked = await sq.query(
+            `UPDATE cliq."notification_channels" SET "locked" = false, "lock_reason" = NULL
+             WHERE "system_key" = 'org.in_app' AND ("locked" = true OR "lock_reason" IS NOT NULL) RETURNING "id"`,
+            { type: QueryTypes.SELECT });
+
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: BUILT_IN_MESSAGES_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('built_in_messages_migrated', {
+            seeded_rules_deleted: seeded_rules.length,
+            rules_on_email_channel_deleted: email_rules.length,
+            email_channels_deleted: email_channels.length,
+            in_app_channels_unlocked: unlocked.length,
+        });
+    } catch (err) {
+        _mig_log.error('built_in_messages_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+/** `cliq.settings` key marking the one-time grant of `rules.manage` to Admin roles as done. */
+export const ADMIN_RULES_MANAGE_KEY = 'migrate.admin_rules_manage_2026_10';
+
+/**
+ * One time (Oct 2026): `rules.manage` (org-wide notification rules) is no longer owner-only; it is
+ * an ordinary permission and part of the default Admin role. Adds it to each org's existing default
+ * `admin` role. Other roles get it only when someone grants it.
+ */
+export async function grant_admin_rules_manage(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.org_roles') AS r`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; r: string | null }>;
+        if (!tables?.s || !tables?.r) {
+            _mig_log.info('admin_rules_manage_deferred', { reason: 'cliq.settings or cliq.org_roles not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: ADMIN_RULES_MANAGE_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const roles = await sq.query(
+            `UPDATE cliq."org_roles" SET "permissions" = array_append("permissions", 'rules.manage')
+             WHERE "slug" = 'admin' AND "is_system" = false AND NOT ('rules.manage' = ANY("permissions")) RETURNING "id"`,
+            { type: QueryTypes.SELECT });
+
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: ADMIN_RULES_MANAGE_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('admin_rules_manage_granted', { roles: roles.length });
+    } catch (err) {
+        _mig_log.error('admin_rules_manage_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}

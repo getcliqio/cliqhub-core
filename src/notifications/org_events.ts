@@ -164,7 +164,8 @@ export interface OrgEventPayload {
 
 /** One delivery attempt made for an org event. */
 export interface OrgDeliveryOutcome {
-    channel_id: string;
+    /** The channel of a rule people added; null for a built-in message. */
+    channel_id: string | null;
     rule_id: string | null;
     /** Destination type (`email`, `cliqhub`, `slack`, …). */
     type: string;

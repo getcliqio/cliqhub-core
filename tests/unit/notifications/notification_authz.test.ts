@@ -123,11 +123,12 @@ describe('route policy — notification rules (org and realm routes share one ha
             expect(await st(`${base}/set_notification_rules`, as('out'), body)).toBe(404);
         });
 
-        it(`${base}: no realm_id → org rules.manage (owner only; admins read)`, async () => {
+        it(`${base}: no realm_id → org rules.manage (owner, and the Admin role holds it; operators read)`, async () => {
             const body = { org_id: 'O1', event: 'run.failed' };
             expect(await st(`${base}/set_notification_rules`, as('own'), body)).toBe(200);
-            expect(await st(`${base}/set_notification_rules`, as('adm'), body)).toBe(403);
+            expect(await st(`${base}/set_notification_rules`, as('adm'), body)).toBe(200);
             expect(await st(`${base}/set_notification_rules`, as('op'), body)).toBe(403);
+            expect(await st(`${base}/set_notification_rules`, as('mem'), body)).toBe(403);
             expect(await st(`${base}/get_notification_rules`, as('adm'), { org_id: 'O1' })).toBe(200);
             expect(await st(`${base}/get_notification_rules`, as('mem'), { org_id: 'O1' })).toBe(200);
             expect(await st(`${base}/get_notification_rules`, as('out'), { org_id: 'O1' })).toBe(404);
@@ -138,10 +139,10 @@ describe('route policy — notification rules (org and realm routes share one ha
         });
     }
 
-    it('remove: realm rule by realm standing, org rule by rules.manage (owner only)', async () => {
+    it('remove: realm rule by realm standing, org rule by rules.manage', async () => {
         expect(await st('/v1/realms/remove_notification_rules', as('op'), { id: 'rule_realm' })).toBe(200);
         expect(await st('/v1/orgs/remove_notification_rules', as('op'), { id: 'rule_org' })).toBe(403);
-        expect(await st('/v1/orgs/remove_notification_rules', as('adm'), { id: 'rule_org' })).toBe(403);
+        expect(await st('/v1/orgs/remove_notification_rules', as('adm'), { id: 'rule_org' })).toBe(200);
         expect(await st('/v1/orgs/remove_notification_rules', as('own'), { id: 'rule_org' })).toBe(200);
         expect(await st('/v1/orgs/remove_notification_rules', as('adm'), { id: 'nope' })).toBe(404);
     });

@@ -135,21 +135,13 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
     // ── seeding ───────────────────────────────────────────────────────
 
     describe('org seeding', () => {
-        it('signup seeds the account org: locked Email (Brevo), In-app, and every default rule', async () => {
+        it('signup seeds the account org: just the In-app channel (unlocked), no rules — invite and account messages are built in', async () => {
             const channels = await NotificationChannel.findAll({ where: { org_id: s.acme, system_key: { [Op.ne]: null } }, raw: true });
-            const email = channels.find((c) => c.system_key === 'org.email')!;
-            const in_app = channels.find((c) => c.system_key === 'org.in_app')!;
-            expect(email).toMatchObject({ name: 'Email', locked: true, enabled: 1 });
-            expect(in_app).toMatchObject({ name: 'In-app', locked: false });
-            const dest = await ChannelDestination.findOne({ where: { channel_id: email.id }, raw: true });
-            expect(dest).toMatchObject({ type: 'email', config: { provider: 'brevo' } });
-
-            const rules = await NotificationRule.findAll({ where: { org_id: s.acme, system_key: { [Op.ne]: null } }, raw: true });
-            expect(rules).toHaveLength(default_rule_specs(true).length);
-            const sent = rules.find((r) => r.event === 'invite.org.sent' && r.channel_id === email.id)!;
-            expect(rules.find((r) => r.event === 'invite.org.sent' && r.channel_id === in_app.id)).toMatchObject({ system_key: 'invite.sent.invitee', locked: false });
-            expect(sent).toMatchObject({ channel_id: email.id, recipients: ['invitee'], system_key: 'invite.sent.invitee', locked: true, lock_reason: 'Invites must reach the invited person.' });
-            expect(rules.filter((r) => r.event === 'invite.owner.accepted').every((r) => !r.locked)).toBe(true);
+            expect(channels.map((c) => c.system_key)).toEqual(['org.in_app']);
+            expect(channels[0]).toMatchObject({ name: 'In-app', locked: false, enabled: 1 });
+            expect(await NotificationRule.count({ where: { org_id: s.acme, realm_id: null, system_key: { [Op.ne]: null } } })).toBe(0);
+            // The built-in messages (not rules) still cover invites and account emails.
+            expect(default_rule_specs(true).find((m) => m.system_key === 'invite.sent.invitee')).toMatchObject({ recipients: ['invitee'] });
             expect((await Org.findByPk(s.acme, { raw: true }))!.notifications_seeded_at).toBeTruthy();
         });
 
@@ -157,23 +149,19 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
             expect(await OrgSeedService.seed_org(s.acme, { account: true })).toEqual({ channels_created: 0, rules_created: 0 });
         });
 
-        it('backfill seeds unseeded orgs once; a removed editable default is not brought back', async () => {
+        it('backfill seeds unseeded orgs once (their In-app channel), and only once', async () => {
             const org = await Org.create({ slug: `seedme${s.stamp}`, display_name: 'Seed me' } as never);
             extra_orgs.push(org.id);
             const first = await OrgSeedService.backfill();
             expect(first.orgs_seeded).toBeGreaterThanOrEqual(1);
-            const rules = await NotificationRule.findAll({ where: { org_id: org.id }, raw: true });
-            expect(rules).toHaveLength(default_rule_specs(false).length);
-
-            const editable = rules.find((r) => !r.locked)!;
-            await NotificationRule.destroy({ where: { id: editable.id } });
+            expect((await NotificationChannel.findAll({ where: { org_id: org.id }, raw: true })).map((c) => c.system_key)).toEqual(['org.in_app']);
+            expect(await NotificationRule.count({ where: { org_id: org.id } })).toBe(0);
             expect((await OrgSeedService.backfill()).orgs_seeded).toBe(0);
-            expect(await NotificationRule.count({ where: { org_id: org.id } })).toBe(rules.length - 1);
         });
 
         it('the boot migrations keep org and personal channels and drop only orphan realm-less ones', async () => {
             const seeded = await NotificationChannel.findAll({ where: { org_id: s.acme, system_key: { [Op.ne]: null } }, attributes: ['id'], raw: true });
-            expect(seeded).toHaveLength(2);
+            expect(seeded).toHaveLength(1);
             const personal = await NotificationChannel.findOne({ where: { org_id: s.acme, user_id: { [Op.ne]: null } }, attributes: ['id'], raw: true });
             expect(personal).toBeTruthy();
             const orphan_id = randomUUID();
@@ -185,10 +173,8 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
             await run_core_api_schema_migrations(get_sequelize());
 
             const kept = await NotificationChannel.findAll({ where: { id: { [Op.in]: [...seeded.map((c) => c.id), personal!.id] } }, attributes: ['id'], raw: true });
-            expect(kept).toHaveLength(3);
+            expect(kept).toHaveLength(2);
             expect(await NotificationChannel.findByPk(orphan_id)).toBeNull();
-            const rule_channels = (await NotificationRule.findAll({ where: { org_id: s.acme, system_key: { [Op.ne]: null } }, attributes: ['channel_id'], raw: true })).map((r) => r.channel_id);
-            expect(new Set(rule_channels)).toEqual(new Set(seeded.map((c) => c.id)));
         });
 
         it('orgs/new seeds the new org and records its future owner', async () => {
@@ -199,7 +185,8 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
             extra_orgs.push(org_id);
             const org = await Org.findByPk(org_id, { raw: true });
             expect(org).toMatchObject({ owner_id: s.user.ben, status: 'waiting_for_owner', activated_at: null });
-            expect(await NotificationRule.count({ where: { org_id, system_key: { [Op.ne]: null } } })).toBe(default_rule_specs(false).length);
+            expect(await NotificationChannel.count({ where: { org_id, system_key: 'org.in_app' } })).toBe(1);
+            expect(await NotificationRule.count({ where: { org_id } })).toBe(0);
         });
     });
 
@@ -273,7 +260,7 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
             expect(input).toMatchObject({
                 event: 'invite.org.sent', org_id: s.acme, to: { email, selector: 'invitee' },
                 links: { accept_url: `${TEST_PUBLIC_APP_URL}/invite/${token}` },
-                subject: { type: 'invite', id: invite.id }, destination: { provider: 'brevo' },
+                subject: { type: 'invite', id: invite.id }, destination: {}, channel_id: null,
             });
 
             const row = (await HubEvent.findByPk(result.event_id!, { raw: true }))!;

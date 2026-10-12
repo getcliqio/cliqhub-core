@@ -75,7 +75,7 @@ describe.skipIf(!has_postgres)('Notification fan-out on event submit', () => {
         expect(body.text).toContain('boom');
     });
 
-    it('default-notify without rules still dispatches via realm:all_users', async () => {
+    it('no rules → nothing is sent (the realm defaults are ordinary rules; no hidden all-users fallback)', async () => {
         const realm = await RealmService.create(test_user_id, `f-${uid()}`.slice(0, 40), 'Empty');
         await NotificationRule.destroy({ where: { realm_id: realm.id } });
         const event = await EventSubmitService.submit({
@@ -84,7 +84,7 @@ describe.skipIf(!has_postgres)('Notification fan-out on event submit', () => {
             run_id: 'run-fanout-2',
             daemon_id: 'daemon-fanout-2',
         });
-        expect(event.notifications).toBe('dispatched');
+        expect(event.notifications).toBe('skipped');
     });
 
     it('dispatches via global rules for team.* without realm_id', async () => {

@@ -9,7 +9,6 @@
 import { z } from 'zod';
 
 import { destination_schema } from '../notifications/channel_config.js';
-import { is_recipient_selector } from '../notifications/recipients.js';
 
 const org_id_field = z.string().uuid().describe(
     'Organization this call targets. Required for account-scoped channel/rule ops and inbox. '
@@ -90,8 +89,7 @@ export type NotificationChannelsTestInput = z.infer<typeof NotificationChannelsT
 /** POST /v1/orgs|realms/get_notification_rules */
 export const NotificationRulesListInput = z.object({
     org_id: org_id_field.optional(),
-    realm_id: z.string().min(1).optional().describe('When set, list realm (and optional team) rules; omit for org-global rules'),
-    team_slug: z.string().min(1).optional().describe('When set with realm_id, filter to team-scoped rules'),
+    realm_id: z.string().min(1).optional().describe('When set, list realm rules; omit for org-global rules'),
     effective: z.boolean().optional().describe('When true with realm_id, merge org + realm tiers for what actually fires'),
 }).superRefine((data, ctx) => {
     const has_realm = Boolean(data.realm_id?.trim());
@@ -109,14 +107,10 @@ export type NotificationRulesListInput = z.infer<typeof NotificationRulesListInp
 /** POST /v1/orgs|realms/set_notification_rules */
 export const NotificationRulesSetInput = z.object({
     org_id: org_id_field.optional(),
-    realm_id: z.string().min(1).optional().describe('When set, upsert a realm/team rule; omit for org-global'),
-    team_slug: z.string().min(1).optional().describe('Optional team scope under the realm'),
+    realm_id: z.string().min(1).optional().describe('When set, upsert a realm rule; omit for org-global'),
     event: z.string().min(1).describe('Event selector (exact type, family wildcard like run.*, or *)'),
     channel_id: z.string().min(1).describe('Target notification channel id'),
     priority: z.number().int().optional().describe('Rule priority (higher wins within a tier when supported)'),
-    recipients: z.array(z.string().refine(is_recipient_selector, 'Not a recipient selector (invitee, org_owners, inviter, user or a user id)'))
-        .nullable().optional()
-        .describe('Who receives it: invitee | org_owners | inviter | user | user ids; null = the channel destinations; omit to keep'),
 }).superRefine((data, ctx) => {
     const has_realm = Boolean(data.realm_id?.trim());
     if (!has_realm && !data.org_id) {
@@ -193,14 +187,12 @@ export const NotificationRuleData = z.object({
 	id: z.string().describe('Rule UUID'),
 	realm_id: z.string().nullable().describe('Realm scope, or null for org-global rules'),
 	org_id: z.string().nullable().optional().describe('Owning org for org-global rules'),
-	team_slug: z.string().nullable().describe('Team slug under the realm, or null for realm/org-wide'),
 	event: z.string().describe('Event selector (exact, family wildcard, or *)'),
 	channel_id: z.string().describe('Target channel id'),
 	priority: z.number().describe('Priority within the tier'),
 	created_at: z.number().describe('Create time (unix ms)'),
 	updated_at: z.number().describe('Last update time (unix ms)'),
 	tier: z.enum(['global', 'realm']).optional().describe('Present when listing effective (org + realm) rules'),
-	recipients: z.array(z.string()).nullable().describe('Who receives it: invitee | org_owners | inviter | user | user ids; null = the channel destinations'),
 	system_key: z.string().nullable().describe('Stable key of a rule CliqHub seeded (e.g. invite.sent.invitee), else null'),
 	locked: z.boolean().describe('True when the rule cannot be changed or removed (409 locked)'),
 	lock_reason: z.string().nullable().describe('Why the rule is locked'),

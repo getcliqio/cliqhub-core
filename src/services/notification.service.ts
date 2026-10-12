@@ -8,10 +8,18 @@ import { RealmRepository } from '../repositories/realm_repository.js';
 import { OrgRepository } from '../repositories/org_repository.js';
 import { ApiError } from '../errors/api_error.js';
 import { OrgMember } from '../models/index.js';
-import { RECIPIENT_SELECTORS } from '../notifications/recipients.js';
 import type { NotificationRule } from '../models/notification_rule.model.js';
 import type { Destination } from '../notifications/channel_config.js';
 import type { NotificationRuleData } from '../schemas/notification_types.js';
+
+/** Name of a realm's in-app channel to all its members. */
+export const REALM_MEMBERS_CHANNEL_NAME = 'All realm members';
+
+/**
+ * Events a new realm sends to its "All realm members" channel by default (ordinary rules people
+ * can change or remove): a run needing input or stuck, and runs that failed or crashed.
+ */
+export const REALM_DEFAULT_RULE_EVENTS = ['phase.input_required', 'phase.idle', 'phase.timed_out', 'run.failed', 'run.crashed'] as const;
 
 const log = get_logger('svc.notification');
 
@@ -45,42 +53,32 @@ export type ChannelRecord = {
 	lock_reason: string | null;
 };
 
-/** A rule row on the wire, with its recipients and lock state. */
+/** A rule row on the wire, with its lock state. */
 function to_rule_data(r: NotificationRule): NotificationRuleData {
 	return {
 		id: r.id!,
 		realm_id: r.realm_id,
 		org_id: r.org_id ? String(r.org_id) : null,
-		team_slug: r.team_slug,
 		event: r.event,
 		channel_id: r.channel_id,
 		priority: r.priority,
 		created_at: Number(r.created_at),
 		updated_at: Number(r.updated_at),
-		recipients: Array.isArray(r.recipients) ? r.recipients.map(String) : null,
 		system_key: r.system_key ?? null,
 		locked: Boolean(r.locked),
 		lock_reason: r.lock_reason ?? null,
 	};
 }
 
-/**
- * A rule may name people only from its own org: every user-id recipient must
- * be an active member of the org (named selectors are always allowed).
- *
- * @throws ApiError 422 invalid_params `{ field: 'recipients', not_members }`
- */
-async function assert_member_recipients(recipients: string[], org_id: string | null): Promise<void> {
-	const user_ids = recipients.filter((r) => !(RECIPIENT_SELECTORS as readonly string[]).includes(r));
-	if (!user_ids.length) return;
-	const members = org_id
-		? await OrgMember.findAll({ where: { org_id, user_id: { [Op.in]: user_ids }, status: 'active', deleted_at: null }, attributes: ['user_id'], raw: true })
-		: [];
-	const found = new Set(members.map((m) => String(m.user_id)));
-	const not_members = user_ids.filter((id) => !found.has(id));
-	if (not_members.length) {
-		throw new ApiError('invalid_params', 'Recipients must be members of the organization', 422, { field: 'recipients', not_members });
-	}
+/** Order destinations are shown and indexed in: in-app first, then email, chat, hooks and refs. */
+const DESTINATION_ORDER = ['cliqhub', 'email', 'slack', 'webhook', 'http', 'jira', 'channel_ref'];
+
+/** Destination rows in a stable order (by type, then creation), the same for display and for `destination_index`. */
+export function sort_destination_rows<T extends { type: string; created_at?: number | string | null; id?: string }>(rows: T[]): T[] {
+	const rank = (t: string) => { const i = DESTINATION_ORDER.indexOf(t); return i === -1 ? DESTINATION_ORDER.length : i; };
+	return [...rows].sort((a, b) => rank(a.type) - rank(b.type)
+		|| Number(a.created_at ?? 0) - Number(b.created_at ?? 0)
+		|| String(a.id ?? '').localeCompare(String(b.id ?? '')));
 }
 
 export class NotificationService {
@@ -98,9 +96,9 @@ export class NotificationService {
 		system_key?: string | null;
 		locked?: boolean;
 		lock_reason?: string | null;
-		destinations_rows?: Array<{ type: string; config: Record<string, unknown> }>;
+		destinations_rows?: Array<{ type: string; config: Record<string, unknown>; created_at?: number; id?: string }>;
 	}): ChannelRecord {
-		const dest_rows = row.destinations_rows ?? [];
+		const dest_rows = sort_destination_rows(row.destinations_rows ?? []);
 		const destinations = dest_rows.map((r) => ({
 			type: r.type,
 			...r.config,
@@ -557,7 +555,7 @@ export class NotificationService {
 
 		/** Read destinations from the normalized table. */
 		const { ChannelDestination } = await import('../models/index.js');
-		const dest_rows = await ChannelDestination.findAll({ where: { channel_id: id } });
+		const dest_rows = sort_destination_rows(await ChannelDestination.findAll({ where: { channel_id: id } }));
 		let destinations: Array<Record<string, unknown>> = dest_rows.map(
 			(r) => ({ type: r.type, ...r.config }),
 		);
@@ -572,6 +570,7 @@ export class NotificationService {
 
 		const { get_deliverer } = await import('../notifications/deliverers/index.js');
 		const { is_channel_provider } = await import('../notifications/types.js');
+		const { destination_to_config } = await import('../notifications/fan_out.service.js');
 
 		const test_payload = {
 			event: 'notification.test',
@@ -599,7 +598,9 @@ export class NotificationService {
 
 			try {
 				const deliverer = get_deliverer(provider as Parameters<typeof get_deliverer>[0]);
-				await deliverer.deliver(dest as Record<string, unknown>, test_payload);
+				// The same config the fan-out sends (an email `address` becomes `to`), and the channel so
+				// an `account: true` email finds its owner.
+				await deliverer.deliver(destination_to_config(dest as unknown as Destination), test_payload, { channel_id: id });
 				delivered += 1;
 			} catch (err) {
 				errors.push(err instanceof Error ? err.message : String(err));
@@ -634,26 +635,15 @@ export class NotificationService {
 	static async resolve_rules(opts: {
 		event: string;
 		realm_id?: string | null;
-		team_slug?: string | null;
 		/** Org context for global-tier rule resolution. */
 		org_id?: string;
 	}): Promise<string[]> {
 		log.debug('resolve_rules', { event: opts.event, realm_id: opts.realm_id });
-		const { event, realm_id, team_slug } = opts;
+		const { event, realm_id } = opts;
 
 		const event_selectors = NotificationService.build_matching_selectors(event);
 
-		if (realm_id && team_slug) {
-			const team_rules = await rule_repo.find_all({
-				realm_id,
-				team_slug,
-				event: { [Op.in]: event_selectors },
-			} as any);
-			if (team_rules.length > 0) {
-				return [...new Set(team_rules.map((r) => r.channel_id))];
-			}
-		}
-
+		// Realm rules replace org rules for that realm (there is no team level).
 		if (realm_id) {
 			const realm_rules = await rule_repo.find_all({
 				realm_id,
@@ -682,11 +672,11 @@ export class NotificationService {
 	}
 
 	/**
-	 * Org-tier rules matching an org event (exact type, family wildcard or `*`),
-	 * with their recipients. Unlike {@link resolve_rules} every match is
-	 * returned, so seeded rules and rules an owner added all fire.
+	 * Org-tier rules matching an org event (exact type, family wildcard or `*`).
+	 * Unlike {@link resolve_rules} every match is returned, so every rule an
+	 * owner added fires (the built-in invite/account messages are not rules).
 	 */
-	static async resolve_org_rules(opts: { event: string; org_id: string }): Promise<Array<{ id: string; channel_id: string; recipients: string[] | null }>> {
+	static async resolve_org_rules(opts: { event: string; org_id: string }): Promise<Array<{ id: string; channel_id: string }>> {
 		log.debug('resolve_org_rules', { event: opts.event, org_id: opts.org_id });
 		const rows = await rule_repo.find_all({
 			org_id: opts.org_id,
@@ -694,31 +684,22 @@ export class NotificationService {
 			team_slug: { [Op.is]: null },
 			event: { [Op.in]: NotificationService.build_matching_selectors(opts.event) },
 		}, { order: [['priority', 'DESC'], ['created_at', 'ASC']] });
-		return rows.map((r) => ({
-			id: String(r.id),
-			channel_id: r.channel_id,
-			recipients: Array.isArray(r.recipients) ? r.recipients.map(String) : null,
-		}));
+		return rows.map((r) => ({ id: String(r.id), channel_id: r.channel_id }));
 	}
 
 	/** List all rules visible at a given tier (for the UI). */
 	static async list_rules(opts: {
 		realm_id?: string | null;
-		team_slug?: string | null;
 		/** Org context — filters org-level rules (realm_id IS NULL) to this org. */
 		org_id?: string;
 	} = {}): Promise<NotificationRuleData[]> {
 		log.debug('list_rules', { realm_id: opts?.realm_id });
 		const where: Record<string, unknown> = {};
+		where.team_slug = { [Op.is]: null };
 		if (opts.realm_id) {
 			where.realm_id = opts.realm_id;
-		}
-		if (opts.team_slug) {
-			where.team_slug = opts.team_slug;
-		}
-		if (!opts.realm_id && !opts.team_slug) {
+		} else {
 			where.realm_id = { [Op.is]: null };
-			where.team_slug = { [Op.is]: null };
 			if (opts.org_id) {
 				where.org_id = opts.org_id;
 			}
@@ -752,29 +733,23 @@ export class NotificationService {
 	}
 
 	/**
-	 * Creates or updates the rule for (tier, event, channel): its priority and,
-	 * when given, its recipients (null = the channel's own destinations).
+	 * Creates or updates the rule for (tier, event, channel) and its priority.
+	 * A rule sends to its channel's destinations.
 	 *
-	 * @throws ApiError 400 missing event / channel; 422 invalid_params when a
-	 *   user-id recipient is not an active member of the rule's org; 404
-	 *   unknown channel; 403 channel outside the rule's realm or org; 409
+	 * @throws ApiError 400 missing event / channel; 404 unknown channel; 403 channel outside the rule's realm or org; 409
 	 *   `locked` when the existing rule is locked
 	 */
 	static async set_rule(data: {
 		realm_id?: string | null;
 		/** Org owning this rule (for org-level rules where realm_id is null). */
 		org_id?: string | null;
-		team_slug?: string | null;
 		event: string;
 		channel_id: string;
 		priority?: number;
-		/** Recipient selectors (invitee, org_owners, inviter, user, or user ids); omit to keep. */
-		recipients?: string[] | null;
 	}): Promise<NotificationRuleData> {
 		log.debug('set_rule', { event: data.event, channel_id: data.channel_id, realm_id: data.realm_id });
 		const realm_id = data.realm_id?.trim() || null;
 		const org_id = realm_id ? null : (data.org_id ?? null);
-		const team_slug = data.team_slug?.trim() || null;
 		const event = data.event.trim();
 		const channel_id = data.channel_id.trim();
 		if (!event || !channel_id) throw new ApiError('bad_request', 'event and channel_id are required', 400);
@@ -807,15 +782,11 @@ export class NotificationService {
 			}
 		}
 
-		if (data.recipients?.length) {
-			const rule_org = org_id ?? (realm_id ? (await realm_repo.find_by_id(realm_id))?.org_id ?? null : null);
-			await assert_member_recipients(data.recipients, rule_org);
-		}
 
 		const now = Date.now();
 		const existing = await rule_repo.find_one({
 			realm_id: realm_id ? realm_id : { [Op.is]: null },
-			team_slug: team_slug ? team_slug : { [Op.is]: null },
+			team_slug: { [Op.is]: null },
 			event,
 			channel_id,
 		} as any);
@@ -824,7 +795,6 @@ export class NotificationService {
 			if (existing.locked) throw ApiError.locked(existing.system_key ?? '', `The rule for ${existing.event} is a system rule and can't be changed`);
 			await existing.update({
 				priority: data.priority ?? 0,
-				...(data.recipients !== undefined ? { recipients: data.recipients } : {}),
 				updated_at: now,
 			});
 			return to_rule_data(existing);
@@ -833,11 +803,11 @@ export class NotificationService {
 		const row = await rule_repo.create_one({
 			realm_id,
 			org_id,
-			team_slug,
+			team_slug: null,
 			event,
 			channel_id,
 			priority: data.priority ?? 0,
-			recipients: data.recipients ?? null,
+			recipients: null,
 			created_at: now,
 			updated_at: now,
 		} as any);
@@ -866,9 +836,14 @@ export class NotificationService {
 		return deleted > 0;
 	}
 
-	/** Per-realm in-app channel (`cliqhub`). Ensures enabled. */
-	static async ensure_realm_cliqhub_channel(realm_id: string): Promise<ChannelRecord> {
-		log.debug('ensure_realm_cliqhub_channel', { realm_id });
+	/**
+	 * The realm's "All realm members" channel: in-app to every member of the realm. A new channel
+	 * starts with the realm's default rules ({@link REALM_DEFAULT_RULE_EVENTS} → this channel);
+	 * an existing one (also the legacy `cliqhub` realm channel) is renamed and enabled, and its
+	 * rules are left as people set them.
+	 */
+	static async ensure_realm_members_channel(realm_id: string): Promise<ChannelRecord> {
+		log.debug('ensure_realm_members_channel', { realm_id });
 		const trimmed = realm_id.trim();
 		if (!trimmed) throw new ApiError('bad_request', 'realm_id is required', 400);
 
@@ -876,91 +851,37 @@ export class NotificationService {
 		if (!realm) throw new ApiError('not_found', `realm '${trimmed}' not found`, 404);
 
 		const channel_id = `cliqhub-${trimmed}`;
-		let row = await channel_repo.find_by_id(channel_id);
-		if (!row) {
-			row = await channel_repo.find_one({
-				realm_id: trimmed, name: 'cliqhub',
-			} as any);
-		}
-		if (!row) {
-			const now = Date.now();
-			row = await channel_repo.create_one({
-				id: channel_id,
-				realm_id: trimmed,
-				name: 'cliqhub',
-				enabled: 1,
-				created_at: now,
-				updated_at: now,
-			} as any);
-			/** Create the default in-app destination row. */
-			const { ChannelDestination } = await import('../models/index.js');
-			await ChannelDestination.findOrCreate({
-				where: { channel_id, type: 'cliqhub' },
-				defaults: {
-					id: `${channel_id}:cliqhub:${now}`,
-					channel_id,
-					type: 'cliqhub',
-					config: {},
-					created_at: now,
-				},
-			});
+		let row = await channel_repo.find_by_id(channel_id)
+			?? await channel_repo.find_one({ realm_id: trimmed, name: { [Op.in]: [REALM_MEMBERS_CHANNEL_NAME, 'cliqhub'] } } as any);
+		if (row) {
+			if (row.enabled !== 1 || row.name !== REALM_MEMBERS_CHANNEL_NAME) {
+				await row.update({ enabled: 1, name: REALM_MEMBERS_CHANNEL_NAME, updated_at: Date.now() });
+			}
 			return NotificationService.to_channel_record(row);
 		}
-		if (row.enabled !== 1) {
-			await row.update({ enabled: 1, updated_at: Date.now() });
-		}
-		return NotificationService.to_channel_record(row);
-	}
 
-	/**
-	 * Per-realm all-users notify channel (`realm:all_users`).
-	 * Hub-only — daemon never resolves or sends this id (Yamazaki H3.2).
-	 */
-	static async ensure_realm_all_users_channel(realm_id: string): Promise<ChannelRecord> {
-		log.debug('ensure_realm_all_users_channel', { realm_id });
-		const trimmed = realm_id.trim();
-		if (!trimmed) throw new ApiError('bad_request', 'realm_id is required', 400);
-
-		const realm2 = await realm_repo.find_by_id(trimmed);
-		if (!realm2) throw new ApiError('not_found', `realm '${trimmed}' not found`, 404);
-
-		// Stable synthetic id so re-ensure is idempotent across restarts.
-		const channel_id = `all_users-${trimmed}`;
-		let row = await channel_repo.find_by_id(channel_id);
-		// Legacy rows may use the name without the synthetic id — fall back to name lookup.
-		if (!row) {
-			row = await channel_repo.find_one({
-				realm_id: trimmed, name: 'realm:all_users',
+		const now = Date.now();
+		row = await channel_repo.create_one({
+			id: channel_id,
+			realm_id: trimmed,
+			name: REALM_MEMBERS_CHANNEL_NAME,
+			enabled: 1,
+			created_at: now,
+			updated_at: now,
+		} as any);
+		const { ChannelDestination } = await import('../models/index.js');
+		await ChannelDestination.findOrCreate({
+			where: { channel_id, type: 'cliqhub' },
+			defaults: { id: randomUUID(), channel_id, type: 'cliqhub', config: {}, created_at: now },
+		});
+		for (const event of REALM_DEFAULT_RULE_EVENTS) {
+			await rule_repo.create_one({
+				realm_id: trimmed, org_id: null, team_slug: null, event, channel_id, priority: 0,
+				recipients: null, system_key: `realm.members.${event}`, locked: false, lock_reason: null,
+				created_at: now, updated_at: now,
 			} as any);
 		}
-		if (!row) {
-			const now = Date.now();
-			row = await channel_repo.create_one({
-				id: channel_id,
-				realm_id: trimmed,
-				name: 'realm:all_users',
-				enabled: 1,
-				created_at: now,
-				updated_at: now,
-			} as any);
-			// Default destination is in-app (cliqhub) — fan-out to all realm members.
-			const { ChannelDestination } = await import('../models/index.js');
-			await ChannelDestination.findOrCreate({
-				where: { channel_id, type: 'cliqhub' },
-				defaults: {
-					id: `${channel_id}:cliqhub:${now}`,
-					channel_id,
-					type: 'cliqhub',
-					config: {},
-					created_at: now,
-				},
-			});
-			return NotificationService.to_channel_record(row);
-		}
-		// Re-enable if an operator disabled the system channel.
-		if (row.enabled !== 1) {
-			await row.update({ enabled: 1, updated_at: Date.now() });
-		}
+		log.info('realm_members_channel_created', { realm_id: trimmed, channel_id, rules: REALM_DEFAULT_RULE_EVENTS.length });
 		return NotificationService.to_channel_record(row);
 	}
 

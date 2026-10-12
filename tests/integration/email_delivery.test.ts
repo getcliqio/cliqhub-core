@@ -12,13 +12,12 @@ import { postgres_reachable } from '../migrated_platform/helpers/control_plane_s
 import { open_live_hub_app, close_live_hub_app } from '../migrated_platform/helpers/live_hub_app.js';
 import { seed_authz, type Seed } from '../helpers/authz_seed.js';
 import { TEST_PUBLIC_APP_URL, use_test_link_env } from '../helpers/link_env.js';
-import { AccountInvite, EmailDelivery, HubEvent, NotificationChannel } from '../../src/models/index.js';
+import { AccountInvite, EmailDelivery, HubEvent } from '../../src/models/index.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
 import { OrgEventService } from '../../src/services/org_event.service.js';
 import { resolve_delivery_links } from '../../src/notifications/delivery_links.js';
 import { DELIVERER_BY_PROVIDER } from '../../src/notifications/deliverers/index.js';
 import type { EmailDeliverer } from '../../src/notifications/deliverers/email_deliverer.js';
-import { ORG_EMAIL_CHANNEL_KEY } from '../../src/services/org_seed.service.js';
 import { issue_token } from '../../src/lib/secure_token.js';
 import type { EmailMessage, EmailSender } from '../../src/lib/email/email_sender.js';
 import type { Container } from '../../src/container.js';
@@ -37,11 +36,10 @@ class StubSender implements EmailSender {
     }
 }
 
-describe.skipIf(!has_postgres)('Email channel delivery', () => {
+describe.skipIf(!has_postgres)('Email delivery (built-in invite and account messages)', () => {
     let s: Seed;
     let container: Container;
     let restore_env: () => void;
-    let email_channel_id: string;
     const invite_ids: string[] = [];
     const email_deliverer = DELIVERER_BY_PROVIDER.email as EmailDeliverer;
 
@@ -50,8 +48,6 @@ describe.skipIf(!has_postgres)('Email channel delivery', () => {
         const live = await open_live_hub_app();
         container = live.container;
         s = await seed_authz(live.app);
-        const channel = await NotificationChannel.findOne({ where: { org_id: s.acme, system_key: ORG_EMAIL_CHANNEL_KEY }, raw: true });
-        email_channel_id = channel!.id;
     }, 300_000);
 
     afterEach(() => { email_deliverer.use_sender(container.email_sender); });
@@ -95,7 +91,7 @@ describe.skipIf(!has_postgres)('Email channel delivery', () => {
         const rows = await rows_for(invite.id);
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({
-            event: 'invite.org.sent', event_id: result.event_id, org_id: s.acme, channel_id: email_channel_id,
+            event: 'invite.org.sent', event_id: result.event_id, org_id: s.acme, channel_id: null, // built-in message: no channel
             to: email, ok: false, provider_message_id: null, error: 'email sending is not configured',
         });
         expect(JSON.stringify(rows[0])).not.toContain(token);
