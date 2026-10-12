@@ -88,6 +88,7 @@ describe('route policy coverage', () => {
             "POST /v1/reviews/ack",
             "POST /v1/reviews/create",
             "POST /v1/reviews/get_by_id",
+            "POST /v1/reviews/remind",
             "POST /v1/reviews/send_message",
             "POST /v1/runs/append_logs",
             "POST /v1/runs/claim",
