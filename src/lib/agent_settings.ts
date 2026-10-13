@@ -71,6 +71,53 @@ export function applicable_settings(
     return settings.filter((s) => setting_applies(s, values));
 }
 
+/** A stored value as text: JSON-quoted strings (`"bitbucket"`) unwrapped, as the daemon reads them. */
+function plain(v: string): string {
+    try {
+        const parsed: unknown = JSON.parse(v);
+        if (typeof parsed === 'string') return parsed.trim();
+    } catch { /* plain text */ }
+    return v;
+}
+
+/** A manifest default worth counting (not undefined / null / ''). */
+function has_default(s: SettingDef | string): boolean {
+    if (typeof s === 'string') return false;
+    return s.default !== undefined && s.default !== null && s.default !== '';
+}
+
+/**
+ * Which required settings apply, and which of those are missing — the daemon's rule
+ * (cliq/daemon/src/lib/required_settings.ts), so Hub and the daemon agree on "ready":
+ *  - a `when` is checked against the values, a key without a value falling back to its manifest
+ *    default (git: `provider` → github), so provider-specific keys only count for that provider;
+ *  - a required setting is satisfied when it has a value or a manifest default.
+ *
+ * @param required - Required setting definitions.
+ * @param all - Every definition (required + optional), for the defaults `when` falls back to.
+ * @param values - Resolved values by key (empty / missing = not set).
+ */
+export function missing_required_settings(
+    required: Array<SettingDef | string>,
+    all: Array<SettingDef | string>,
+    values: Record<string, string | undefined | null>,
+): { applicable: string[]; missing: string[] } {
+    const effective: Record<string, string | undefined | null> = {};
+    for (const d of all) {
+        if (typeof d !== 'string' && has_default(d)) effective[d.key] = String(d.default);
+    }
+    for (const [k, v] of Object.entries(values)) if (v !== undefined && v !== null && v !== '') effective[k] = plain(v);
+    const applicable: string[] = [];
+    const missing: string[] = [];
+    for (const d of required) {
+        if (!setting_applies(d, effective)) continue;
+        const key = typeof d === 'string' ? d : d.key;
+        applicable.push(key);
+        if (!(values[key] ?? '') && !has_default(d)) missing.push(key);
+    }
+    return { applicable, missing };
+}
+
 /**
  * Normalise a manifest's `settings` block into typed required/optional arrays.
  *

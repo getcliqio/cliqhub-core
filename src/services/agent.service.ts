@@ -23,6 +23,7 @@ import {
     resolve_agent_settings,
     setting_applies,
     applicable_settings,
+    missing_required_settings,
     SCALAR_INPUT_TYPES,
     SKIP_PROMOTE_INPUTS,
 } from '../lib/agent_settings.js';
@@ -44,7 +45,7 @@ export type AgentListFilters = {
 
 type SettingsCounts = Pick<
     SettingsData,
-    'required_total' | 'required_configured' | 'optional_total' | 'optional_configured' | 'all_required_configured'
+    'required_total' | 'required_configured' | 'optional_total' | 'optional_configured' | 'all_required_configured' | 'missing_required'
 >;
 
 export class AgentService {
@@ -87,22 +88,25 @@ export class AgentService {
         return { values, source, inherited, configured };
     }
 
-    private count_configured(required: SettingDef[], optional: SettingDef[], configured: Record<string, boolean>): SettingsCounts {
-        // UI badges depend on these tallies (required vs optional completeness).
-        let required_configured = 0;
+    /**
+     * UI badges depend on these tallies. Required settings follow the daemon's rule: only the ones
+     * whose `when` applies count, and a manifest default satisfies one (see missing_required_settings).
+     */
+    private count_configured(required: SettingDef[], optional: SettingDef[], configured: Record<string, boolean>, values: Record<string, string>): SettingsCounts {
+        const set: Record<string, string> = {};
+        for (const [k, v] of Object.entries(values)) if (configured[k]) set[k] = v;
+        const { applicable, missing } = missing_required_settings(required, [...required, ...optional], set);
         let optional_configured = 0;
-        for (const s of required) {
-            if (configured[s.key]) required_configured += 1;
-        }
         for (const s of optional) {
             if (configured[s.key]) optional_configured += 1;
         }
         return {
-            required_total: required.length,
-            required_configured,
+            required_total: applicable.length,
+            required_configured: applicable.length - missing.length,
             optional_total: optional.length,
             optional_configured,
-            all_required_configured: required.length === 0 || required_configured === required.length,
+            all_required_configured: missing.length === 0,
+            missing_required: missing,
         };
     }
 
@@ -355,7 +359,7 @@ export class AgentService {
             }
         }
 
-        const counts = this.count_configured(required, optional, maps.configured);
+        const counts = this.count_configured(required, optional, maps.configured, maps.values);
         return {
             id: agent.id,
             name,
@@ -405,7 +409,7 @@ export class AgentService {
                 }
             }
 
-            const counts = this.count_configured(required, optional, maps.configured);
+            const counts = this.count_configured(required, optional, maps.configured, maps.values);
             summaries.push({
                 id: agent.id,
                 name: agent.name,

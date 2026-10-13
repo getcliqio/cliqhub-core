@@ -36,11 +36,12 @@ export const SettingsData = z.object({
 	source: z.record(z.string(), z.enum(['org', 'realm']).nullable()).describe('Where each value was set (org, realm, or unset)'),
 	inherited: z.record(z.string(), z.boolean()).describe('True when the value is inherited rather than local'),
 	configured: z.record(z.string(), z.boolean()).describe('True when the key has a non-empty resolved value'),
-	required_total: z.number().describe('Count of required keys'),
-	required_configured: z.number().describe('Count of required keys that are configured'),
+	required_total: z.number().describe('Count of required keys that apply (a `when` that does not match leaves a key out)'),
+	required_configured: z.number().describe('Count of those that are set or have a manifest default'),
 	optional_total: z.number().describe('Count of optional keys'),
 	optional_configured: z.number().describe('Count of optional keys that are configured'),
-	all_required_configured: z.boolean().describe('True when every required key is configured'),
+	all_required_configured: z.boolean().describe('True when every required key that applies is set or defaulted (the daemon’s rule)'),
+	missing_required: z.array(z.string()).describe('Required keys that apply and are neither set nor defaulted'),
 	mcp: z.unknown().optional().describe("The agent manifest's mcp block (transports, allow_custom, presets) when the agent supports MCP servers"),
 });
 export type SettingsData = z.infer<typeof SettingsData>;
