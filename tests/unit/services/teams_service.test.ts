@@ -809,9 +809,8 @@ describe('TeamsService — unpublish', () => {
         const result = await service.unpublish(ALICE, { name: 'my-team', scope: 'alice' });
         expect(result.status).toBe('draft');
         expect(result.listed).toBe(false);
-        expect(team_repo.update_visibility_and_listed).toHaveBeenCalledWith(
-            hub_legacy_uuid(1), 'draft', 0,
-        );
+        // Back to draft inside the same transaction that takes it off realms' team lists.
+        expect(team_repo.update_visibility_and_listed.mock.calls[0].slice(0, 3)).toEqual([hub_legacy_uuid(1), 'draft', 0]);
     });
 
     it('admin can unpublish by team_id with audit', async () => {

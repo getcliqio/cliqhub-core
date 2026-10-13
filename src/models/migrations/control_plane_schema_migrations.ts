@@ -544,6 +544,7 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     // Soft-delete for realms — keep row for audit; filter deleted from APIs.
     await run(`ALTER TABLE cliq."realms" ADD COLUMN IF NOT EXISTS "deleted" BOOLEAN NOT NULL DEFAULT false`);
     await run(`ALTER TABLE cliq."realms" ADD COLUMN IF NOT EXISTS "deleted_at" BIGINT`);
+    await run(`ALTER TABLE cliq."realms" ADD COLUMN IF NOT EXISTS "description" TEXT`);
     await run(`CREATE INDEX IF NOT EXISTS "realms_deleted_idx" ON cliq."realms" ("deleted")`);
 
     // v2 Notifications: tiered notification rules (replaces subscriptions).

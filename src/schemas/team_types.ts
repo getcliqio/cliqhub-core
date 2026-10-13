@@ -449,6 +449,8 @@ export const TeamMutationData = z.object({
     listed: z.boolean().optional().describe('Listed flag (present after unpublish)'),
     draft_saved_at: z.string().nullable().optional()
         .describe('teams/update: when the working copy was saved (save_as draft), or null after a version was minted'),
+    uninstalled_from: z.array(z.object({ realm_id: z.string(), realm_slug: z.string() })).optional()
+        .describe('teams/unpublish: the realms it was removed from (all of them, or unpublish is refused)'),
 });
 export type TeamMutationData = z.infer<typeof TeamMutationData>;
 

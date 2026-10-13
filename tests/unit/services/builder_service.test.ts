@@ -345,7 +345,35 @@ describe('validate', () => {
 		const result = service.validate(AUTH as any, { team: team as any });
 
 		expect(result.valid).toBe(false);
-		expect(result.errors.some(e => e.includes('requires review.reviewer'))).toBe(true);
+		expect(result.errors.some(e => e.includes('requires a reviewer'))).toBe(true);
+	});
+
+	it('hand-written review.reviewers (channels / users) counts as a reviewer, and {{inputs.x}} counts as using x', () => {
+		// The shape of cliq/examples/hello-hug/team.yml.
+		const team = make_team({
+			inputs: [{ name: 'reviewers', description: 'who reviews' }],
+			phases: [
+				{ name: 'dev', type: 'standard', depends_on: [] },
+				{ name: 'review', type: 'gate', depends_on: ['dev'], agent: 'hug', review: { timeout: '30m', reviewers: [{ policy: 'any', channels: ['{{inputs.reviewers}}'] }] } },
+			],
+			roles: [
+				{ name: 'dev', content: LONG_ROLE_CONTENT },
+				{ name: 'review', content: LONG_ROLE_CONTENT },
+			],
+		});
+		const result = service.validate(AUTH as any, { team: team as any });
+
+		expect(result.errors.filter(e => e.includes('reviewer'))).toEqual([]);
+		expect(result.warnings.some(w => w.includes('never referenced'))).toBe(false);
+		// An empty reviewers list is still no reviewer.
+		const empty = make_team({
+			phases: [
+				{ name: 'dev', type: 'standard', depends_on: [] },
+				{ name: 'review', type: 'gate', depends_on: ['dev'], agent: 'hug', review: { reviewers: [{ policy: 'any', channels: [] }] } },
+			],
+			roles: [{ name: 'dev', content: LONG_ROLE_CONTENT }, { name: 'review', content: LONG_ROLE_CONTENT }],
+		});
+		expect(service.validate(AUTH as any, { team: empty as any }).errors.some(e => e.includes('requires a reviewer'))).toBe(true);
 	});
 
 	it('passes when hug gate has review.reviewer', () => {

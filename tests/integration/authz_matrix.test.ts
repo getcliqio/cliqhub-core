@@ -145,8 +145,9 @@ const MATRIX: Record<string, Row> = {
     'POST /v1/orgs/delete_scope': { expect: ACME_ADMIN_PERM },
     'POST /v1/orgs/assign_scope_member': { expect: ACME_ADMIN_PERM },
     'POST /v1/orgs/unassign_scope_member': { expect: ACME_ADMIN_PERM },
-    'POST /v1/orgs/set_notification_rules': { expect: ACME_OWNER_ONLY, body: NO_REALM },
-    'POST /v1/orgs/remove_notification_rules': { expect: ACME_OWNER_ONLY, body: id('rule_acme') },
+    // rules.manage is in the default Admin role (no longer owner-only).
+    'POST /v1/orgs/set_notification_rules': { expect: ACME_ADMIN_PERM, body: NO_REALM },
+    'POST /v1/orgs/remove_notification_rules': { expect: ACME_ADMIN_PERM, body: id('rule_acme') },
     'POST /v1/invitations/create': { expect: A1_ADMIN },
     'POST /v1/invitations/get': { expect: A1_ADMIN },
     'POST /v1/invitations/get_by_id': { expect: ACME_ADMIN_PERM },

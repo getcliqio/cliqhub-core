@@ -55,10 +55,28 @@ interface TargetEntry {
 
 interface GeneratedReviewBlock {
 	reviewer?: string;
+	/** Hand-written team.yml: who reviews, as users and/or channels (`[{ policy, channels, users }]`). */
+	reviewers?: Array<{ policy?: string; channels?: unknown; users?: unknown } | string>;
 	artifacts?: string[];
 	timeout?: string;
 	remind_every?: string;
 }
+
+/** Names a human review asks: `review.reviewer`, or the users / channels in `review.reviewers`. */
+export function review_targets(review: GeneratedReviewBlock | undefined): string[] {
+	if (!review) return [];
+	const out: string[] = [];
+	const add = (v: unknown) => { if (typeof v === 'string' && v.trim()) out.push(v); else if (Array.isArray(v)) v.forEach(add); };
+	add(review.reviewer);
+	for (const r of Array.isArray(review.reviewers) ? review.reviewers : []) {
+		if (typeof r === 'string') add(r);
+		else if (r && typeof r === 'object') { add(r.channels); add(r.users); }
+	}
+	return out;
+}
+
+/** `$(inputs.x)` (Builder style) and `{{inputs.x}}` (team.yml templating). */
+const INPUT_REF = /\$\(inputs\.(\w+)\)|\{\{\s*inputs\.(\w+)\s*\}\}/g;
 
 interface GeneratedPhase {
 	name: string;
@@ -259,8 +277,8 @@ function validate_team(team: GeneratedTeam): ValidationResult {
 			if (!p.commands || p.commands.length === 0) {
 				warnings.push(`Hug phase "${p.name}" has no commands — the reviewer will have no automated results to evaluate`);
 			}
-			if (!p.review?.reviewer) {
-				errors.push(`Hug phase "${p.name}" requires review.reviewer`);
+			if (!review_targets(p.review).length) {
+				errors.push(`Hug phase "${p.name}" requires a reviewer (review.reviewer, or users / channels in review.reviewers)`);
 			}
 		}
 
@@ -373,22 +391,14 @@ function validate_team(team: GeneratedTeam): ValidationResult {
 					if (c.run) fields.push(c.run);
 				}
 			}
-			if (p.review?.reviewer) fields.push(p.review.reviewer);
+			fields.push(...review_targets(p.review));
 			for (const f of fields) {
-				const re = /\$\(inputs\.(\w+)\)/g;
-				let m;
-				while ((m = re.exec(f)) !== null) {
-					referenced.add(m[1]);
-				}
+				for (const m of f.matchAll(INPUT_REF)) referenced.add(m[1] ?? m[2]);
 			}
 		}
 		for (const role of team.roles) {
 			if (role.content) {
-				const re = /\$\(inputs\.(\w+)\)/g;
-				let m;
-				while ((m = re.exec(role.content)) !== null) {
-					referenced.add(m[1]);
-				}
+				for (const m of role.content.matchAll(INPUT_REF)) referenced.add(m[1] ?? m[2]);
 			}
 		}
 		for (const inp of team.inputs) {

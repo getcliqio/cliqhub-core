@@ -104,8 +104,14 @@ export class RealmController extends BaseController {
         const body = this.parse_body(RealmCreateInput, req);
         // Route policy: realms.create in body.org_id.
 
+        // One transaction: the realm, its people, its invites and its enrollment token — or nothing.
         const realm = await this._realm.create(user.user_id, body.slug, body.name, {
             org_id: body.org_id,
+            description: body.description,
+            members: body.members,
+            invites: body.invites,
+            enroll_token: body.enroll_token,
+            auth: req.auth,
         });
         log.info('realm_created', { id: realm.id });
         res.json({ ok: true, realm });
@@ -143,6 +149,7 @@ export class RealmController extends BaseController {
             offset: body.offset,
             sort_by: body.sort_by,
             sort_dir: body.sort_dir,
+            with_stats: body.with_stats,
             ...(site_admin ? { site_admin: true } : {}),
         });
         res.json({
@@ -214,7 +221,7 @@ export class RealmController extends BaseController {
         // Zod SoT — realm_id + name; no body org_id required for mutations.
         const body = this.parse_body(RealmUpdateInput, req);
         // No header org gate — RealmService enforces caller may mutate this realm.
-        const realm = await this._realm.update(body.realm_id, user.user_id, { name: body.name });
+        const realm = await this._realm.update(body.realm_id, user.user_id, { name: body.name, description: body.description });
         log.info('realm_updated', { id: body.realm_id });
         res.json({ ok: true, realm });
     }

@@ -1,11 +1,25 @@
 import { org_standing, visible_realm_ids } from '../auth/route_policy/visible.js';
 import { default_daemon_grant, type Token_grant } from '../auth/grants.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { Op, fn, col, type WhereOptions } from 'sequelize';
+import { Op, QueryTypes, fn, col, literal, type WhereOptions } from 'sequelize';
 
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import { get_sequelize } from '../lib/sequelize.js';
+
+/** Realm list sort keys: columns, plus counts worked out per realm. */
+export type RealmSortKey = 'slug' | 'name' | 'created_at' | 'updated_at' | 'created_by' | 'members' | 'online_daemons' | 'active_runs';
+
+/** Per-realm counts as SQL over the outer `"Realm"` row (used to sort and to report them). */
+const REALM_STAT_SQL = {
+    /** People (users) who are members. */
+    members: `(SELECT count(*) FROM cliq."realm_members" m WHERE m."realm_id"::text = "Realm"."id"::text AND m."member_type" = 'user')`,
+    /** Daemons in the realm that are online now. */
+    online_daemons: `(SELECT count(*) FROM cliq."realm_members" m JOIN cliq."daemons" d ON d."id"::text = m."member_id"::text
+                       WHERE m."realm_id"::text = "Realm"."id"::text AND m."member_type" = 'daemon' AND d."status" = 'online')`,
+    /** Runs running or awaiting input. */
+    active_runs: `(SELECT count(*) FROM cliq."team_runs" ru WHERE ru."realm_id"::text = "Realm"."id"::text AND ru."state" IN ('running', 'awaiting_input'))`,
+} as const;
 import { AgentWorkflow } from '../lib/agent_workflow.js';
 import { SemVer } from '../lib/semver.js';
 import type { RealmModel } from '../models/realm.model.js';
@@ -48,6 +62,29 @@ const SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const TOKEN_PREFIX = 'cliq_dt_';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/** Teams every new realm starts with. */
+const BUILTIN_REALM_TEAMS = [{ scope: 'cliq', slug: 'hello-world' }] as const;
+
+/** What a realm create can include besides the realm itself — all saved together. */
+export interface Realm_create_extras {
+    description?: string | null;
+    /** People already in the org, added straight away. */
+    members?: Array<{ user_id: string; role: string }>;
+    /** Emails invited (a pending membership; the email goes out after the create commits). */
+    invites?: Array<{ email: string; role: string }>;
+    /** An enrollment token for the realm, returned once. */
+    enroll_token?: { name: string };
+    /** The caller (needed for invites). */
+    auth?: import('../schemas/auth_types.js').AuthContext;
+}
+
+/** What a create added besides the realm. */
+export interface Realm_create_result {
+    members_added?: Array<{ user_id: string; role: string }>;
+    invites?: Array<{ email: string; role: string; email_sent: boolean; invite_url: string | null }>;
+    enroll_token?: { id: string; name: string; token: string } | null;
+}
+
 export interface Realm_dto {
     id: string;
     slug: string;
@@ -56,6 +93,8 @@ export interface Realm_dto {
     /** Qualified slug in `org.realm` format (null if org unknown). */
     qualified_slug: string | null;
     name: string;
+    /** What the realm is for; null when not set. */
+    description: string | null;
     owner_user_id: string;
     created_by: string;
     /** Resolved Hub username for created_by when available. */
@@ -166,6 +205,7 @@ function to_realm_dto(
         org_slug,
         qualified_slug: org_slug ? `${org_slug}.${row.slug}` : null,
         name: row.name,
+        description: row.description ?? null,
         owner_user_id: row.owner_user_id || row.created_by,
         created_by: row.created_by,
         created_by_username,
@@ -290,8 +330,8 @@ export class RealmService {
         user_id: string,
         slug: string,
         name: string,
-        opts?: { org_id?: string | null },
-    ): Promise<Realm_dto> {
+        opts?: { org_id?: string | null } & Realm_create_extras,
+    ): Promise<Realm_dto & Realm_create_result> {
         assert_slug(slug);
         const trimmed_name = name.trim();
         if (!trimmed_name) throw ApiError.bad_request('name is required');
@@ -320,27 +360,59 @@ export class RealmService {
         const dup = await _realm_repo.find_one_q({ where: dup_where });
         if (dup) throw ApiError.conflict(`Realm slug '${slug}' already exists in this org`);
 
+        // Everything the caller asked for is checked before anything is written…
+        const plan = await RealmService._plan_create(user_id, String(org_id), opts);
+
+        // …then written together: the realm (with hello-world on its team list), its owner, the people
+        // added, the invites and the enrollment token. Any failure rolls all of it back.
         const ts = now_ms();
-        const realm = await _realm_repo.create_one({
-            id: randomUUID(),
-            slug,
-            name: trimmed_name,
-            owner_user_id: user_id,
-            created_by: user_id,
-            org_id,
-            deleted: false,
-            deleted_at: null,
-            created_at: ts,
-            updated_at: ts,
+        const realm_id = randomUUID();
+        const sq = get_sequelize();
+        const invitations = plan.invites.length ? await RealmService._invitations() : null;
+        const result = await sq.transaction(async (t) => {
+            const realm = await _realm_repo.create_one({
+                id: realm_id,
+                slug,
+                name: trimmed_name,
+                description: opts?.description?.trim() || null,
+                owner_user_id: user_id,
+                created_by: user_id,
+                org_id,
+                team_list: [...BUILTIN_REALM_TEAMS] as any,
+                deleted: false,
+                deleted_at: null,
+                created_at: ts,
+                updated_at: ts,
+            } as any, { transaction: t });
+            await _realm_member_repo.create_one({
+                id: randomUUID(), realm_id, member_type: 'user', member_id: user_id, role: 'admin', created_at: ts,
+            }, { transaction: t });
+            for (const m of plan.members) {
+                await _realm_member_repo.create_one({
+                    id: randomUUID(), realm_id, member_type: 'user', member_id: m.user_id, role: m.role, created_at: ts,
+                }, { transaction: t });
+            }
+            const sent = [];
+            for (const inv of plan.invites) {
+                const invitee = await invitations!.invitee_user_id(opts!.auth!, inv.email, { t });
+                sent.push(await invitations!.send_in_transaction(t, {
+                    target: 'realm', org_id: String(org_id), realm_id, email: inv.email, role: inv.role,
+                    user_id: invitee, actor_id: user_id, now: new Date(ts),
+                }));
+            }
+            const token = opts?.enroll_token
+                ? await RealmService._mint_realm_token([realm_id], user_id, opts.enroll_token.name, undefined, t)
+                : null;
+            return { realm, sent, token };
         });
-        await _realm_member_repo.create_one({
-            id: randomUUID(),
-            realm_id: realm.id,
-            member_type: 'user',
-            member_id: user_id,
-            role: 'admin',
-            created_at: ts,
-        });
+        const realm = result.realm;
+        // After commit: how each invite went out (email sent, or a link to share).
+        const invites_out = [];
+        for (const s of result.sent) {
+            const d = await invitations!.delivery_outcome(s);
+            invites_out.push({ email: s.invite.email as string, role: s.invite.role as string, email_sent: d.email_sent, invite_url: d.invite_url });
+        }
+        log.info('realm_created_with', { realm_id, members: plan.members.length, invites: plan.invites.length, token: Boolean(result.token) });
         await NotificationService.ensure_realm_members_channel(realm.id);
 
         // Snapshot org-level agent credentials into the fresh realm so
@@ -383,7 +455,59 @@ export class RealmService {
             });
         }
 
-        return to_realm_dto_enriched(realm);
+        return {
+            ...(await to_realm_dto_enriched(realm)),
+            members_added: plan.members.map((m) => ({ user_id: m.user_id, role: m.role })),
+            invites: invites_out,
+            enroll_token: result.token ? { id: result.token.id, name: result.token.name, token: result.token.token } : null,
+        };
+    }
+
+    /**
+     * Check a create's people before anything is written: each person added is an active member of
+     * the org (not the creator, not twice); invite emails are valid and not also added; roles are
+     * realm roles.
+     *
+     * @throws ApiError 422 `invalid_params` naming the field, 409 when someone is listed twice.
+     */
+    private static async _plan_create(user_id: string, org_id: string, opts?: Realm_create_extras): Promise<{
+        members: Array<{ user_id: string; role: Realm_member_role }>;
+        invites: Array<{ email: string; role: Realm_member_role }>;
+    }> {
+        const roles = new Set(['admin', 'operator', 'member']);
+        const members: Array<{ user_id: string; role: Realm_member_role }> = [];
+        const seen = new Set<string>([user_id]);
+        for (const m of opts?.members ?? []) {
+            if (!roles.has(m.role)) throw ApiError.unprocessable(`members: unknown role '${m.role}'`, 'invalid_params');
+            if (seen.has(m.user_id)) continue;
+            const { OrgMember } = await import('../models/index.js');
+            const active = await OrgMember.findOne({ where: { org_id, user_id: m.user_id, status: 'active', deleted_at: null } as any, attributes: ['user_id'], raw: true });
+            if (!active) throw ApiError.unprocessable('members: everyone added must already be in the organization — invite the others by email', 'invalid_params');
+            seen.add(m.user_id);
+            members.push({ user_id: m.user_id, role: m.role as Realm_member_role });
+        }
+        const invites: Array<{ email: string; role: Realm_member_role }> = [];
+        const emails = new Set<string>();
+        if (opts?.invites?.length && !opts.auth) throw ApiError.bad_request('invites need the caller');
+        const { normalize_email } = await import('../lib/account_fields.js');
+        for (const i of opts?.invites ?? []) {
+            if (!roles.has(i.role)) throw ApiError.unprocessable(`invites: unknown role '${i.role}'`, 'invalid_params');
+            const email = normalize_email(i.email, 'invites');
+            if (emails.has(email)) continue;
+            emails.add(email);
+            invites.push({ email, role: i.role as Realm_member_role });
+        }
+        if (opts?.enroll_token && !opts.enroll_token.name.trim()) throw ApiError.unprocessable('enroll_token: a name is required', 'invalid_params');
+        return { members, invites };
+    }
+
+    /** The invitations service, for the invite steps of a create (no container in this static service). */
+    private static async _invitations() {
+        const [{ InvitationsService }, { ReactivationService }, { OrgRepository }, { UserRepository: Users }] = await Promise.all([
+            import('./invitations_service.js'), import('./reactivation.service.js'),
+            import('../repositories/org_repository.js'), import('../repositories/user_repository.js'),
+        ]);
+        return new InvitationsService(new OrgRepository(), new ScopeRepository(), new Users(), new ReactivationService());
     }
 
     /**
@@ -656,17 +780,19 @@ export class RealmService {
             org_id?: string;
             limit?: number;
             offset?: number;
-            sort_by?: 'slug' | 'name' | 'created_at' | 'updated_at' | 'created_by';
+            sort_by?: RealmSortKey;
             sort_dir?: 'asc' | 'desc';
             /** Site admins (`all: true`): every realm, not only the caller's memberships. */
             site_admin?: boolean;
+            /** Add member_count / online_daemons / active_runs to each realm. */
+            with_stats?: boolean;
         },
     ): Promise<{ realms: Realm_dto[]; total: number }> {
         const opts: {
             slug?: string; query?: string; owned?: 'me' | 'default'; org_id?: string;
             limit?: number; offset?: number;
-            sort_by?: 'slug' | 'name' | 'created_at' | 'updated_at' | 'created_by';
-            sort_dir?: 'asc' | 'desc'; site_admin?: boolean;
+            sort_by?: RealmSortKey;
+            sort_dir?: 'asc' | 'desc'; site_admin?: boolean; with_stats?: boolean;
         } = typeof filters === 'string' ? { slug: filters } : (filters ?? {});
         const query = opts.query?.trim();
         const pattern = query ? `%${escape_like(query)}%` : null;
@@ -675,6 +801,7 @@ export class RealmService {
                 [Op.or]: [
                     { slug: { [Op.iLike]: pattern } },
                     { name: { [Op.iLike]: pattern } },
+                    { description: { [Op.iLike]: pattern } },
                 ],
             }
             : null;
@@ -693,6 +820,7 @@ export class RealmService {
         const limit = opts.limit;
         const offset = opts.offset ?? 0;
 
+        const stat = REALM_STAT_SQL[sort_by as keyof typeof REALM_STAT_SQL];
         const { rows, count } = await _realm_repo.find_and_count_q({
             where: {
                 ...(realm_ids ? { id: { [Op.in]: realm_ids } } : {}),
@@ -702,11 +830,28 @@ export class RealmService {
                 ...(query_clause ?? {}),
                 ...(owned_clause ?? {}),
             },
-            // id breaks ties so equal values (e.g. created_by) page stably.
-            order: [[sort_by, sort_dir], ['id', 'ASC']],
+            // Counted columns sort in the database; id breaks ties so equal values page stably.
+            order: [[stat ? literal(stat) : sort_by, sort_dir], ['id', 'ASC']],
             ...(limit != null ? { limit, offset } : {}),
         });
-        return { realms: await to_realm_dtos(rows), total: count };
+        const realms = await to_realm_dtos(rows);
+        if (!opts.with_stats || !realms.length) return { realms, total: count };
+        const stats = await RealmService.stats_for(realms.map((r) => r.id));
+        return { realms: realms.map((r) => ({ ...r, ...(stats.get(r.id) ?? { member_count: 0, online_daemons: 0, active_runs: 0 }) })), total: count };
+    }
+
+    /** People, daemons online now, and runs running or awaiting input — per realm, one query. */
+    static async stats_for(realm_ids: string[]): Promise<Map<string, { member_count: number; online_daemons: number; active_runs: number }>> {
+        if (!realm_ids.length) return new Map();
+        const rows = await get_sequelize().query<{ id: string; member_count: string; online_daemons: string; active_runs: string }>(
+            `SELECT "Realm"."id"::text AS id,
+                    ${REALM_STAT_SQL.members} AS member_count,
+                    ${REALM_STAT_SQL.online_daemons} AS online_daemons,
+                    ${REALM_STAT_SQL.active_runs} AS active_runs
+               FROM cliq."realms" "Realm" WHERE "Realm"."id"::text IN (:ids)`,
+            { replacements: { ids: realm_ids }, type: QueryTypes.SELECT },
+        );
+        return new Map(rows.map((r) => [r.id, { member_count: Number(r.member_count), online_daemons: Number(r.online_daemons), active_runs: Number(r.active_runs) }]));
     }
 
     /**
@@ -843,7 +988,7 @@ export class RealmService {
     static async update(
         realm_id: string,
         user_id: string,
-        patch: { name?: string },
+        patch: { name?: string; description?: string | null },
     ): Promise<Realm_dto> {
         // Callers authorized this: realms/update (route policy: admin + realms.update).
         const realm = await _realm_repo.find_by_id(realm_id);
@@ -854,6 +999,7 @@ export class RealmService {
             if (!trimmed) throw ApiError.bad_request('name is required');
             realm.name = trimmed;
         }
+        if (patch.description !== undefined) realm.description = patch.description?.trim() || null;
         realm.updated_at = now_ms();
         await realm.save();
         return to_realm_dto_enriched(realm);
@@ -1276,6 +1422,17 @@ export class RealmService {
         for (const realm_id of realm_ids) {
             await RealmService.assert_member(realm_id, user_id);
         }
+        return RealmService._mint_realm_token(realm_ids, user_id, name, permissions_override);
+    }
+
+    /** Mint a realm (enrollment) token; `t` keeps it in the caller's transaction (realm create). */
+    private static async _mint_realm_token(
+        realm_ids: string[],
+        user_id: string,
+        name: string,
+        permissions_override?: Record<string, unknown>,
+        t?: import('sequelize').Transaction,
+    ): Promise<Realm_token_created> {
         const trimmed = name.trim();
         if (!trimmed) throw ApiError.bad_request('token name is required');
 
@@ -1308,7 +1465,7 @@ export class RealmService {
             token_prefix: token_hash.slice(0, 16),
             permissions,
             revoked_at: null,
-        });
+        }, t ? { transaction: t } : undefined);
         return {
             ...to_token_dto(row as unknown as Parameters<typeof to_token_dto>[0], realm_ids[0]),
             token: plaintext,

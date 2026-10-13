@@ -19,24 +19,34 @@ export const RealmOrgIdField = z.string().uuid().describe(
 );
 
 /** POST /v1/realms/create */
+const RealmRoleField = z.enum(['admin', 'operator', 'member']).describe('Role in the realm');
 export const RealmCreateInput = z.object({
     org_id: RealmOrgIdField,
     slug: z.string().min(1).describe('URL-safe realm slug unique within the org'),
     name: z.string().min(1).describe('Display name'),
-});
+    description: z.string().max(500).optional().describe('What the realm is for'),
+    members: z.array(z.object({ user_id: z.string().min(1), role: RealmRoleField })).max(100).optional()
+        .describe('People already in the org, added to the realm'),
+    invites: z.array(z.object({ email: z.string().min(3), role: RealmRoleField })).max(100).optional()
+        .describe('Emails to invite (sent after the realm is created)'),
+    enroll_token: z.object({ name: z.string().min(1).max(100) }).optional()
+        .describe('Create an enrollment token with the realm; returned once'),
+}).describe('Everything given is saved together, or nothing is');
 export type RealmCreateInput = z.infer<typeof RealmCreateInput>;
 
 /** POST /v1/realms/get — list / filter (omit org_id = all orgs the user is in). */
 export const RealmGetInput = z.object({
     slug: z.string().min(1).optional().describe('Exact slug filter'),
-    query: z.string().min(1).optional().describe('Substring search on slug or name'),
+    query: z.string().min(1).optional().describe('Substring search on slug, name or description'),
     owned: z.enum(['me', 'default']).optional().describe('me = owned by caller; default = personal default realm'),
     org_id: RealmOrgIdField.optional().describe('When set, only realms in this org'),
     limit: z.number().int().min(1).max(100).optional().describe('Page size (default server-side)'),
     offset: z.number().int().min(0).optional().describe('Page offset'),
-    sort_by: z.enum(['slug', 'name', 'created_at', 'updated_at', 'created_by']).optional()
-        .describe('Sort column'),
+    sort_by: z.enum(['slug', 'name', 'created_at', 'updated_at', 'created_by', 'members', 'online_daemons', 'active_runs']).optional()
+        .describe('Sort column (members / online_daemons / active_runs are counted per realm)'),
     sort_dir: z.enum(['asc', 'desc']).optional().describe('Sort direction'),
+    with_stats: z.boolean().optional()
+        .describe('Add member_count (people), online_daemons and active_runs (running or awaiting input) to each realm'),
     all: z.boolean().optional().describe('Site admins only: every record on the hub, not just the caller\'s realm memberships (ignored for everyone else). org_id still narrows.'),
 });
 export type RealmGetInput = z.infer<typeof RealmGetInput>;
@@ -108,6 +118,7 @@ export type RealmGetByIdInput = z.infer<typeof RealmGetByIdInput>;
 export const RealmUpdateInput = z.object({
     realm_id: z.string().min(1).describe('Realm UUID to update'),
     name: z.string().min(1).optional().describe('New display name'),
+    description: z.string().max(500).nullable().optional().describe('What the realm is for; empty or null clears it'),
 });
 export type RealmUpdateInput = z.infer<typeof RealmUpdateInput>;
 
@@ -192,6 +203,8 @@ export const RealmData = z.object({
         .describe('"org_slug.realm_slug" for org realms; null for personal realms'),
     name: z.string()
         .describe('Realm display name'),
+    description: z.string().nullable()
+        .describe('What the realm is for; null when not set'),
     owner_user_id: z.string().uuid()
         .describe('UUID of the user who owns this realm'),
     created_by: z.string().uuid()
@@ -204,6 +217,9 @@ export const RealmData = z.object({
         .describe('Epoch ms of last update'),
     members: z.array(RealmMemberData).optional()
         .describe('Populated on get_by_id; absent on list'),
+    member_count: z.number().int().optional().describe('realms/get with with_stats: people in the realm'),
+    online_daemons: z.number().int().optional().describe('realms/get with with_stats: daemons online now'),
+    active_runs: z.number().int().optional().describe('realms/get with with_stats: runs running or awaiting input'),
 });
 
 export type RealmData = z.infer<typeof RealmData>;

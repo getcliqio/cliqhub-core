@@ -516,8 +516,11 @@ export class TeamsService {
 
         const origin = params.forked_from ? await this._fork_origin(auth, params.forked_from) : null;
         const description = params.description || origin?.description || '';
-        const manifest_yaml = resolve_manifest_yaml(params)
+        const sent_manifest = resolve_manifest_yaml(params);
+        const manifest_yaml = sent_manifest
             ?? (origin ? with_manifest_name(origin.manifest_yaml, params.name) : null);
+        // A fork of the origin's own team.yml keeps its role briefs too (a manifest sent with the fork wins).
+        const roles_json = !sent_manifest && origin ? origin.roles_json : null;
         const scope_record = auth.scopes.find((s) => s.slug === params.scope);
         const scope_type = scope_record?.scope_type || null;
 
@@ -532,7 +535,7 @@ export class TeamsService {
 
             if (manifest_yaml) {
                 version = '0.1.0';
-                await this._seed_version_from_manifest(team_id, version, manifest_yaml, description, t);
+                await this._seed_version_from_manifest(team_id, version, manifest_yaml, description, t, roles_json);
             }
             if (origin) await this._team_repo.set_fork_origin(team_id, origin.team_id, origin.version, t);
         });
@@ -632,6 +635,16 @@ export class TeamsService {
     }
 
     /** Return a draft team to draft status (visibility draft, listed 0). Versions kept. */
+    /**
+     * Unpublish: back to draft, and off every realm that has it — all or nothing. Every realm whose
+     * team list has the team is checked first against the same rule as `realms/remove_team`
+     * (operate + realms.teams.manage). If the caller can't remove it from any one of them, nothing
+     * changes (403 `unpublish_blocked`, naming the realms they can see and counting the rest).
+     * Otherwise the team leaves every team list and goes back to draft in one transaction; the
+     * daemons are then told to uninstall it (best effort, like `realms/remove_team`).
+     *
+     * @throws ApiError 403 `unpublish_blocked` when the caller can't remove it from a realm that has it.
+     */
     async unpublish(auth: AuthContext, params: {
         name?: string; scope?: string; team_id?: string;
     }) {
@@ -640,11 +653,66 @@ export class TeamsService {
         assert_access(auth, 'teams', 'write');
 
         const team = await this._resolve_team_for_write(auth, params);
-        await this._team_repo.update_visibility_and_listed(team.id, 'draft', 0);
+        const scope = team.scope ?? '';
+        const slug = team.name;
+        const sq = get_sequelize();
+        const has_team = `EXISTS (SELECT 1 FROM jsonb_array_elements(r."team_list") e
+                           WHERE e->>'slug' = :slug AND NULLIF(e->>'scope', '') IS NOT DISTINCT FROM NULLIF(:scope, ''))`;
+        const realms = await sq.query<{ id: string; slug: string }>(
+            `SELECT r."id", r."slug" FROM cliq."realms" r WHERE NOT r."deleted" AND ${has_team} ORDER BY r."slug"`,
+            { replacements: { slug, scope }, type: QueryTypes.SELECT },
+        );
+
+        // Pre-flight: the caller must be able to remove it from every one of them.
+        const [{ ROUTE_POLICY }, { decide }, { SequelizeAccessStore }] = await Promise.all([
+            import('../auth/route_policy/table.js'), import('../auth/route_policy/engine.js'), import('../auth/route_policy/store.js'),
+        ]);
+        const policy = ROUTE_POLICY['POST /v1/realms/remove_team'];
+        const store = new SequelizeAccessStore();
+        const blocked: Array<{ realm_id: string; realm_slug: string }> = [];
+        let hidden = 0;
+        for (const r of realms) {
+            const d = await decide(policy, { method: 'POST', path: '/v1/realms/remove_team', body: { realm_id: r.id, scope, slug }, auth }, store, { allow_pat_daemon_writes: false });
+            if (d.allow) continue;
+            if (d.status === 404) hidden += 1; else blocked.push({ realm_id: r.id, realm_slug: r.slug });
+        }
+        if (blocked.length || hidden) {
+            const parts = [
+                ...(blocked.length ? [`you can't remove it from ${blocked.map((b) => b.realm_slug).join(', ')}`] : []),
+                ...(hidden ? [`it's installed in ${hidden} realm${hidden === 1 ? '' : 's'} you can't see`] : []),
+            ];
+            log.info('team_unpublish_blocked', { team_id: team.id, realms: realms.length, blocked: blocked.length, hidden });
+            throw new ApiError('unpublish_blocked', `Not unpublished: ${parts.join(', and ')}. Ask someone who can remove it there, then try again.`, 403, { blocked, hidden });
+        }
+
+        await sq.transaction(async (t) => {
+            if (realms.length) {
+                await sq.query(
+                    `UPDATE cliq."realms" r SET "team_list" = COALESCE((
+                         SELECT jsonb_agg(e) FROM jsonb_array_elements(r."team_list") e
+                          WHERE NOT (e->>'slug' = :slug AND NULLIF(e->>'scope', '') IS NOT DISTINCT FROM NULLIF(:scope, ''))
+                     ), '[]'::jsonb), "updated_at" = :now
+                     WHERE r."id" IN (:ids)`,
+                    { replacements: { slug, scope, now: Date.now(), ids: realms.map((r) => r.id) }, transaction: t },
+                );
+            }
+            await this._team_repo.update_visibility_and_listed(team.id, 'draft', 0, t);
+        });
+
+        // After commit: tell each realm's daemons to uninstall it (as realms/remove_team does).
+        const { DispatchService } = await import('./dispatch.service.js');
+        for (const r of realms) {
+            await DispatchService.uninstall_team({ scope, slug, realm_id: r.id, user_id: auth.user.id, org_ids: auth.org_ids })
+                .catch((err) => log.warn('team_unpublish_uninstall_failed', { team_id: team.id, realm_id: r.id, error: err instanceof Error ? err.message : String(err) }));
+            void import('./mesh_lifecycle.service.js')
+                .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(r.id))
+                .catch(() => {});
+        }
+        log.info('team_unpublished', { team_id: team.id, uninstalled_from: realms.length });
 
         if (auth.user.role === 'admin' && team.author_id !== auth.user.id && this._audit_repo) {
             await this._audit_repo.create(auth.user.id, 'team.unpublish', 'team', team.id, {
-                name: team.name, scope: team.scope,
+                name: team.name, scope: team.scope, uninstalled_from: realms.map((r) => r.slug),
             });
         }
 
@@ -653,7 +721,10 @@ export class TeamsService {
             name: team.name,
             scope: team.scope,
             status: 'draft' as const,
+            version: null,
             listed: false,
+            /** Realms it was removed from. */
+            uninstalled_from: realms.map((r) => ({ realm_id: r.id, realm_slug: r.slug })),
         };
     }
 
@@ -955,6 +1026,8 @@ export class TeamsService {
      */
     private async _fork_origin(auth: AuthContext, ref: { team_id: string; version?: string }): Promise<{
         team_id: string; version: string; manifest_yaml: string; description: string;
+        /** The version's role briefs (`roles_json`), copied into the fork. */
+        roles_json: string | null;
     }> {
         const source = await this._team_repo.find_by_id(ref.team_id);
         if (!source || !can_read_team(auth, source)) throw new ApiError('not_found', 'Team to fork not found', 404);
@@ -963,7 +1036,8 @@ export class TeamsService {
         const detail = await this._version_repo.find_detail_by_team_and_version(source.id, version);
         const manifest_yaml = (detail as { manifest_yaml?: string | null } | null)?.manifest_yaml;
         if (!detail || !manifest_yaml) throw new ApiError('not_found', `Version ${version} not found`, 404);
-        return { team_id: source.id, version, manifest_yaml, description: source.description };
+        const roles_json = (detail as { roles_json?: string | null }).roles_json ?? null;
+        return { team_id: source.id, version, manifest_yaml, description: source.description, roles_json };
     }
 
     /**
@@ -1014,6 +1088,8 @@ export class TeamsService {
         manifest_yaml: string,
         description: string,
         transaction?: import('sequelize').Transaction,
+        /** Role briefs to keep (a fork copies its origin's); none otherwise. */
+        roles_json: string | null = null,
     ): Promise<void> {
         const team_yml = parse_manifest_yaml(manifest_yaml);
         const workflow = workflow_from_team_yml(team_yml);
@@ -1026,13 +1102,12 @@ export class TeamsService {
         });
         const agents_json = JSON.stringify(team_yml?.agents || {});
         const tools = JSON.stringify(team_yml?.tools || []);
-        const roles_json = '[]';
         const pkg_path = `draft://${team_id}/${version}`;
 
         await this._version_repo.create(
             team_id, version, description || '', pkg_path,
             team_yml?.cliq_version || null, tools, workflow_json, manifest_yaml,
-            '', capability_json, agents_json, roles_json, transaction,
+            '', capability_json, agents_json, roles_json ?? '[]', transaction,
         );
     }
 

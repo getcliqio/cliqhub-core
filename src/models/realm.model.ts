@@ -10,6 +10,8 @@ export class Realm extends BaseModel {
     declare id: string;
     declare slug: string;
     declare name: string;
+    /** What the realm is for (optional). */
+    declare description: string | null;
     /** Account that owns this realm (billing / delete authority). */
     declare owner_user_id: string;
     declare created_by: string;
@@ -36,6 +38,7 @@ export class Realm extends BaseModel {
             id: { type: DataTypes.TEXT, primaryKey: true },
             slug: { type: DataTypes.TEXT, allowNull: false },
             name: { type: DataTypes.TEXT, allowNull: false },
+            description: { type: DataTypes.TEXT, allowNull: true, defaultValue: null },
             owner_user_id: { type: DataTypes.TEXT, allowNull: false },
             created_by: { type: DataTypes.TEXT, allowNull: false },
             org_id: { type: DataTypes.UUID, allowNull: false },

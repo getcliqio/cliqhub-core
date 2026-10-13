@@ -149,7 +149,7 @@ describe('RealmController org_id tenancy', () => {
             String(hub_legacy_uuid(1)),
             'prod',
             'Prod',
-            { org_id: ORG_A },
+            expect.objectContaining({ org_id: ORG_A }),
         );
         expect(res.json).toHaveBeenCalledWith({ ok: true, realm: expect.any(Object) });
     });
@@ -170,7 +170,7 @@ describe('RealmController org_id tenancy', () => {
             expect.any(String),
             'prod',
             'Prod',
-            { org_id: ORG_A },
+            expect.objectContaining({ org_id: ORG_A }),
         );
     });
 
