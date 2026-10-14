@@ -414,6 +414,29 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
             expect(await NotificationRule.count({ where: { id: locked.id } })).toBe(1);
         });
 
+        it('a locked org rule can\'t be replaced in a realm (409 locked); nothing is written', async () => {
+            const { rule: locked } = await locked_rule_and_channel();
+            const before = await NotificationRule.count({ where: { realm_id: s.A1, event: locked.event } });
+            const set = await post('/v1/realms/set_notification_rules', s.token.olivia, { realm_id: s.A1, event: locked.event, channel_id: s.channel_a1 });
+            expect(set.status, JSON.stringify(set.body)).toBe(409);
+            expect(err(set).code).toBe('locked');
+            expect(await NotificationRule.count({ where: { realm_id: s.A1, event: locked.event } })).toBe(before);
+        });
+
+        it('rules switch on and off (enabled): reads carry it, a new rule is on, an update keeps it unless told', async () => {
+            const event = `custom.onoff${s.stamp}`;
+            const made = await post('/v1/realms/set_notification_rules', s.token.olivia, { realm_id: s.A1, event, channel_id: s.channel_a1, priority: 3 });
+            expect(made.status, JSON.stringify(made.body)).toBe(200);
+            expect(made.body.data).toMatchObject({ enabled: true, priority: 3 });
+            const off = await post('/v1/realms/set_notification_rules', s.token.olivia, { realm_id: s.A1, event, channel_id: s.channel_a1, enabled: false });
+            expect(off.body.data).toMatchObject({ id: made.body.data.id, enabled: false, priority: 3 });
+            const same = await post('/v1/realms/set_notification_rules', s.token.olivia, { realm_id: s.A1, event, channel_id: s.channel_a1, priority: 4 });
+            expect(same.body.data).toMatchObject({ enabled: false, priority: 4 });
+            const list = await post('/v1/realms/get_notification_rules', s.token.olivia, { realm_id: s.A1 });
+            expect(list.body.data.find((r: { id: string }) => r.id === made.body.data.id)).toMatchObject({ enabled: false, realm_id: s.A1 });
+            await post('/v1/realms/remove_notification_rules', s.token.olivia, { id: made.body.data.id });
+        });
+
         it('updating or removing a locked channel answers 409 locked; the In-app channel is editable', async () => {
             const { channel: locked, key } = await locked_rule_and_channel();
             const upd = await post('/v1/notification_channels/update', s.token.olivia, { id: locked.id, enabled: false });

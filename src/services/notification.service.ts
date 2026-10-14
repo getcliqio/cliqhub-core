@@ -67,6 +67,7 @@ function to_rule_data(r: NotificationRule): NotificationRuleData {
 		system_key: r.system_key ?? null,
 		locked: Boolean(r.locked),
 		lock_reason: r.lock_reason ?? null,
+		enabled: r.enabled !== false,
 	};
 }
 
@@ -650,8 +651,9 @@ export class NotificationService {
 				team_slug: { [Op.is]: null },
 				event: { [Op.in]: event_selectors },
 			} as any);
+			// Switched-off realm rules still replace the org's (that's "off in this realm"); they just send nothing.
 			if (realm_rules.length > 0) {
-				return [...new Set(realm_rules.map((r) => r.channel_id))];
+				return [...new Set(realm_rules.filter((r) => r.enabled !== false).map((r) => r.channel_id))];
 			}
 		}
 
@@ -659,6 +661,7 @@ export class NotificationService {
 			realm_id: { [Op.is]: null },
 			team_slug: { [Op.is]: null },
 			event: { [Op.in]: event_selectors },
+			enabled: true,
 		};
 		if (opts.org_id) {
 			global_where.org_id = opts.org_id;
@@ -683,6 +686,7 @@ export class NotificationService {
 			realm_id: { [Op.is]: null },
 			team_slug: { [Op.is]: null },
 			event: { [Op.in]: NotificationService.build_matching_selectors(opts.event) },
+			enabled: true,
 		}, { order: [['priority', 'DESC'], ['created_at', 'ASC']] });
 		return rows.map((r) => ({ id: String(r.id), channel_id: r.channel_id }));
 	}
@@ -717,10 +721,13 @@ export class NotificationService {
 		const realm_rules = await NotificationService.list_rules({ realm_id });
 
 		const realm_events = new Set(realm_rules.map((r) => r.event));
+		// Same matching as delivery: an org rule is replaced when a realm rule's selector (exact,
+		// family wildcard or *) covers it — e.g. a realm `run.*` replaces the org's `run.failed`.
+		const replaced = (event: string) => NotificationService.build_matching_selectors(event).some((s) => realm_events.has(s));
 
 		const effective: Array<NotificationRuleData & { tier: 'global' | 'realm' }> = [];
 		for (const r of global_rules) {
-			if (!realm_events.has(r.event)) {
+			if (!replaced(r.event)) {
 				effective.push({ ...r, tier: 'global' });
 			}
 		}
@@ -746,6 +753,8 @@ export class NotificationService {
 		event: string;
 		channel_id: string;
 		priority?: number;
+		/** On or off; a new rule is on unless this says otherwise, an existing one keeps its state when omitted. */
+		enabled?: boolean;
 	}): Promise<NotificationRuleData> {
 		log.debug('set_rule', { event: data.event, channel_id: data.channel_id, realm_id: data.realm_id });
 		const realm_id = data.realm_id?.trim() || null;
@@ -783,6 +792,19 @@ export class NotificationService {
 		}
 
 
+		// A locked org rule (e.g. reviewers always hear about a review) can't be replaced in a realm.
+		if (realm_id) {
+			const realm = await realm_repo.find_by_id(realm_id);
+			const org_locked = realm?.org_id ? await rule_repo.find_one({
+				realm_id: { [Op.is]: null },
+				org_id: realm.org_id,
+				team_slug: { [Op.is]: null },
+				event,
+				locked: true,
+			} as any) : null;
+			if (org_locked) throw ApiError.locked(org_locked.system_key ?? '', `The org's rule for ${event} is locked and can't be replaced in a realm`);
+		}
+
 		const now = Date.now();
 		const existing = await rule_repo.find_one({
 			realm_id: realm_id ? realm_id : { [Op.is]: null },
@@ -794,7 +816,8 @@ export class NotificationService {
 		if (existing) {
 			if (existing.locked) throw ApiError.locked(existing.system_key ?? '', `The rule for ${existing.event} is a system rule and can't be changed`);
 			await existing.update({
-				priority: data.priority ?? 0,
+				priority: data.priority ?? existing.priority ?? 0,
+				...(data.enabled === undefined ? {} : { enabled: data.enabled }),
 				updated_at: now,
 			});
 			return to_rule_data(existing);
@@ -808,6 +831,7 @@ export class NotificationService {
 			channel_id,
 			priority: data.priority ?? 0,
 			recipients: null,
+			enabled: data.enabled ?? true,
 			created_at: now,
 			updated_at: now,
 		} as any);

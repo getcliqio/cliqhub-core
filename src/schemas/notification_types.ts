@@ -111,6 +111,7 @@ export const NotificationRulesSetInput = z.object({
     event: z.string().min(1).describe('Event selector (exact type, family wildcard like run.*, or *)'),
     channel_id: z.string().min(1).describe('Target notification channel id'),
     priority: z.number().int().optional().describe('Rule priority (higher wins within a tier when supported)'),
+    enabled: z.boolean().optional().describe('Switch the rule on or off (default on for a new rule; unchanged when omitted). A rule sends only when it and its channel are on.'),
 }).superRefine((data, ctx) => {
     const has_realm = Boolean(data.realm_id?.trim());
     if (!has_realm && !data.org_id) {
@@ -196,6 +197,7 @@ export const NotificationRuleData = z.object({
 	system_key: z.string().nullable().describe('Stable key of a rule CliqHub seeded (e.g. invite.sent.invitee), else null'),
 	locked: z.boolean().describe('True when the rule cannot be changed or removed (409 locked)'),
 	lock_reason: z.string().nullable().describe('Why the rule is locked'),
+	enabled: z.boolean().describe('False when switched off: the rule sends nothing (a realm rule that is off still replaces the org\'s for its event)'),
 });
 export type NotificationRuleData = z.infer<typeof NotificationRuleData>;
 

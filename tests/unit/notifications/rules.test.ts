@@ -71,9 +71,11 @@ type MockRows = Array<Record<string, unknown>>;
 
 function seed_rules(rows: Array<{
     realm_id?: string | null;
+    org_id?: string | null;
     team_slug?: string | null;
     event: string;
     channel_id: string;
+    enabled?: boolean;
 }>): void {
     const store = (NotificationRule as unknown as { _rows: MockRows })._rows;
     store.length = 0;
@@ -81,7 +83,9 @@ function seed_rules(rows: Array<{
         store.push({
             id: Math.floor(Math.random() * 10000),
             realm_id: r.realm_id ?? null,
+            org_id: r.org_id ?? null,
             team_slug: r.team_slug ?? null,
+            enabled: r.enabled ?? true,
             event: r.event,
             channel_id: r.channel_id,
             priority: 0,
@@ -191,5 +195,65 @@ describe('resolve_rules — realm, else org', () => {
         expect(result).toContain('ch-slack');
         expect(result).toContain('ch-email');
         expect(result).toHaveLength(2);
+    });
+});
+
+
+describe('rules on / off — a rule sends only when it (and its channel) is on', () => {
+    beforeEach(() => seed_rules([]));
+
+    it('a realm whose rules for the event are all off sends nothing — the org\'s rule doesn\'t come back', async () => {
+        seed_rules([
+            { event: 'run.failed', channel_id: 'ch-org' },
+            { realm_id: 'realm-1', event: 'run.failed', channel_id: 'ch-org', enabled: false },
+        ]);
+        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-1' })).toEqual([]);
+        // Other realms still get the org's rule.
+        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-2' })).toEqual(['ch-org']);
+    });
+
+    it('a replaced event sends only to the realm rules that are on', async () => {
+        seed_rules([
+            { event: 'run.failed', channel_id: 'ch-org' },
+            { realm_id: 'realm-1', event: 'run.failed', channel_id: 'ch-org', enabled: false },
+            { realm_id: 'realm-1', event: 'run.failed', channel_id: 'ch-realm' },
+        ]);
+        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-1' })).toEqual(['ch-realm']);
+    });
+
+    it('an org rule that is paused sends nothing; its other rules still do', async () => {
+        seed_rules([
+            { event: 'run.failed', channel_id: 'ch-paused', enabled: false },
+            { event: 'run.*', channel_id: 'ch-on' },
+        ]);
+        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-1' })).toEqual(['ch-on']);
+    });
+
+    it('org-event rules skip paused ones', async () => {
+        seed_rules([
+            { org_id: 'org-1', event: 'invite.sent', channel_id: 'ch-paused', enabled: false },
+            { org_id: 'org-1', event: 'invite.*', channel_id: 'ch-on' },
+        ]);
+        const rules = await NotificationService.resolve_org_rules({ event: 'invite.sent', org_id: 'org-1' });
+        expect(rules.map((r: { channel_id: string }) => r.channel_id)).toEqual(['ch-on']);
+    });
+});
+
+describe('list_effective_rules — what applies in a realm matches delivery', () => {
+    beforeEach(() => seed_rules([]));
+
+    it('a realm wildcard replaces the org\'s exact rule; a realm exact rule leaves the org\'s wildcard (other events still use it)', async () => {
+        seed_rules([
+            { org_id: 'org-1', event: 'run.failed', channel_id: 'ch-org-failed' },
+            { org_id: 'org-1', event: 'phase.*', channel_id: 'ch-org-phase' },
+            { realm_id: 'realm-1', event: 'run.*', channel_id: 'ch-realm-run' },
+            { realm_id: 'realm-1', event: 'phase.failed', channel_id: 'ch-realm-phase', enabled: false },
+        ]);
+        const rows = await NotificationService.list_effective_rules('realm-1', 'org-1');
+        expect(rows.map((r: { event: string; tier: string; enabled: boolean }) => [r.event, r.tier, r.enabled])).toEqual([
+            ['phase.*', 'global', true],
+            ['phase.failed', 'realm', false],
+            ['run.*', 'realm', true],
+        ]);
     });
 });

@@ -722,6 +722,11 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`CREATE INDEX IF NOT EXISTS "notification_rules_org_id_idx"
                ON cliq."notification_rules" ("org_id")`);
 
+    // ── notification_rules.enabled: a rule sends only when it and its channel are on ──
+    // A realm's rules for an event replace the org's there even when switched off (that's "off in this realm").
+    await run(`ALTER TABLE cliq."notification_rules"
+               ADD COLUMN IF NOT EXISTS "enabled" BOOLEAN NOT NULL DEFAULT true`);
+
     // ── team_runs.lease_expires_at (Hub action lease) ─────────────────
     // See DESIGN-control-message-reliability Phase 3.
     await run(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "lease_expires_at" BIGINT`);

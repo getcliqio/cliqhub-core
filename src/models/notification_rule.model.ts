@@ -36,6 +36,8 @@ export class NotificationRule extends BaseModel {
     declare locked: boolean;
     /** Why the rule is locked, shown next to the lock. */
     declare lock_reason: string | null;
+    /** A rule sends only when it and its channel are enabled. */
+    declare enabled: boolean;
 
     static register(sequelize: Sequelize): void {
         NotificationRule.init({
@@ -52,6 +54,7 @@ export class NotificationRule extends BaseModel {
             system_key: { type: DataTypes.TEXT, allowNull: true },
             locked: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
             lock_reason: { type: DataTypes.TEXT, allowNull: true },
+            enabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
         }, {
             sequelize,
             schema: 'cliq',
@@ -81,4 +84,5 @@ export type NotificationRuleAttributes = {
     priority: number;
     created_at: number;
     updated_at: number;
+    enabled?: boolean;
 };
