@@ -19,6 +19,7 @@ import { ReviewPendingService } from '../../src/services/review_pending.service.
 import { RealmService } from '../../src/services/realm.service.js';
 import {
 	NotificationChannel,
+	NotificationRule,
 	Realm,
 	RealmMember,
 	Review,
@@ -51,6 +52,7 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		if (!has_postgres) return;
 		await ReviewNotification.destroy({ where: {} });
 		await Review.destroy({ where: {} });
+		await NotificationRule.destroy({ where: {} });
 		await NotificationChannel.destroy({ where: {} });
 		await RealmMember.destroy({ where: {} });
 		await Realm.destroy({ where: {} });
@@ -205,53 +207,54 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		expect(pending.reviews).toHaveLength(0);
 	});
 
-	it('no-reviewer review is rejected (realm-broadcast removed)', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Broadcast');
+	it('a review without reviewers goes where the realm sends review requests: by default every member can answer it', async () => {
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Default reviewers');
 		await RealmMember.create({
-			id: `rm-${uid()}`,
-			realm_id: realm.id,
-			member_type: 'user',
-			member_id: hub_legacy_uuid(2),
-			role: 'operator',
-			created_at: Date.now(),
+			id: `rm-${uid()}`, realm_id: realm.id, member_type: 'user', member_id: hub_legacy_uuid(2), role: 'operator', created_at: Date.now(),
 		});
+		// Provisioned with the realm: review requests → "All realm members".
+		expect(await NotificationRule.count({ where: { realm_id: realm.id, event: 'hug.review_requested', channel_id: `cliqhub-${realm.id}` } })).toBe(1);
 
-		/** Creating a review with no reviewers must fail. */
-		await expect(
-			HugReviewsService.create({
-				run_id: 'run-broadcast',
-				daemon_id: 'd-broadcast',
-				realm_id: realm.id,
-				payload: { phase: 'human-review', message: 'No reviewers test' },
-				timeout_minutes: 60,
-			}),
-		).rejects.toMatchObject({ status_code: 400 });
+		const created = await HugReviewsService.create({
+			run_id: 'run-default', daemon_id: 'd-default', realm_id: realm.id, payload: { phase: 'human-review' }, timeout_minutes: 60,
+		});
+		const rows = await ReviewNotification.findAll({ where: { review_id: created.review_id } });
+		expect(rows.map((r) => ({ channel_id: r.channel_id, user_id: r.user_id }))).toEqual([{ channel_id: `cliqhub-${realm.id}`, user_id: null }]);
+
+		for (const member of [hub_legacy_uuid(1), hub_legacy_uuid(2)]) {
+			const listed = await ReviewPendingService.list_for_user({ user_id: member });
+			expect(listed.reviews.map((r) => r.review_id)).toContain(created.review_id);
+			await expect(HugReviewsService.authorize_verdict_via_notification(rows[0].id, created.review_id, member)).resolves.toBeUndefined();
+		}
+		const outsider = hub_legacy_uuid(3);
+		expect((await ReviewPendingService.list_for_user({ user_id: outsider })).reviews).toHaveLength(0);
+		await expect(HugReviewsService.authorize_verdict_via_notification(rows[0].id, created.review_id, outsider)).rejects.toMatchObject({ status_code: 403 });
 	});
 
-	it('no-reviewer review is rejected even for non-members', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(2), `r-${uid()}`.slice(0, 40), 'ScopedOut');
-		await expect(
-			HugReviewsService.create({
-				run_id: 'run-scoped',
-				daemon_id: 'd-scoped',
-				realm_id: realm.id,
-				payload: { phase: 'human-review' },
-				timeout_minutes: 60,
-			}),
-		).rejects.toMatchObject({ status_code: 400 });
+	it('a realm whose review requests go nowhere refuses a review without reviewers (it never waits unseen)', async () => {
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Nobody');
+		await NotificationRule.destroy({ where: { realm_id: realm.id, event: 'hug.review_requested' } });
+		await expect(HugReviewsService.create({
+			run_id: 'run-nobody', daemon_id: 'd-nobody', realm_id: realm.id, payload: { phase: 'human-review' }, timeout_minutes: 60,
+		})).rejects.toMatchObject({ status_code: 400, message: expect.stringContaining('hug.review_requested') });
+		expect(await Review.count({ where: { run_id: 'run-nobody' } })).toBe(0);
 	});
 
-	it('no-reviewer review is rejected for authorization checks', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'BroadcastAuth');
-		await expect(
-			HugReviewsService.create({
-				run_id: 'run-auth',
-				daemon_id: 'd-auth',
-				realm_id: realm.id,
-				payload: { phase: 'human-review' },
-				timeout_minutes: 60,
-			}),
-		).rejects.toMatchObject({ status_code: 400 });
+	it('the realm can send review requests to another shared channel: its members see and answer them there', async () => {
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Leads');
+		const leads = `ch-${uid()}`;
+		await NotificationChannel.create({
+			id: leads, realm_id: realm.id, org_id: null, user_id: null, name: `leads-${uid()}`.slice(0, 30), enabled: 1, created_at: Date.now(), updated_at: Date.now(),
+		});
+		await NotificationRule.update({ channel_id: leads }, { where: { realm_id: realm.id, event: 'hug.review_requested' } });
+
+		const created = await HugReviewsService.create({
+			run_id: 'run-leads', daemon_id: 'd-leads', realm_id: realm.id, mode: 'input_pause', payload: { phase: 'implement', summary: 'Which DB?' }, timeout_minutes: 60,
+		} as never);
+		const rows = await ReviewNotification.findAll({ where: { review_id: created.review_id } });
+		expect(rows.map((r) => r.channel_id)).toEqual([leads]);
+		const listed = await ReviewPendingService.list_for_user({ user_id: hub_legacy_uuid(1) });
+		expect(listed.reviews.find((r) => r.review_id === created.review_id)?.notification_id).toBe(rows[0].id);
 	});
 
 	it('a REJECT decides at once: first response under `any`; one reject under `all` (no waiting for approvals)', async () => {

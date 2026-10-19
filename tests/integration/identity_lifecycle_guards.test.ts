@@ -11,7 +11,7 @@
  *     the lifecycle fields of the member org list;
  *   - concurrent creates, accepts and revokes answer 200 / 409, never 500;
  *   - users/new reactivation with a different email, username or role;
- *   - rule recipients from outside the org, account orgs of new people,
+ *   - account orgs of new people,
  *     password length limits, the boot backfill run twice at once;
  *   - no token or link in any log line or event row.
  */
@@ -28,7 +28,7 @@ import { seed_authz, type Seed } from '../helpers/authz_seed.js';
 import { use_test_link_env } from '../helpers/link_env.js';
 import { accept_invite_url, token_from_invite_url } from '../helpers/invite_links.js';
 import {
-    AccountInvite, HubEvent, NotificationChannel, NotificationRule, Org, OrgMember, OrgRole, PasswordReset,
+    AccountInvite, ChannelDestination, HubEvent, NotificationChannel, NotificationRule, Org, OrgMember, OrgRole, PasswordReset,
     Realm, RealmInvite, RealmMember, User,
 } from '../../src/models/index.js';
 import { run_invite_sweep } from '../../src/services/invite_sweep.service.js';
@@ -251,15 +251,16 @@ describe.skipIf(!has_postgres)('identity lifecycle guards', () => {
             expect(await RealmMember.count({ where: { realm_id: realm.id, member_id: s.user.ben } })).toBe(1);
         });
 
-        it('an unlocked default rule the owners removed stays removed when the org is reactivated', async () => {
-            const created = await new_org({ slug: uniq('rmrule'), owner: { user_id: s.user.ben } });
+        it('the default In-app channel the owners removed stays removed when the org is reactivated', async () => {
+            const created = await new_org({ slug: uniq('rmchan'), owner: { user_id: s.user.ben } });
             const org_id = created.body.data.org.id as string;
-            const rule = (await NotificationRule.findOne({ where: { org_id, locked: false }, raw: true }))!;
-            await NotificationRule.destroy({ where: { id: rule.id } });
+            const in_app = (await NotificationChannel.findOne({ where: { org_id, system_key: 'org.in_app' }, raw: true }))!;
+            await ChannelDestination.destroy({ where: { channel_id: in_app.id } });
+            await NotificationChannel.destroy({ where: { id: in_app.id } });
             expect((await post('/internal/orgs/delete', s.token.sam, { org_id })).status).toBe(200);
             const back = await post('/v1/orgs/new', s.token.sam, { slug: created.body.data.org.slug, owner: { user_id: s.user.ben }, reactivate: true });
             expect(back.status, JSON.stringify(back.body)).toBe(200);
-            expect(await NotificationRule.count({ where: { org_id, system_key: rule.system_key, event: rule.event, channel_id: rule.channel_id } })).toBe(0);
+            expect(await NotificationChannel.count({ where: { org_id, system_key: 'org.in_app' } })).toBe(0);
         });
     });
 
@@ -331,7 +332,7 @@ describe.skipIf(!has_postgres)('identity lifecycle guards', () => {
             expect(account).toMatchObject({ owner_id: user.id, status: 'active' });
             const owner_role = (await OrgRole.findOne({ where: { org_id: account.id, slug: 'owner' }, raw: true }))!;
             expect(await OrgMember.findOne({ where: { org_id: account.id, user_id: user.id }, raw: true })).toMatchObject({ role_id: owner_role.id, status: 'active' });
-            expect(await NotificationRule.count({ where: { org_id: account.id, system_key: 'user.password_changed.user' } })).toBeGreaterThan(0);
+            expect(await NotificationChannel.count({ where: { org_id: account.id, system_key: 'org.in_app' } })).toBe(1);
         });
 
         it('accept and revoke at once: exactly one wins', async () => {
@@ -393,17 +394,6 @@ describe.skipIf(!has_postgres)('identity lifecycle guards', () => {
     // ── other guards ──────────────────────────────────────────────────
 
     describe('other guards', () => {
-        it('a rule may name only active members of its org as recipients', async () => {
-            const open = (await NotificationRule.findOne({ where: { org_id: s.acme, system_key: 'invite.accepted.notify', locked: false }, raw: true }))!;
-            const body = { org_id: s.acme, event: open.event, channel_id: open.channel_id };
-            const outsider = await post('/v1/orgs/set_notification_rules', s.token.olivia, { ...body, recipients: ['org_owners', s.user.ben] });
-            expect(outsider.status).toBe(422);
-            expect(err(outsider)).toMatchObject({ code: 'invalid_params', details: { field: 'recipients', not_members: [s.user.ben] } });
-            const member = await post('/v1/orgs/set_notification_rules', s.token.olivia, { ...body, recipients: ['org_owners', s.user.adam] });
-            expect(member.status, JSON.stringify(member.body)).toBe(200);
-            await post('/v1/orgs/set_notification_rules', s.token.olivia, { ...body, recipients: open.recipients });
-        });
-
         it('passwords longer than the maximum are refused on signup, accept and the reset link', async () => {
             const long = 'x'.repeat(129);
             const signup = await post('/internal/auth/signup', null, { username: uniq('lng').slice(0, 20), email: new_email('lng'), password: long });
@@ -464,7 +454,7 @@ describe.skipIf(!has_postgres)('identity lifecycle guards', () => {
             orgs.push(org.id);
             const [a, b] = await Promise.all([OrgSeedService.backfill(), OrgSeedService.backfill()]);
             expect(a.orgs_seeded + b.orgs_seeded).toBeGreaterThanOrEqual(1);
-            expect(await NotificationChannel.count({ where: { org_id: org.id, system_key: 'org.email' } })).toBe(1);
+            expect(await NotificationChannel.count({ where: { org_id: org.id, system_key: 'org.in_app' } })).toBe(1);
             expect((await Org.findByPk(org.id, { raw: true }))!.notifications_seeded_at).not.toBeNull();
             await NotificationRule.destroy({ where: { org_id: org.id } });
             await NotificationChannel.destroy({ where: { org_id: org.id } });

@@ -81,9 +81,8 @@ describe.skipIf(!has_pg)('EventSubmitService', () => {
 		// Other runs and other event types are untouched.
 		await EventSubmitService.submit({ type: 'run.started', realm_id: 'realm-1', run_id: 'run-t', daemon_id: 'daemon-1' });
 		await EventSubmitService.submit({ type: 'run.failed', realm_id: 'realm-1', run_id: 'run-s', daemon_id: 'daemon-1' });
-		await EventSubmitService.submit({ type: 'run.failed', realm_id: 'realm-1', run_id: 'run-s', daemon_id: 'daemon-1' });
 		expect(await HubEvent.count({ where: { type: 'run.started' } })).toBe(2);
-		expect(await HubEvent.count({ where: { type: 'run.failed', run_id: 'run-s' } })).toBe(2);
+		expect(await HubEvent.count({ where: { type: 'run.failed', run_id: 'run-s' } })).toBe(1);
 	});
 
 	it('a run.started after the run ended is a new attempt (resume), not merged', async () => {

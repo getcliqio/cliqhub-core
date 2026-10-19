@@ -17,9 +17,11 @@ export const REALM_MEMBERS_CHANNEL_NAME = 'All realm members';
 
 /**
  * Events a new realm sends to its "All realm members" channel by default (ordinary rules people
- * can change or remove): a run needing input or stuck, and runs that failed or crashed.
+ * can change or remove): a run needing input or stuck, runs that failed or crashed, and review
+ * requests — the people a review request reaches are the ones who can answer it, so every realm
+ * starts with someone who can.
  */
-export const REALM_DEFAULT_RULE_EVENTS = ['phase.input_required', 'phase.idle', 'phase.timed_out', 'run.failed', 'run.crashed'] as const;
+export const REALM_DEFAULT_RULE_EVENTS = ['phase.input_required', 'phase.idle', 'phase.timed_out', 'run.failed', 'run.crashed', 'hug.review_requested'] as const;
 
 const log = get_logger('svc.notification');
 

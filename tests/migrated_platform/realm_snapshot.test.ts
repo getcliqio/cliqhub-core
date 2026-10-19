@@ -10,6 +10,7 @@ import { Realm, RealmMember } from '../../src/models/index.js';
 import { NotificationChannel } from '../../src/models/index.js';
 
 import { RealmService } from '../../src/services/realm.service.js';
+import { REALM_MEMBERS_CHANNEL_NAME } from '../../src/services/notification.service.js';
 import { OrgAgentSetting, UserRealmAgentSetting } from '../../src/models/index.js';
 import { RealmAgentSettingRepository } from '../../src/repositories/realm_agent_setting_repository.js';
 
@@ -95,14 +96,12 @@ describe.skipIf(!has_postgres)('RealmService.create snapshot behavior', () => {
         expect(rows).toHaveLength(0);
     });
 
-    it('creates realm cliqhub channel on realm create', async () => {
+    it('creates the realm\'s "All realm members" channel on realm create', async () => {
         const realm = await RealmService.create(user_a, 'snap-notifs', 'Snap Notifs');
 
-        /** Provider is no longer a column — the auto-provisioned realm
-         *  channel is identified by (realm_id, name='cliqhub') or by its
-         *  deterministic id `cliqhub-<realm_id>`. */
+        /** The auto-provisioned realm channel has the deterministic id `cliqhub-<realm_id>`. */
         const channel = await NotificationChannel.findOne({
-            where: { realm_id: realm.id, name: 'cliqhub' },
+            where: { realm_id: realm.id, name: REALM_MEMBERS_CHANNEL_NAME },
         });
         expect(channel).not.toBeNull();
         expect(channel!.id).toBe(`cliqhub-${realm.id}`);

@@ -175,6 +175,8 @@ describe.skipIf(!has_postgres)('webhook_deliveries audit', () => {
             destinations: webhook_dest(),
         });
         await NotificationService.set_rule({ realm_id: realm.id, event: 'run.*', channel_id: channel.id });
+        // Only the webhook channel hears it: the realm's "All realm members" in-app rules would deliver.
+        await NotificationRule.destroy({ where: { channel_id: `cliqhub-${realm.id}` } });
 
         vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
         const event = await EventSubmitService.submit({

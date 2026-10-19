@@ -252,33 +252,33 @@ export class HugReviewsService {
 			resolved_groups = await resolve_reviewer_groups(input.org_id, reviewer_groups);
 
 			/**
-			 * If any group resolved to zero destinations, log a warning and
-			 * discard the explicit groups so the realm-broadcast fallback
-			 * kicks in below. This is more resilient than hard-failing.
+			 * A reviewers block that names nobody who exists (a typo, a deleted channel) is refused:
+			 * sending it to the realm's default reviewers instead would hide the mistake.
 			 */
-			const empty_group = resolved_groups.find((g, i) => {
-				if (g.destinations.length === 0) {
-					log.warn('reviewer_group_empty', { group_index: i, org_id: input.org_id });
-					return true;
-				}
-				return false;
+			const unresolved = reviewer_groups.flatMap((g, i) => {
+				const found = new Set(resolved_groups[i]?.destinations.map((d) => d.target));
+				return g.channels.map((c) => c.trim()).filter((c) => c && !found.has(c));
 			});
-			if (empty_group) {
-				log.warn('reviewer_resolution_fallback_to_realm_broadcast', {
-					review_id: id, org_id: input.org_id,
-				});
-				resolved_groups = [];
+			if (resolved_groups.some((g) => g.destinations.length === 0)) {
+				log.warn('reviewer_group_empty', { review_id: id, org_id: input.org_id, unresolved });
+				throw ApiError.bad_request(
+					`No channel named ${unresolved.map((c) => `'${c}'`).join(', ')} in this org — check the gate's reviewers block`,
+				);
 			}
 		}
 
 		/**
-		 * No implicit fallback — reviewers must be explicit for verdict-mode
-		 * reviews. Input-pause and chat reviews are single-responder interactions
-		 * routed to the actor, not to reviewer groups.
+		 * No reviewers block (an agent question, a chat, a gate without one): the review goes
+		 * where the realm's rules send `hug.review_requested` — every realm is provisioned with
+		 * one to its "All realm members" channel. Nobody receiving it is refused, not left waiting.
 		 */
-		if (resolved_groups.length === 0 && mode !== 'input_pause' && mode !== 'chat') {
+		const from_rules = resolved_groups.length === 0;
+		if (from_rules) {
+			resolved_groups = await _groups_from_review_rules(input.realm_id, input.org_id ?? null);
+		}
+		if (resolved_groups.length === 0) {
 			throw ApiError.bad_request(
-				'No reviewers specified — add a reviewers block to the gate phase',
+				'Nobody receives review requests in this realm — add a notification rule for hug.review_requested, or a reviewers block on the gate',
 			);
 		}
 
@@ -360,9 +360,9 @@ export class HugReviewsService {
 		const phase = typeof input.payload.phase === 'string' ? input.payload.phase : null;
 		const team = typeof input.payload.team === 'string' ? input.payload.team : null;
 
-		/** Collect all resolved channel IDs for targeted delivery. */
+		/** The reviewers block's channels get it directly; channels from the rules already get it by rule. */
 		const target_channels: string[] = [];
-		for (const group of resolved_groups) {
+		for (const group of from_rules ? [] : resolved_groups) {
 			for (const dest of group.destinations) {
 				if (dest.channel_id) target_channels.push(dest.channel_id);
 				if (dest.named_channel_id) target_channels.push(dest.named_channel_id);
@@ -959,6 +959,27 @@ function _normalize_reviewer_groups(raw: unknown[]): ReviewerGroup[] {
 	const channels = raw.filter((r): r is string => typeof r === 'string' && r.trim().length > 0);
 	if (channels.length === 0) return [];
 	return [{ policy: 'any', channels }];
+}
+
+/**
+ * The reviewers of a review without a reviewers block: the enabled channels the realm's rules
+ * (else the org's) send `hug.review_requested` to, as one `any` group — the first answer decides.
+ * A person's channel assigns that person; a shared channel is answered by the realm's members.
+ */
+async function _groups_from_review_rules(realm_id: string, org_id: string | null): Promise<ResolvedGroup[]> {
+	const channel_ids = await NotificationService.resolve_rules({ event: 'hug.review_requested', realm_id, ...(org_id ? { org_id } : {}) });
+	const channels = await NotificationService.find_enabled_channels(channel_ids);
+	if (channels.length === 0) return [];
+	const destinations = channels
+		.map((c) => ({ id: String(c.id), name: String(c.name), user_id: c.user_id ? String(c.user_id) : null }))
+		.sort((a, b) => a.id.localeCompare(b.id))
+		.map((c) => ({
+			target: c.name,
+			user_id: c.user_id,
+			channel_id: c.user_id ? c.id : null,
+			named_channel_id: c.user_id ? null : c.id,
+		}));
+	return [{ policy: 'any', destinations }];
 }
 
 async function _evaluate_policy(

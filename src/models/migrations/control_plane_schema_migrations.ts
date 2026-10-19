@@ -1369,6 +1369,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_realm_members_channels(sq);
     await migrate_built_in_messages(sq);
     await grant_admin_rules_manage(sq);
+    await add_realm_review_rule(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -1691,5 +1692,66 @@ export async function grant_admin_rules_manage(sq: Sequelize): Promise<void> {
         _mig_log.info('admin_rules_manage_granted', { roles: roles.length });
     } catch (err) {
         _mig_log.error('admin_rules_manage_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+/** `cliq.settings` key marking the one-time review-request rule for existing realms as done. */
+export const REALM_REVIEW_RULE_KEY = 'migrate.realm_review_rule_2026_10';
+
+/**
+ * One time (Oct 2026): every realm is provisioned with a rule sending `hug.review_requested` to its
+ * "All realm members" channel — the people a review request reaches are the ones who can answer it.
+ * Adds that rule to each live realm that has no realm rule for review requests yet (`hug.review_requested`,
+ * `hug.*` or `*`); a realm that already routes them keeps its own choice.
+ */
+export async function add_realm_review_rule(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.notification_rules') AS r`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; r: string | null }>;
+        if (!tables?.s || !tables?.r) {
+            _mig_log.info('realm_review_rule_deferred', { reason: 'cliq.settings or cliq.notification_rules not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: REALM_REVIEW_RULE_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const { NotificationService } = await import('../../services/notification.service.js');
+        const realms = await sq.query(
+            `SELECT r."id" FROM cliq."realms" r
+             WHERE COALESCE(r."deleted", false) = false
+               AND NOT EXISTS (
+                 SELECT 1 FROM cliq."notification_rules" nr
+                 WHERE nr."realm_id" = r."id" AND nr."team_slug" IS NULL
+                   AND nr."event" IN ('hug.review_requested', 'hug.*', '*')
+               )`, { type: QueryTypes.SELECT }) as Array<{ id: string }>;
+        let added = 0;
+        for (const { id: realm_id } of realms) {
+            // The realm's channel as its owners left it (switched off stays off); created only when missing.
+            const [existing] = await sq.query(`SELECT "id" FROM cliq."notification_channels" WHERE "id" = :id`,
+                { replacements: { id: `cliqhub-${realm_id}` }, type: QueryTypes.SELECT }) as Array<{ id: string }>;
+            const channel_id = existing?.id ?? (await NotificationService.ensure_realm_members_channel(realm_id)).id;
+            const rows = await sq.query(
+                `INSERT INTO cliq."notification_rules"
+                    ("id", "realm_id", "org_id", "team_slug", "event", "channel_id", "priority", "recipients",
+                     "system_key", "locked", "lock_reason", "created_at", "updated_at")
+                 SELECT gen_random_uuid(), :realm_id, NULL, NULL, 'hug.review_requested', :channel_id, 0, NULL,
+                        'realm.members.hug.review_requested', false, NULL, EXTRACT(EPOCH FROM NOW()) * 1000, EXTRACT(EPOCH FROM NOW()) * 1000
+                 WHERE NOT EXISTS (
+                    SELECT 1 FROM cliq."notification_rules"
+                    WHERE "realm_id" = :realm_id AND "team_slug" IS NULL AND "event" = 'hug.review_requested'
+                 )
+                 RETURNING "id"`,
+                { replacements: { realm_id, channel_id }, type: QueryTypes.SELECT },
+            );
+            added += rows.length;
+        }
+
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: REALM_REVIEW_RULE_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('realm_review_rule_added', { realms: realms.length, rules_added: added });
+    } catch (err) {
+        _mig_log.error('realm_review_rule_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }

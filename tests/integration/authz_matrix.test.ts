@@ -237,6 +237,7 @@ const MATRIX: Record<string, Row> = {
     'GET /v1/reviews/stream_messages': { expect: A1_VIEW },
     'POST /v1/reviews/verdict': { expect: A1_OPERATE },
     'POST /v1/reviews/send_message': { expect: A1_DAEMON_WRITE },
+    'POST /v1/reviews/remind': { expect: A1_DAEMON_WRITE },
     'POST /v1/reviews/ack': { expect: A1_DAEMON_WRITE },
 
     // teams (default team = Mia's private team)

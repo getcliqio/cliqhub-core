@@ -1,9 +1,10 @@
-import { Op } from 'sequelize';
+import { Op, literal } from 'sequelize';
 
 import { get_logger } from '../lib/log.js';
 import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
 import { ReviewRepository } from '../repositories/review_repository.js';
 import { ReviewNotificationRepository } from '../repositories/review_notification_repository.js';
+import { get_sequelize } from '../lib/sequelize.js';
 
 const log = get_logger('svc.review_pending');
 
@@ -76,31 +77,11 @@ export class ReviewPendingService {
         const normalized_user_id = String(user_id);
 
         /**
-         * Discover reviews the caller can act on:
-         *   1. review_notifications rows targeting user_id (direct assignment).
-         *   2. shared-channel rows (user_id IS NULL) on the realm's cliqhub
-         *      broadcast channel, when the caller is a realm member.
-         *
          * Track review_id → notification_id so the frontend can post a
          * verdict against the correct notification row. Direct assignment
-         * wins over broadcast when both exist for the same review.
+         * wins over a shared channel when both exist for the same review.
          */
-        const broadcast_channel_ids = await _resolve_broadcast_channel_ids(user_id);
-
-        const notification_rows = await _review_notif_repo_rp.find_all_q({
-            where: {
-                [Op.or]: [
-                    { user_id: normalized_user_id },
-                    ...(broadcast_channel_ids.length > 0
-                        ? [{
-                            user_id: { [Op.is]: null } as any,
-                            channel_id: { [Op.in]: broadcast_channel_ids },
-                        }]
-                        : []),
-                ],
-            },
-            attributes: ['id', 'review_id', 'user_id'],
-        });
+        const notification_rows = await _actionable_rows(normalized_user_id);
 
         /** review_id → notification_id, preferring direct assignment. */
         const notification_id_by_review = new Map<string, string>();
@@ -251,35 +232,35 @@ export class ReviewPendingService {
     }
 }
 
-/** Review ids the user is notified about: direct assignment or their realms' broadcast channels. */
+/** Review ids the user can act on (see {@link _actionable_rows}). */
 async function _actionable_review_ids(user_id: string): Promise<string[]> {
-    const broadcast_channel_ids = await _resolve_broadcast_channel_ids(user_id);
-    const notification_rows = await _review_notif_repo_rp.find_all_q({
-        where: {
-            [Op.or]: [
-                { user_id },
-                ...(broadcast_channel_ids.length > 0
-                    ? [{
-                        user_id: { [Op.is]: null } as any,
-                        channel_id: { [Op.in]: broadcast_channel_ids },
-                    }]
-                    : []),
-            ],
-        },
-        attributes: ['review_id'],
-    });
-    return [...new Set(notification_rows.map((r) => r.review_id))];
+    const rows = await _actionable_rows(user_id);
+    return [...new Set(rows.map((r) => r.review_id))];
 }
 
 /**
- * Build the list of `cliqhub-<realm_id>` broadcast channel IDs for
- * every realm this user belongs to. Used to include realm-wide HUG
- * reviews (those with no explicit reviewers) in a user's pending list.
+ * The review_notifications rows the user can act on — the same rule as the verdict check:
+ *   1. rows assigned to the user (a person's channel);
+ *   2. shared-channel rows (no person: a realm or org channel, from a reviewers block or the
+ *      realm's `hug.review_requested` rule) of reviews in a realm the user is a member of.
  */
-async function _resolve_broadcast_channel_ids(user_id: string): Promise<string[]> {
+async function _actionable_rows(user_id: string): Promise<Array<{ id: string; review_id: string; user_id: string | null }>> {
     const memberships = await _realm_member_repo_rp.find_all_q({
         where: { member_type: 'user', member_id: user_id },
         attributes: ['realm_id'],
     });
-    return memberships.map((m) => `cliqhub-${m.realm_id}`);
+    const realm_ids = [...new Set(memberships.map((m) => String(m.realm_id)))];
+    const sq = get_sequelize();
+    const in_my_realms = realm_ids.length > 0
+        ? literal(`(SELECT "id" FROM cliq."reviews" WHERE "realm_id" IN (${realm_ids.map((id) => sq.escape(id)).join(', ')}))`)
+        : null;
+    return _review_notif_repo_rp.find_all_q({
+        where: {
+            [Op.or]: [
+                { user_id },
+                ...(in_my_realms ? [{ user_id: { [Op.is]: null } as any, review_id: { [Op.in]: in_my_realms } }] : []),
+            ],
+        },
+        attributes: ['id', 'review_id', 'user_id'],
+    });
 }

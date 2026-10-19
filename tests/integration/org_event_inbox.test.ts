@@ -2,8 +2,8 @@
  * Org events in the in-app inbox over HTTP on live Postgres (production app,
  * route policy enforced): who sees an accepted invite and a "You're invited"
  * notice through `notifications/get { org_id }`, that nobody else does, the
- * versioned default rules added once to orgs seeded before, and the boot
- * backfill of the org of older inbox rows.
+ * org defaults (just the In-app channel; versions raised once at boot), and
+ * the boot backfill of the org of older inbox rows.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -119,41 +119,29 @@ describe.skipIf(!has_postgres)('org events in the inbox', () => {
         expect(items[0].title).toBe('Your password was changed');
     });
 
-    it('orgs seeded before get the new default rules once at boot; a removed editable default stays removed', async () => {
+    it('orgs seeded by an older defaults version are raised to the current one at boot, once, without adding rules', async () => {
         const org = await Org.create({ slug: uniq('seedv'), display_name: 'Seed v', activated_at: new Date() } as never);
         await OrgSeedService.seed_org(org.id, { account: false });
-        // As seeded by the first version: no in-app copies yet, no version recorded.
-        const email_channel = (await NotificationChannel.findOne({ where: { org_id: org.id, system_key: 'org.email' }, raw: true }))!;
-        const in_app = (await NotificationChannel.findOne({ where: { org_id: org.id, system_key: 'org.in_app' }, raw: true }))!;
-        await NotificationRule.destroy({ where: { org_id: org.id, channel_id: in_app.id, system_key: { [Op.in]: ['invite.sent.invitee', 'invite.reminder.invitee'] } } });
         await Org.update({ notifications_seed_version: null } as never, { where: { id: org.id } });
-        // The owners removed an editable default of the first version.
-        await NotificationRule.destroy({ where: { org_id: org.id, channel_id: in_app.id, system_key: 'invite.declined.notify', event: 'invite.org.declined' } });
 
-        await OrgSeedService.upgrade_defaults();
-        await OrgSeedService.upgrade_defaults();
+        expect((await OrgSeedService.upgrade_defaults()).orgs_upgraded).toBeGreaterThanOrEqual(1);
+        expect((await OrgSeedService.upgrade_defaults()).orgs_upgraded).toBe(0);
 
-        const added = await NotificationRule.findAll({ where: { org_id: org.id, channel_id: in_app.id, system_key: 'invite.sent.invitee' }, raw: true });
-        expect(added.map((r) => r.event).sort()).toEqual(['invite.org.sent', 'invite.owner.sent', 'invite.realm.sent']);
-        expect(added.every((r) => !r.locked && JSON.stringify(r.recipients) === '["invitee"]')).toBe(true);
-        expect(await NotificationRule.count({ where: { org_id: org.id, channel_id: in_app.id, system_key: 'invite.reminder.invitee' } })).toBe(3);
-        expect(await NotificationRule.count({ where: { org_id: org.id, channel_id: in_app.id, system_key: 'invite.declined.notify', event: 'invite.org.declined' } })).toBe(0);
-        expect(await NotificationRule.count({ where: { org_id: org.id, channel_id: email_channel.id, system_key: 'invite.sent.invitee' } })).toBe(3);
         expect((await Org.findByPk(org.id, { raw: true }))!.notifications_seed_version).toBe(DEFAULTS_VERSION);
+        expect(await NotificationChannel.count({ where: { org_id: org.id, system_key: 'org.in_app' } })).toBe(1);
+        expect(await NotificationRule.count({ where: { org_id: org.id } })).toBe(0);
 
         const channels = (await NotificationChannel.findAll({ where: { org_id: org.id }, attributes: ['id'], raw: true })).map((c) => c.id);
-        await NotificationRule.destroy({ where: { org_id: org.id } });
         await ChannelDestination.destroy({ where: { channel_id: { [Op.in]: channels } } });
         await NotificationChannel.destroy({ where: { org_id: org.id } });
         await Org.destroy({ where: { id: org.id } });
     });
 
-    it('new orgs get in-app copies of every default email rule except the set-password email', async () => {
+    it('new orgs get the In-app channel and no rules: invite and account messages are built in', async () => {
         const u = await s.signup('defaults');
-        const in_app = (await NotificationChannel.findOne({ where: { org_id: u.org_id, system_key: 'org.in_app' }, raw: true }))!;
-        const keys = (await NotificationRule.findAll({ where: { org_id: u.org_id, channel_id: in_app.id }, raw: true })).map((r) => r.system_key);
-        expect(keys).toEqual(expect.arrayContaining(['invite.sent.invitee', 'invite.reminder.invitee', 'user.password_reset.user', 'user.password_changed.user']));
-        expect(keys).not.toContain('user.setup.user');
+        expect(await NotificationChannel.count({ where: { org_id: u.org_id, system_key: 'org.in_app' } })).toBe(1);
+        expect(await NotificationChannel.count({ where: { org_id: u.org_id, system_key: 'org.email' } })).toBe(0);
+        expect(await NotificationRule.count({ where: { org_id: u.org_id } })).toBe(0);
         expect((await Org.findByPk(u.org_id, { raw: true }))!.notifications_seed_version).toBe(DEFAULTS_VERSION);
     });
 

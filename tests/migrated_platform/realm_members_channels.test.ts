@@ -25,8 +25,10 @@ import { EventSubmitService } from '../../src/services/events_service.js';
 import { ensure_per_user_channel } from '../../src/services/per_user_channel.service.js';
 import { CliqHubDeliverer } from '../../src/notifications/deliverers/cliqhub_deliverer.js';
 import {
+	add_realm_review_rule,
 	migrate_realm_members_channels,
 	REALM_MEMBERS_MIGRATION_KEY,
+	REALM_REVIEW_RULE_KEY,
 } from '../../src/models/migrations/control_plane_schema_migrations.js';
 import {
 	ChannelDestination,
@@ -178,6 +180,33 @@ describe.skipIf(!has_postgres)('PLAN-channels E2: explicit channels', () => {
 			await NotificationRule.destroy({ where: { realm_id: l.realm.id, event: 'run.failed' } });
 			await migrate_realm_members_channels(NotificationChannel.sequelize!);
 			expect(await NotificationRule.count({ where: { realm_id: l.realm.id, event: 'run.failed' } })).toBe(0);
+		});
+	});
+
+	describe('one-time review-request rule for existing realms', () => {
+		beforeEach(async () => { await Setting.destroy({ where: { key: REALM_REVIEW_RULE_KEY } }); });
+
+		it('adds review requests → "All realm members" to a realm without one, once; a realm\'s own choice and a switched-off channel are kept', async () => {
+			const plain = await new_realm();
+			await NotificationRule.destroy({ where: { realm_id: plain.id, event: 'hug.review_requested' } });
+			const own = await new_realm();
+			await NotificationRule.destroy({ where: { realm_id: own.id, event: 'hug.review_requested' } });
+			await NotificationRule.create({ realm_id: own.id, org_id: null, team_slug: null, event: 'hug.*', channel_id: `cliqhub-${own.id}`, priority: 0, created_at: Date.now(), updated_at: Date.now() } as never);
+			const off = await new_realm();
+			await NotificationRule.destroy({ where: { realm_id: off.id, event: 'hug.review_requested' } });
+			await NotificationChannel.update({ enabled: 0 }, { where: { id: `cliqhub-${off.id}` } });
+
+			await add_realm_review_rule(NotificationChannel.sequelize!);
+			expect(await NotificationRule.count({ where: { realm_id: plain.id, event: 'hug.review_requested', channel_id: `cliqhub-${plain.id}` } })).toBe(1);
+			expect(await NotificationRule.count({ where: { realm_id: own.id, event: 'hug.review_requested' } })).toBe(0);
+			expect(await NotificationRule.count({ where: { realm_id: off.id, event: 'hug.review_requested' } })).toBe(1);
+			expect((await NotificationChannel.findByPk(`cliqhub-${off.id}`, { raw: true }))?.enabled).toBe(0);
+			expect(await Setting.findByPk(REALM_REVIEW_RULE_KEY)).toBeTruthy();
+
+			// Runs once: a rule removed afterwards stays removed.
+			await NotificationRule.destroy({ where: { realm_id: plain.id, event: 'hug.review_requested' } });
+			await add_realm_review_rule(NotificationChannel.sequelize!);
+			expect(await NotificationRule.count({ where: { realm_id: plain.id, event: 'hug.review_requested' } })).toBe(0);
 		});
 	});
 });

@@ -961,7 +961,7 @@ export class RunService {
     ): Promise<void> {
         try {
             const row = await _run_repo_rs.find_by_id(run_id, {
-                attributes: ['run_id', 'realm_id', 'daemon_id', 'run_name', 'team_id', 'current_phase'],
+                attributes: ['run_id', 'realm_id', 'daemon_id', 'run_name', 'team_id', 'current_phase', 'origin'],
             });
             if (!row) return;
 
