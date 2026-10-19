@@ -4,6 +4,7 @@
  * (Fresh and local databases; in production each cliq-agents release writes the full manifests.)
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { postgres_reachable } from '../migrated_platform/helpers/control_plane_store.js';
 import { open_live_hub_app, close_live_hub_app } from '../migrated_platform/helpers/live_hub_app.js';
 import { AgentCatalog } from '../../src/models/index.js';
@@ -42,6 +43,24 @@ describe.skipIf(!has_postgres)('built-in agent catalog seed', () => {
         expect(jira.action.required).toBe(true);
         expect(jira.sources).toMatchObject({ required: false, required_unless: ['target_entries'] });
         expect(jira.target_entries).toMatchObject({ required: false, required_unless: ['sources'] });
+    });
+
+    it('boots when a release already wrote the seed\'s version next to an older row (one row per name and version)', async () => {
+        const seeded = (await AgentCatalog.findOne({ where: { name: 'jira', is_system: true }, raw: true }))!;
+        await AgentCatalog.destroy({ where: { name: 'jira' } });
+        const now = Date.now();
+        const base = { name: 'jira', description: 'x', agent_type: seeded.agent_type, is_system: true, deleted: false, deleted_at: null, created_at: now, updated_at: now };
+        await AgentCatalog.create({ ...base, id: randomUUID(), version: '1.0.0', manifest: { inputs: {} } } as never);
+        await AgentCatalog.create({ ...base, id: randomUUID(), version: seeded.version, manifest: { inputs: { from_release: {} } } } as never);
+
+        await expect(seed_all()).resolves.not.toThrow();
+        const rows = await AgentCatalog.findAll({ where: { name: 'jira' }, raw: true });
+        expect(rows.map((r) => r.version).sort()).toEqual(['1.0.0', seeded.version]);
+        // The release's manifest is kept, not overwritten by the seed's shorter copy.
+        expect(rows.find((r) => r.version === seeded.version)!.manifest).toEqual({ inputs: { from_release: {} } });
+
+        await AgentCatalog.destroy({ where: { name: 'jira' } });
+        await seed_all();
     });
 
 });

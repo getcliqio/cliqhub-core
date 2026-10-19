@@ -281,9 +281,12 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
     // Upgrade outdated builtin metadata (version/description/manifest/agent_type). Only for a newer
     // version: in production each cliq-agents release writes the agents' full manifests here
     // (scripts/publish_pack_to_hub.mjs), and those must not be overwritten by this shorter copy.
+    // The catalog keeps one row per (name, version): compare with the newest row, so a version a
+    // release already wrote is never written twice (that unique-key clash stopped the server booting).
     for (const row of rows) {
-        const existing = await AgentCatalog.findOne({ where: { name: row.name } });
-        if (!existing) continue;
+        const versions = await AgentCatalog.findAll({ where: { name: row.name } });
+        if (versions.length === 0) continue;
+        const existing = versions.reduce((a, b) => (is_newer(b.version ?? '', a.version) ? b : a));
         if (!is_newer(row.version, existing.version)) continue;
         await existing.update({
             version: row.version,
