@@ -133,7 +133,8 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
           dockerfile: cli_dockerfile('codex', 'npm install -g @openai/codex'), dependencies: cli_deps('codex', 'npm install -g @openai/codex') },
         { name: 'curl', agent_type: 'connector', description: 'HTTP connector', version: '1.0.0', capabilities: ['phase:standard'],
           inputs: { sources: { type: 'source_entry[]', required: false }, target_entries: { type: 'target_entry[]', required: false } }, dockerfile: builtin_dockerfile },
-        { name: 'git', agent_type: 'connector', description: 'Git finalization', version: '1.1.0', capabilities: ['phase:standard', 'notify'],
+        // Keep in sync with cliq-agents/git/manifest.json (v1.1.1).
+        { name: 'git', agent_type: 'connector', description: 'Git finalization', version: '1.1.1', capabilities: ['phase:standard', 'notify'],
           settings: {
             required: [
               { key: 'provider', description: 'Git hosting provider: github or bitbucket', default: 'github' },
@@ -154,12 +155,13 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
             action: { type: 'string', required: true, default: 'create_pr', description: "Git operation to perform (currently only 'create_pr')" },
             project_dir: { type: 'string', required: false, description: 'Working tree the PR is opened from (defaults to process.cwd())' },
             base_branch: { type: 'string', required: false, description: "Destination branch for the PR (e.g. 'master', 'develop'). Overrides settings.<provider>.base_branch and the remote HEAD auto-detect; falls back to 'main' if none is available" },
+            notify: { type: 'object', required: false, description: 'Pipeline lifecycle events this agent can handle (e.g. on_complete with action: create_pr)' },
           }, dockerfile: builtin_dockerfile,
           dependencies: '- name: git\n  install: apk add --no-cache git\n' },
         // Keep in sync with cliq-agents/jira/manifest.json (v1.2.1).
         { name: 'jira', agent_type: 'connector',
           description: 'Jira connector — fetch issues/trees, create/update Stories from dispatch.json, comments, transitions',
-          version: '1.2.0', capabilities: ['phase:standard', 'notify'],
+          version: '1.2.1', capabilities: ['phase:standard', 'notify'],
           settings: { required: [
             { key: 'base_url', description: 'Jira instance URL, e.g. https://yoursite.atlassian.net' },
             { key: 'email', description: 'Jira account email for authentication' },
@@ -170,22 +172,39 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
               type: 'string', required: true,
               description: 'Jira operation: get_issue | get_issue_tree | get_comments | search | add_comment | transition | create_issue | update_issue | update_fields',
             },
-            sources: { type: 'source_entry[]', required: false, description: 'Jira resources to fetch (issues, trees, comments, search)' },
-            target_entries: { type: 'target_entry[]', required: false, description: 'Jira resources to write (comments, transitions, dispatch.json create/update)' },
+            sources: { type: 'source_entry[]', required: false, required_unless: ['target_entries'], description: 'Jira resources to fetch (issues, trees, comments, search)' },
+            target_entries: { type: 'target_entry[]', required: false, required_unless: ['sources'], description: 'Jira resources to write (comments, transitions, dispatch.json create/update)' },
+            notify: { type: 'object', required: false, description: 'Pipeline lifecycle events this agent can handle (e.g. on_escalate, on_complete)' },
           },
           dockerfile: builtin_dockerfile },
         { name: 'confluence', agent_type: 'connector', description: 'Confluence connector', version: '1.0.0', capabilities: ['phase:standard'],
           settings: { required: [{ key: 'base_url', description: 'Confluence URL' }, { key: 'email', description: 'Email' }, { key: 'api_token', description: 'API token' }] },
-          inputs: { action: { type: 'string', required: true } }, dockerfile: builtin_dockerfile },
+          inputs: {
+            action: { type: 'string', required: true },
+            sources: { type: 'source_entry[]', required: false, required_unless: ['target_entries'], description: 'Confluence resources to fetch (pages, spaces, search)' },
+            target_entries: { type: 'target_entry[]', required: false, required_unless: ['sources'], description: 'Confluence resources to write to (create/update pages)' },
+          }, dockerfile: builtin_dockerfile },
         { name: 'zendesk', agent_type: 'connector', description: 'Zendesk connector', version: '1.0.0', capabilities: ['phase:standard'],
           settings: { required: [{ key: 'subdomain', description: 'Zendesk subdomain' }, { key: 'email', description: 'Email' }, { key: 'api_token', description: 'API token' }] },
-          inputs: { action: { type: 'string', required: true } }, dockerfile: builtin_dockerfile },
+          inputs: {
+            action: { type: 'string', required: true },
+            sources: { type: 'source_entry[]', required: false, required_unless: ['target_entries'], description: 'Zendesk resources to fetch (tickets, comments, search)' },
+            target_entries: { type: 'target_entry[]', required: false, required_unless: ['sources'], description: 'Zendesk resources to write to (comments, status updates)' },
+          }, dockerfile: builtin_dockerfile },
         { name: 'hubspot', agent_type: 'connector', description: 'HubSpot connector', version: '1.0.0', capabilities: ['phase:standard'],
           settings: { required: [{ key: 'access_token', description: 'HubSpot access token' }] },
-          inputs: { action: { type: 'string', required: true } }, dockerfile: builtin_dockerfile },
+          inputs: {
+            action: { type: 'string', required: true },
+            sources: { type: 'source_entry[]', required: false, required_unless: ['target_entries'], description: 'HubSpot resources to fetch (contacts, deals, companies)' },
+            target_entries: { type: 'target_entry[]', required: false, required_unless: ['sources'], description: 'HubSpot resources to write to (create/update records)' },
+          }, dockerfile: builtin_dockerfile },
         { name: 'datadog', agent_type: 'connector', description: 'Datadog connector', version: '1.0.0', capabilities: ['phase:standard'],
           settings: { required: [{ key: 'api_key', description: 'Datadog API key' }, { key: 'app_key', description: 'Datadog app key' }] },
-          inputs: { action: { type: 'string', required: true } }, dockerfile: builtin_dockerfile },
+          inputs: {
+            action: { type: 'string', required: true },
+            sources: { type: 'source_entry[]', required: false, required_unless: ['target_entries'], description: 'Datadog resources to fetch (metrics, monitors, events)' },
+            target_entries: { type: 'target_entry[]', required: false, required_unless: ['sources'], description: 'Datadog resources to write to (events, monitors)' },
+          }, dockerfile: builtin_dockerfile },
         { name: 's3', agent_type: 'connector', description: 'S3 connector', version: '1.0.0', capabilities: ['phase:standard'],
           settings: { required: [{ key: 'access_key_id', description: 'AWS access key' }, { key: 'secret_access_key', description: 'AWS secret key' }] },
           inputs: { sources: { type: 'source_entry[]', required: false }, target_entries: { type: 'target_entry[]', required: false } }, dockerfile: builtin_dockerfile },
@@ -195,6 +214,20 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
         { name: 'slack', agent_type: 'notify', description: 'Slack notification agent', version: '1.0.0', capabilities: ['notify'],
           settings: { required: [{ key: 'channels', description: 'Channel-to-webhook mapping' }] },
           inputs: { notify: { type: 'string[]', required: false } }, dockerfile: builtin_dockerfile },
+        // Keep in sync with cliq-agents/email/manifest.json (v1.0.0).
+        { name: 'email', agent_type: 'connector', description: 'Email notification agent — delivers pipeline event notifications via SMTP', version: '1.0.0', capabilities: ['notify'],
+          settings: {
+            required: [{ key: 'smtp_host', description: 'SMTP server hostname' }, { key: 'channels', description: 'Channel name to email address mapping' }],
+            optional: [
+              { key: 'smtp_port', description: 'SMTP server port, default 587' },
+              { key: 'username', description: 'SMTP authentication username' },
+              { key: 'password', description: 'SMTP authentication password' },
+              { key: 'tls', description: 'Enable TLS encryption, default true' },
+              { key: 'from_address', description: 'Sender email address' },
+              { key: 'from_name', description: 'Sender display name' },
+            ],
+          },
+          inputs: { notify: { type: 'string[]', required: false, description: 'Pipeline events this agent handles (e.g. on_escalate, on_complete)' } }, dockerfile: builtin_dockerfile },
         { name: 'mesh', agent_type: 'connector', description: 'Svantic mesh agent', version: '1.0.0', capabilities: ['phase:standard'],
           settings: { required: [{ key: 'url', description: 'Mesh server URL' }, { key: 'client_id', description: 'OAuth client ID' }, { key: 'client_secret', description: 'OAuth client secret' }] },
           inputs: { role: { type: 'string', required: false, description: 'Instructions for the agent' }, sources: { type: 'source_entry[]', required: false },
@@ -245,7 +278,9 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
         ignoreDuplicates: true,
     });
 
-    // Upgrade outdated builtin metadata (version/description/manifest/agent_type).
+    // Upgrade outdated builtin metadata (version/description/manifest/agent_type). Only for a newer
+    // version: in production each cliq-agents release writes the agents' full manifests here
+    // (scripts/publish_pack_to_hub.mjs), and those must not be overwritten by this shorter copy.
     for (const row of rows) {
         const existing = await AgentCatalog.findOne({ where: { name: row.name } });
         if (!existing) continue;

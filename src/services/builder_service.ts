@@ -694,7 +694,7 @@ Key points: type: team delegates to another team. Must have "team" field. No com
 const PHASE_TYPES = `Phase types:
 - standard: Normal execution phase with a role prompt. Can optionally have an "agent" field to select a specific agent (e.g. agent: "exec" for shell-only execution, or a connector agent for pull/push). When agent is "exec", the phase runs shell commands (must include "commands" array). Each exec command has an optional "escalate_on_fail" boolean (default true). Standard phases can also carry "sources" and "target_entries" for data integration.
 - gate: Quality gate with automated commands (must include "commands" array with "name" and "run" fields). Gates loop until commands pass or max_iterations is reached. The orchestrator automatically injects the verdict protocol — roles should describe evaluation criteria, not verdict syntax. When agent is "hug", the gate becomes a human-in-the-loop review: a human reviewer approves or rejects instead of the AI agent deciding. Hug gates may have "commands" (automated results shown to the reviewer), and a nested "review" object containing "reviewer" (name from hug settings), "artifacts" (file paths the reviewer should see), "timeout" (e.g. "30m", "2h"), and "remind_every" (e.g. "10m").
-- team: Delegates to another team. Must have a "team" field naming the sub-team and may have "inputs" to pass parameters. No commands, no role file.
+- team: Delegates to another team. Must have a "team" field naming the sub-team and may have "args" (a map) to pass values to the sub-team's inputs. No commands, no role file.
 
 Support phases (activated only when a gate routes to them) are declared in a separate top-level "support" section, not in the main "phases" list. They have their own type (standard, gate, etc.) and must be referenced by at least one gate role's evaluation criteria.`;
 
@@ -768,7 +768,7 @@ const OUTPUT_FORMAT = `Return ONLY a JSON object with this exact structure (no m
 Phase type rules:
 - type: standard — normal agent execution. Set agent: "exec" for shell-only phases (must have commands, escalate_on_fail allowed). Sources and target_entries can be set for data integration.
 - type: gate — quality gate. Must have commands and max_iterations. Set agent: "hug" for human-in-the-loop review (use a nested "review" object with reviewer, artifacts, timeout, remind_every). Gate roles describe evaluation criteria.
-- type: team — delegates to a sub-team. Must have "team" field, may have "inputs" map. No commands, no role file.
+- type: team — delegates to a sub-team. Must have "team" field, may have an "args" map (values for the sub-team's inputs). No commands, no role file.
 - sources entries: name is a slug for local storage, url/ref point to external content. For curl agent, sources may include a "body" field (string) to send a request body — method defaults to POST when body is present, Content-Type defaults to application/json
 - target_entries entries: name is a slug, file is a project-relative path, mode defaults to "create"
 - URLs can use template variables: $(inputs.key), $(team_name), $(date), $(phase), $(timestamp)
@@ -843,7 +843,8 @@ function parse_phases(raw: unknown, is_support = false): GeneratedPhase[] {
 				} };
 			})() : {}),
 			...(p.team ? { team: String(p.team) } : {}),
-			...(p.inputs && typeof p.inputs === 'object' ? { inputs: p.inputs as Record<string, string> } : {}),
+			// A team phase's values for its sub-team (`args`): kept as `inputs` in the Builder's model, written out as `args`.
+			...(sub_team_args(p) ? { inputs: sub_team_args(p)! } : {}),
 			...(is_support ? { is_support: true } : {}),
 		};
 	});
@@ -855,6 +856,11 @@ function parse_roles(raw: unknown): GeneratedRole[] {
 		name: normalise_name(String(r.name || '')),
 		content: String(r.content || ''),
 	}));
+}
+
+/** A team phase's values for its sub-team (`args`); null when there are none. */
+function sub_team_args(p: Record<string, unknown>): Record<string, string> | null {
+	return p.args && typeof p.args === 'object' && !Array.isArray(p.args) ? p.args as Record<string, string> : null;
 }
 
 function parse_metadata(raw: Record<string, unknown>): Pick<GeneratedTeam, 'tags' | 'inputs' | 'use_when' | 'not_for'> {

@@ -32,6 +32,7 @@ const MANIFEST = (name: string) => [
     'phases:',
     '  - name: build',
     '    agent: claude-code',
+    '    role: Build it',
 ].join('\n');
 
 describe('with_manifest_name', () => {

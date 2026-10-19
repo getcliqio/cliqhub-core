@@ -27,6 +27,8 @@ import { OrgMemberRepository as OrgMemberRepoClass } from '../repositories/org_m
 
 import { get_logger } from '../lib/log.js';
 import { escape_like } from '../lib/search.js';
+import { lint_team, type AgentInputs } from '@getcliqio/cliq-sdk';
+import { AgentCatalog } from '../models/agent_catalog.model.js';
 
 const log = get_logger('svc.teams');
 
@@ -59,6 +61,37 @@ function resolve_manifest_yaml(params: {
     } catch {
         return JSON.stringify(params.manifest);
     }
+}
+
+/**
+ * Refuse a team whose phases carry lines cliq would silently ignore (cliq-sdk `lint_team`, shared with cliqd): a line
+ * that's neither a phase field nor an input its agent declares, a required agent input missing, or
+ * a field a team input doesn't have. Agent inputs come from the agent catalog (built-in and custom).
+ *
+ * @throws ApiError 422 `invalid_team` with `details.problems` (phase, line, message) when there are any.
+ */
+export async function assert_team_lints(team_yml: ParsedTeamYml | Record<string, unknown> | null, role_files: Array<{ name: string }> = []): Promise<void> {
+    if (!team_yml) return;
+    const team = team_yml as Record<string, unknown>;
+    const names = new Set<string>();
+    for (const p of [...(Array.isArray(team['phases']) ? team['phases'] : []), ...(Array.isArray(team['support']) ? team['support'] : [])]) {
+        const agent = (p as Record<string, unknown> | null)?.['agent'];
+        if (typeof agent === 'string' && agent) names.add(agent);
+    }
+    const agents = new Map<string, AgentInputs>();
+    if (names.size) {
+        const rows = await AgentCatalog.findAll({ where: { name: { [Op.in]: [...names] }, deleted: false }, attributes: ['name', 'manifest'], raw: true });
+        // A name can exist as a built-in and as custom agents in several orgs: any of them accepting a line is enough.
+        for (const row of rows) {
+            const inputs = ((row.manifest ?? {}) as { inputs?: AgentInputs }).inputs ?? {};
+            agents.set(row.name, { ...(agents.get(row.name) ?? {}), ...inputs });
+        }
+    }
+    // roles/<phase>.md is that phase's role brief.
+    const briefs = new Set(role_files.map((r) => r.name.replace(/^.*\//, '').replace(/\.md$/, '')));
+    const problems = lint_team(team, agents, briefs);
+    if (!problems.length) return;
+    throw new ApiError('invalid_team', `This team has ${problems.length} problem${problems.length === 1 ? '' : 's'}: ${problems.map((p) => p.message).join('; ')}`, 422, { problems });
 }
 
 function parse_manifest_yaml(manifest_yaml: string): ParsedTeamYml | null {
@@ -772,6 +805,10 @@ export class TeamsService {
             const latest = await this._version_repo.find_latest_version(team.id);
             if (!latest) throw new ApiError('invalid_params', 'data_base64 is required when the team has no versions', 422);
             if (params.tags && params.tags.length > 20) throw new ApiError('invalid_params', 'Maximum 20 tags allowed', 422);
+            // Publishing (or re-listing) the latest version: its team.yml gets the same check as a new package.
+            const row = await this._version_repo.find_by_team_and_version(team.id, latest);
+            const briefs = row?.roles_json ? (JSON.parse(row.roles_json) as Array<{ name: string }>) : [];
+            await assert_team_lints(row?.manifest_yaml ? parse_manifest_yaml(row.manifest_yaml) : null, briefs);
             await this._team_repo.update_visibility_and_listed(team.id, visibility, 1);
             if (params.tags) {
                 const status_tags = normalize_tags(params.tags);
@@ -813,6 +850,7 @@ export class TeamsService {
 
         const { team_yml, manifest_yaml, roles, readme } = await extract_package(zip_buffer);
         if (!team_yml) throw new ApiError('invalid_package', 'Package must contain a valid team.yml', 422);
+        await assert_team_lints(team_yml, roles);
 
         if (!tags && team_yml.tags) tags = normalize_tags(team_yml.tags);
 

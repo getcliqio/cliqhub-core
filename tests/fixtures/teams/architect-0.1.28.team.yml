@@ -1,0 +1,81 @@
+name: "@measureone/architect"
+version: "0.1.28"
+description: "One run: get_issue_tree, @measureone/git-sync (mode=ensure, index=false), design-lld (Cursor + one HUG, no GitNexus), then create-stories when create_stories=true (default false). Does not clone missing repos, identify-scope, regroup, or implement. Local no-gitnexus test — do not publish as the MCP path."
+tags: [architect, lld, jira, platform]
+inputs:
+  - name: jira_key
+    description: "Epic or story key the plan belongs to (e.g. M1-2122). Used for get_issue_tree and as the parent/epic of created stories."
+    required: true
+  - name: create_stories
+    description: "If true, run create-stories (Jira create/PUT). False skips that phase only — dispatch.json stays for implement/sdlc. Temporary; remove this input and create-stories when: when Jira write is always on."
+    required: false
+    optional: true
+    default: "false"
+outputs:
+  - name: dispatch
+    description: "dispatch.json jobs (this run) plus parked (Jira this run, implement later). create-stories stamps jira_key on both when create_stories=true."
+  - name: scope
+    description: "Unused. Identify-scope is not on this path."
+  - name: lld
+    description: "First-job LLD at lld.json plus roll-up lld.md"
+use_when:
+  - An approved ./plan.json needs engineering stories with the LLD on the description
+  - git-sync has already cloned the selected set (allow_list, or all Bitbucket remotes minus ignore if allow is empty)
+not_for:
+  - Cutting or regrouping the plan (that is project-planning)
+  - Enqueueing implement teams (that is dispatch, after this team)
+  - Writing product code or opening PRs
+phases:
+  - name: fetch
+    type: standard
+    agent: jira
+    action: get_issue_tree
+    escalate_on_fail: true
+    sources:
+      - name: ticket.json
+        ref: "{{inputs.jira_key}}"
+
+  - name: ensure-clones
+    type: team
+    team: "@measureone/git-sync"
+    depends_on: [fetch]
+    team_inputs:
+      mode: "ensure"
+      index: "false"
+
+  - name: design
+    type: team
+    team: "@measureone/design-lld"
+    depends_on: [ensure-clones]
+
+  # Bundled jira create_issue hardcodes issuetype Story (invalid on M1). Exec POSTs job.jira_type.
+  # when: create_stories — default false. Later: delete the create_stories input and this when: line.
+  - name: create-stories
+    type: standard
+    agent: exec
+    escalate_on_fail: true
+    depends_on: [design]
+    when: "{{inputs.create_stories}}"
+    timeout: -1
+    commands:
+      - escalate_on_fail: true
+        run: |
+          set -e
+          SRC=""
+          for d in \
+            "/Users/kbaldaniya/Documents/cliq/teams/architect/scripts" \
+            scripts; do
+            if [ -f "$d/create_stories.py" ]; then
+              SRC="$d"
+              break
+            fi
+          done
+          if [ -z "$SRC" ]; then
+            echo "ERROR: architect create_stories.py missing" >&2
+            exit 1
+          fi
+          export JIRA_BASE_URL="{{settings.agents.jira.base_url}}"
+          export JIRA_EMAIL="{{settings.agents.jira.email}}"
+          export JIRA_API_TOKEN="{{settings.agents.jira.api_token}}"
+          export JIRA_PARENT="{{inputs.jira_key}}"
+          python3 "$SRC/create_stories.py"
