@@ -177,6 +177,7 @@ export class TokensController extends BaseController {
                 String(user.id),
                 token_name,
                 permissions_out,
+                body.daemon_id ? { daemon_id: body.daemon_id } : undefined,
             );
 
             this.ok(res, {

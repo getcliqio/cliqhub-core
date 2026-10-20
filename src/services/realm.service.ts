@@ -1409,12 +1409,17 @@ export class RealmService {
         return RealmService.create_token_for_realms([realm_id], user_id, name);
     }
 
-    /** Mint a daemon token granted to one or more realms (unified `tokens` table). */
+    /**
+     * Mint a daemon token granted to one or more realms (unified `tokens` table). With `daemon_id` (a daemon
+     * enrolling) the token is that daemon's: in one transaction the earlier tokens of that daemon made by the
+     * same person are revoked and this one is minted — one token per daemon (PLAN-tokens-sessions step 2).
+     */
     static async create_token_for_realms(
         realm_ids: string[],
         user_id: string,
         name: string,
         permissions_override?: Record<string, unknown>,
+        opts?: { daemon_id?: string },
     ): Promise<Realm_token_created> {
         if (realm_ids.length === 0) {
             throw ApiError.bad_request('At least one realm is required');
@@ -1422,7 +1427,21 @@ export class RealmService {
         for (const realm_id of realm_ids) {
             await RealmService.assert_member(realm_id, user_id);
         }
-        return RealmService._mint_realm_token(realm_ids, user_id, name, permissions_override);
+        const daemon_id = opts?.daemon_id?.trim();
+        if (!daemon_id) return RealmService._mint_realm_token(realm_ids, user_id, name, permissions_override);
+        return get_sequelize().transaction(async (t) => {
+            const { ApiToken } = await import('../models/index.js');
+            await ApiToken.update({ revoked_at: new Date() }, {
+                where: {
+                    user_id,
+                    type: { [Op.in]: ['realm', 'daemon'] },
+                    revoked_at: { [Op.is]: null },
+                    [Op.and]: [literal(`"permissions"->>'daemon_id' = ${get_sequelize().escape(daemon_id)}`)],
+                } as never,
+                transaction: t,
+            });
+            return RealmService._mint_realm_token(realm_ids, user_id, name, { ...(permissions_override ?? {}), daemon_id }, t);
+        });
     }
 
     /** Mint a realm (enrollment) token; `t` keeps it in the caller's transaction (realm create). */
@@ -1455,6 +1474,7 @@ export class RealmService {
         if (permissions_override?.auto_enrolled === true) {
             permissions.auto_enrolled = true;
         }
+        if (typeof permissions_override?.daemon_id === 'string') permissions.daemon_id = permissions_override.daemon_id;
         const token_hash = hash_token(plaintext);
         const row = await _api_token_repo.create_one({
             id: randomUUID(),
@@ -1520,6 +1540,11 @@ export class RealmService {
         });
         if (!row || row.revoked_at) {
             throw ApiError.unauthorized('Invalid or revoked realm token');
+        }
+        // Record use, at most once a minute per token (PLAN-tokens-sessions step 2).
+        const last = row.last_used_at ? new Date(row.last_used_at).getTime() : 0;
+        if (Date.now() - last > 60_000) {
+            void _api_token_repo.update_where({ id: row.id } as never, { last_used_at: new Date() } as never).catch(() => {});
         }
         const permissions = (row.permissions as Record<string, unknown>) ?? {};
         return {

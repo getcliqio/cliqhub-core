@@ -102,6 +102,12 @@ export const generate_token_schema = z.object({
     run_id: z.string().optional(),
     action: z.enum(['execute', 'cancel', 'access']).optional(),
     permissions: permissions_schema.optional(),
+    /**
+     * type=realm, a daemon enrolling: its id. The token is that daemon's: its earlier ones (made by the same
+     * person) are revoked as this one is made — one token per daemon. Tokens made on purpose (shared by
+     * several daemons) don't send one and are left alone.
+     */
+    daemon_id: z.string().trim().min(1).max(200).optional(),
 }).superRefine((val, ctx) => {
     if (val.type === 'a2a' || val.type === 'daemon_wire') {
         if (val.realm_id) return;
