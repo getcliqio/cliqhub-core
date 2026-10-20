@@ -5,6 +5,7 @@ import { DaemonRepository } from '../repositories/daemon_repository.js';
 import { RunRepository } from '../repositories/run_repository.js';
 import { NotificationService } from '../services/notification.service.js';
 import { OrgSeedService, default_rule_specs, ORG_EMAIL_CHANNEL_KEY } from '../services/org_seed.service.js';
+import { raise_unknown_channel } from './unknown_channel.js';
 import { get_deliverer } from './deliverers/index.js';
 import {
 	event_title,
@@ -54,10 +55,19 @@ export class NotificationFanOutService {
 		if (plan.action === 'mute') return 'skipped';
 
 		if (plan.action === 'refs') {
-			const ids = await resolve_channel_refs(realm_id, plan.refs);
+			const { ids, missing } = await resolve_channel_refs(realm_id, plan.refs);
+			// A named channel that doesn't exist reaches the realm as Unknown channel (once per run per name).
+			if (event.type !== 'notification.unknown_channel') {
+				for (const name of missing) {
+					await raise_unknown_channel({
+						realm_id, name, source: 'notify_channels', for_event: event.type,
+						run_id: event.run_id ?? null, phase: event.phase ?? null, team: event.team ?? null, daemon_id: event.daemon_id ?? null,
+					});
+				}
+			}
 			if (ids.length === 0) {
-				log.warn(`notify refs unresolved for ${event.type} — skipping`);
-				return 'skipped';
+				log.warn(`notify refs unresolved for ${event.type} — Unknown channel raised`);
+				return 'failed';
 			}
 			return deliver_for_channel_ids(ids, event);
 		}
@@ -219,8 +229,10 @@ async function run_notify_channels(event: SubmittedEvent): Promise<string[] | un
  * Resolve team.yml-style channel refs (`slack:oncall`, bare names) to
  * Hub channel ids within the realm. Tries full ref then suffix after `:`.
  */
-async function resolve_channel_refs(realm_id: string, refs: string[]): Promise<string[]> {
+/** Channel ids for the named refs in a realm, and the names that matched no channel. */
+async function resolve_channel_refs(realm_id: string, refs: string[]): Promise<{ ids: string[]; missing: string[] }> {
 	const ids: string[] = [];
+	const missing: string[] = [];
 	const seen = new Set<string>();
 	for (const ref of refs) {
 		const candidates = [ref];
@@ -228,16 +240,19 @@ async function resolve_channel_refs(realm_id: string, refs: string[]): Promise<s
 		if (colon >= 0 && colon < ref.length - 1) {
 			candidates.push(ref.slice(colon + 1));
 		}
+		let found = false;
 		for (const name of candidates) {
 			const ch = await NotificationService.find_channel_by_name(name, realm_id);
 			if (!ch) continue;
+			found = true;
 			if (seen.has(ch.id)) break;
 			seen.add(ch.id);
 			ids.push(ch.id);
 			break;
 		}
+		if (!found && !missing.includes(ref)) missing.push(ref);
 	}
-	return ids;
+	return { ids, missing };
 }
 
 /**
