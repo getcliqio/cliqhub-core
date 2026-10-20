@@ -347,6 +347,14 @@ export class NotificationService {
 	 *
 	 * @throws ApiError 400 when `owner_id` is null and a destination uses `account: true`
 	 */
+	/** `members: true` email is CliqHub's own (built-in channels); people can't set it. */
+	static assert_no_members_email(destinations: unknown[]): void {
+		const uses_members = destinations.some((d) => (d as { type?: unknown }).type === 'email' && (d as { members?: unknown }).members === true);
+		if (uses_members) {
+			throw new ApiError('invalid_params', 'Invalid destinations: members: true is only for built-in channels', 422, { field: 'destinations' });
+		}
+	}
+
 	static assert_account_email_owner(destinations: unknown[], owner_id: string | null): void {
 		if (owner_id) return;
 		const uses_account = destinations.some((d) => (d as { type?: unknown; account?: unknown }).type === 'email' && (d as { account?: unknown }).account === true);
@@ -373,6 +381,7 @@ export class NotificationService {
 		}
 		// Channels made here have no owner, so there is no account email to send to.
 		NotificationService.assert_account_email_owner(data.destinations, null);
+		NotificationService.assert_no_members_email(data.destinations);
 
 		if (realm_id) {
 			const realm = await realm_repo.find_by_id(realm_id);
@@ -461,6 +470,7 @@ export class NotificationService {
 
 		if (data.destinations !== undefined) {
 			NotificationService.assert_account_email_owner(data.destinations, existing.user_id ?? null);
+			NotificationService.assert_no_members_email(data.destinations);
 			/** Replace all destination rows. */
 			const { ChannelDestination } = await import('../models/index.js');
 			await ChannelDestination.destroy({ where: { channel_id: data.id } });
@@ -860,10 +870,10 @@ export class NotificationService {
 	}
 
 	/**
-	 * The realm's "All realm members" channel: in-app to every member of the realm. A new channel
-	 * starts with the realm's default rules ({@link REALM_DEFAULT_RULE_EVENTS} → this channel);
-	 * an existing one (also the legacy `cliqhub` realm channel) is renamed and enabled, and its
-	 * rules are left as people set them.
+	 * The realm's "All realm members" channel (built in, locked): in-app and email to every member of
+	 * the realm. A new channel starts with the realm's default rules ({@link REALM_DEFAULT_RULE_EVENTS}
+	 * → this channel); an existing one (also the legacy `cliqhub` realm channel) is brought in line —
+	 * name, on, built in, locked, its destinations — and its rules are left as people set them.
 	 */
 	static async ensure_realm_members_channel(realm_id: string): Promise<ChannelRecord> {
 		log.debug('ensure_realm_members_channel', { realm_id });
@@ -877,9 +887,10 @@ export class NotificationService {
 		let row = await channel_repo.find_by_id(channel_id)
 			?? await channel_repo.find_one({ realm_id: trimmed, name: { [Op.in]: [REALM_MEMBERS_CHANNEL_NAME, 'cliqhub'] } } as any);
 		if (row) {
-			if (row.enabled !== 1 || row.name !== REALM_MEMBERS_CHANNEL_NAME) {
-				await row.update({ enabled: 1, name: REALM_MEMBERS_CHANNEL_NAME, updated_at: Date.now() });
-			}
+			const builtin = { enabled: 1, name: REALM_MEMBERS_CHANNEL_NAME, system_key: REALM_MEMBERS_CHANNEL.system_key, locked: true, lock_reason: REALM_MEMBERS_CHANNEL.lock_reason };
+			const off = row.enabled !== 1 || row.name !== builtin.name || row.system_key !== builtin.system_key || !row.locked || row.lock_reason !== builtin.lock_reason;
+			if (off) await row.update({ ...builtin, updated_at: Date.now() } as any);
+			await NotificationService._ensure_destinations(row.id, REALM_MEMBERS_CHANNEL.destinations);
 			return NotificationService.to_channel_record(row);
 		}
 
@@ -889,16 +900,13 @@ export class NotificationService {
 			realm_id: trimmed,
 			name: REALM_MEMBERS_CHANNEL_NAME,
 			enabled: 1,
+			system_key: REALM_MEMBERS_CHANNEL.system_key,
+			locked: true,
+			lock_reason: REALM_MEMBERS_CHANNEL.lock_reason,
 			created_at: now,
 			updated_at: now,
 		} as any);
-		const { ChannelDestination } = await import('../models/index.js');
-		for (const d of REALM_MEMBERS_CHANNEL.destinations) {
-			await ChannelDestination.findOrCreate({
-				where: { channel_id, type: d.type },
-				defaults: { id: randomUUID(), channel_id, type: d.type, config: d.config, created_at: now },
-			});
-		}
+		await NotificationService._ensure_destinations(channel_id, REALM_MEMBERS_CHANNEL.destinations);
 		for (const event of REALM_DEFAULT_RULE_EVENTS) {
 			await rule_repo.create_one({
 				realm_id: trimmed, org_id: null, team_slug: null, event, channel_id, priority: 0,
@@ -908,6 +916,17 @@ export class NotificationService {
 		}
 		log.info('realm_members_channel_created', { realm_id: trimmed, channel_id, rules: REALM_DEFAULT_RULE_EVENTS.length });
 		return NotificationService.to_channel_record(row);
+	}
+
+	/** Adds the built-in destinations a channel is missing (one row per type; existing rows are kept). */
+	private static async _ensure_destinations(channel_id: string, destinations: readonly { type: string; config: Record<string, unknown> }[]): Promise<void> {
+		const { ChannelDestination } = await import('../models/index.js');
+		for (const d of destinations) {
+			await ChannelDestination.findOrCreate({
+				where: { channel_id, type: d.type },
+				defaults: { id: randomUUID(), channel_id, type: d.type, config: d.config, created_at: Date.now() },
+			});
+		}
 	}
 
 }

@@ -51,12 +51,15 @@ const slack_destination = z.object({
 
 /**
  * Email to `address`, or — on a personal channel — to the channel owner's
- * current account address (`account: true`, resolved when sending).
+ * current account address (`account: true`), or — on a built-in channel — to
+ * each of the channel's members at their account address (`members: true`).
+ * Account and members addresses are resolved when sending.
  */
 const email_destination = z.object({
 	type: z.literal('email'),
 	address: z.string().min(1).optional(),
 	account: z.literal(true).optional().describe("Send to the channel owner's account email (personal channels)"),
+	members: z.literal(true).optional().describe("Send to each member of the channel's org or realm (built-in channels only)"),
 	cc: z.string().optional(),
 	bcc: z.string().optional(),
 });
@@ -100,9 +103,9 @@ export const destination_schema = z.discriminatedUnion('type', [
 	channel_ref_destination,
 	cliqhub_destination,
 ]).superRefine((d, ctx) => {
-	// An email destination names its address, or uses the owner's account email — exactly one.
-	if (d.type === 'email' && Boolean(d.address) === Boolean(d.account)) {
-		ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['address'], message: 'Give either address or account: true' });
+	// An email destination names its address, the owner's account email, or the members — exactly one.
+	if (d.type === 'email' && [Boolean(d.address), Boolean(d.account), Boolean(d.members)].filter(Boolean).length !== 1) {
+		ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['address'], message: 'Give one of address, account: true or members: true' });
 	}
 });
 

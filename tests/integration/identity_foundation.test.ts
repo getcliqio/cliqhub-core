@@ -135,10 +135,10 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
     // ── seeding ───────────────────────────────────────────────────────
 
     describe('org seeding', () => {
-        it('signup seeds the account org: just the In-app channel (unlocked), no rules — invite and account messages are built in', async () => {
+        it('signup seeds the account org: just the built-in All org members channel (locked), no rules — invite and account messages are built in', async () => {
             const channels = await NotificationChannel.findAll({ where: { org_id: s.acme, system_key: { [Op.ne]: null } }, raw: true });
             expect(channels.map((c) => c.system_key)).toEqual(['org.in_app']);
-            expect(channels[0]).toMatchObject({ name: 'In-app', locked: false, enabled: 1 });
+            expect(channels[0]).toMatchObject({ name: 'All org members', locked: true, enabled: 1 });
             expect(await NotificationRule.count({ where: { org_id: s.acme, realm_id: null, system_key: { [Op.ne]: null } } })).toBe(0);
             // The built-in messages (not rules) still cover invites and account emails.
             expect(default_rule_specs(true).find((m) => m.system_key === 'invite.sent.invitee')).toMatchObject({ recipients: ['invitee'] });

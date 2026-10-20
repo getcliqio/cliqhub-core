@@ -418,7 +418,7 @@ export function destination_to_config(dest: Destination): Record<string, unknown
 		case 'slack':
 			return { webhook_url: dest.webhook_url };
 		case 'email':
-			return { to: dest.address, cc: dest.cc, bcc: dest.bcc, account: dest.account };
+			return { to: dest.address, cc: dest.cc, bcc: dest.bcc, account: dest.account, members: dest.members };
 		case 'webhook':
 			return { url: dest.url, headers: dest.headers };
 		case 'http':

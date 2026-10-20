@@ -51,13 +51,16 @@ describe('resolve_recipients', () => {
 describe('OrgSeedService.seed_org', () => {
     beforeEach(() => vi.clearAllMocks());
 
-    it('creates the In-app channel (no rules: invite and account messages are built in) in the caller transaction, then marks the org', async () => {
+    it('creates the built-in All org members channel — locked, in-app + email to members (no rules: invite and account messages are built in) — in the caller transaction, then marks the org', async () => {
         const t = { id: 'tx' } as never;
         const result = await OrgSeedService.seed_org('org-1', { account: true, transaction: t });
         expect(result).toEqual({ channels_created: 1, rules_created: 0 });
         const channels = vi.mocked(NotificationChannel.create).mock.calls.map((c) => c[0] as Record<string, unknown>);
-        expect(channels).toEqual([expect.objectContaining({ org_id: 'org-1', name: 'In-app', system_key: 'org.in_app', locked: false })]);
-        expect(vi.mocked(ChannelDestination.create).mock.calls[0][0]).toMatchObject({ type: 'cliqhub', config: {} });
+        expect(channels).toEqual([expect.objectContaining({ org_id: 'org-1', name: 'All org members', system_key: 'org.in_app', locked: true })]);
+        expect(vi.mocked(ChannelDestination.create).mock.calls.map((c) => c[0])).toEqual([
+            expect.objectContaining({ type: 'cliqhub', config: {} }),
+            expect.objectContaining({ type: 'email', config: { members: true } }),
+        ]);
         expect(vi.mocked(NotificationChannel.create).mock.calls.every((c) => (c[1] as { transaction: unknown }).transaction === t)).toBe(true);
         expect(NotificationRule.create).not.toHaveBeenCalled();
         expect(vi.mocked(Org.update).mock.calls[0][1]).toMatchObject({ where: { id: 'org-1' }, transaction: t });

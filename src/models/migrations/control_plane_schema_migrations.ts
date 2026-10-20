@@ -1370,6 +1370,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_built_in_messages(sq);
     await grant_admin_rules_manage(sq);
     await add_realm_review_rule(sq);
+    await migrate_builtin_channels(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -1761,3 +1762,108 @@ export async function add_realm_review_rule(sq: Sequelize): Promise<void> {
         _mig_log.error('realm_review_rule_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }
+
+/** `cliq.settings` key marking the one-time move to locked built-in channels as done. */
+export const BUILTIN_CHANNELS_MIGRATION_KEY = 'migrate.builtin_channels_2026_10';
+
+/** What this migration makes the built-in channels — frozen as written (PLAN-notifications-v2 A2). */
+const BUILTIN_CHANNELS_2026_10 = {
+    org: { system_key: 'org.in_app', old_name: 'In-app', name: 'All org members', lock_reason: 'Built in — in-app and email to every member of the org.' },
+    realm: { system_key: 'realm.members', lock_reason: 'Built in — in-app and email to every member of the realm.' },
+    destinations: [{ type: 'cliqhub', config: {} }, { type: 'email', config: { members: true } }],
+} as const;
+
+/**
+ * One time (Oct 2026): the org's "In-app" channel and each realm's "All realm members" become built-in,
+ * locked channels with two destinations — in-app and email to their members.
+ * - Org: `org.in_app` → renamed "All org members" (only while it still has its seeded name "In-app" and
+ *   the org has no other channel by that name), email-to-members added, locked, on.
+ * - Realm: `cliqhub-<realm>` (or the realm's channel named "All realm members" / "cliqhub") → system key
+ *   `realm.members`, email-to-members added, locked, on (built-in channels are always on). A live realm
+ *   without one gets it with its default rules.
+ * Rules are not touched. Safe to repeat; the key is recorded once everything succeeded.
+ */
+export async function migrate_builtin_channels(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.notification_channels') AS c`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; c: string | null }>;
+        if (!tables?.s || !tables?.c) {
+            _mig_log.info('builtin_channels_deferred', { reason: 'cliq.settings or cliq.notification_channels not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: BUILTIN_CHANNELS_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const spec = BUILTIN_CHANNELS_2026_10;
+        const add_destinations = async (channel_id: string) => {
+            for (const d of spec.destinations) {
+                await sq.query(
+                    `INSERT INTO cliq."channel_destinations" ("id", "channel_id", "type", "config", "created_at")
+                     SELECT gen_random_uuid(), :channel_id, :type, CAST(:config AS jsonb), EXTRACT(EPOCH FROM NOW()) * 1000
+                     WHERE NOT EXISTS (SELECT 1 FROM cliq."channel_destinations" WHERE "channel_id" = :channel_id AND "type" = :type)`,
+                    { replacements: { channel_id, type: d.type, config: JSON.stringify(d.config) } },
+                );
+            }
+        };
+
+        // Orgs: the seeded In-app channel.
+        const org_channels = await sq.query(
+            `SELECT c."id", c."org_id", c."name" FROM cliq."notification_channels" c
+             JOIN cliq."orgs" o ON o."id"::text = c."org_id"::text AND o."deleted_at" IS NULL
+             WHERE c."system_key" = :key AND c."realm_id" IS NULL AND c."user_id" IS NULL`,
+            { replacements: { key: spec.org.system_key }, type: QueryTypes.SELECT }) as Array<{ id: string; org_id: string; name: string }>;
+        let orgs_renamed = 0;
+        for (const c of org_channels) {
+            const [taken] = await sq.query(
+                `SELECT 1 AS t FROM cliq."notification_channels" WHERE "org_id"::text = :org_id AND "realm_id" IS NULL AND "name" = :name AND "id" <> :id`,
+                { replacements: { org_id: String(c.org_id), name: spec.org.name, id: c.id }, type: QueryTypes.SELECT }) as Array<{ t: number }>;
+            const rename = c.name === spec.org.old_name && !taken;
+            await sq.query(
+                `UPDATE cliq."notification_channels" SET "locked" = true, "lock_reason" = :reason, "enabled" = 1,
+                    "name" = CASE WHEN :rename THEN :name ELSE "name" END, "updated_at" = EXTRACT(EPOCH FROM NOW()) * 1000
+                 WHERE "id" = :id`,
+                { replacements: { reason: spec.org.lock_reason, rename, name: spec.org.name, id: c.id } },
+            );
+            if (rename) orgs_renamed += 1;
+            await add_destinations(c.id);
+        }
+
+        // Realms: their All realm members channel.
+        const { NotificationService } = await import('../../services/notification.service.js');
+        const realms = await sq.query(
+            `SELECT "id" FROM cliq."realms" WHERE COALESCE("deleted", false) = false`, { type: QueryTypes.SELECT }) as Array<{ id: string }>;
+        let realm_channels_created = 0;
+        let realm_channels_turned_on = 0;
+        for (const { id: realm_id } of realms) {
+            const [ch] = await sq.query(
+                `SELECT "id", "enabled" FROM cliq."notification_channels"
+                 WHERE "id" = :cid OR ("realm_id"::text = :realm_id AND "user_id" IS NULL AND "name" IN ('All realm members', 'cliqhub'))
+                 ORDER BY ("id" = :cid) DESC LIMIT 1`,
+                { replacements: { cid: `cliqhub-${realm_id}`, realm_id }, type: QueryTypes.SELECT }) as Array<{ id: string; enabled: number }>;
+            if (!ch) {
+                await NotificationService.ensure_realm_members_channel(realm_id);
+                realm_channels_created += 1;
+                continue;
+            }
+            if (Number(ch.enabled) !== 1) realm_channels_turned_on += 1;
+            await sq.query(
+                `UPDATE cliq."notification_channels" SET "system_key" = :key, "locked" = true, "lock_reason" = :reason, "enabled" = 1,
+                    "name" = 'All realm members', "updated_at" = EXTRACT(EPOCH FROM NOW()) * 1000
+                 WHERE "id" = :id`,
+                { replacements: { key: spec.realm.system_key, reason: spec.realm.lock_reason, id: ch.id } },
+            );
+            await add_destinations(ch.id);
+        }
+
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: BUILTIN_CHANNELS_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('builtin_channels_migrated', {
+            org_channels: org_channels.length, orgs_renamed, realms: realms.length, realm_channels_created, realm_channels_turned_on,
+        });
+    } catch (err) {
+        _mig_log.error('builtin_channels_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+

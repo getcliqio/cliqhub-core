@@ -128,6 +128,11 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 		payload: NotificationPayload,
 		context?: DeliveryContext,
 	): Promise<void> {
+		// Email to the members of a built-in channel arrives with PLAN-notifications-v2 A4.
+		if (config.members === true) {
+			log.debug('email_members_not_sent', { event: payload.event, channel_id: context?.channel_id ?? null });
+			return;
+		}
 		let to = addresses(config.to);
 		if (to.length === 0 && config.account === true) {
 			to = await account_address(context?.channel_id);

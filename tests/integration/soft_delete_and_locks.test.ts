@@ -397,7 +397,7 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
 
             const channels = await post('/v1/notification_channels/get', s.token.olivia, { org_id: s.acme, account: true });
             expect(channels.body.data.find((c: { id: string }) => c.id === channel.id)).toMatchObject({ locked: true, enabled: 1 });
-            expect(channels.body.data.find((c: { system_key: string | null }) => c.system_key === 'org.in_app')).toMatchObject({ locked: false });
+            expect(channels.body.data.find((c: { system_key: string | null }) => c.system_key === 'org.in_app')).toMatchObject({ locked: true });
             expect(channels.body.data.find((c: { system_key: string | null }) => c.system_key === 'org.email')).toBeUndefined();
         });
 
@@ -437,7 +437,7 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
             await post('/v1/realms/remove_notification_rules', s.token.olivia, { id: made.body.data.id });
         });
 
-        it('updating or removing a locked channel answers 409 locked; the In-app channel is editable', async () => {
+        it('updating or removing a locked channel answers 409 locked — the built-in All org members channel too', async () => {
             const { channel: locked, key } = await locked_rule_and_channel();
             const upd = await post('/v1/notification_channels/update', s.token.olivia, { id: locked.id, enabled: false });
             expect(upd.status).toBe(409);
@@ -447,8 +447,9 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
             expect((await NotificationChannel.findByPk(locked.id, { raw: true }))!.enabled).toBe(1);
 
             const in_app = (await NotificationChannel.findOne({ where: { org_id: s.acme, system_key: 'org.in_app' }, raw: true }))!;
-            const ok = await post('/v1/notification_channels/update', s.token.olivia, { id: in_app.id, name: in_app.name });
-            expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+            const built_in = await post('/v1/notification_channels/update', s.token.olivia, { id: in_app.id, name: in_app.name });
+            expect(built_in.status, JSON.stringify(built_in.body)).toBe(409);
+            expect(err(built_in)).toMatchObject({ code: 'locked', details: { system_key: 'org.in_app' } });
         });
     });
 

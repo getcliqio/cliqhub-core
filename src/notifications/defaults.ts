@@ -28,13 +28,22 @@ export interface BuiltinChannelSpec {
 /** `system_key` of the org's in-app channel to all its members. */
 export const ORG_IN_APP_CHANNEL_KEY = 'org.in_app';
 
-/** The channels a new org starts with: "In-app" — its in-app goes to every member of the org. */
+/** Name of the org's built-in channel to all its members. */
+export const ORG_MEMBERS_CHANNEL_NAME = 'All org members';
+
+/** The two destinations of a built-in channel: in-app, and email to each of its members. */
+const TO_MEMBERS: readonly BuiltinDestination[] = [
+    { type: 'cliqhub', config: {} },
+    { type: 'email', config: { members: true } },
+];
+
+/** The channels a new org starts with: "All org members" — in-app and email to every member of the org. */
 export const ORG_BUILTIN_CHANNELS: readonly BuiltinChannelSpec[] = [
     {
         system_key: ORG_IN_APP_CHANNEL_KEY,
-        name: 'In-app',
-        lock_reason: null,
-        destinations: [{ type: 'cliqhub', config: {} }],
+        name: ORG_MEMBERS_CHANNEL_NAME,
+        lock_reason: 'Built in — in-app and email to every member of the org.',
+        destinations: TO_MEMBERS,
     },
 ];
 
@@ -46,10 +55,15 @@ export function realm_members_channel_id(realm_id: string): string {
     return `cliqhub-${realm_id}`;
 }
 
-/** A realm's "All realm members" channel: in-app to every member of the realm. */
-export const REALM_MEMBERS_CHANNEL: { name: string; destinations: readonly BuiltinDestination[] } = {
+/** `system_key` of a realm's "All realm members" channel. */
+export const REALM_MEMBERS_CHANNEL_KEY = 'realm.members';
+
+/** A realm's "All realm members" channel: in-app and email to every member of the realm. */
+export const REALM_MEMBERS_CHANNEL: BuiltinChannelSpec = {
+    system_key: REALM_MEMBERS_CHANNEL_KEY,
     name: REALM_MEMBERS_CHANNEL_NAME,
-    destinations: [{ type: 'cliqhub', config: {} }],
+    lock_reason: 'Built in — in-app and email to every member of the realm.',
+    destinations: TO_MEMBERS,
 };
 
 /**

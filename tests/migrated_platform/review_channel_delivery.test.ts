@@ -107,9 +107,10 @@ describe.skipIf(!has_postgres)('PLAN-channels S0 baseline: reviews reach people 
 				payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: ORG,
 				reviewers: [{ policy: 'any', channels: ['qa-mail'] }],
 			});
-			await eventually(async () => sent.mock.calls.length > 0);
-			expect(sent).toHaveBeenCalledTimes(1);
-			expect(sent.mock.calls[0][0]).toMatchObject({ to: 'qa@cliq.local' });
+			// Sends to that address (built-in channels' email-to-members may also be called).
+			const to_qa = () => sent.mock.calls.filter((c) => (c[0] as { to?: unknown }).to === 'qa@cliq.local');
+			await eventually(async () => to_qa().length > 0);
+			expect(to_qa()).toHaveLength(1);
 		} finally {
 			sent.mockRestore();
 		}
