@@ -1374,6 +1374,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_default_rules(sq);
     await migrate_account_scopes(sq);
     await migrate_removed_event_rules(sq);
+    await revoke_admin_test_tokens(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -2035,5 +2036,56 @@ export async function migrate_removed_event_rules(sq: Sequelize): Promise<void> 
         _mig_log.info('removed_event_rules_migrated', { deleted: deleted.length });
     } catch (err) {
         _mig_log.error('removed_event_rules_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+/** `cliq.settings` key marking the one-time revoke of the admin account's test tokens as done. */
+export const ADMIN_TEST_TOKENS_MIGRATION_KEY = 'migrate.revoke_admin_test_tokens_2026_10';
+
+/** Exactly which tokens — frozen as written (PLAN-tokens-sessions step 1). */
+const ADMIN_TEST_TOKENS_2026_10 = {
+    username: 'admin',
+    /** Made by Core's test suite running against prod: `test…`, and `jira-` + a 13-digit timestamp. */
+    name_pattern: '^(test|jira-[0-9]{13}$)',
+    created_from: '2026-08-15',
+    created_before: '2026-09-12',
+} as const;
+
+/**
+ * One time (Oct 2026): revoke the `admin` account's tokens left by Core's test suite having run against prod
+ * (Aug 15 – Sep 11): active tokens named `test…` or `jira-<13-digit timestamp>`, made in that window. Sets
+ * `revoked_at` only — nothing is deleted; the account's other tokens (its realm tokens, sessions) are left.
+ * Safe to repeat; the key is recorded once it succeeded.
+ */
+export async function revoke_admin_test_tokens(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.tokens') AS t`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; t: string | null }>;
+        if (!tables?.s || !tables?.t) {
+            _mig_log.info('admin_test_tokens_deferred', { reason: 'cliq.settings or cliq.tokens not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: ADMIN_TEST_TOKENS_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const spec = ADMIN_TEST_TOKENS_2026_10;
+        const revoked = await sq.query(
+            `UPDATE cliq."tokens" tk SET "revoked_at" = NOW()
+             FROM cliq."users" u
+             WHERE u."id"::text = tk."user_id"::text AND u."username" = :username
+               AND tk."revoked_at" IS NULL
+               AND tk."name" ~ :pattern
+               AND tk."created_at" >= CAST(:from AS date) AND tk."created_at" < CAST(:before AS date)
+             RETURNING tk."id"`,
+            { replacements: { username: spec.username, pattern: spec.name_pattern, from: spec.created_from, before: spec.created_before }, type: QueryTypes.SELECT },
+        );
+
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: ADMIN_TEST_TOKENS_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('admin_test_tokens_revoked', { revoked: revoked.length });
+    } catch (err) {
+        _mig_log.error('admin_test_tokens_migration_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }
