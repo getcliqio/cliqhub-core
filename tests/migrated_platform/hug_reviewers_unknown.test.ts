@@ -125,4 +125,24 @@ describe.skipIf(!has_postgres)('B3 — gate reviewers are channels the realm can
 		await expect(validate_run_start_options({ realm_id: s.realm_id, notify_channels: [s.org_name, s.realm_name] })).resolves.toBeUndefined();
 		await expect(validate_run_start_options({ realm_id: s.realm_id, notify_channels: ['nobody-here'] })).rejects.toMatchObject({ status: 422 });
 	});
+	describe('B4.3a — an input Hug (a phase that lacks inputs) goes to the channels it names', () => {
+		const input_hug = (s: { realm_id: string; org_id: string }, run_id: string, names: string[]) => HugReviewsService.create({
+			run_id, daemon_id: 'd-1', realm_id: s.realm_id, org_id: s.org_id, mode: 'input_pause',
+			payload: { phase: 'fix', fields: [{ name: 'ticket', type: 'text', required: true }] }, timeout_minutes: 60, actor_id: OWNER,
+			reviewers: [{ policy: 'any', channels: names }],
+		}).then((r) => { reviews.push(r.review_id); return r; });
+
+		it('its channels get it (no longer dropped)', async () => {
+			const s = await setup();
+			const r = await input_hug(s, `run-${uid()}`, [s.realm_name, s.org_name]);
+			expect(await targets(r.review_id)).toEqual([s.realm_name, s.org_name].sort());
+		});
+
+		it('a name with no channel — e.g. a person\'s name from an old daemon — raises Unknown channel; none left → 422', async () => {
+			const s = await setup();
+			const run_id = `run-${uid()}`;
+			await expect(input_hug(s, run_id, ['some-username'])).rejects.toMatchObject({ status_code: 422 });
+			expect((await notices(run_id)).map((e) => e.message)).toEqual([unknown_channel_message('some-username')]);
+		});
+	});
 });

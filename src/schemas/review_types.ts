@@ -56,7 +56,7 @@ export const reviews_create_schema = z.object({
     remind_every_minutes: z.number().int().min(1).max(10080).optional(),
     /** Reviewer groups — each group has a policy and list of channel targets. */
     reviewers: z.array(reviewer_group_schema).optional(),
-    /** `input_pause` = form without policy (Yamazaki mid-phase inputs). */
+    /** `input_pause` = a form for inputs a phase lacks (single responder; goes to the phase's `hug` channels). */
     mode: z.enum(['input_pause', 'verdict', 'chat']).optional(),
     /** Initial agent message for chat mode. */
     initial_message: z.string().max(10_000).optional(),

@@ -223,7 +223,8 @@ export class HugReviewsService {
 		 * Policy validation: 'all' is only valid with verdict mode.
 		 * Chat and input modes are inherently single-responder interactions.
 		 */
-		const raw_reviewers = mode === 'input_pause' ? [] : (input.reviewers ?? []);
+		/** Every mode takes channels: an input Hug goes to the phase's `hug` channels (PLAN-notifications-v2 B4.3a). */
+		const raw_reviewers = input.reviewers ?? [];
 		const normalized_groups = _normalize_reviewer_groups(raw_reviewers);
 		if (mode === 'chat' || mode === 'input_pause') {
 			for (const group of normalized_groups) {
