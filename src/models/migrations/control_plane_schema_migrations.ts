@@ -1540,6 +1540,12 @@ async function repair_capability_required_flags(sq: Sequelize): Promise<void> {
 export const REALM_MEMBERS_MIGRATION_KEY = 'migrate.realm_members_channels_2026_10';
 
 /**
+ * The default rules this migration gives existing realms — frozen as they were when it was written
+ * (7ecba12); later default changes (notifications/defaults.ts) have their own migrations.
+ */
+export const REALM_MEMBERS_MIGRATION_EVENTS = ['phase.input_required', 'phase.idle', 'phase.timed_out', 'run.failed', 'run.crashed'] as const;
+
+/**
  * One time (Oct 2026), explicit channels:
  *   1. rules people created on channels with no destinations (they delivered nothing) and those
  *      empty shared channels are deleted;
@@ -1575,13 +1581,13 @@ export async function migrate_realm_members_channels(sq: Sequelize): Promise<voi
         const all_users_channels = await sq.query(
             `DELETE FROM cliq."notification_channels" WHERE "id" IN (${all_users}) RETURNING "id"`, { type: QueryTypes.SELECT });
 
-        const { NotificationService, REALM_DEFAULT_RULE_EVENTS } = await import('../../services/notification.service.js');
+        const { NotificationService } = await import('../../services/notification.service.js');
         const realms = await sq.query(
             `SELECT "id" FROM cliq."realms" WHERE COALESCE("deleted", false) = false`, { type: QueryTypes.SELECT }) as Array<{ id: string }>;
         let default_rules = 0;
         for (const { id: realm_id } of realms) {
             const channel = await NotificationService.ensure_realm_members_channel(realm_id);
-            for (const event of REALM_DEFAULT_RULE_EVENTS) {
+            for (const event of REALM_MEMBERS_MIGRATION_EVENTS) {
                 const added = await sq.query(
                     `INSERT INTO cliq."notification_rules"
                         ("id", "realm_id", "org_id", "team_slug", "event", "channel_id", "priority", "recipients",

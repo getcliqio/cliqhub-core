@@ -31,23 +31,14 @@ import {
     type OrgEventType,
 } from '../notifications/org_events.js';
 import type { RecipientSelector } from '../notifications/recipients.js';
+import { ORG_BUILTIN_CHANNELS, ORG_IN_APP_CHANNEL_KEY } from '../notifications/defaults.js';
 
 const log = get_logger('svc.org_seed');
 
 /** `system_key` of the seeded Email channel. */
 export const ORG_EMAIL_CHANNEL_KEY = 'org.email';
-/** `system_key` of the seeded In-app channel. */
-export const ORG_IN_APP_CHANNEL_KEY = 'org.in_app';
 
 type ChannelKey = typeof ORG_EMAIL_CHANNEL_KEY | typeof ORG_IN_APP_CHANNEL_KEY;
-
-/** A seeded channel. */
-interface ChannelSpec {
-    system_key: ChannelKey;
-    name: string;
-    lock_reason: string | null;
-    destination: { type: string; config: Record<string, unknown> };
-}
 
 /** A seeded rule. */
 export interface DefaultRuleSpec {
@@ -67,20 +58,6 @@ export interface DefaultRuleSpec {
  * are built-in messages, not rules; only the In-app channel is created.
  */
 export const DEFAULTS_VERSION = 3;
-
-/**
- * The channels a new org starts with: just "In-app", an ordinary org channel (its in-app goes to
- * every member of the org). Invite and account messages are built in (see {@link default_rule_specs}),
- * not rules on a system Email channel.
- */
-const CHANNELS: readonly ChannelSpec[] = [
-    {
-        system_key: ORG_IN_APP_CHANNEL_KEY,
-        name: 'In-app',
-        lock_reason: null,
-        destination: { type: 'cliqhub', config: {} },
-    },
-];
 
 const NOTIFY: RecipientSelector[] = ['org_owners', 'inviter'];
 
@@ -147,8 +124,8 @@ export class OrgSeedService {
         const now = Date.now();
         const result: SeedResult = { channels_created: 0, rules_created: 0 };
 
-        const channel_ids = new Map<ChannelKey, string>();
-        for (const spec of CHANNELS) {
+        const channel_ids = new Map<string, string>();
+        for (const spec of ORG_BUILTIN_CHANNELS) {
             const existing = await NotificationChannel.findOne({ where: { org_id, system_key: spec.system_key }, attributes: ['id'], transaction });
             if (existing) {
                 channel_ids.set(spec.system_key, existing.id);
@@ -161,7 +138,9 @@ export class OrgSeedService {
                 secret: null, enabled: 1, created_at: now, updated_at: now,
                 system_key: spec.system_key, locked: spec.lock_reason !== null, lock_reason: spec.lock_reason,
             }, { transaction });
-            await ChannelDestination.create({ id: randomUUID(), channel_id: id, type: spec.destination.type, config: spec.destination.config, created_at: now }, { transaction });
+            for (const d of spec.destinations) {
+                await ChannelDestination.create({ id: randomUUID(), channel_id: id, type: d.type, config: d.config, created_at: now }, { transaction });
+            }
             channel_ids.set(spec.system_key, id);
             result.channels_created += 1;
         }

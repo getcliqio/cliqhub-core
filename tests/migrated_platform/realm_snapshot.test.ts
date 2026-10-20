@@ -10,7 +10,7 @@ import { Realm, RealmMember } from '../../src/models/index.js';
 import { NotificationChannel } from '../../src/models/index.js';
 
 import { RealmService } from '../../src/services/realm.service.js';
-import { REALM_MEMBERS_CHANNEL_NAME } from '../../src/services/notification.service.js';
+import { REALM_MEMBERS_CHANNEL_NAME } from '../../src/notifications/defaults.js';
 import { OrgAgentSetting, UserRealmAgentSetting } from '../../src/models/index.js';
 import { RealmAgentSettingRepository } from '../../src/repositories/realm_agent_setting_repository.js';
 

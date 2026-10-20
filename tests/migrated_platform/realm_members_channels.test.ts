@@ -19,7 +19,8 @@ import {
 	postgres_reachable,
 } from './helpers/control_plane_store.js';
 import { RealmService } from '../../src/services/realm.service.js';
-import { NotificationService, REALM_DEFAULT_RULE_EVENTS, REALM_MEMBERS_CHANNEL_NAME } from '../../src/services/notification.service.js';
+import { NotificationService } from '../../src/services/notification.service.js';
+import { REALM_DEFAULT_RULE_EVENTS, REALM_MEMBERS_CHANNEL_NAME } from '../../src/notifications/defaults.js';
 import { InAppNotificationService } from '../../src/services/in_app_notification.service.js';
 import { EventSubmitService } from '../../src/services/events_service.js';
 import { ensure_per_user_channel } from '../../src/services/per_user_channel.service.js';
@@ -27,6 +28,7 @@ import { CliqHubDeliverer } from '../../src/notifications/deliverers/cliqhub_del
 import {
 	add_realm_review_rule,
 	migrate_realm_members_channels,
+	REALM_MEMBERS_MIGRATION_EVENTS,
 	REALM_MEMBERS_MIGRATION_KEY,
 	REALM_REVIEW_RULE_KEY,
 } from '../../src/models/migrations/control_plane_schema_migrations.js';
@@ -170,7 +172,7 @@ describe.skipIf(!has_postgres)('PLAN-channels E2: explicit channels', () => {
 			expect(await NotificationChannel.findByPk(l.all_users_id)).toBeNull();
 			expect((await NotificationChannel.findByPk(l.members_id, { raw: true }))?.name).toBe(REALM_MEMBERS_CHANNEL_NAME);
 			const rules = await NotificationRule.findAll({ where: { realm_id: l.realm.id }, raw: true });
-			expect(rules.map((r) => r.event).sort()).toEqual([...REALM_DEFAULT_RULE_EVENTS].sort());
+			expect(rules.map((r) => r.event).sort()).toEqual([...REALM_MEMBERS_MIGRATION_EVENTS].sort());
 			expect(await Setting.findByPk(REALM_MEMBERS_MIGRATION_KEY)).toBeTruthy();
 		});
 

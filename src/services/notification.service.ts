@@ -12,16 +12,13 @@ import type { NotificationRule } from '../models/notification_rule.model.js';
 import type { Destination } from '../notifications/channel_config.js';
 import type { NotificationRuleData } from '../schemas/notification_types.js';
 
-/** Name of a realm's in-app channel to all its members. */
-export const REALM_MEMBERS_CHANNEL_NAME = 'All realm members';
-
-/**
- * Events a new realm sends to its "All realm members" channel by default (ordinary rules people
- * can change or remove): a run needing input or stuck, runs that failed or crashed, and review
- * requests — the people a review request reaches are the ones who can answer it, so every realm
- * starts with someone who can.
- */
-export const REALM_DEFAULT_RULE_EVENTS = ['phase.input_required', 'phase.idle', 'phase.timed_out', 'run.failed', 'run.crashed', 'hug.review_requested'] as const;
+import {
+	REALM_DEFAULT_RULE_EVENTS,
+	REALM_MEMBERS_CHANNEL,
+	REALM_MEMBERS_CHANNEL_NAME,
+	realm_default_rule_key,
+	realm_members_channel_id,
+} from '../notifications/defaults.js';
 
 const log = get_logger('svc.notification');
 
@@ -876,7 +873,7 @@ export class NotificationService {
 		const realm = await realm_repo.find_by_id(trimmed);
 		if (!realm) throw new ApiError('not_found', `realm '${trimmed}' not found`, 404);
 
-		const channel_id = `cliqhub-${trimmed}`;
+		const channel_id = realm_members_channel_id(trimmed);
 		let row = await channel_repo.find_by_id(channel_id)
 			?? await channel_repo.find_one({ realm_id: trimmed, name: { [Op.in]: [REALM_MEMBERS_CHANNEL_NAME, 'cliqhub'] } } as any);
 		if (row) {
@@ -896,14 +893,16 @@ export class NotificationService {
 			updated_at: now,
 		} as any);
 		const { ChannelDestination } = await import('../models/index.js');
-		await ChannelDestination.findOrCreate({
-			where: { channel_id, type: 'cliqhub' },
-			defaults: { id: randomUUID(), channel_id, type: 'cliqhub', config: {}, created_at: now },
-		});
+		for (const d of REALM_MEMBERS_CHANNEL.destinations) {
+			await ChannelDestination.findOrCreate({
+				where: { channel_id, type: d.type },
+				defaults: { id: randomUUID(), channel_id, type: d.type, config: d.config, created_at: now },
+			});
+		}
 		for (const event of REALM_DEFAULT_RULE_EVENTS) {
 			await rule_repo.create_one({
 				realm_id: trimmed, org_id: null, team_slug: null, event, channel_id, priority: 0,
-				recipients: null, system_key: `realm.members.${event}`, locked: false, lock_reason: null,
+				recipients: null, system_key: realm_default_rule_key(event), locked: false, lock_reason: null,
 				created_at: now, updated_at: now,
 			} as any);
 		}
