@@ -242,7 +242,7 @@ async function resolve_channel_refs(realm_id: string, refs: string[]): Promise<{
 		}
 		let found = false;
 		for (const name of candidates) {
-			const ch = await NotificationService.find_channel_by_name(name, realm_id);
+			const ch = await NotificationService.find_realm_usable_channel(name, realm_id);
 			if (!ch) continue;
 			found = true;
 			if (seen.has(ch.id)) break;

@@ -1281,7 +1281,7 @@ export class TeamsService {
  *
  * @throws ApiError (422) on validation failure.
  */
-function validate_hug_reviewer_groups(workflow: NormalizedWorkflow): void {
+export function validate_hug_reviewer_groups(workflow: NormalizedWorkflow): void {
     const all_phases = [
         ...(workflow.phases ?? []),
         ...(workflow.support ?? []),

@@ -59,7 +59,7 @@ export async function validate_run_start_options(opts: {
         const { NotificationService } = await import('./notification.service.js');
         const unknown: string[] = [];
         for (const name of opts.notify_channels) {
-            if (!(await NotificationService.find_channel_by_name(name, realm_id))) unknown.push(name);
+            if (!(await NotificationService.find_realm_usable_channel(name, realm_id))) unknown.push(name);
         }
         if (unknown.length > 0) {
             throw new ApiError('invalid_params', `Unknown notification channels: ${unknown.join(', ')}`, 422, { field: 'notify_channels', unknown });

@@ -39,12 +39,13 @@ export interface ResolvedGroup {
 }
 
 /**
- * Resolve reviewer groups against org-scoped notification channels
+ * Resolve reviewer groups against the channels the realm can use: the realm's own and its org's
  * (shared + personal). Every reviewer target is a channel name.
  */
 export async function resolve_reviewer_groups(
     org_id: string,
     groups: ReviewerGroup[],
+    realm_id?: string | null,
 ): Promise<ResolvedGroup[]> {
     /** Collect all unique target strings across groups. */
     const all_targets = new Set<string>();
@@ -59,7 +60,7 @@ export async function resolve_reviewer_groups(
         return groups.map((g) => ({ policy: g.policy, destinations: [] }));
     }
 
-    const channel_map = await _resolve_channel_names(org_id, [...all_targets]);
+    const channel_map = await _resolve_channel_names(org_id, [...all_targets], realm_id ?? null);
 
     /** Build resolved groups. */
     const resolved: ResolvedGroup[] = [];
@@ -99,24 +100,29 @@ interface ResolvedChannel {
 }
 
 /**
- * Look up org-scoped notification channels by name (shared + personal).
+ * Look up enabled channels by name: the realm's own (when given) and the org's (shared + personal).
+ * A realm channel wins over an org channel of the same name.
  * Returns a map of target string → channel info.
  */
 async function _resolve_channel_names(
     org_id: string,
     targets: string[],
+    realm_id: string | null,
 ): Promise<Map<string, ResolvedChannel>> {
     if (targets.length === 0) return new Map();
 
+    const scopes: Record<string, unknown>[] = [{ org_id, realm_id: { [Op.is]: null } }];
+    if (realm_id) scopes.push({ realm_id });
     const channels = await channel_repo.find_all(
         {
-            org_id,
-            realm_id: { [Op.is]: null },
+            [Op.or]: scopes,
             name: { [Op.in]: targets },
             enabled: 1,
-        },
-        { attributes: ['id', 'name', 'user_id'] },
+        } as any,
+        { attributes: ['id', 'name', 'user_id', 'realm_id'] },
     );
+    /** Org channels first, so a realm channel of the same name replaces it. */
+    channels.sort((a, b) => Number(Boolean(a.realm_id)) - Number(Boolean(b.realm_id)));
 
     const result = new Map<string, ResolvedChannel>();
     for (const ch of channels) {

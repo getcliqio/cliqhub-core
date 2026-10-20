@@ -22,6 +22,7 @@ import {
 	type ReviewArtifactInfo,
 } from './review_enrichment.js';
 import { NotificationService } from './notification.service.js';
+import { raise_unknown_channel } from '../notifications/unknown_channel.js';
 import {
 	resolve_reviewer_groups,
 	type ReviewerGroup,
@@ -249,20 +250,29 @@ export class HugReviewsService {
 		const reviewer_groups = normalized_groups;
 		let resolved_groups: ResolvedGroup[] = [];
 		if (reviewer_groups.length > 0 && input.org_id) {
-			resolved_groups = await resolve_reviewer_groups(input.org_id, reviewer_groups);
+			resolved_groups = await resolve_reviewer_groups(input.org_id, reviewer_groups, input.realm_id);
 
 			/**
-			 * A reviewers block that names nobody who exists (a typo, a deleted channel) is refused:
-			 * sending it to the realm's default reviewers instead would hide the mistake.
+			 * Each reviewer name with no channel the realm can use raises Unknown channel (PLAN-notifications-v2
+			 * B3); the names that exist still get the review. A group left with nobody is refused — never sent
+			 * to the realm's default reviewers instead — and the gate's phase fails with this message.
 			 */
-			const unresolved = reviewer_groups.flatMap((g, i) => {
+			const unresolved = [...new Set(reviewer_groups.flatMap((g, i) => {
 				const found = new Set(resolved_groups[i]?.destinations.map((d) => d.target));
 				return g.channels.map((c) => c.trim()).filter((c) => c && !found.has(c));
-			});
+			}))];
+			for (const name of unresolved) {
+				await raise_unknown_channel({
+					realm_id: input.realm_id, name, source: 'reviewers', for_event: 'hug.review_requested',
+					run_id: input.run_id, phase: typeof input.payload?.phase === 'string' ? input.payload.phase : null, daemon_id: input.daemon_id,
+				});
+			}
 			if (resolved_groups.some((g) => g.destinations.length === 0)) {
 				log.warn('reviewer_group_empty', { review_id: id, org_id: input.org_id, unresolved });
-				throw ApiError.bad_request(
-					`No channel named ${unresolved.map((c) => `'${c}'`).join(', ')} in this org — check the gate's reviewers block`,
+				throw new ApiError(
+					422,
+					`Review sent to unknown channel ${unresolved.map((c) => `'${c}'`).join(', ')} — no channel with that name in this realm or its org`,
+					'invalid_params',
 				);
 			}
 		}

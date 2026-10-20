@@ -116,17 +116,16 @@ describe.skipIf(!has_postgres)('PLAN-channels S0 baseline: reviews reach people 
 		}
 	});
 
-	it('a reviewer name with no channel reaches nobody (no direct notification)', async () => {
+	it('a reviewer name with no channel reaches nobody directly — it is refused and raises Unknown channel (B3)', async () => {
 		const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews');
-		const created = await HugReviewsService.create({
+		await expect(HugReviewsService.create({
 			run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id, org_id: ORG,
 			payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: ORG,
 			reviewers: [{ policy: 'any', channels: ['nobody-here'] }],
-		}).catch((err: Error) => ({ review_id: null as string | null, error: err.message }));
-		if (created.review_id) {
-			expect(await ReviewNotification.count({ where: { review_id: created.review_id } })).toBe(0);
-		}
+		})).rejects.toMatchObject({ status_code: 422 });
+		expect(await Review.count()).toBe(0);
 		await new Promise((r) => setTimeout(r, 300));
-		expect(await InAppNotification.count()).toBe(0);
+		const inbox = await InAppNotification.findAll({ raw: true });
+		expect(inbox.every((n) => n.event === 'notification.unknown_channel' && !n.review_id)).toBe(true);
 	});
 });

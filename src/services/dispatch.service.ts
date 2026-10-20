@@ -10,6 +10,7 @@
  * request/response semantics (design task 4.15 — future outbox+ack).
  */
 
+import type { NormalizedWorkflow } from './package_parser.js';
 import { randomUUID } from 'node:crypto';
 import { Op, QueryTypes } from 'sequelize';
 
@@ -587,6 +588,11 @@ export class DispatchService {
             }
             const { team: hub_team } = resolved;
             const latest_version = target_version;
+
+            /** A Hug gate without reviewers can't be installed (versions published before the publish check). */
+            const { validate_hug_reviewer_groups } = await import('./teams_service.js');
+            const yaml = (await import('js-yaml')).default;
+            validate_hug_reviewer_groups((yaml.load(latest_version.workflow_json || '{}') ?? {}) as NormalizedWorkflow);
             const scope_slug = hub_team.scope ?? '';
 
             const targets = await DispatchService._resolve_install_targets({

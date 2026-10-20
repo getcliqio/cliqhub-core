@@ -343,6 +343,22 @@ export class NotificationService {
 	}
 
 	/**
+	 * A channel a realm can use, by name: the realm's own channel, else its org's (shared or a
+	 * person's). Used for names a run or a gate gives (notify channels, reviewers).
+	 */
+	static async find_realm_usable_channel(name: string, realm_id: string): Promise<ChannelRecord | null> {
+		const own = await NotificationService.find_channel_by_name(name, realm_id);
+		if (own) return own;
+		const { Realm, ChannelDestination } = await import('../models/index.js');
+		const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'], raw: true });
+		if (!realm?.org_id) return null;
+		const ch = await channel_repo.find_one({ name, org_id: realm.org_id, realm_id: { [Op.is]: null } } as any, {
+			include: [{ model: ChannelDestination, as: 'destinations_rows' }],
+		});
+		return ch ? NotificationService.to_channel_record(ch) : null;
+	}
+
+	/**
 	 * An email destination with `account: true` sends to the channel owner's account email, so only
 	 * a personal channel (one with an owner) can have it.
 	 *

@@ -8,6 +8,8 @@ import {
     Realm,
     RealmMember,
     DaemonTeam,
+    Team,
+    TeamVersion,
 } from '../../src/models/index.js';
 import { Scope } from '../../src/models/index.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
@@ -29,6 +31,7 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
     let realm_id: string;
     let d1: string;
     let d2: string;
+    const catalog_ids: string[] = [];
     /** Spy on outbox enqueue — install now goes through the durable outbox. */
     const mock_enqueue = vi.fn();
 
@@ -104,6 +107,9 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
         await Daemon.destroy({ where: { id: d1 } });
         await Daemon.destroy({ where: { id: d2 } });
         await DaemonTeam.destroy({ where: { id: team_id } });
+        await TeamVersion.destroy({ where: { team_id: catalog_ids } });
+        await DaemonTeam.destroy({ where: { scope_id } });
+        await Team.destroy({ where: { id: catalog_ids } });
         await Scope.destroy({ where: { id: scope_id } });
         await close_test_control_plane_store();
     });
@@ -180,5 +186,35 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
             scope_ids: [],
             org_ids: [org_id],
         })).rejects.toBeInstanceOf(ApiError);
+    });
+    /** A catalog team whose one phase is a Hug gate (PLAN-notifications-v2 B3). */
+    async function publish_gate(review: Record<string, unknown> | undefined): Promise<string> {
+        const scope = await Scope.findByPk(scope_id, { raw: true });
+        const name = `gate-${uid()}`.slice(0, 40);
+        const team = await Team.create({
+            id: randomUUID(), name, scope: scope!.slug, scope_type: 'org', description: 'gate',
+            author_id: user_id, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
+        } as any);
+        catalog_ids.push(team.id);
+        await TeamVersion.create({
+            id: randomUUID(), team_id: team.id, version: '1.0.0', changelog: '', package_path: '/tmp/x.zip',
+            workflow_json: JSON.stringify({ phases: [{ name: 'human-review', type: 'gate', agent: 'hug', ...(review ? { review } : {}) }] }),
+            manifest_yaml: '', readme: '', capability_json: '{}', agents_json: '{}', roles_json: '[]', tools: '[]', published_at: new Date(),
+        } as any);
+        return `${scope!.slug}/${name}`;
+    }
+
+    it('B3: a Hug gate with no reviewers can\'t be installed', async () => {
+        const team = await publish_gate(undefined);
+        await expect(DispatchService.install_team({ team_id: team, daemon_ids: [d1], user_id, scope_ids: [scope_id], org_ids: [org_id] }))
+            .rejects.toMatchObject({ status: 422, message: expect.stringContaining('must declare review.reviewers') });
+        expect(mock_enqueue).not.toHaveBeenCalled();
+    });
+
+    it('B3: a Hug gate with reviewers installs', async () => {
+        const team = await publish_gate({ reviewers: [{ policy: 'any', channels: ['qa'] }] });
+        const result = await DispatchService.install_team({ team_id: team, daemon_ids: [d1], user_id, scope_ids: [scope_id], org_ids: [org_id] });
+        expect(result.results[0].ok).toBe(true);
+        expect(mock_enqueue).toHaveBeenCalledTimes(1);
     });
 });
