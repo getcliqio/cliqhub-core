@@ -68,10 +68,24 @@ export const REALM_MEMBERS_CHANNEL: BuiltinChannelSpec = {
 
 /**
  * Events a new realm sends to its "All realm members" channel by default (ordinary rules people
- * can change or remove): a run needing input or stuck, runs that failed or crashed, and review
- * requests.
+ * can change or remove): a run needing input or stuck, runs that failed or crashed, and — until reviews
+ * always name their reviewers (PLAN-notifications-v2 B3/B4) — review requests.
  */
 export const REALM_DEFAULT_RULE_EVENTS = ['phase.input_required', 'phase.idle', 'phase.timed_out', 'run.failed', 'run.crashed', 'hug.review_requested'] as const;
+
+/** A rule CliqHub fixes: shown with a lock; can't be changed, switched off or removed. */
+export interface FixedRuleSpec {
+    event: string;
+    lock_reason: string;
+}
+
+/**
+ * Rules every realm has to its "All realm members" channel that nobody can change: a named channel that
+ * doesn't exist always reaches the realm.
+ */
+export const REALM_FIXED_RULES: readonly FixedRuleSpec[] = [
+    { event: 'notification.unknown_channel', lock_reason: 'Built in — a channel that doesn’t exist always reaches the realm.' },
+];
 
 /** `system_key` of a realm's default rule for `event`. */
 export function realm_default_rule_key(event: string): string {

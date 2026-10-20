@@ -20,7 +20,7 @@ import {
 } from './helpers/control_plane_store.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
-import { REALM_DEFAULT_RULE_EVENTS, REALM_MEMBERS_CHANNEL_NAME } from '../../src/notifications/defaults.js';
+import { REALM_DEFAULT_RULE_EVENTS, REALM_FIXED_RULES, REALM_MEMBERS_CHANNEL_NAME } from '../../src/notifications/defaults.js';
 import { InAppNotificationService } from '../../src/services/in_app_notification.service.js';
 import { EventSubmitService } from '../../src/services/events_service.js';
 import { ensure_per_user_channel } from '../../src/services/per_user_channel.service.js';
@@ -101,8 +101,10 @@ describe.skipIf(!has_postgres)('PLAN-channels E2: explicit channels', () => {
 		expect(ch).toBeTruthy();
 		expect((await ChannelDestination.findAll({ where: { channel_id: ch!.id }, raw: true })).map((d) => d.type)).toEqual(['cliqhub', 'email']);
 		const rules = await NotificationRule.findAll({ where: { realm_id: realm.id }, raw: true });
-		expect(rules.map((r) => r.event).sort()).toEqual([...REALM_DEFAULT_RULE_EVENTS].sort());
-		expect(rules.every((r) => r.channel_id === ch!.id && !r.locked)).toBe(true);
+		expect(rules.map((r) => r.event).sort()).toEqual([...REALM_DEFAULT_RULE_EVENTS, ...REALM_FIXED_RULES.map((f) => f.event)].sort());
+		expect(rules.every((r) => r.channel_id === ch!.id)).toBe(true);
+		// The defaults are editable; the fixed rules are locked.
+		expect(rules.filter((r) => r.locked).map((r) => r.event)).toEqual(REALM_FIXED_RULES.map((f) => f.event));
 	});
 
 	it('in-app to a realm channel reaches that realm’s members, as they join', async () => {

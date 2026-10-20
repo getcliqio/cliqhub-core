@@ -66,7 +66,8 @@ describe('notification.* event group', () => {
         const types = expand_event_selector('notification.*');
         expect(types).toContain('notification.test');
         expect(types).toContain('notification.failed');
-        expect(types.length).toBe(2);
+        expect(types).toContain('notification.unknown_channel');
+        expect(types.length).toBe(3);
     });
 });
 

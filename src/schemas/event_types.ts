@@ -118,6 +118,9 @@ export const EVENT_TYPES = [
 	'auth.api_key_revoked',
 	'notification.test',
 	'notification.failed',
+	// A channel named for an event (a run's notify channels, a gate's reviewers) doesn't exist.
+	// Raised only by CliqHub; always reaches the realm through its fixed rule (PLAN-notifications-v2).
+	'notification.unknown_channel',
 	// Org-scoped identity events, raised only by CliqHub itself
 	// (notifications/org_events.ts); `events/submit` refuses them.
 	'invite.owner.sent',
@@ -200,6 +203,7 @@ export const EVENT_TYPE_SEVERITY: Record<EventType, EventSeverity> = {
 	'auth.api_key_revoked': 'warn',
 	'notification.test': 'info',
 	'notification.failed': 'error',
+	'notification.unknown_channel': 'warn',
 	'invite.owner.sent': 'info',
 	'invite.owner.reminder': 'info',
 	'invite.owner.accepted': 'info',
@@ -227,9 +231,12 @@ export const EVENT_TYPE_SEVERITY: Record<EventType, EventSeverity> = {
 /** Families raised only by CliqHub (org events); clients cannot submit them. */
 const SYSTEM_EVENT_PREFIXES = ['invite.', 'org.', 'user.'] as const;
 
-/** True for event types only CliqHub raises (invites, org lifecycle, account emails). */
+/** Single event types raised only by CliqHub. */
+const SYSTEM_EVENT_TYPES: ReadonlySet<string> = new Set(['notification.unknown_channel']);
+
+/** True for event types only CliqHub raises (invites, org lifecycle, account emails, unknown channel). */
 export function is_system_event_type(type: string): boolean {
-	return SYSTEM_EVENT_PREFIXES.some((prefix) => type.startsWith(prefix));
+	return SYSTEM_EVENT_TYPES.has(type) || SYSTEM_EVENT_PREFIXES.some((prefix) => type.startsWith(prefix));
 }
 
 
@@ -247,6 +254,7 @@ export function required_fields_for(type: EventType): readonly string[] {
 	if (type.startsWith('realm.')) return ['realm_id'];
 	if (type.startsWith('team.')) return ['team'];
 	if (type.startsWith('custom.')) return ['realm_id'];
+	if (type === 'notification.unknown_channel') return ['realm_id'];
 	return [];
 }
 

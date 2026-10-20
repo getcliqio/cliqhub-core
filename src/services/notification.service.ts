@@ -14,6 +14,7 @@ import type { NotificationRuleData } from '../schemas/notification_types.js';
 
 import {
 	REALM_DEFAULT_RULE_EVENTS,
+	REALM_FIXED_RULES,
 	REALM_MEMBERS_CHANNEL,
 	REALM_MEMBERS_CHANNEL_NAME,
 	realm_default_rule_key,
@@ -914,7 +915,14 @@ export class NotificationService {
 				created_at: now, updated_at: now,
 			} as any);
 		}
-		log.info('realm_members_channel_created', { realm_id: trimmed, channel_id, rules: REALM_DEFAULT_RULE_EVENTS.length });
+		for (const fixed of REALM_FIXED_RULES) {
+			await rule_repo.create_one({
+				realm_id: trimmed, org_id: null, team_slug: null, event: fixed.event, channel_id, priority: 0,
+				recipients: null, system_key: realm_default_rule_key(fixed.event), locked: true, lock_reason: fixed.lock_reason,
+				created_at: now, updated_at: now,
+			} as any);
+		}
+		log.info('realm_members_channel_created', { realm_id: trimmed, channel_id, rules: REALM_DEFAULT_RULE_EVENTS.length + REALM_FIXED_RULES.length });
 		return NotificationService.to_channel_record(row);
 	}
 

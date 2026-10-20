@@ -48,6 +48,9 @@ describe('org event catalogue', () => {
         const parsed = event_submit_schema.safeParse({ type: 'invite.org.sent', org_id: 'o1', payload: { data: invite_data } });
         expect(parsed.success).toBe(false);
         expect(parsed.error?.issues[0].message).toContain('raised by CliqHub only');
+        // Unknown channel is CliqHub's own too (PLAN-notifications-v2 A3).
+        expect(is_system_event_type('notification.unknown_channel')).toBe(true);
+        expect(event_submit_schema.safeParse({ type: 'notification.unknown_channel', realm_id: 'r1' }).success).toBe(false);
     });
 
     it('describes events for in-app and chat without links', () => {

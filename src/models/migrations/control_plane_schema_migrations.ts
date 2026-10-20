@@ -1371,6 +1371,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await grant_admin_rules_manage(sq);
     await add_realm_review_rule(sq);
     await migrate_builtin_channels(sq);
+    await migrate_default_rules(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -1864,6 +1865,65 @@ export async function migrate_builtin_channels(sq: Sequelize): Promise<void> {
         });
     } catch (err) {
         _mig_log.error('builtin_channels_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+/** `cliq.settings` key marking the one-time fixed-rule change (A3) as done. */
+export const DEFAULT_RULES_MIGRATION_KEY = 'migrate.default_rules_2026_10';
+
+/** What this migration does — frozen as written (PLAN-notifications-v2 A3). */
+const DEFAULT_RULES_2026_10 = {
+    fixed: { event: 'notification.unknown_channel', system_key: 'realm.members.notification.unknown_channel', lock_reason: 'Built in — a channel that doesn’t exist always reaches the realm.' },
+} as const;
+
+/**
+ * One time (Oct 2026): every live realm gets the fixed, locked rule
+ * `notification.unknown_channel → All realm members`. A realm's other rules are untouched. (Removing the
+ * review-request default waits for reviews to always name their reviewers — B3/B4.) Safe to repeat; the
+ * key is recorded once everything succeeded.
+ */
+export async function migrate_default_rules(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.notification_rules') AS r`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; r: string | null }>;
+        if (!tables?.s || !tables?.r) {
+            _mig_log.info('default_rules_deferred', { reason: 'cliq.settings or cliq.notification_rules not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: DEFAULT_RULES_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const spec = DEFAULT_RULES_2026_10;
+
+        const realms = await sq.query(
+            `SELECT r."id", c."id" AS channel_id FROM cliq."realms" r
+             JOIN cliq."notification_channels" c ON c."id" = 'cliqhub-' || r."id"
+             WHERE COALESCE(r."deleted", false) = false`, { type: QueryTypes.SELECT }) as Array<{ id: string; channel_id: string }>;
+        let fixed_added = 0;
+        for (const { id: realm_id, channel_id } of realms) {
+            const added = await sq.query(
+                `INSERT INTO cliq."notification_rules"
+                    ("id", "realm_id", "org_id", "team_slug", "event", "channel_id", "priority", "recipients",
+                     "system_key", "locked", "lock_reason", "created_at", "updated_at")
+                 SELECT gen_random_uuid(), :realm_id, NULL, NULL, :event, :channel_id, 0, NULL,
+                        :system_key, true, :reason, EXTRACT(EPOCH FROM NOW()) * 1000, EXTRACT(EPOCH FROM NOW()) * 1000
+                 WHERE NOT EXISTS (
+                    SELECT 1 FROM cliq."notification_rules"
+                    WHERE "realm_id" = :realm_id AND "team_slug" IS NULL AND "event" = :event AND "channel_id" = :channel_id
+                 )
+                 RETURNING "id"`,
+                { replacements: { realm_id, channel_id, event: spec.fixed.event, system_key: spec.fixed.system_key, reason: spec.fixed.lock_reason }, type: QueryTypes.SELECT },
+            );
+            fixed_added += added.length;
+        }
+
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: DEFAULT_RULES_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('default_rules_migrated', { realms: realms.length, fixed_added });
+    } catch (err) {
+        _mig_log.error('default_rules_migration_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }
 
