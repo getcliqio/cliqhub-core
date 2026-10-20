@@ -1,13 +1,13 @@
 /**
- * Run start options on live Postgres: reviewers per human phase and the
- * notification channel override.
+ * Run start options on live Postgres: the notification channel override, and the channels a run asks
+ * people through (PLAN-notifications-v2 B4.2).
  *
- *   1. `runs/enqueue` refuses unknown reviewers and unknown channels (422 with
- *      `details.field`) before anything is queued.
- *   2. A run stores the options and returns them on its record.
+ *   1. `runs/enqueue` refuses unknown notify channels (422 with `details.field`) before anything is queued.
+ *   2. A run stores its notify channels and returns them on its record.
  *   3. The run's lifecycle events go to its own channels instead of the realm
  *      rules; other events and runs without options keep the rules.
- *   4. Reviewer phases are checked against the manifest that runs.
+ *   4. The channels a run asks people through — `type: channel` inputs, Hug gate reviewers, phase `hug`
+ *      blocks — are read from the manifest that runs; each must be one the realm can use.
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -22,29 +22,42 @@ import { NotificationChannel, Run } from '../../src/models/index.js';
 import { RunService } from '../../src/services/run.service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
 import { NotificationFanOutService } from '../../src/notifications/fan_out.service.js';
-import { assert_reviewer_phases } from '../../src/services/run_start_options.js';
+import { assert_run_channels, run_channel_names } from '../../src/services/run_start_options.js';
 import { to_run_data } from '../../src/lib/mappers.js';
 import type { SubmittedEvent } from '../../src/services/events_service.js';
 
 const has_postgres = await postgres_reachable();
 
-const MANIFEST = [
+/** A team with a channel input, a gate (one fixed name + the input) and a phase `hug` block. */
+const manifest = (gate_names: string[], hug_names: string[]) => [
     'name: gated',
+    'inputs:',
+    '  - name: reviewers',
+    '    type: channel',
+    '  - name: ticket',
     'phases:',
     '  - name: design',
     '    agent: claude-code',
+    `    hug: { channels: ${JSON.stringify(hug_names)} }`,
     '  - name: design-review',
     '    agent: hug',
     '    type: gate',
+    '    review:',
+    `      reviewers: [{ policy: any, channels: ${JSON.stringify(gate_names)} }]`,
 ].join('\n');
 
-describe('assert_reviewer_phases', () => {
-    it('accepts phases the manifest has and refuses others with the unknown names', () => {
-        expect(() => assert_reviewer_phases(MANIFEST, { 'design-review': ['priya'] })).not.toThrow();
-        expect(() => assert_reviewer_phases(MANIFEST, { deploy: ['priya'] })).toThrow(
-            expect.objectContaining({ status: 422, details: { field: 'reviewers', unknown_phases: ['deploy'] } }),
-        );
-        expect(() => assert_reviewer_phases(undefined, { deploy: ['priya'] })).not.toThrow();
+describe('run_channel_names', () => {
+    it('channel inputs, gate reviewers and hug blocks — fixed names as written, input references as the input\'s value', () => {
+        const names = run_channel_names(manifest(['qa', '{{inputs.reviewers}}'], ['ops', '$(inputs.reviewers)']), { reviewers: ['elan', 'priya'], ticket: 'X-1' });
+        expect(names).toEqual([
+            { name: 'elan', from: "input 'reviewers'" },
+            { name: 'priya', from: "input 'reviewers'" },
+            { name: 'ops', from: "phase 'design'" },
+            { name: 'qa', from: "phase 'design-review'" },
+        ]);
+        expect(run_channel_names(manifest(['qa'], ['ops']), { reviewers: 'a, b' }).map((c) => c.name)).toEqual(['a', 'b', 'ops', 'qa']);
+        expect(run_channel_names(manifest(['team-{{inputs.ticket}}'], ['ops']), {}).map((c) => c.name)).toEqual(['ops']);
+        expect(run_channel_names(undefined, { reviewers: ['x'] })).toEqual([]);
     });
 });
 
@@ -76,11 +89,7 @@ describe.skipIf(!has_postgres)('run start options', () => {
         await close_live_hub_app();
     }, 300_000);
 
-    it('refuses unknown reviewers and unknown channels with the names', async () => {
-        const reviewers = await enqueue({ reviewers: { 'design-review': ['nobody-here-xyz'] } });
-        expect(reviewers.status, JSON.stringify(reviewers.body)).toBe(422);
-        expect(reviewers.body.details).toEqual({ field: 'reviewers', unknown: ['nobody-here-xyz'] });
-
+    it('refuses unknown notify channels with the names', async () => {
         const channels = await enqueue({ notify_channels: ['no-such-channel'] });
         expect(channels.status, JSON.stringify(channels.body)).toBe(422);
         expect(channels.body.details).toEqual({ field: 'notify_channels', unknown: ['no-such-channel'] });
@@ -89,13 +98,11 @@ describe.skipIf(!has_postgres)('run start options', () => {
     it('a run stores its options and returns them on its record', async () => {
         const run_id = await RunService.create(s.workspace_a1, s.team_public, {
             realm_id: s.A1,
-            reviewers: { 'design-review': ['olivia'] },
             notify_channels: [channel_name],
         });
         run_ids.push(run_id);
         const row = await Run.findByPk(run_id, { raw: true });
         const data = to_run_data(row as never);
-        expect(data.reviewers).toEqual({ 'design-review': ['olivia'] });
         expect(data.notify_channels).toEqual([channel_name]);
     });
 
@@ -119,5 +126,16 @@ describe.skipIf(!has_postgres)('run start options', () => {
             rules.mockRestore();
             by_name.mockRestore();
         }
+    });
+
+    it('a run whose channels the realm can\'t use is refused, naming each one and where it comes from', async () => {
+        const ok = manifest(['{{inputs.reviewers}}'], [channel_name]);
+        await expect(assert_run_channels({ realm_id: s.A1, manifest_yaml: ok, inputs: { reviewers: [channel_name] } })).resolves.toBeUndefined();
+        await expect(assert_run_channels({ realm_id: s.A1, manifest_yaml: manifest(['qa-nobody'], [channel_name]), inputs: { reviewers: ['nobody-in'] } }))
+            .rejects.toMatchObject({
+                status: 422,
+                message: "Unknown channels: 'nobody-in' (input 'reviewers'), 'qa-nobody' (phase 'design-review') — not a channel this realm can use",
+                details: { field: 'channels', unknown: ['nobody-in', 'qa-nobody'] },
+            });
     });
 });

@@ -1027,8 +1027,6 @@ export class RunService {
             external_id?: string;
             context_labels?: Record<string, string>;
             execution_type?: string;
-            /** Reviewers per human phase chosen at run start. */
-            reviewers?: Record<string, string[]>;
             /** Notification channels chosen at run start. */
             notify_channels?: string[];
             /** Who initiated this run: `'cli'` (local) or `'hub'` (Hub-dispatched). */
@@ -1041,7 +1039,6 @@ export class RunService {
         const inputs_json = opts?.inputs ? JSON.stringify(opts.inputs) : null;
         const execution_type = opts?.execution_type ?? 'local';
         const context_labels_json = opts?.context_labels ? JSON.stringify(opts.context_labels) : null;
-        const reviewers_json = opts?.reviewers ? JSON.stringify(opts.reviewers) : null;
         const notify_channels_json = opts?.notify_channels ? JSON.stringify(opts.notify_channels) : null;
 
         const realm_id = opts?.realm_id
@@ -1097,7 +1094,6 @@ export class RunService {
                 inputs: inputs_json ?? existing.inputs,
                 external_id: opts?.external_id ?? existing.external_id,
                 context_labels: context_labels_json ?? existing.context_labels,
-                reviewers: reviewers_json ?? existing.reviewers,
                 notify_channels: notify_channels_json ?? existing.notify_channels,
                 origin: opts?.origin ?? existing.origin ?? null,
                 error: null,
@@ -1138,7 +1134,6 @@ export class RunService {
             inputs: inputs_json,
             external_id: opts?.external_id ?? null,
             context_labels: context_labels_json,
-            reviewers: reviewers_json,
             notify_channels: notify_channels_json,
             started_at: now,
             completed_at: null,

@@ -320,7 +320,7 @@ export class RunController extends BaseController {
         const user_id = req.auth?.user?.id ?? '';
         const org_ids = req.auth?.org_ids ?? [];
         const scope_ids = req.auth?.scopes?.map(s => s.id) ?? [];
-        await validate_run_start_options({ realm_id: body.realm_id, reviewers: body.reviewers, notify_channels: body.notify_channels });
+        await validate_run_start_options({ realm_id: body.realm_id, notify_channels: body.notify_channels });
 
         if (body.daemon_id) {
             const run_context = {
@@ -340,7 +340,6 @@ export class RunController extends BaseController {
                 run_context,
                 run_name: body.run_name,
                 execution_type: body.execution_type,
-                reviewers: body.reviewers,
                 notify_channels: body.notify_channels,
                 org_ids,
                 user_id,
@@ -363,7 +362,6 @@ export class RunController extends BaseController {
         if (body.manifest_yaml) payload.manifest_yaml = body.manifest_yaml;
         if (body.run_name) payload.run_name = body.run_name;
         if (body.execution_type) payload.execution_type = body.execution_type;
-        if (body.reviewers) payload.reviewers = body.reviewers;
         if (body.notify_channels) payload.notify_channels = body.notify_channels;
         const inputs = {
             ...((payload.inputs && typeof payload.inputs === 'object' && !Array.isArray(payload.inputs))

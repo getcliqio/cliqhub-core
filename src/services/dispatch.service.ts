@@ -56,26 +56,9 @@ import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import { CustomEventService } from './custom_event.service.js';
 import { SemVer } from '../lib/semver.js';
-import { assert_reviewer_phases, type RunReviewers } from './run_start_options.js';
+import { assert_run_channels } from './run_start_options.js';
 
 const log = get_logger('dispatch');
-
-/** A stored `{ phase: [username] }` reviewers map from a queue payload. */
-function is_reviewers(v: unknown): v is RunReviewers {
-    return Boolean(v) && typeof v === 'object' && !Array.isArray(v)
-        && Object.values(v as Record<string, unknown>).every(is_string_list);
-}
-
-/** The reviewers stored on a run row (JSON text), or undefined. */
-function parse_reviewers(raw: string | null | undefined): RunReviewers | undefined {
-    if (!raw) return undefined;
-    try {
-        const v = JSON.parse(raw) as unknown;
-        return is_reviewers(v) ? v : undefined;
-    } catch {
-        return undefined;
-    }
-}
 
 /** A non-empty list of strings. */
 function is_string_list(v: unknown): v is string[] {
@@ -108,8 +91,6 @@ export interface DispatchRunInput {
     };
     run_name?: string;
     execution_type?: 'local' | 'docker';
-    /** Reviewers per human phase chosen at run start. */
-    reviewers?: RunReviewers;
     /** Notification channels chosen at run start for the run's lifecycle events. */
     notify_channels?: string[];
     org_ids?: string[];
@@ -226,7 +207,8 @@ export class DispatchService {
             team,
             input.run_context.inputs ?? {},
         );
-        assert_reviewer_phases(manifest_yaml, input.reviewers);
+        /** Every channel the run will ask people through must be one its realm can use (B4.2). */
+        await assert_run_channels({ realm_id: input.realm_id, manifest_yaml, inputs: input.run_context.inputs ?? {} });
 
         // ── Validate that all agents in the manifest are registered ──
         // Hub dispatch requires every custom agent to be in the org's
@@ -258,7 +240,6 @@ export class DispatchService {
             external_id: input.run_context.id,
             context_labels: input.run_context.labels,
             execution_type: input.execution_type,
-            reviewers: input.reviewers,
             notify_channels: input.notify_channels,
             origin: 'hub',
         });
@@ -283,7 +264,7 @@ export class DispatchService {
             team_id: input.team_id,
             ...(team_scope_slug && team ? { scope: team_scope_slug, slug: team.slug } : {}),
             ...(team_version ? { version: team_version } : {}),
-            run_context: input.reviewers ? { ...input.run_context, reviewers: input.reviewers } : input.run_context,
+            run_context: input.run_context,
             run_name,
             execution_type: input.execution_type ?? 'local',
             ...(input.queue_item_id ? { queue_item_id: input.queue_item_id } : {}),
@@ -394,9 +375,7 @@ export class DispatchService {
         // Route policy: operate + teams.run on the run's realm.
         const daemon = await DispatchService._check_daemon_reachable(run);
 
-        // The reviewers chosen at run start keep applying to the resumed phases.
-        const reviewers = parse_reviewers(run.reviewers);
-        await command_outbox_enqueue(daemon.id, '/v1/resume', { run_id, from_phase, ...(reviewers ? { reviewers } : {}) });
+        await command_outbox_enqueue(daemon.id, '/v1/resume', { run_id, from_phase });
 
         log.info(`dispatched resume run ${run_id} from_phase='${from_phase}' to daemon ${run.daemon_id}`);
         return { resumed: true, from_phase };
@@ -1275,7 +1254,6 @@ export class DispatchService {
             run_context,
             run_name: typeof payload.run_name === 'string' ? payload.run_name : undefined,
             execution_type: payload.execution_type === 'docker' ? 'docker' : 'local',
-            reviewers: is_reviewers(payload.reviewers) ? payload.reviewers : undefined,
             notify_channels: is_string_list(payload.notify_channels) ? payload.notify_channels : undefined,
             user_id: input.user_id,
             scope_ids: input.scope_ids,

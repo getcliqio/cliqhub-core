@@ -169,12 +169,6 @@ export const RunsSupplyInputsInput = z.object({
 });
 export type RunsSupplyInputsInput = z.infer<typeof RunsSupplyInputsInput>;
 
-/** Reviewers per human phase chosen at run start: `{ phase: [username] }`. */
-export const RunReviewersField = z.record(
-    z.string().min(1).max(100),
-    z.array(z.string().trim().min(1).max(100)).min(1).max(20),
-);
-
 /** Notification channel refs chosen at run start (channel name or id in the run's realm). */
 export const RunNotifyChannelsField = z.array(z.string().trim().min(1).max(200)).min(1).max(5);
 
@@ -197,8 +191,6 @@ export const RunsEnqueueInput = z.object({
     }).optional(),
     /** Realm path: flat payload bag (legacy enqueue shape without kind). */
     payload: z.record(z.unknown()).optional(),
-    reviewers: RunReviewersField.optional()
-        .describe('Reviewers per human phase for this run: { phase: [username] }; replaces the team defaults for those phases'),
     notify_channels: RunNotifyChannelsField.optional()
         .describe("Notification channels (name or id in the run's realm) that receive this run's lifecycle events instead of the realm rules"),
 }).superRefine((v, ctx) => {
@@ -410,8 +402,6 @@ export const RunData = z.object({
     current_phase: z.string().nullable().describe('Phase currently executing'),
     external_id: z.string().nullable().describe('External correlation id'),
     context_labels: z.unknown().nullable().describe('Context labels map or JSON string'),
-    reviewers: z.record(z.string(), z.array(z.string())).nullable().optional()
-        .describe('Reviewers per human phase chosen at run start, or null'),
     notify_channels: z.array(z.string()).nullable().optional()
         .describe('Notification channels chosen at run start for its lifecycle events, or null'),
     lease_expires_at: z.number().nullable().describe('Action lease expiry (unix ms)'),

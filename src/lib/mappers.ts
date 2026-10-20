@@ -165,7 +165,6 @@ export function to_run_data(
         current_phase: plain.current_phase == null ? null : String(plain.current_phase),
         external_id: plain.external_id == null ? null : String(plain.external_id),
         context_labels: plain.context_labels ?? null,
-        reviewers: parse_json_field<Record<string, string[]>>(plain.reviewers),
         notify_channels: parse_json_field<string[]>(plain.notify_channels),
         lease_expires_at: lease,
         started_at: started,
