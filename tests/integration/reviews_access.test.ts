@@ -125,7 +125,7 @@ describe.skipIf(!has_postgres)('reviews access (Core API 5)', () => {
         });
 
         it('reviews/create: only in the token’s realm, for a run of that realm', async () => {
-            const body = { run_id: s.run_a1, daemon_id: s.daemon_a1, realm_id: s.A1, payload: { title: 'check' } };
+            const body = { run_id: s.run_a1, daemon_id: s.daemon_a1, realm_id: s.A1, payload: { title: 'check' }, reviewers: [{ policy: 'any', channels: ['a1'] }] };
             expect((await post('/v1/reviews/create', s.token.dB, body)).status).toBe(404);
             expect((await post('/v1/reviews/create', s.token.dA, { ...body, run_id: s.run_b1 })).status).toBe(404);
             expect((await post('/v1/reviews/create', s.token.dA, { ...body, daemon_id: 'not-my-daemon' })).status).toBe(403);

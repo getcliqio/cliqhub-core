@@ -83,9 +83,9 @@ describe.skipIf(!has_postgres)('PLAN-channels S0 baseline: reviews reach people 
 
 	it('a review to "elan" is recorded against Elan and lands in his in-app inbox', async () => {
 		await ensure_per_user_channel(ELAN, ORG, 'elan');
-		const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews');
+		const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews', { org_id: ORG });
 		const created = await HugReviewsService.create({
-			run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id, org_id: ORG,
+			run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id,
 			payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: ORG,
 			reviewers: [{ policy: 'any', channels: ['elan'] }],
 		});
@@ -101,9 +101,9 @@ describe.skipIf(!has_postgres)('PLAN-channels S0 baseline: reviews reach people 
 		try {
 			// Created the way the API does (`notification_channels/create`).
 			await NotificationService.create_channel({ org_id: ORG, name: 'qa-mail', destinations: [{ type: 'email', address: 'qa@cliq.local' }] });
-			const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews');
+			const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews', { org_id: ORG });
 			await HugReviewsService.create({
-				run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id, org_id: ORG,
+				run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id,
 				payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: ORG,
 				reviewers: [{ policy: 'any', channels: ['qa-mail'] }],
 			});
@@ -117,9 +117,9 @@ describe.skipIf(!has_postgres)('PLAN-channels S0 baseline: reviews reach people 
 	});
 
 	it('a reviewer name with no channel reaches nobody directly — it is refused and raises Unknown channel (B3)', async () => {
-		const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews');
+		const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews', { org_id: ORG });
 		await expect(HugReviewsService.create({
-			run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id, org_id: ORG,
+			run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id,
 			payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: ORG,
 			reviewers: [{ policy: 'any', channels: ['nobody-here'] }],
 		})).rejects.toMatchObject({ status_code: 422 });

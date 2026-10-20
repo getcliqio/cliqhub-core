@@ -14,11 +14,9 @@ import { ApiError } from '../lib/api_error.js';
 import { HugReviewsService } from '../services/hug_reviews.service.js';
 import { ReviewMessageService } from '../services/review_message.service.js';
 import { ReviewPendingService } from '../services/review_pending.service.js';
-import { RealmRepository } from '../repositories/realm_repository.js';
 import { RealmService } from '../services/realm.service.js';
 import { Run } from '../models/index.js';
 
-const _realm_repo_rvc = new RealmRepository();
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
 import {
     ReviewsGetInput,
@@ -94,10 +92,6 @@ export class ReviewsController extends BaseController {
 
         const body = this.parse_body(ReviewsCreateInput, req);
 
-        // Org tenancy follows the review's realm — not invent from headers.
-        const realm = await _realm_repo_rvc.find_by_id(body.realm_id, { attributes: ['org_id'] });
-        const org_id = realm?.org_id ?? null;
-
         // The run must live in that realm, and a daemon token may only name its own daemons.
         const run = await Run.findOne({ where: { run_id: body.run_id }, attributes: ['realm_id', 'origin'], raw: true }) as { realm_id: string | null; origin: string | null } | null;
         if (!run || run.realm_id !== body.realm_id) throw ApiError.not_found('Run not found in this realm');
@@ -115,7 +109,6 @@ export class ReviewsController extends BaseController {
             remind_every_minutes: body.remind_every_minutes ?? null,
             actor_id: user_id,
             reviewers: body.reviewers ?? [],
-            org_id,
             mode: body.mode,
             initial_message: body.initial_message,
         });

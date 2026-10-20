@@ -72,7 +72,7 @@ describe.skipIf(!has_postgres)('B3 — gate reviewers are channels the realm can
 		return { realm_id: realm.id, org_id, realm_name, org_name, realm_ch: rc.id, org_ch: oc.id };
 	}
 	const review = (s: { realm_id: string; org_id: string }, run_id: string, names: string[]) => HugReviewsService.create({
-		run_id, daemon_id: 'd-1', realm_id: s.realm_id, org_id: s.org_id,
+		run_id, daemon_id: 'd-1', realm_id: s.realm_id,
 		payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: OWNER,
 		reviewers: [{ policy: 'any', channels: names }],
 	}).then((r) => { reviews.push(r.review_id); return r; });
@@ -127,7 +127,7 @@ describe.skipIf(!has_postgres)('B3 — gate reviewers are channels the realm can
 	});
 	describe('B4.3a — an input Hug (a phase that lacks inputs) goes to the channels it names', () => {
 		const input_hug = (s: { realm_id: string; org_id: string }, run_id: string, names: string[]) => HugReviewsService.create({
-			run_id, daemon_id: 'd-1', realm_id: s.realm_id, org_id: s.org_id, mode: 'input_pause',
+			run_id, daemon_id: 'd-1', realm_id: s.realm_id, mode: 'input_pause',
 			payload: { phase: 'fix', fields: [{ name: 'ticket', type: 'text', required: true }] }, timeout_minutes: 60, actor_id: OWNER,
 			reviewers: [{ policy: 'any', channels: names }],
 		}).then((r) => { reviews.push(r.review_id); return r; });

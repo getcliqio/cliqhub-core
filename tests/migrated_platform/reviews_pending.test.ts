@@ -15,10 +15,14 @@ import {
 } from './helpers/control_plane_store.js';
 import { make_hub_bearer, stub_hub_pat_auth } from './helpers/hub_jwt.js';
 import { HugReviewsService } from '../../src/services/hug_reviews.service.js';
+import { REALM_MEMBERS_CHANNEL_NAME } from '../../src/notifications/defaults.js';
+import { no_channel_message } from '../../src/notifications/unknown_channel.js';
 import { ReviewPendingService } from '../../src/services/review_pending.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import {
+	HubEvent,
 	NotificationChannel,
+	Org,
 	NotificationRule,
 	Realm,
 	RealmMember,
@@ -27,6 +31,8 @@ import {
 } from '../../src/models/index.js';
 
 const has_postgres = await postgres_reachable();
+/** Reviewers that reach every member of the realm (its built-in channel). */
+const ALL_MEMBERS = [{ policy: 'any' as const, channels: [REALM_MEMBERS_CHANNEL_NAME] }];
 const { app, repos } = create_migrated_test_app();
 const uid = () => `rev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -76,8 +82,8 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		const supply = vi.spyOn(DispatchService, 'supply_inputs').mockResolvedValue(undefined as never);
 		const cancel = vi.spyOn(DispatchService, 'cancel_run').mockResolvedValue({ cancelled: true, mode: 'queued' });
 		try {
-			const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Question');
-			const ask = () => HugReviewsService.create({
+			const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Question', { org_id: hub_legacy_uuid(1) });
+			const ask = () => HugReviewsService.create({ reviewers: ALL_MEMBERS,
 				run_id: 'run-q', daemon_id: 'daemon-1', realm_id: realm.id, mode: 'input_pause',
 				payload: { phase: 'implement', mode: 'input_pause', summary: 'Use Redis?' },
 				timeout_minutes: 60, actor_id: hub_legacy_uuid(1),
@@ -105,7 +111,7 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 	});
 
 	it('pending review appears; verdict removes from pending list after completed', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Reviews');
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Reviews', { org_id: hub_legacy_uuid(1) });
 
 		/** Seed a named channel for the explicit reviewer. */
 		const ch_name = `rev-${uid()}`.slice(0, 30);
@@ -124,7 +130,6 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 			run_id: 'run-1',
 			daemon_id: 'daemon-1',
 			realm_id: realm.id,
-			org_id: hub_legacy_uuid(1),
 			payload: { phase: 'human-review' },
 			timeout_minutes: 60,
 			actor_id: hub_legacy_uuid(1),
@@ -175,7 +180,7 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 	});
 
 	it('expired pending is filtered out', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Expire');
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Expire', { org_id: hub_legacy_uuid(1) });
 		const id = `expired-${uid()}`;
 		await Review.create({
 			id,
@@ -196,7 +201,7 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 
 	it('non-member of realm does not see pending', async () => {
 		const realm = await RealmService.create(hub_legacy_uuid(2), `r-${uid()}`.slice(0, 40), 'Other');
-		await HugReviewsService.create({
+		await HugReviewsService.create({ reviewers: ALL_MEMBERS,
 			run_id: 'run-2',
 			daemon_id: 'd-2',
 			realm_id: realm.id,
@@ -207,16 +212,14 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		expect(pending.reviews).toHaveLength(0);
 	});
 
-	it('a review without reviewers goes where the realm sends review requests: by default every member can answer it', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Default reviewers');
+	it('a review to the realm\'s All realm members channel: every member can answer it, an outsider can\'t', async () => {
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Default reviewers', { org_id: hub_legacy_uuid(1) });
 		await RealmMember.create({
 			id: `rm-${uid()}`, realm_id: realm.id, member_type: 'user', member_id: hub_legacy_uuid(2), role: 'operator', created_at: Date.now(),
 		});
-		// Provisioned with the realm: review requests → "All realm members".
-		expect(await NotificationRule.count({ where: { realm_id: realm.id, event: 'hug.review_requested', channel_id: `cliqhub-${realm.id}` } })).toBe(1);
-
 		const created = await HugReviewsService.create({
 			run_id: 'run-default', daemon_id: 'd-default', realm_id: realm.id, payload: { phase: 'human-review' }, timeout_minutes: 60,
+			reviewers: ALL_MEMBERS,
 		});
 		const rows = await ReviewNotification.findAll({ where: { review_id: created.review_id } });
 		expect(rows.map((r) => ({ channel_id: r.channel_id, user_id: r.user_id }))).toEqual([{ channel_id: `cliqhub-${realm.id}`, user_id: null }]);
@@ -231,25 +234,27 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		await expect(HugReviewsService.authorize_verdict_via_notification(rows[0].id, created.review_id, outsider)).rejects.toMatchObject({ status_code: 403 });
 	});
 
-	it('a realm whose review requests go nowhere refuses a review without reviewers (it never waits unseen)', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Nobody');
-		await NotificationRule.destroy({ where: { realm_id: realm.id, event: 'hug.review_requested' } });
+	it('a review that names no channel is refused and raises Unknown channel — nobody is worked out instead (B4.3)', async () => {
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Nobody', { org_id: hub_legacy_uuid(1) });
 		await expect(HugReviewsService.create({
 			run_id: 'run-nobody', daemon_id: 'd-nobody', realm_id: realm.id, payload: { phase: 'human-review' }, timeout_minutes: 60,
-		})).rejects.toMatchObject({ status_code: 400, message: expect.stringContaining('hug.review_requested') });
+		})).rejects.toMatchObject({ status_code: 422, message: no_channel_message('human-review') });
 		expect(await Review.count({ where: { run_id: 'run-nobody' } })).toBe(0);
+		const notices = await HubEvent.findAll({ where: { type: 'notification.unknown_channel', run_id: 'run-nobody' }, raw: true });
+		expect(notices.map((e) => e.message)).toEqual([no_channel_message('human-review')]);
 	});
 
-	it('the realm can send review requests to another shared channel: its members see and answer them there', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Leads');
+	it('an input Hug to another shared channel of the realm: its members see and answer it there', async () => {
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Leads', { org_id: hub_legacy_uuid(1) });
 		const leads = `ch-${uid()}`;
+		const leads_name = `leads-${uid()}`.slice(0, 30);
 		await NotificationChannel.create({
-			id: leads, realm_id: realm.id, org_id: null, user_id: null, name: `leads-${uid()}`.slice(0, 30), enabled: 1, created_at: Date.now(), updated_at: Date.now(),
+			id: leads, realm_id: realm.id, org_id: null, user_id: null, name: leads_name, enabled: 1, created_at: Date.now(), updated_at: Date.now(),
 		});
-		await NotificationRule.update({ channel_id: leads }, { where: { realm_id: realm.id, event: 'hug.review_requested' } });
 
 		const created = await HugReviewsService.create({
 			run_id: 'run-leads', daemon_id: 'd-leads', realm_id: realm.id, mode: 'input_pause', payload: { phase: 'implement', summary: 'Which DB?' }, timeout_minutes: 60,
+			reviewers: [{ policy: 'any', channels: [leads_name] }],
 		} as never);
 		const rows = await ReviewNotification.findAll({ where: { review_id: created.review_id } });
 		expect(rows.map((r) => r.channel_id)).toEqual([leads]);
@@ -258,7 +263,7 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 	});
 
 	it('a REJECT decides at once: first response under `any`; one reject under `all` (no waiting for approvals)', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Verdicts');
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Verdicts', { org_id: hub_legacy_uuid(1) });
 		const channel = async () => {
 			const name = `rv-${uid()}`.slice(0, 30);
 			await NotificationChannel.create({ id: `ch-${uid()}`, realm_id: null, org_id: hub_legacy_uuid(1), user_id: null, name, enabled: 1, created_at: Date.now(), updated_at: Date.now() });
@@ -266,7 +271,7 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 		};
 		const review_for = async (policy: 'any' | 'all') => {
 			const created = await HugReviewsService.create({
-				run_id: `run-${policy}-${uid()}`, daemon_id: 'd-verdict', realm_id: realm.id, org_id: hub_legacy_uuid(1),
+				run_id: `run-${policy}-${uid()}`, daemon_id: 'd-verdict', realm_id: realm.id,
 				payload: { phase: 'hug-lld' }, timeout_minutes: 30,
 				reviewers: [{ policy, channels: [await channel(), await channel()] }],
 			});
@@ -300,7 +305,7 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 	});
 
 	it('review with explicit reviewers does NOT get the broadcast fallback', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Explicit');
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Explicit', { org_id: hub_legacy_uuid(1) });
 		/** Seed a named org-scoped channel so reviewer resolution succeeds
 		 *  without needing DB-level user/org_member seeding. */
 		const channel_name = `ops-${uid()}`.slice(0, 30);
@@ -319,7 +324,6 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 			run_id: 'run-explicit',
 			daemon_id: 'd-explicit',
 			realm_id: realm.id,
-			org_id: hub_legacy_uuid(1),
 			payload: { phase: 'human-review' },
 			timeout_minutes: 60,
 			reviewers: [{ policy: 'any', channels: [channel_name] }],
@@ -335,8 +339,8 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 	});
 
 	it('expire_pending_for_run removes input HUGs from pending list', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Expire');
-		const created = await HugReviewsService.create({
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Expire', { org_id: hub_legacy_uuid(1) });
+		const created = await HugReviewsService.create({ reviewers: ALL_MEMBERS,
 			run_id: 'run-cancel-hug',
 			daemon_id: 'daemon-1',
 			realm_id: realm.id,
@@ -363,18 +367,24 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 	});
 
 	it('filters: realm_id, org_id and statuses narrow the caller’s own reviews; others see none', async () => {
-		const realm_1 = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'One');
-		const realm_2 = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Two');
+		const realm_1 = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'One', { org_id: hub_legacy_uuid(1) });
+		const realm_2 = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Two', { org_id: hub_legacy_uuid(1) });
 		const org_x = hub_legacy_uuid(901);
 		const org_y = hub_legacy_uuid(902);
-		const make = (realm_id: string, org_id: string, phase: string) => HugReviewsService.create({
-			run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id, org_id,
+		// A Hug's org is its realm's: put each realm in its own org.
+		for (const [id, slug] of [[org_x, 'filt-x'], [org_y, 'filt-y']]) {
+			await Org.findOrCreate({ where: { id }, defaults: { id, slug: `${slug}-${uid()}`.slice(0, 40), display_name: slug, activated_at: new Date() } as never });
+		}
+		await Realm.update({ org_id: org_x }, { where: { id: realm_1.id } });
+		await Realm.update({ org_id: org_y }, { where: { id: realm_2.id } });
+		const make = (realm_id: string, phase: string) => HugReviewsService.create({ reviewers: ALL_MEMBERS,
+			run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id,
 			payload: { phase, mode: 'input_pause' }, timeout_minutes: 60,
 			mode: 'input_pause', actor_id: hub_legacy_uuid(1),
 		});
-		const a = await make(realm_1.id, org_x, 'a');
-		const b = await make(realm_2.id, org_y, 'b');
-		const c = await make(realm_2.id, org_y, 'c');
+		const a = await make(realm_1.id, 'a');
+		const b = await make(realm_2.id, 'b');
+		const c = await make(realm_2.id, 'c');
 		const c_notif = (await ReviewNotification.findOne({ where: { review_id: c.review_id } }))!;
 		await HugReviewsService.submit_verdict({
 			review_id: c.review_id, action: 'PASS', reviewer_name: 'Alice',
@@ -396,14 +406,14 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 	});
 
 	it('an ended run closes its reviews: pending → expired, decided → completed', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Ended');
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Ended', { org_id: hub_legacy_uuid(1) });
 		const run_id = `run-ended-${uid()}`;
-		const pending = await HugReviewsService.create({
+		const pending = await HugReviewsService.create({ reviewers: ALL_MEMBERS,
 			run_id, daemon_id: 'daemon-1', realm_id: realm.id,
 			payload: { phase: 'p1', mode: 'input_pause' }, timeout_minutes: 60,
 			mode: 'input_pause', actor_id: hub_legacy_uuid(1),
 		});
-		const decided = await HugReviewsService.create({
+		const decided = await HugReviewsService.create({ reviewers: ALL_MEMBERS,
 			run_id, daemon_id: 'daemon-1', realm_id: realm.id,
 			payload: { phase: 'p2', mode: 'input_pause' }, timeout_minutes: 60,
 			mode: 'input_pause', actor_id: hub_legacy_uuid(1),
@@ -423,13 +433,13 @@ describe.skipIf(!has_postgres)('POST /v1/reviews/get', () => {
 	});
 
 	it('per-realm badge count matches the pending list (decided reviews are not counted)', async () => {
-		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Badge');
-		const pending = await HugReviewsService.create({
+		const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Badge', { org_id: hub_legacy_uuid(1) });
+		const pending = await HugReviewsService.create({ reviewers: ALL_MEMBERS,
 			run_id: 'run-badge-pending', daemon_id: 'daemon-1', realm_id: realm.id,
 			payload: { phase: 'p1', mode: 'input_pause' }, timeout_minutes: 60,
 			mode: 'input_pause', actor_id: hub_legacy_uuid(1),
 		});
-		const decided = await HugReviewsService.create({
+		const decided = await HugReviewsService.create({ reviewers: ALL_MEMBERS,
 			run_id: 'run-badge-decided', daemon_id: 'daemon-1', realm_id: realm.id,
 			payload: { phase: 'p2', mode: 'input_pause' }, timeout_minutes: 60,
 			mode: 'input_pause', actor_id: hub_legacy_uuid(1),

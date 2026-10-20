@@ -66,7 +66,6 @@ async function maybe_create_input_pause_review(event: SubmittedEvent): Promise<v
 		run_id,
 		daemon_id,
 		realm_id,
-		org_id: event.org_id ? String(event.org_id) : null,
 		timeout_minutes: 24 * 60,
 		mode: 'input_pause',
 		payload: {

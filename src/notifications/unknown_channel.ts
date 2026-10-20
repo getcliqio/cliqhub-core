@@ -17,8 +17,8 @@ export type UnknownChannelSource = 'notify_channels' | 'reviewers';
 
 export interface UnknownChannelInput {
 	realm_id: string;
-	/** The missing channel name, as written. */
-	name: string;
+	/** The missing channel name, as written; null when the phase names no channel at all. */
+	name: string | null;
 	source: UnknownChannelSource;
 	/** The event that named it (e.g. run.failed, hug.review_requested). */
 	for_event: string;
@@ -33,12 +33,17 @@ export function unknown_channel_message(name: string): string {
 	return `No channel named '${name}' in this realm — nothing was sent to it.`;
 }
 
+/** The notice's message when a phase asks a person but names no channel (PLAN-notifications-v2 B4.3). */
+export function no_channel_message(phase: string | null | undefined): string {
+	return `Phase '${phase ?? '?'}' asked a person but names no hug channel — nothing was sent.`;
+}
+
 /**
  * Raise `notification.unknown_channel` for one missing name (once per run per name). Never throws:
  * a failure to raise is logged and the caller carries on.
  */
 export async function raise_unknown_channel(input: UnknownChannelInput): Promise<void> {
-	const message = unknown_channel_message(input.name);
+	const message = input.name === null ? no_channel_message(input.phase) : unknown_channel_message(input.name);
 	try {
 		if (input.run_id) {
 			const already = await HubEvent.findOne({ where: { type: 'notification.unknown_channel', run_id: input.run_id, message }, attributes: ['id'], raw: true });
@@ -53,7 +58,7 @@ export async function raise_unknown_channel(input: UnknownChannelInput): Promise
 			team: input.team ?? undefined,
 			daemon_id: input.daemon_id ?? undefined,
 			severity: 'warn',
-			title: `Unknown channel: ${input.name}`,
+			title: input.name === null ? 'No hug channel' : `Unknown channel: ${input.name}`,
 			message,
 			payload: { name: input.name, source: input.source, for_event: input.for_event } as never,
 		}, { system: true });

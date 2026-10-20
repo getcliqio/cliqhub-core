@@ -23,6 +23,7 @@ import {
 } from './helpers/control_plane_store.js';
 import { make_hub_bearer, stub_hub_pat_auth } from './helpers/hub_jwt.js';
 import { HugReviewsService } from '../../src/services/hug_reviews.service.js';
+import { REALM_MEMBERS_CHANNEL_NAME } from '../../src/notifications/defaults.js';
 import { ReviewMessageService } from '../../src/services/review_message.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import {
@@ -34,6 +35,8 @@ import {
 } from '../../src/models/index.js';
 
 const has_postgres = await postgres_reachable();
+/** Reviewers that reach every member of the realm (its built-in channel). */
+const ALL_MEMBERS = [{ policy: 'any' as const, channels: [REALM_MEMBERS_CHANNEL_NAME] }];
 const { app, repos } = create_migrated_test_app();
 const uid = () => `rev-msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -43,7 +46,7 @@ async function seed_review(opts?: {
     initial_message?: string;
 }): Promise<{ review_id: string; realm_id: string }> {
     const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'MsgTest');
-    const created = await HugReviewsService.create({
+    const created = await HugReviewsService.create({ reviewers: ALL_MEMBERS,
         run_id: `run-${uid()}`,
         daemon_id: `daemon-${uid()}`,
         realm_id: realm.id,
@@ -164,7 +167,7 @@ describe.skipIf(!has_postgres)('Review Messages + Claim/Unclaim', () => {
     it('send_agent_message stores assistant message', async () => {
         const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'AgentMsg');
         const daemon_id = `d-${uid()}`;
-        const created = await HugReviewsService.create({
+        const created = await HugReviewsService.create({ reviewers: ALL_MEMBERS,
             run_id: `run-${uid()}`,
             daemon_id,
             realm_id: realm.id,
