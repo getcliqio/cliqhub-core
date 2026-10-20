@@ -12,7 +12,7 @@ import {
 	type EventSeverity,
 	type EventType,
 } from '../schemas/event_types.js';
-import { event_submit_schema } from '../schemas/event_types.js';
+import { event_submit_schema, system_event_submit_schema } from '../schemas/event_types.js';
 import { HubEventRepository } from '../repositories/hub_event_repository.js';
 import { RealmRepository } from '../repositories/realm_repository.js';
 
@@ -123,9 +123,10 @@ const RUN_ENDED_SAME_END_MS = 10 * 60_000;
  * Persists the event, then dispatches notification handlers by EventType registry.
  */
 export class EventSubmitService {
-	static async submit(input: SubmitEventInput): Promise<SubmittedEvent> {
-		// Zod catalog + family-required fields (also used by EventsController).
-		const body = event_submit_schema.parse({
+	static async submit(input: SubmitEventInput, opts: { system?: boolean } = {}): Promise<SubmittedEvent> {
+		// Zod catalog + family-required fields (also used by EventsController). `system`: CliqHub raising
+		// one of its own events (e.g. notification.unknown_channel), which clients can't submit.
+		const body = (opts.system ? system_event_submit_schema : event_submit_schema).parse({
 			type: input.type,
 			occurred_at: input.occurred_at,
 			realm_id: input.realm_id,

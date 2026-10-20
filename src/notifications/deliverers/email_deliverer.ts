@@ -23,7 +23,8 @@ import type { DeliveryLinks, EventActor, OrgEventData, OrgEventType } from '../o
 import type { ResolvedRecipient } from '../recipients.js';
 import { get_logger } from '../../lib/log.js';
 import { public_app_url } from '../../config/env.js';
-import { NotificationChannel, Org, User } from '../../models/index.js';
+import { Op } from 'sequelize';
+import { NotificationChannel, Org, OrgMember, RealmMember, User } from '../../models/index.js';
 import { EmailDeliveryRepository } from '../../repositories/email_delivery_repository.js';
 import { EmailSendError, mask_email, type EmailAddress, type EmailSender } from '../../lib/email/email_sender.js';
 import { NoopEmailSender } from '../../lib/email/noop_email_sender.js';
@@ -89,6 +90,40 @@ async function account_address(channel_id: string | undefined): Promise<EmailAdd
  * an {@link EmailSendError} message is built from the provider's status and
  * code only; other errors are this service's own (configuration, database).
  */
+/**
+ * The members of a built-in channel (`members: true`): a realm channel → the realm's people, an org
+ * channel → the org's active members — each at their own account address. Suspended, deleted and
+ * address-less accounts are left out. Worked out at send time, so it follows joins and leaves.
+ */
+async function members_addresses(channel_id: string | undefined): Promise<EmailAddress[]> {
+	if (!channel_id) return [];
+	const channel = await NotificationChannel.findByPk(channel_id, { attributes: ['realm_id', 'org_id', 'user_id'], raw: true }) as
+		{ realm_id: string | null; org_id: string | null; user_id: string | null } | null;
+	if (!channel || channel.user_id) return [];
+	let user_ids: string[] = [];
+	if (channel.realm_id) {
+		const rows = await RealmMember.findAll({ where: { realm_id: channel.realm_id, member_type: 'user' }, attributes: ['member_id'], raw: true }) as Array<{ member_id: string }>;
+		user_ids = rows.map((r) => String(r.member_id));
+	} else if (channel.org_id) {
+		const rows = await OrgMember.findAll({ where: { org_id: channel.org_id, status: 'active' }, attributes: ['user_id'], raw: true }) as Array<{ user_id: string }>;
+		user_ids = rows.map((r) => String(r.user_id));
+	}
+	if (user_ids.length === 0) return [];
+	const users = await User.findAll({
+		where: { id: { [Op.in]: [...new Set(user_ids)] }, deleted_at: null, status: { [Op.ne]: 'suspended' } },
+		attributes: ['email', 'display_name'], raw: true,
+	}) as Array<{ email: string | null; display_name: string | null }>;
+	const seen = new Set<string>();
+	const out: EmailAddress[] = [];
+	for (const u of users) {
+		const email = u.email?.trim();
+		if (!email || seen.has(email.toLowerCase())) continue;
+		seen.add(email.toLowerCase());
+		out.push(u.display_name ? { email, name: u.display_name } : { email });
+	}
+	return out;
+}
+
 function failure_reason(err: unknown): string {
 	if (err instanceof EmailSendError) return err.kind === 'not_configured' ? err.message : `${err.kind}: ${err.message}`;
 	return err instanceof Error ? err.message : String(err);
@@ -114,11 +149,14 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 	}
 
 	/**
-	 * Sends an event to a channel's fixed addresses, or with `account: true` to
-	 * the channel owner's current account email. Without a configured
-	 * transport it sends nothing and returns.
+	 * Sends an event to a channel's fixed addresses, with `account: true` to the
+	 * channel owner's current account email, or with `members: true` (built-in
+	 * channels) to each of the channel's members — one email per person, so
+	 * nobody sees anyone else's address. Without a configured transport it sends
+	 * nothing and returns.
 	 *
-	 * @param config - `{ to, cc?, bcc? }` or `{ account: true }` from the email destination.
+	 * @param config - `{ to, cc?, bcc? }`, `{ account: true }` or `{ members: true }` from the email destination.
+	 * @throws Error when the transport refuses or fails to send (for members: when every send failed).
 	 * @param payload - The notification payload.
 	 * @param context - The channel being delivered (needed for `account: true`).
 	 * @throws Error when the transport refuses or fails to send.
@@ -128,9 +166,8 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 		payload: NotificationPayload,
 		context?: DeliveryContext,
 	): Promise<void> {
-		// Email to the members of a built-in channel arrives with PLAN-notifications-v2 A4.
 		if (config.members === true) {
-			log.debug('email_members_not_sent', { event: payload.event, channel_id: context?.channel_id ?? null });
+			await this._deliver_to_members(payload, context);
 			return;
 		}
 		let to = addresses(config.to);
@@ -156,6 +193,33 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 		} catch (err) {
 			throw new Error(`email delivery failed: ${failure_reason(err)}`);
 		}
+	}
+
+	/** One email per member of a built-in channel; a failure for one person doesn't stop the rest. */
+	private async _deliver_to_members(payload: NotificationPayload, context?: DeliveryContext): Promise<void> {
+		const people = await members_addresses(context?.channel_id);
+		if (people.length === 0) {
+			log.debug('email_members_none', { event: payload.event, channel_id: context?.channel_id ?? null });
+			return;
+		}
+		if (!this._sender.configured) {
+			log.debug('email_not_sent', { event: payload.event, reason: 'email sending is not configured' });
+			return;
+		}
+		const rendered = render_channel_email(payload, public_app_url());
+		let sent = 0;
+		let last_error: string | null = null;
+		for (const person of people) {
+			try {
+				await this._sender.send({ to: [person], subject: rendered.subject, html: rendered.html, text: rendered.text, tags: [payload.event] });
+				sent += 1;
+			} catch (err) {
+				last_error = failure_reason(err);
+				log.warn('email_member_not_sent', { event: payload.event, channel_id: context?.channel_id ?? null, to: mask_email(person.email), reason: last_error });
+			}
+		}
+		log.info('email_members_sent', { event: payload.event, channel_id: context?.channel_id ?? null, sent, of: people.length });
+		if (sent === 0) throw new Error(`email delivery failed: ${last_error ?? 'no member email sent'}`);
 	}
 
 	/**

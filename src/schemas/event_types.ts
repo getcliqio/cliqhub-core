@@ -306,7 +306,12 @@ export const event_payload_schema = z
 	})
 	.passthrough();
 
-export const event_submit_schema = z
+/**
+ * The submit schema. `allow_system`: CliqHub raising one of its own events (unknown channel); clients
+ * never get that — their submissions of system events are refused.
+ */
+function make_event_submit_schema(allow_system: boolean) {
+	return z
 	.object({
 		type: event_type_schema.describe(
 			'Hub catalog type (run.* / phase.* / hug.* / …) or custom.<name>',
@@ -344,7 +349,7 @@ export const event_submit_schema = z
 			return;
 		}
 
-		if (is_system_event_type(data.type)) {
+		if (!allow_system && is_system_event_type(data.type)) {
 			ctx.addIssue({
 				code: z.ZodIssueCode.custom,
 				path: ['type'],
@@ -366,5 +371,12 @@ export const event_submit_schema = z
 			});
 		}
 	});
+}
+
+/** What clients (daemons, API) submit: system events are refused. */
+export const event_submit_schema = make_event_submit_schema(false);
+
+/** What CliqHub itself raises: system events allowed. */
+export const system_event_submit_schema = make_event_submit_schema(true);
 
 export type EventSubmitBody = z.infer<typeof event_submit_schema>;

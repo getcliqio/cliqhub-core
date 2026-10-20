@@ -38,6 +38,7 @@ import {
 	ChannelDestination,
 	InAppNotification,
 	NotificationChannel,
+	NotificationRule,
 	Realm,
 	RealmMember,
 	Review,
@@ -75,6 +76,9 @@ async function eventually<T>(fn: () => Promise<T> | T, ms = 3000): Promise<T> {
 
 async function review_to(channel: string): Promise<string> {
 	const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews');
+	// Only the named reviewer channel: the realm's own review default (All realm members, which emails its
+	// members) would add emails these tests aren't about.
+	await NotificationRule.destroy({ where: { realm_id: realm.id, event: 'hug.review_requested' } });
 	const created = await HugReviewsService.create({
 		run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id, org_id: ORG,
 		payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: ORG,
