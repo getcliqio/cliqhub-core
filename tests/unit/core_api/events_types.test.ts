@@ -10,7 +10,9 @@ describe('event types catalog', () => {
 	it('includes core run, phase, hug, team, daemon, realm types', () => {
 		expect(EVENT_TYPES).toContain('run.started');
 		expect(EVENT_TYPES).toContain('phase.timed_out');
-		expect(EVENT_TYPES).toContain('hug.review_requested');
+		// Retired (PLAN-notifications-v2 B4.5): a phase that needs a person posts its own Hug to its channels.
+		expect(EVENT_TYPES).not.toContain('hug.review_requested');
+		expect(EVENT_TYPES).not.toContain('phase.input_required');
 		expect(EVENT_TYPES).toContain('hug.routing_requested');
 		expect(EVENT_TYPES).toContain('hug.review_responded');
 		expect(EVENT_TYPES).toContain('team.published');

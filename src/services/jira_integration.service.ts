@@ -59,7 +59,6 @@ export const JIRA_LIFECYCLE_EVENTS = [
     'run.failed',
     'run.cancelled',
     'run.crashed',
-    'phase.input_required',
     'phase.inputs_supplied',
 ] as const;
 

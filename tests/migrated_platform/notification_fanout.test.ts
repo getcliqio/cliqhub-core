@@ -123,7 +123,7 @@ describe.skipIf(!has_postgres)('Notification fan-out on event submit', () => {
         expect(event.notifications).toBe('skipped');
     });
 
-    it('dispatches Slack for run.started, phase.input_required, and hug.review_requested when rules exist', async () => {
+    it('dispatches Slack for run.started, phase.escalated and hug.review_reminded when rules exist', async () => {
         const fetch_mock = vi.fn().mockResolvedValue({ ok: true });
         vi.stubGlobal('fetch', fetch_mock);
 
@@ -143,8 +143,8 @@ describe.skipIf(!has_postgres)('Notification fan-out on event submit', () => {
 
         const cases = [
             { type: 'run.started' as const, message: 'run started', phase: undefined as string | undefined },
-            { type: 'phase.input_required' as const, message: 'need inputs', phase: 'collect' },
-            { type: 'hug.review_requested' as const, message: 'review please', phase: undefined },
+            { type: 'phase.escalated' as const, message: 'gate escalated', phase: 'collect' },
+            { type: 'hug.review_reminded' as const, message: 'review please', phase: undefined },
         ];
 
         for (const c of cases) {
@@ -159,9 +159,6 @@ describe.skipIf(!has_postgres)('Notification fan-out on event submit', () => {
             });
             expect(event.notifications).toBe('dispatched');
             expect(fetch_mock).toHaveBeenCalled();
-            /** phase.input_required also creates an input_pause review which
-             *  submits hug.review_requested — match any Slack body, not only
-             *  the first call. */
             const texts = fetch_mock.mock.calls.map((call) => {
                 const body = JSON.parse((call[1] as { body: string }).body) as { text: string };
                 return body.text;

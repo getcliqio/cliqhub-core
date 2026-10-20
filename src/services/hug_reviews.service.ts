@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { Op } from 'sequelize';
 
 import { ApiError } from '../lib/api_error.js';
-import { EventSubmitService } from './events_service.js';
+import { EventSubmitService, type SubmittedEvent } from './events_service.js';
 import { ReviewRepository } from '../repositories/review_repository.js';
 import { ReviewNotificationRepository } from '../repositories/review_notification_repository.js';
 import { RunRepository } from '../repositories/run_repository.js';
@@ -370,7 +370,7 @@ export class HugReviewsService {
 		const phase = typeof input.payload.phase === 'string' ? input.payload.phase : null;
 		const team = typeof input.payload.team === 'string' ? input.payload.team : null;
 
-		/** The reviewers block's channels get it directly; channels from the rules already get it by rule. */
+		/** The Hug's channels — the ones it names. */
 		const target_channels: string[] = [];
 		for (const group of resolved_groups) {
 			for (const dest of group.destinations) {
@@ -379,27 +379,33 @@ export class HugReviewsService {
 			}
 		}
 
-		/** Single event submission — rule-based routing + targeted delivery. */
+		/**
+		 * Posted straight to those channels — the same message as before, labelled "Review requested" — and
+		 * to nobody else: not an event, so no rule can match it (PLAN-notifications-v2 B4.5).
+		 */
 		try {
-			await EventSubmitService.submit({
+			const { NotificationFanOutService } = await import('../notifications/fan_out.service.js');
+			const now = new Date();
+			await NotificationFanOutService.deliver_to_channels([...new Set(target_channels)], {
+				id: randomUUID(),
 				type: 'hug.review_requested',
+				occurred_at: now.toISOString(),
 				realm_id: input.realm_id,
+				org_id,
+				team,
 				run_id: input.run_id,
+				phase,
 				daemon_id: input.daemon_id,
-				phase: phase ?? undefined,
-				team: team ?? undefined,
-				actor_id: input.actor_id ?? null,
-				severity: 'info',
 				title: `Review requested${phase ? ` — ${phase}` : ''}`,
 				message: `A human review is needed for your run. Open review: ${review_url}`,
-				payload: {
-					review_id: id,
-					review_url,
-				},
-				target_channels: [...new Set(target_channels)],
-			});
+				severity: 'info',
+				payload: { review_id: id, review_url },
+				actor_id: input.actor_id ?? null,
+				created_at: now.getTime(),
+				notifications: 'deferred',
+			} as unknown as SubmittedEvent);
 		} catch (err) {
-			log.error('review_event_submit_failed', {
+			log.error('review_delivery_failed', {
 				review_id: id,
 				error: err instanceof Error ? err.message : String(err),
 			});

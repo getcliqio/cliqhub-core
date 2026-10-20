@@ -68,10 +68,10 @@ export const REALM_MEMBERS_CHANNEL: BuiltinChannelSpec = {
 
 /**
  * Events a new realm sends to its "All realm members" channel by default (ordinary rules people
- * can change or remove): a run needing input or stuck, runs that failed or crashed, and — until reviews
- * always name their reviewers (PLAN-notifications-v2 B3/B4) — review requests.
+ * can change or remove): a run stuck, runs that failed or crashed. (A phase that needs a person posts its
+ * own Hug to its channels — PLAN-notifications-v2 B4.)
  */
-export const REALM_DEFAULT_RULE_EVENTS = ['phase.input_required', 'phase.idle', 'phase.timed_out', 'run.failed', 'run.crashed', 'hug.review_requested'] as const;
+export const REALM_DEFAULT_RULE_EVENTS = ['phase.idle', 'phase.timed_out', 'run.failed', 'run.crashed'] as const;
 
 /** A rule CliqHub fixes: shown with a lock; can't be changed, switched off or removed. */
 export interface FixedRuleSpec {

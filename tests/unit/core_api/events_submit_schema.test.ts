@@ -75,22 +75,13 @@ describe('event_submit_schema', () => {
 		expect(result.error.issues.some((i) => i.path[0] === 'phase')).toBe(true);
 	});
 
-	it('accepts phase.input_required with rich Yamazaki bundle fields in payload', () => {
-		const result = event_submit_schema.safeParse({
-			type: 'phase.input_required',
-			realm_id: 'realm-1',
-			run_id: 'run-1',
-			daemon_id: 'daemon-1',
-			phase: 'implement',
-			payload: {
-				kind: 'requested_inputs',
-				summary: 'Pick target env',
-				context: [{ role: 'assistant', content: 'options…' }],
-				fields: [{ name: 'target_env', type: 'enum', options: ['dev', 'prod'] }],
-				artifacts: [{ path: 'plan.md' }],
-			},
-		});
-		expect(result.success).toBe(true);
+	it('refuses the retired events: a phase that needs a person posts its own Hug (PLAN-notifications-v2 B4.5)', () => {
+		for (const type of ['phase.input_required', 'hug.review_requested']) {
+			expect(event_submit_schema.safeParse({
+				type, realm_id: 'realm-1', run_id: 'run-1', daemon_id: 'daemon-1', phase: 'implement',
+				payload: { kind: 'requested_inputs', summary: 'Pick target env' },
+			}).success).toBe(false);
+		}
 	});
 
 	it('rejects underscored lifecycle aliases', () => {

@@ -1373,6 +1373,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_builtin_channels(sq);
     await migrate_default_rules(sq);
     await migrate_account_scopes(sq);
+    await migrate_removed_event_rules(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -1996,5 +1997,43 @@ export async function migrate_account_scopes(sq: Sequelize): Promise<void> {
         _mig_log.info('account_scopes_migrated', { accounts: accounts.length, created, linked, other_owner });
     } catch (err) {
         _mig_log.error('account_scopes_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+/** `cliq.settings` key marking the one-time removal of rules on retired events as done. */
+export const REMOVED_EVENT_RULES_MIGRATION_KEY = 'migrate.removed_event_rules_2026_10';
+
+/** Events retired in Oct 2026 — frozen as written (PLAN-notifications-v2 B4.5). */
+const REMOVED_EVENTS_2026_10 = ['phase.input_required', 'hug.review_requested'] as const;
+
+/**
+ * One time (Oct 2026): delete every notification rule on an event that is no longer an event —
+ * `phase.input_required` and `hug.review_requested`. A phase that needs a person now posts its own Hug to
+ * its channels; those rules can never match again. Built-in defaults and rules people added alike.
+ * Safe to repeat; the key is recorded once everything succeeded.
+ */
+export async function migrate_removed_event_rules(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.notification_rules') AS r`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; r: string | null }>;
+        if (!tables?.s || !tables?.r) {
+            _mig_log.info('removed_event_rules_deferred', { reason: 'cliq.settings or cliq.notification_rules not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: REMOVED_EVENT_RULES_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const deleted = await sq.query(
+            `DELETE FROM cliq."notification_rules" WHERE "event" IN (:events) RETURNING "id"`,
+            { replacements: { events: [...REMOVED_EVENTS_2026_10] }, type: QueryTypes.SELECT },
+        );
+
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: REMOVED_EVENT_RULES_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('removed_event_rules_migrated', { deleted: deleted.length });
+    } catch (err) {
+        _mig_log.error('removed_event_rules_migration_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }

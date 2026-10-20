@@ -183,7 +183,7 @@ describe.skipIf(!has_postgres)('RunService lifecycle events', () => {
         expect(done).toHaveLength(1);
     });
 
-    it('set_awaiting_input emits phase.input_required, resume emits phase.inputs_supplied', async () => {
+    it('set_awaiting_input raises no event (the phase posts its own Hug — B4.4); resume emits phase.inputs_supplied', async () => {
         const run_id = await RunService.create(workspace_id, team_id, {
             realm_id, daemon_id, run_name: 'lc-await',
         });
@@ -197,7 +197,7 @@ describe.skipIf(!has_postgres)('RunService lifecycle events', () => {
         await RunService.resume(run_id); // Idempotent — where clause gates.
 
         const evs = await events_for(run_id);
-        expect(evs.filter((e) => e.type === 'phase.input_required')).toHaveLength(1);
+        expect(evs.filter((e) => e.type === 'phase.input_required')).toHaveLength(0);
         expect(evs.filter((e) => e.type === 'phase.inputs_supplied')).toHaveLength(1);
     });
 

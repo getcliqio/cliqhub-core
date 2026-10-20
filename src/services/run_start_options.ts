@@ -20,7 +20,6 @@ export const RUN_NOTIFY_OVERRIDE_EVENTS: ReadonlySet<string> = new Set([
     'run.failed',
     'run.crashed',
     'run.cancelled',
-    'phase.input_required',
     'phase.escalated',
 ]);
 

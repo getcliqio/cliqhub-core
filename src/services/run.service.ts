@@ -1215,22 +1215,15 @@ export class RunService {
 
     static async set_awaiting_input(run_id: string) {
         log.debug('set_awaiting_input', { run_id });
-        // Only emit when we're actually transitioning INTO awaiting_input.
-        // The daemon calls this every time a phase gates for inputs; if
-        // the run was already parked we don't want to re-notify. The
-        // event maps to `phase.input_required` because that's the
-        // human-meaningful transition — the run itself is a container,
-        // but a specific phase is what's blocking on input.
-        const [count] = await _run_repo_rs.update_where(
+        // A phase waiting for a person posts its own Hug to its channels (PLAN-notifications-v2 B4.3):
+        // no notification event here.
+        await _run_repo_rs.update_where(
             { run_id, state: { [Op.ne]: 'awaiting_input' } } as any,
             {
                 state: 'awaiting_input',
                 lease_expires_at: lease_deadline('awaiting_input'),
             } as any,
         );
-        if (count > 0) {
-            await this._emit_lifecycle(run_id, 'phase.input_required');
-        }
     }
 
     static async resume(run_id: string) {
