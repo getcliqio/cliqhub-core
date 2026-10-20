@@ -96,137 +96,78 @@ function seed_rules(rows: Array<{
 }
 
 
-describe('resolve_rules — realm, else org', () => {
+describe('resolve_rules — the org\'s rules and the realm\'s both apply (PLAN-notifications-v2 B1)', () => {
+    const ORG = 'org-1';
+    const resolve = (event: string, realm_id?: string) => NotificationService.resolve_rules({ event, ...(realm_id ? { realm_id } : {}), org_id: ORG });
 
     beforeEach(() => {
         seed_rules([]);
     });
 
     it('returns empty when no rules exist', async () => {
-        const result = await NotificationService.resolve_rules({
-            event: 'run.failed',
-            realm_id: 'realm-1',
-        });
-        expect(result).toEqual([]);
+        expect(await resolve('run.failed', 'realm-1')).toEqual([]);
     });
 
-    it('resolves global rules when no realm rules exist', async () => {
-        seed_rules([
-            { event: 'run.*', channel_id: 'ch-global' },
-        ]);
-        const result = await NotificationService.resolve_rules({
-            event: 'run.failed',
-        });
-        expect(result).toEqual(['ch-global']);
+    it('the org\'s rules apply in every realm', async () => {
+        seed_rules([{ org_id: ORG, event: 'run.*', channel_id: 'ch-org' }]);
+        expect(await resolve('run.failed', 'realm-1')).toEqual(['ch-org']);
+        expect(await resolve('run.failed')).toEqual(['ch-org']);
     });
 
-    it('realm rules replace global rules for same event', async () => {
+    it('a realm\'s rule is sent as well as the org\'s — never instead', async () => {
         seed_rules([
-            { event: 'run.*', channel_id: 'ch-global' },
+            { org_id: ORG, event: 'run.*', channel_id: 'ch-org' },
             { realm_id: 'realm-1', event: 'run.*', channel_id: 'ch-realm' },
         ]);
-        const result = await NotificationService.resolve_rules({
-            event: 'run.failed',
-            realm_id: 'realm-1',
-        });
-        expect(result).toEqual(['ch-realm']);
+        expect((await resolve('run.failed', 'realm-1')).sort()).toEqual(['ch-org', 'ch-realm']);
+        // Another realm has only the org's.
+        expect(await resolve('run.failed', 'realm-2')).toEqual(['ch-org']);
     });
 
-    it('falls back to global when realm has no matching rule', async () => {
-        seed_rules([
-            { event: 'run.*', channel_id: 'ch-global' },
-        ]);
-        const result = await NotificationService.resolve_rules({
-            event: 'run.failed',
-            realm_id: 'realm-1',
-        });
-        expect(result).toEqual(['ch-global']);
+    it('another org\'s rules never apply', async () => {
+        seed_rules([{ org_id: 'org-2', event: 'run.*', channel_id: 'ch-other-org' }]);
+        expect(await resolve('run.failed', 'realm-1')).toEqual([]);
     });
 
-    it('matches exact event type', async () => {
+    it('matches exact, family wildcard and *', async () => {
         seed_rules([
-            { event: 'phase.escalated', channel_id: 'ch-exact' },
+            { org_id: ORG, event: 'phase.escalated', channel_id: 'ch-exact' },
+            { org_id: ORG, event: 'phase.*', channel_id: 'ch-wildcard' },
+            { org_id: ORG, event: '*', channel_id: 'ch-all' },
         ]);
-        const result = await NotificationService.resolve_rules({
-            event: 'phase.escalated',
-        });
-        expect(result).toEqual(['ch-exact']);
+        expect((await resolve('phase.escalated')).sort()).toEqual(['ch-all', 'ch-exact', 'ch-wildcard']);
+        expect(await resolve('custom.anything')).toEqual(['ch-all']);
     });
 
-    it('matches wildcard selector for event family', async () => {
+    it('a channel matched by several rules (or both tiers) is sent once', async () => {
         seed_rules([
-            { event: 'phase.*', channel_id: 'ch-wildcard' },
+            { org_id: ORG, event: 'run.*', channel_id: 'ch-a' },
+            { org_id: ORG, event: 'run.failed', channel_id: 'ch-a' },
+            { realm_id: 'realm-1', event: 'run.failed', channel_id: 'ch-a' },
         ]);
-        const result = await NotificationService.resolve_rules({
-            event: 'phase.escalated',
-        });
-        expect(result).toEqual(['ch-wildcard']);
-    });
-
-    it('matches global wildcard *', async () => {
-        seed_rules([
-            { event: '*', channel_id: 'ch-all' },
-        ]);
-        const result = await NotificationService.resolve_rules({
-            event: 'custom.anything',
-        });
-        expect(result).toEqual(['ch-all']);
-    });
-
-    it('deduplicates channel IDs from multiple matching rules', async () => {
-        seed_rules([
-            { event: 'run.*', channel_id: 'ch-a' },
-            { event: 'run.failed', channel_id: 'ch-a' },
-        ]);
-        const result = await NotificationService.resolve_rules({
-            event: 'run.failed',
-        });
-        expect(result).toEqual(['ch-a']);
-    });
-
-    it('returns multiple channels from different rules at same tier', async () => {
-        seed_rules([
-            { event: 'run.*', channel_id: 'ch-slack' },
-            { event: 'run.*', channel_id: 'ch-email' },
-        ]);
-        const result = await NotificationService.resolve_rules({
-            event: 'run.failed',
-        });
-        expect(result).toContain('ch-slack');
-        expect(result).toContain('ch-email');
-        expect(result).toHaveLength(2);
+        expect(await resolve('run.failed', 'realm-1')).toEqual(['ch-a']);
     });
 });
 
 
 describe('rules on / off — a rule sends only when it (and its channel) is on', () => {
+    const ORG = 'org-1';
     beforeEach(() => seed_rules([]));
 
-    it('a realm whose rules for the event are all off sends nothing — the org\'s rule doesn\'t come back', async () => {
+    it('a realm switching its own rule off stops only that rule — the org\'s still sends', async () => {
         seed_rules([
-            { event: 'run.failed', channel_id: 'ch-org' },
-            { realm_id: 'realm-1', event: 'run.failed', channel_id: 'ch-org', enabled: false },
+            { org_id: ORG, event: 'run.failed', channel_id: 'ch-org' },
+            { realm_id: 'realm-1', event: 'run.failed', channel_id: 'ch-realm', enabled: false },
         ]);
-        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-1' })).toEqual([]);
-        // Other realms still get the org's rule.
-        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-2' })).toEqual(['ch-org']);
-    });
-
-    it('a replaced event sends only to the realm rules that are on', async () => {
-        seed_rules([
-            { event: 'run.failed', channel_id: 'ch-org' },
-            { realm_id: 'realm-1', event: 'run.failed', channel_id: 'ch-org', enabled: false },
-            { realm_id: 'realm-1', event: 'run.failed', channel_id: 'ch-realm' },
-        ]);
-        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-1' })).toEqual(['ch-realm']);
+        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-1', org_id: ORG })).toEqual(['ch-org']);
     });
 
     it('an org rule that is paused sends nothing; its other rules still do', async () => {
         seed_rules([
-            { event: 'run.failed', channel_id: 'ch-paused', enabled: false },
-            { event: 'run.*', channel_id: 'ch-on' },
+            { org_id: ORG, event: 'run.failed', channel_id: 'ch-paused', enabled: false },
+            { org_id: ORG, event: 'run.*', channel_id: 'ch-on' },
         ]);
-        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-1' })).toEqual(['ch-on']);
+        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-1', org_id: ORG })).toEqual(['ch-on']);
     });
 
     it('org-event rules skip paused ones', async () => {
@@ -242,7 +183,7 @@ describe('rules on / off — a rule sends only when it (and its channel) is on',
 describe('list_effective_rules — what applies in a realm matches delivery', () => {
     beforeEach(() => seed_rules([]));
 
-    it('a realm wildcard replaces the org\'s exact rule; a realm exact rule leaves the org\'s wildcard (other events still use it)', async () => {
+    it('lists every org rule and every realm rule — nothing is hidden as "replaced"', async () => {
         seed_rules([
             { org_id: 'org-1', event: 'run.failed', channel_id: 'ch-org-failed' },
             { org_id: 'org-1', event: 'phase.*', channel_id: 'ch-org-phase' },
@@ -254,6 +195,7 @@ describe('list_effective_rules — what applies in a realm matches delivery', ()
             ['phase.*', 'global', true],
             ['phase.failed', 'realm', false],
             ['run.*', 'realm', true],
+            ['run.failed', 'global', true],
         ]);
     });
 });

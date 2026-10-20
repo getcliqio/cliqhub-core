@@ -148,13 +148,16 @@ describe.skipIf(!has_postgres)('CliqHubDeliverer — persist in-app notification
 			destinations: [{ type: 'cliqhub' }],
 		});
 		await NotificationService.set_rule({
+			org_id: hub_legacy_uuid(1),
 			event: 'team.*',
 			channel_id: channel.id,
 		});
 
+		// An account-level event reaches only its own org's rules — say which org.
 		const event = await EventSubmitService.submit({
 			type: 'team.published',
 			team: '@acme/demo',
+			org_id: hub_legacy_uuid(1),
 			message: 'shipped',
 		});
 

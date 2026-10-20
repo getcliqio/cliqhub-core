@@ -414,13 +414,12 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
             expect(await NotificationRule.count({ where: { id: locked.id } })).toBe(1);
         });
 
-        it('a locked org rule can\'t be replaced in a realm (409 locked); nothing is written', async () => {
+        it('a realm can add its own rule for an event the org has locked — the org\'s locked rule still applies (both send)', async () => {
             const { rule: locked } = await locked_rule_and_channel();
-            const before = await NotificationRule.count({ where: { realm_id: s.A1, event: locked.event } });
             const set = await post('/v1/realms/set_notification_rules', s.token.olivia, { realm_id: s.A1, event: locked.event, channel_id: s.channel_a1 });
-            expect(set.status, JSON.stringify(set.body)).toBe(409);
-            expect(err(set).code).toBe('locked');
-            expect(await NotificationRule.count({ where: { realm_id: s.A1, event: locked.event } })).toBe(before);
+            expect(set.status, JSON.stringify(set.body)).toBe(200);
+            expect(await NotificationRule.findByPk(locked.id, { raw: true })).toMatchObject({ locked: true, enabled: true });
+            await NotificationRule.destroy({ where: { realm_id: s.A1, event: locked.event, channel_id: s.channel_a1 } });
         });
 
         it('rules switch on and off (enabled): reads carry it, a new rule is on, an update keeps it unless told', async () => {
