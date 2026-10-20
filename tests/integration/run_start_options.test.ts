@@ -138,4 +138,20 @@ describe.skipIf(!has_postgres)('run start options', () => {
                 details: { field: 'channels', unknown: ['nobody-in', 'qa-nobody'] },
             });
     });
+    it('the run form picker: with realm_id, the realm\'s own channels too — only for a realm of that org the caller can see', async () => {
+        const targets = (who: string, body: Record<string, unknown>) => request(app).post('/v1/orgs/get_reviewable_targets')
+            .set('Authorization', `Bearer ${s.token[who as keyof typeof s.token]}`).send({ org_id: s.acme, ...body });
+        const names = (res: request.Response) => (res.body.data.channels as Array<{ name: string }>).map((c) => c.name);
+
+        const without = await targets('omar', {});
+        expect(without.status, JSON.stringify(without.body)).toBe(200);
+        expect(names(without)).not.toContain(channel_name);
+
+        const with_realm = await targets('omar', { realm_id: s.A1 });
+        expect(with_realm.status, JSON.stringify(with_realm.body)).toBe(200);
+        expect(names(with_realm)).toContain(channel_name);
+
+        expect((await targets('nora', { realm_id: s.A1 })).status).toBe(404);
+        expect((await targets('omar', { realm_id: s.B1 })).status).toBe(404);
+    });
 });

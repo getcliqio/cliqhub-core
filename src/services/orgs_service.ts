@@ -1,5 +1,5 @@
 import { ApiError } from '../errors/api_error.js';
-import { org_permissions } from '../auth/route_policy/visible.js';
+import { org_permissions, visible_realm_ids } from '../auth/route_policy/visible.js';
 import { get_logger } from '../lib/log.js';
 import { RESERVED_SCOPES, SLUG_PATTERN } from '../config/env.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
@@ -280,11 +280,12 @@ export class OrgsService {
     /**
      * Org-scoped picker targets for HUG reviewers / dispatch destinations:
      * notification channels (and users when wired). Caller must be an org member.
-     * `org_id` is required — no header-based fallback.
+     * `org_id` is required — no header-based fallback. With `realm_id` (a realm of that org the caller
+     * can see, else 404) the realm's own channels are listed too — the channels that realm can use.
      */
     async get_reviewable_targets(
         auth: AuthContext,
-        params: { org_id: string; query?: string },
+        params: { org_id: string; query?: string; realm_id?: string },
     ): Promise<{ users: Array<{ username: string; display_name?: string }>; channels: Array<{ id: string; name: string }> }> {
         log.debug('get_reviewable_targets', { org_id: params.org_id, user_id: auth.user?.id });
         this._require_auth(auth);
@@ -295,8 +296,14 @@ export class OrgsService {
         // Route policy: member of org_id.
         const query = (params.query ?? '').trim().toLowerCase();
         const { NotificationChannel } = await import('../models/index.js');
-        const channel_where: Record<string, unknown> = {
-            org_id,
+        const scopes: Record<string, unknown>[] = [{ org_id }];
+        if (params.realm_id) {
+            const visible = await visible_realm_ids(String(auth.user!.id), { org_id });
+            if (!visible.includes(params.realm_id)) throw new ApiError('not_found', 'Realm not found', 404);
+            scopes.push({ realm_id: params.realm_id });
+        }
+        const channel_where: Record<string | symbol, unknown> = {
+            [Op.or]: scopes,
             enabled: 1,
         };
         if (query) {

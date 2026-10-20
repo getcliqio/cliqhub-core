@@ -192,6 +192,8 @@ export const OrgsGetReviewableTargetsInput = z.object({
         .describe('Org UUID; required — no header fallback'),
     query: z.string().optional()
         .describe('Substring filter on usernames or channel names'),
+    realm_id: z.string().uuid().optional()
+        .describe("Also list this realm's own channels (a realm of org_id the caller can see)"),
 });
 
 export type OrgsGetReviewableTargetsInput = z.infer<typeof OrgsGetReviewableTargetsInput>;
