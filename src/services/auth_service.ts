@@ -16,7 +16,7 @@ import type { AuthContext } from '../schemas/auth_types.js';
 import type { EnvConfig } from '../config/env.js';
 import { RealmService } from '../services/realm.service.js';
 import { ensure_per_user_channel } from '../services/per_user_channel.service.js';
-import { ensure_account_org } from './account_org.js';
+import { ensure_account_org, ensure_account_scope } from './account_org.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('svc.auth');
@@ -139,7 +139,7 @@ export class AuthService {
 
         const pw_hash = await hash_password(password);
 
-        const { User: UserModel, Org, ScopeMember } = await import('../models/index.js');
+        const { User: UserModel } = await import('../models/index.js');
         const { user, org_id } = await on_name_race(() => UserModel.sequelize!.transaction(async (t) => {
             const user_id = await this._user_repo.create(
                 norm_username, norm_email, pw_hash, norm_username, t,
@@ -148,23 +148,7 @@ export class AuthService {
             // The account org: default roles, owner membership, channels and rules.
             const org = await ensure_account_org(user_id, norm_username, t);
 
-            const scope_id = await this._scope_repo.create(
-                norm_username,
-                norm_username,
-                user_id,
-                'public',
-                'org',
-                t,
-                org.id,
-            );
-            await ScopeMember.create(
-                { scope_id, user_id },
-                { transaction: t },
-            );
-            await Org.update(
-                { default_scope_id: scope_id },
-                { where: { id: org.id }, transaction: t },
-            );
+            await ensure_account_scope(user_id, norm_username, norm_username, org.id, t);
 
             const created_user = await this._user_repo.find_by_id_with_transaction(user_id, t);
             if (!created_user) throw new ApiError('internal_error', 'Failed to read created user', 500);

@@ -9,7 +9,7 @@
 import type { Transaction } from 'sequelize';
 
 import { normalize_name } from '../lib/namespace.js';
-import { Org, OrgMember, OrgRole } from '../models/index.js';
+import { Org, OrgMember, OrgRole, Scope, ScopeMember } from '../models/index.js';
 import { seed_default_roles_for_org } from '../models/migrations/migrate_org_roles.js';
 import { OrgSeedService } from './org_seed.service.js';
 
@@ -45,6 +45,37 @@ export async function ensure_account_org(user_id: string, username: string, t: T
     await OrgSeedService.seed_org(org.id, { account: true, transaction: t });
     await add_owner(org.id, user_id, t);
     return { id: org.id, created: true };
+}
+
+/**
+ * The account's scope — its publishing namespace, named after the username — inside `t`, the way signup
+ * makes it: created when missing (public, linked to the account org, owned by the user); a scope of that
+ * name the user owns but that isn't linked to the org is linked. Either way the user is a member and, when
+ * the org has none, it is the org's default scope. A scope of that name someone else owns is left alone.
+ *
+ * @returns The scope's id, or null when someone else owns the name.
+ */
+export async function ensure_account_scope(
+    user_id: string, username: string, display_name: string, org_id: string, t: Transaction,
+): Promise<string | null> {
+    const slug = normalize_name(username);
+    const found = await Scope.findOne({ where: { slug }, attributes: ['id', 'owner_id', 'org_id'], raw: true, transaction: t });
+    let scope_id: string;
+    if (!found) {
+        scope_id = (await Scope.create(
+            { slug, display_name: display_name || slug, owner_id: user_id, visibility: 'public', scope_type: 'org', org_id } as never,
+            { transaction: t },
+        )).id;
+    } else {
+        if (String(found.owner_id) !== String(user_id)) return null;
+        scope_id = String(found.id);
+        if (String(found.org_id) !== String(org_id)) {
+            await Scope.update({ org_id, scope_type: 'org' }, { where: { id: scope_id }, transaction: t });
+        }
+    }
+    await ScopeMember.findOrCreate({ where: { scope_id, user_id }, defaults: { scope_id, user_id } as never, transaction: t });
+    await Org.update({ default_scope_id: scope_id }, { where: { id: org_id, default_scope_id: null }, transaction: t });
+    return scope_id;
 }
 
 /** Adds the user as an active member holding the org's owner role. */

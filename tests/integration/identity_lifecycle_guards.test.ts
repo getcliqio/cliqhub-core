@@ -29,7 +29,7 @@ import { use_test_link_env } from '../helpers/link_env.js';
 import { accept_invite_url, token_from_invite_url } from '../helpers/invite_links.js';
 import {
     AccountInvite, ChannelDestination, HubEvent, NotificationChannel, NotificationRule, Org, OrgMember, OrgRole, PasswordReset,
-    Realm, RealmInvite, RealmMember, User,
+    Realm, RealmInvite, RealmMember, Scope, ScopeMember, User,
 } from '../../src/models/index.js';
 import { run_invite_sweep } from '../../src/services/invite_sweep.service.js';
 import { OrgSeedService } from '../../src/services/org_seed.service.js';
@@ -185,6 +185,13 @@ describe.skipIf(!has_postgres)('identity lifecycle guards', () => {
             s.track(accepted.body.data.user.username);
             expect(await realm_row(s.A1, user.id)).toMatchObject({ status: 'active', deleted_at: null });
             expect(await RealmMember.count({ where: { realm_id: s.A1, member_id: user.id } })).toBe(1);
+            // A new person's account gets its scope as signup makes it: linked to their account org, its default.
+            const username = accepted.body.data.user.username as string;
+            const account = (await Org.findOne({ where: { slug: username }, raw: true }))!;
+            const scope = (await Scope.findOne({ where: { slug: username }, raw: true }))!;
+            expect(scope).toMatchObject({ owner_id: user.id, org_id: account.id, scope_type: 'org' });
+            expect(await ScopeMember.count({ where: { scope_id: scope.id, user_id: user.id } })).toBe(1);
+            expect(account.default_scope_id).toBe(scope.id);
         });
 
         it('revoke, decline and expiry of a realm invite remove the pending realm membership and leave the org membership alone', async () => {

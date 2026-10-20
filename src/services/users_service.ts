@@ -23,7 +23,7 @@ import { assert_email_free, assert_namespace_free, deleted_user_error, on_name_r
 import { assert_password_rules, normalize_email, normalize_username } from '../lib/account_fields.js';
 import { equals_first, list_order, nulls_last, type SortColumns, type SortDir } from '../lib/list_sort.js';
 import { Org, Scope, User } from '../models/index.js';
-import { ensure_account_org } from './account_org.js';
+import { ensure_account_org, ensure_account_scope } from './account_org.js';
 import { OrgEventService } from './org_event.service.js';
 import { ReactivationService } from './reactivation.service.js';
 import { PasswordLinkService } from './password_link.service.js';
@@ -389,15 +389,13 @@ export class UsersService {
                 );
                 user_id = created.id;
             }
-            // Default personal scope (registry namespace); realms come from org / on-demand create.
-            if (!(await Scope.findOne({ where: { slug }, attributes: ['id'], raw: true, transaction: t }))) {
-                await this._scope_repo.create(slug, display_name, user_id, 'public', 'user', t);
-            }
             const row = await User.findByPk(user_id, {
                 attributes: ['id', 'username', 'email', 'display_name', 'status'], raw: true, transaction: t,
             });
             if (!row) throw new ApiError('internal_error', 'Failed to read the created user', 500);
             const org_id = (await ensure_account_org(row.id, row.username, t)).id;
+            // The account's scope (registry namespace), as signup makes it.
+            await ensure_account_scope(row.id, row.username, row.display_name ?? row.username, org_id, t);
 
             const issued = await this._password_links.issue(row.id, 'setup', { requested_by: auth.user!.id, transaction: t });
             const raised = OrgEventService.raise_after_commit(t, {

@@ -37,7 +37,7 @@ import { OrgEventService, type PendingOrgEvent } from './org_event.service.js';
 import type { ReactivationService } from './reactivation.service.js';
 import { RealmService } from './realm.service.js';
 import { ensure_per_user_channel } from './per_user_channel.service.js';
-import { ensure_account_org } from './account_org.js';
+import { ensure_account_org, ensure_account_scope } from './account_org.js';
 import {
     activate_org_membership, activate_realm_membership, drop_pending_membership, find_invite_by_id,
     find_invite_by_token, invite_event_data, invite_link, invite_model, load_context, set_pending_org_membership, set_pending_realm_membership,
@@ -719,11 +719,8 @@ export class InvitationsService {
         } else {
             user_id = String((await User.create({ ...fields, email, role: 'user' }, { transaction: t })).id);
         }
-        const scope = await Scope.findOne({ where: { slug: person.username }, attributes: ['id'], raw: true, transaction: t });
-        if (!scope) {
-            await Scope.create({ slug: person.username, display_name: person.display_name, owner_id: user_id, visibility: 'public', scope_type: 'user' } as never, { transaction: t });
-        }
-        await ensure_account_org(user_id, person.username, t);
+        const org = await ensure_account_org(user_id, person.username, t);
+        await ensure_account_scope(user_id, person.username, person.display_name, org.id, t);
         return { user_id, username: person.username };
     }
 

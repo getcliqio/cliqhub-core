@@ -17,7 +17,7 @@ import { seed_authz, type Seed } from '../helpers/authz_seed.js';
 import { TEST_PUBLIC_APP_URL, use_test_link_env } from '../helpers/link_env.js';
 import {
     ChannelDestination, HubEvent, NotificationChannel, NotificationRule, Org, OrgMember, OrgRole,
-    PasswordReset, PasswordResetRequest, User,
+    PasswordReset, PasswordResetRequest, Scope, ScopeMember, User,
 } from '../../src/models/index.js';
 import { DELIVERER_BY_PROVIDER } from '../../src/notifications/deliverers/index.js';
 import type { EmailDeliverer } from '../../src/notifications/deliverers/email_deliverer.js';
@@ -132,6 +132,11 @@ describe.skipIf(!has_postgres)('password links (users/new, reset_password, chang
             // The account org is seeded with its In-app channel; the setup / reset / changed emails are built in.
             expect(await NotificationChannel.count({ where: { org_id: org.id, system_key: 'org.in_app' } })).toBe(1);
             expect(await NotificationRule.count({ where: { org_id: org.id } })).toBe(0);
+            // Its scope, as signup makes it: named after the username, linked to the account org, its default.
+            const scope = (await Scope.findOne({ where: { slug: username }, raw: true }))!;
+            expect(scope).toMatchObject({ owner_id: user.id, org_id: org.id, scope_type: 'org', visibility: 'public' });
+            expect(await ScopeMember.count({ where: { scope_id: scope.id, user_id: user.id } })).toBe(1);
+            expect((await Org.findByPk(org.id, { raw: true }))!.default_scope_id).toBe(scope.id);
 
             const token = token_of(setup.setup_url);
             const link = (await PasswordReset.findOne({ where: { user_id: user.id }, raw: true }))!;

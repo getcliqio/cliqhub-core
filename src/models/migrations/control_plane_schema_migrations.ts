@@ -1372,6 +1372,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await add_realm_review_rule(sq);
     await migrate_builtin_channels(sq);
     await migrate_default_rules(sq);
+    await migrate_account_scopes(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -1927,3 +1928,73 @@ export async function migrate_default_rules(sq: Sequelize): Promise<void> {
     }
 }
 
+/** `cliq.settings` key marking the one-time account-scope fix as done. */
+export const ACCOUNT_SCOPES_MIGRATION_KEY = 'migrate.account_scopes_2026_10';
+
+/**
+ * One time (Oct 2026): every account org (a user's own org — a member's username is the org's slug) gets its
+ * scope the way signup makes it, frozen as written: a scope named after the username, public, owned by the
+ * user and linked to the org (created when missing; the user's own unlinked scope of that name is linked);
+ * the user a member of it; and the org's default scope when it has none. A scope of that name owned by
+ * someone else is left alone. Accounts made before signup created the scope, or through an invite / by an
+ * admin, had none or an unlinked one. Safe to repeat; the key is recorded once everything succeeded.
+ */
+export async function migrate_account_scopes(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.scope_members') AS m`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; m: string | null }>;
+        if (!tables?.s || !tables?.m) {
+            _mig_log.info('account_scopes_deferred', { reason: 'cliq.settings or cliq.scope_members not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: ACCOUNT_SCOPES_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const accounts = await sq.query(
+            `SELECT DISTINCT ON (o."id") o."id" AS org_id, o."slug", u."id" AS user_id, COALESCE(NULLIF(u."display_name", ''), u."username") AS display_name
+             FROM cliq."orgs" o
+             JOIN cliq."org_members" om ON om."org_id" = o."id"
+             JOIN cliq."users" u ON u."id"::text = om."user_id"::text AND lower(u."username") = lower(o."slug")
+             WHERE o."deleted_at" IS NULL AND u."deleted_at" IS NULL
+             ORDER BY o."id"`, { type: QueryTypes.SELECT }) as Array<{ org_id: string; slug: string; user_id: string; display_name: string }>;
+        let created = 0; let linked = 0; let other_owner = 0;
+        for (const a of accounts) {
+            const [found] = await sq.query(`SELECT "id", "owner_id", "org_id" FROM cliq."scopes" WHERE lower("slug") = lower(:slug)`,
+                { replacements: { slug: a.slug }, type: QueryTypes.SELECT }) as Array<{ id: string; owner_id: string | null; org_id: string | null }>;
+            let scope_id: string;
+            if (!found) {
+                const [row] = await sq.query(
+                    `INSERT INTO cliq."scopes" ("id", "slug", "display_name", "owner_id", "org_id", "visibility", "scope_type", "created_at", "is_default")
+                     VALUES (gen_random_uuid(), :slug, :display_name, :user_id, :org_id, 'public', 'org', NOW(), 0) RETURNING "id"`,
+                    { replacements: { slug: a.slug, display_name: a.display_name, user_id: a.user_id, org_id: a.org_id }, type: QueryTypes.SELECT },
+                ) as Array<{ id: string }>;
+                scope_id = row.id;
+                created++;
+            } else if (String(found.owner_id) !== String(a.user_id)) {
+                other_owner++;
+                continue;
+            } else {
+                scope_id = found.id;
+                if (String(found.org_id) !== String(a.org_id)) {
+                    await sq.query(`UPDATE cliq."scopes" SET "org_id" = :org_id, "scope_type" = 'org' WHERE "id" = :scope_id`,
+                        { replacements: { org_id: a.org_id, scope_id } });
+                    linked++;
+                }
+            }
+            await sq.query(
+                `INSERT INTO cliq."scope_members" ("scope_id", "user_id") VALUES (:scope_id, :user_id) ON CONFLICT DO NOTHING`,
+                { replacements: { scope_id, user_id: a.user_id } },
+            );
+            await sq.query(`UPDATE cliq."orgs" SET "default_scope_id" = :scope_id WHERE "id" = :org_id AND "default_scope_id" IS NULL`,
+                { replacements: { scope_id, org_id: a.org_id } });
+        }
+
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: ACCOUNT_SCOPES_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('account_scopes_migrated', { accounts: accounts.length, created, linked, other_owner });
+    } catch (err) {
+        _mig_log.error('account_scopes_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
