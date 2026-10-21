@@ -3,7 +3,7 @@ import { can_read_team, can_view_team } from '../auth/access.js';
 import { assert_access, assert_admin_access } from '../auth/assert_grant.js';
 
 import yaml from 'js-yaml';
-import { extract_package, normalize_tags, compute_next_version, workflow_from_team_yml, enrich_required_inputs } from './package_parser.js';
+import { extract_package, to_package_zip, normalize_tags, compute_next_version, workflow_from_team_yml, enrich_required_inputs } from './package_parser.js';
 import type { ParsedTeamYml } from './package_parser.js';
 import { SemVer } from '../lib/semver.js';
 import { SLUG_PATTERN, RESERVED_SCOPES } from '../config/env.js';
@@ -893,7 +893,8 @@ export class TeamsService {
 
         const pkg_key = package_key(name, resolved_version);
         const pkg_path = this._packages_path ? package_path(this._packages_path, name, resolved_version) : pkg_key;
-        if (this._storage) await this._storage.write(pkg_key, zip_buffer);
+        // Stored as a zip whatever was sent (daemons unzip it).
+        if (this._storage) await this._storage.write(pkg_key, await to_package_zip(zip_buffer, { manifest_yaml, roles, readme }));
 
         let published_team_id = '';
         await get_sequelize().transaction(async (t) => {

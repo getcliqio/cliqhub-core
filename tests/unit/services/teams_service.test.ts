@@ -596,6 +596,9 @@ describe('TeamsService — publish', () => {
         expect(team_repo.create).toHaveBeenCalled();
         expect(version_repo.create).toHaveBeenCalled();
         expect(storage.write).toHaveBeenCalled();
+        // Stored as a zip even though what was sent isn't one.
+        const stored = storage.write.mock.calls[0][1] as Buffer;
+        expect([stored[0], stored[1]]).toEqual([0x50, 0x4B]);
     });
 
     it('updates existing team with explicit version', async () => {

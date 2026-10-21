@@ -6,6 +6,7 @@ import {
     compute_next_version,
     workflow_from_team_yml,
     enrich_required_inputs,
+    to_package_zip,
 } from '../../../src/services/package_parser.js';
 
 describe('normalize_tags', () => {
@@ -131,5 +132,27 @@ describe('extract_package', () => {
         expect(result.team_yml?.name).toBe('zipped');
         expect(result.roles).toEqual([{ name: 'coder', content_md: '# Coder' }]);
         expect(result.readme).toBe('# Readme');
+    });
+});
+
+describe('to_package_zip (what is stored: daemons install with unzip)', () => {
+    it('a JSON package (the builder\'s) is stored as a zip with team.yml, roles and README', async () => {
+        const json = Buffer.from(JSON.stringify({ 'team.yml': 'name: x\nphases: []\n', roles: [{ name: 'dev', content: '# Dev' }], readme: '# Read' }));
+        const content = await extract_package(json);
+        const out = await to_package_zip(json, content);
+        expect([out[0], out[1]]).toEqual([0x50, 0x4B]);
+        const zip = await JSZip.loadAsync(out);
+        expect(await zip.file('team.yml')!.async('string')).toBe('name: x\nphases: []\n');
+        expect(await zip.file('roles/dev.md')!.async('string')).toBe('# Dev');
+        expect(await zip.file('README.md')!.async('string')).toBe('# Read');
+        // And it reads back the same.
+        expect(await extract_package(out)).toMatchObject({ manifest_yaml: content.manifest_yaml, roles: content.roles, readme: content.readme });
+    });
+
+    it('a zip is stored as sent', async () => {
+        const zip = new JSZip();
+        zip.file('team.yml', 'name: y\n');
+        const buf = await zip.generateAsync({ type: 'nodebuffer' });
+        expect(await to_package_zip(buf, await extract_package(buf))).toBe(buf);
     });
 });

@@ -91,6 +91,19 @@ function extract_json_package(data_buffer: Buffer): PackageContent {
     return { team_yml, manifest_yaml, roles, readme };
 }
 
+/**
+ * The package as stored: always a zip (`team.yml`, `roles/<name>.md`, `README.md`) — daemons install with
+ * `unzip`. A zip is kept as sent; a JSON package (the builder's) is rebuilt as a zip from its content.
+ */
+export async function to_package_zip(data_buffer: Buffer, content: Pick<PackageContent, 'manifest_yaml' | 'roles' | 'readme'>): Promise<Buffer> {
+    if (data_buffer[0] === 0x50 && data_buffer[1] === 0x4B) return data_buffer;
+    const zip = new JSZip();
+    zip.file('team.yml', content.manifest_yaml ?? '');
+    for (const role of content.roles) zip.file(`roles/${role.name}.md`, role.content_md);
+    if (content.readme) zip.file('README.md', content.readme);
+    return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
 async function extract_zip_package(zip_buffer: Buffer): Promise<PackageContent> {
     const zip = await JSZip.loadAsync(zip_buffer);
 
