@@ -7,6 +7,7 @@ import {
     workflow_from_team_yml,
     enrich_required_inputs,
     to_package_zip,
+    dependencies_problems,
 } from '../../../src/services/package_parser.js';
 
 describe('normalize_tags', () => {
@@ -154,5 +155,38 @@ describe('to_package_zip (what is stored: daemons install with unzip)', () => {
         zip.file('team.yml', 'name: y\n');
         const buf = await zip.generateAsync({ type: 'nodebuffer' });
         expect(await to_package_zip(buf, await extract_package(buf))).toBe(buf);
+    });
+});
+
+describe('dependencies.yml in a package', () => {
+    const DEPS = '- name: jq\n  version: "1.7"\n  install: apt-get install -y jq\n';
+
+    it('is read from a JSON package and from a zip, and packed into the stored zip', async () => {
+        const json = Buffer.from(JSON.stringify({ 'team.yml': 'name: x\nphases: []\n', roles: [], 'dependencies.yml': DEPS }));
+        const from_json = await extract_package(json);
+        expect(from_json.dependencies_yml).toBe(DEPS);
+        const stored = await to_package_zip(json, from_json);
+        expect(await (await JSZip.loadAsync(stored)).file('dependencies.yml')!.async('string')).toBe(DEPS);
+        expect((await extract_package(stored)).dependencies_yml).toBe(DEPS);
+    });
+
+    it('a package without one has none', async () => {
+        const json = Buffer.from(JSON.stringify({ 'team.yml': 'name: x\n' }));
+        const c = await extract_package(json);
+        expect(c.dependencies_yml).toBe('');
+        expect((await JSZip.loadAsync(await to_package_zip(json, c))).file('dependencies.yml')).toBeNull();
+    });
+
+    it('problems: each dependency has a name and an install command (version optional)', () => {
+        expect(dependencies_problems('')).toEqual([]);
+        expect(dependencies_problems(DEPS)).toEqual([]);
+        expect(dependencies_problems('name: jq')).toEqual(['dependencies.yml must be a list of dependencies']);
+        expect(dependencies_problems('- name: jq\n- install: x\n- name: jq\n  install: y\n')).toEqual([
+            'dependency `jq` has no `install` command',
+            'dependency 2 has no `name`',
+            'dependency `jq` is listed twice',
+        ]);
+        expect(dependencies_problems('- name: jq\n  install: y\n')).toEqual([]);
+        expect(dependencies_problems('- [')[0]).toMatch(/isn't valid YAML/);
     });
 });

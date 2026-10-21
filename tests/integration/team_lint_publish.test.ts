@@ -79,4 +79,24 @@ describe.skipIf(!has_postgres)('publish refuses lines cliq would ignore', () => 
         expect(res.status, JSON.stringify(res.body)).toBe(422);
         expect(err(res).code).toBe('invalid_team');
     });
+
+    it('dependencies.yml: published with the team, returned by get_by_id, packed in the download; a broken one is refused', async () => {
+        const deps = '- name: jq\n  version: "1.7"\n  install: apt-get install -y jq\n';
+        const with_deps = Buffer.from(JSON.stringify({ 'team.yml': FIXED.replace(/^name: .*$/m, 'name: depsy'), roles: [], 'dependencies.yml': deps })).toString('base64');
+        const res = await post('/v1/teams/publish', { name: 'depsy', scope: me.username, version: '1.0.0', data_base64: with_deps });
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        team_ids.push(res.body.data.id);
+
+        const got = await post('/v1/teams/get_by_id', { name: 'depsy', scope: me.username });
+        expect(got.body.data.dependencies).toBe(deps);
+        const dl = await post('/v1/teams/download', { name: 'depsy', scope: me.username });
+        const JSZip = (await import('jszip')).default;
+        const zip = await JSZip.loadAsync(Buffer.from(dl.body.data.data_base64, 'base64'));
+        expect(await zip.file('dependencies.yml')!.async('string')).toBe(deps);
+
+        const broken = Buffer.from(JSON.stringify({ 'team.yml': FIXED.replace(/^name: .*$/m, 'name: depsy'), roles: [], 'dependencies.yml': '- name: jq\n' })).toString('base64');
+        const bad = await post('/v1/teams/publish', { name: 'depsy', scope: me.username, version: '1.0.1', data_base64: broken });
+        expect(bad.status, JSON.stringify(bad.body)).toBe(422);
+        expect(err(bad).details).toMatchObject({ field: 'dependencies.yml', problems: ['dependency `jq` has no `install` command'] });
+    });
 });

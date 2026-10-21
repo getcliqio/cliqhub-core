@@ -14,6 +14,8 @@ export class TeamVersion extends BaseModel {
     declare capability_json: string;
     declare agents_json: string;
     declare roles_json: string;
+    /** dependencies.yml text ('' when the team has none). */
+    declare dependencies_yaml: string;
     declare cliq_version: string | null;
     declare tools: string;
     declare published_at: Date;
@@ -31,6 +33,7 @@ export class TeamVersion extends BaseModel {
             capability_json: { type: DataTypes.TEXT, allowNull: false, defaultValue: '{}' },
             agents_json: { type: DataTypes.TEXT, allowNull: false, defaultValue: '{}' },
             roles_json: { type: DataTypes.TEXT, allowNull: false, defaultValue: '[]' },
+            dependencies_yaml: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
             cliq_version: { type: DataTypes.TEXT, allowNull: true },
             tools: { type: DataTypes.TEXT, allowNull: false, defaultValue: '[]' },
             published_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },

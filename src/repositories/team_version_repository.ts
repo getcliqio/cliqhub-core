@@ -37,7 +37,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     async find_detail_by_team_and_version(team_id: string, version: string) {
         return TeamVersion.findOne({
             where: { team_id, version },
-            attributes: ['id', 'version', 'workflow_json', 'manifest_yaml', 'agents_json', 'readme', 'cliq_version', 'tools', 'capability_json', 'roles_json'],
+            attributes: ['id', 'version', 'workflow_json', 'manifest_yaml', 'agents_json', 'readme', 'cliq_version', 'tools', 'capability_json', 'roles_json', 'dependencies_yaml'],
             raw: true,
         });
     }
@@ -67,9 +67,10 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
         readme: string, capability_json: string, agents_json: string,
         roles_json: string,
         transaction?: Transaction,
+        dependencies_yaml = '',
     ): Promise<string> {
         const row = await TeamVersion.create(
-            { team_id, version, changelog, package_path: pkg_path, cliq_version, tools, workflow_json, manifest_yaml, readme, capability_json, agents_json, roles_json },
+            { team_id, version, changelog, package_path: pkg_path, cliq_version, tools, workflow_json, manifest_yaml, readme, capability_json, agents_json, roles_json, dependencies_yaml },
             { transaction },
         );
         return row.id;

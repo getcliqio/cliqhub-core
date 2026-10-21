@@ -51,6 +51,8 @@ export interface PackageContent {
     manifest_yaml: string;
     roles: { name: string; content_md: string }[];
     readme: string;
+    /** dependencies.yml text: tools the team needs and how to install them ('' when none). */
+    dependencies_yml: string;
 }
 
 const MAX_PACKAGE_SIZE = 10 * 1024 * 1024;
@@ -88,20 +90,50 @@ function extract_json_package(data_buffer: Buffer): PackageContent {
     }
 
     const readme = typeof pkg.readme === 'string' ? pkg.readme : '';
-    return { team_yml, manifest_yaml, roles, readme };
+    const dependencies_yml = typeof pkg['dependencies.yml'] === 'string' ? pkg['dependencies.yml'] : '';
+    return { team_yml, manifest_yaml, roles, readme, dependencies_yml };
 }
 
 /**
- * The package as stored: always a zip (`team.yml`, `roles/<name>.md`, `README.md`) — daemons install with
+ * The package as stored: always a zip (`team.yml`, `roles/<name>.md`, `README.md`, `dependencies.yml`) — daemons install with
  * `unzip`. A zip is kept as sent; a JSON package (the builder's) is rebuilt as a zip from its content.
  */
-export async function to_package_zip(data_buffer: Buffer, content: Pick<PackageContent, 'manifest_yaml' | 'roles' | 'readme'>): Promise<Buffer> {
+export async function to_package_zip(data_buffer: Buffer, content: Pick<PackageContent, 'manifest_yaml' | 'roles' | 'readme'> & { dependencies_yml?: string }): Promise<Buffer> {
     if (data_buffer[0] === 0x50 && data_buffer[1] === 0x4B) return data_buffer;
     const zip = new JSZip();
     zip.file('team.yml', content.manifest_yaml ?? '');
     for (const role of content.roles) zip.file(`roles/${role.name}.md`, role.content_md);
     if (content.readme) zip.file('README.md', content.readme);
+    if (content.dependencies_yml) zip.file('dependencies.yml', content.dependencies_yml);
     return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+}
+
+/**
+ * Problems with a dependencies.yml — the same rules cliq-docker applies when it builds a realm image:
+ * a list of entries, each with a `name` and an `install` command (`version` optional).
+ */
+export function dependencies_problems(text: string): string[] {
+    if (!text.trim()) return [];
+    let raw: unknown;
+    try {
+        raw = yaml.load(text);
+    } catch (err) {
+        return [`dependencies.yml isn't valid YAML: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`];
+    }
+    if (raw === null || raw === undefined) return [];
+    if (!Array.isArray(raw)) return ['dependencies.yml must be a list of dependencies'];
+    const out: string[] = [];
+    const seen = new Set<string>();
+    raw.forEach((item, i) => {
+        const rec = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : null;
+        const name = typeof rec?.name === 'string' ? rec.name.trim() : '';
+        if (!name) { out.push(`dependency ${i + 1} has no \`name\``); return; }
+        if (typeof rec?.install !== 'string' || !rec.install.trim()) out.push(`dependency \`${name}\` has no \`install\` command`);
+        if (rec?.version !== undefined && typeof rec.version !== 'string' && typeof rec.version !== 'number') out.push(`dependency \`${name}\`: \`version\` must be text`);
+        if (seen.has(name)) out.push(`dependency \`${name}\` is listed twice`);
+        seen.add(name);
+    });
+    return out;
 }
 
 async function extract_zip_package(zip_buffer: Buffer): Promise<PackageContent> {
@@ -150,7 +182,8 @@ async function extract_zip_package(zip_buffer: Buffer): Promise<PackageContent> 
     }
 
     const readme = await read_text('README.md') ?? '';
-    return { team_yml, manifest_yaml, roles, readme };
+    const dependencies_yml = await read_text('dependencies.yml') ?? '';
+    return { team_yml, manifest_yaml, roles, readme, dependencies_yml };
 }
 
 /**

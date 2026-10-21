@@ -1211,6 +1211,8 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_manifest" TEXT`);
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_description" TEXT`);
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_saved_at" TIMESTAMPTZ`);
+    // A version's dependencies.yml (tools the team needs and how to install them) — shown in the builder.
+    await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "dependencies_yaml" TEXT NOT NULL DEFAULT ''`);
 
     // Org team library: teams an org has taken on (from the marketplace or its own
     // scopes). A team joins the org before any of the org's realms can add it.

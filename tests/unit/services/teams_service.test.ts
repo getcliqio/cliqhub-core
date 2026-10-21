@@ -601,6 +601,18 @@ describe('TeamsService — publish', () => {
         expect([stored[0], stored[1]]).toEqual([0x50, 0x4B]);
     });
 
+    it('a package with a broken dependencies.yml is refused before anything is stored', async () => {
+        const parser = await import('../../../src/services/package_parser.js');
+        vi.mocked(parser.extract_package).mockResolvedValueOnce({
+            team_yml: { phases: [], description: 'test', tools: [], tags: [] } as never,
+            manifest_yaml: 'name: t\n', roles: [], readme: '', dependencies_yml: '- name: jq\n',
+        });
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
+        await expect(service.publish(ALICE, { name: 'dep-team', scope: 'alice', bump: 'patch', data_base64: DATA_BASE64 }))
+            .rejects.toMatchObject({ status: 422, details: { field: 'dependencies.yml', problems: ['dependency `jq` has no `install` command'] } });
+        expect(storage.write).not.toHaveBeenCalled();
+    });
+
     it('updates existing team with explicit version', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
         version_repo.find_by_team_and_version.mockResolvedValueOnce(null);

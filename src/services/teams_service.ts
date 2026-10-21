@@ -3,7 +3,7 @@ import { can_read_team, can_view_team } from '../auth/access.js';
 import { assert_access, assert_admin_access } from '../auth/assert_grant.js';
 
 import yaml from 'js-yaml';
-import { extract_package, to_package_zip, normalize_tags, compute_next_version, workflow_from_team_yml, enrich_required_inputs } from './package_parser.js';
+import { extract_package, to_package_zip, dependencies_problems, normalize_tags, compute_next_version, workflow_from_team_yml, enrich_required_inputs } from './package_parser.js';
 import type { ParsedTeamYml } from './package_parser.js';
 import { SemVer } from '../lib/semver.js';
 import { SLUG_PATTERN, RESERVED_SCOPES } from '../config/env.js';
@@ -367,6 +367,7 @@ export class TeamsService {
         let tools: string[] = []; let inputs: unknown[] | undefined;
         let use_when: string[] | undefined; let not_for: string[] | undefined;
         let version_manifest_yaml = '';
+        let dependencies = '';
 
         if (target_version) {
             const ver_row = await this._version_repo.find_detail_by_team_and_version(team.id, target_version);
@@ -385,6 +386,7 @@ export class TeamsService {
                 try { const raw = JSON.parse(ver_row.capability_json); if (raw) { inputs = raw.inputs; use_when = raw.use_when; not_for = raw.not_for; } } catch { /* default */ }
                 try { roles = JSON.parse(ver_row.roles_json || '[]'); } catch { /* default */ }
                 version_manifest_yaml = ver_row.manifest_yaml || '';
+                dependencies = (ver_row as { dependencies_yaml?: string }).dependencies_yaml || '';
             }
         }
 
@@ -421,6 +423,8 @@ export class TeamsService {
             inputs, use_when, not_for,
             listed: team.listed !== 0,
             raw_manifest,
+            /** dependencies.yml of this version ('' when the team has none). */
+            dependencies,
             /** SPA builder compat — same payload as former drafts.team_json. */
             team_json: raw_manifest,
             forked_from,
@@ -848,8 +852,10 @@ export class TeamsService {
         const zip_buffer = Buffer.from(params.data_base64, 'base64');
         if (zip_buffer.length > 10 * 1024 * 1024) throw new ApiError('invalid_params', 'Package too large (max 10MB)', 422);
 
-        const { team_yml, manifest_yaml, roles, readme } = await extract_package(zip_buffer);
+        const { team_yml, manifest_yaml, roles, readme, dependencies_yml = '' } = await extract_package(zip_buffer);
         if (!team_yml) throw new ApiError('invalid_package', 'Package must contain a valid team.yml', 422);
+        const dep_problems = dependencies_problems(dependencies_yml);
+        if (dep_problems.length) throw new ApiError('invalid_package', dep_problems.join('; '), 422, { field: 'dependencies.yml', problems: dep_problems });
         await assert_team_lints(team_yml, roles);
 
         if (!tags && team_yml.tags) tags = normalize_tags(team_yml.tags);
@@ -894,7 +900,7 @@ export class TeamsService {
         const pkg_key = package_key(name, resolved_version);
         const pkg_path = this._packages_path ? package_path(this._packages_path, name, resolved_version) : pkg_key;
         // Stored as a zip whatever was sent (daemons unzip it).
-        if (this._storage) await this._storage.write(pkg_key, await to_package_zip(zip_buffer, { manifest_yaml, roles, readme }));
+        if (this._storage) await this._storage.write(pkg_key, await to_package_zip(zip_buffer, { manifest_yaml, roles, readme, dependencies_yml }));
 
         let published_team_id = '';
         await get_sequelize().transaction(async (t) => {
@@ -919,7 +925,7 @@ export class TeamsService {
             await this._version_repo.create(
                 effective_team_id, resolved_version!, params.changelog || '', pkg_path,
                 cliq_version, tools, workflow_json, manifest_yaml,
-                readme, capability_json, agents_json, roles_json, t,
+                readme, capability_json, agents_json, roles_json, t, dependencies_yml,
             );
 
             if (tags) {
