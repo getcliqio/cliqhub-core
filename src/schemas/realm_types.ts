@@ -159,6 +159,8 @@ export const RealmTeamRefInput = z.object({
     realm_id: z.string().min(1).describe('Realm UUID'),
     scope: z.string().min(1).describe('Team scope (e.g. cliq or org slug)'),
     slug: z.string().min(1).describe('Team slug'),
+    version: z.string().min(1).optional()
+        .describe('add_team: the version this realm runs (default: the latest published). A team already on the list moves to it — without a version, to the latest.'),
 });
 export type RealmTeamRefInput = z.infer<typeof RealmTeamRefInput>;
 

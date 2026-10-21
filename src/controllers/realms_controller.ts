@@ -354,7 +354,7 @@ export class RealmController extends BaseController {
         log.debug('add_team', { user_id: user.user_id });
         // Zod SoT — realm_id + published team scope/slug.
         const body = this.parse_body(RealmTeamRefInput, req);
-        const entry = { scope: body.scope, slug: body.slug };
+        const entry = { scope: body.scope, slug: body.slug, ...(body.version ? { version: body.version } : {}) };
 
         // A team joins the realm's org before the realm (added to the org here when allowed).
         await OrgTeamsService.ensure_for_realm(req.auth!, body.realm_id, body.scope, body.slug);

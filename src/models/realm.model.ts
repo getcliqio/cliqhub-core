@@ -4,6 +4,8 @@ import { BaseModel } from './base_model.js';
 export interface TeamListEntry {
     scope: string;
     slug: string;
+    /** The version of the team this realm runs; its daemons install exactly this version. */
+    version?: string;
 }
 
 export class Realm extends BaseModel {

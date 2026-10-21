@@ -1865,7 +1865,10 @@ export class RealmService {
             installed_count: number;
             online_daemon_count: number;
             coverage_label: string;
+            /** The realm's version of a team on its list; for a team only daemons report, what they report. */
             version: string | null;
+            /** Online daemons not on the realm's version (older, or not installed); null for a team not on the list. */
+            online_stale: number | null;
             sample_team_id: string | null;
             /** Catalog (`cliq.teams`) id of a Hub-published team — what `/v1/teams/install` takes; null for CLI-installed teams. */
             team_id: string | null;
@@ -1883,10 +1886,10 @@ export class RealmService {
         // Realm + team-list.
         const realm = await _realm_repo.find_by_id(params.realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
-        const team_list_set = new Set(
-            (((realm as unknown as { team_list?: Array<{ scope: string; slug: string }> })
-                .team_list) ?? []).map((e) => `${e.scope}/${e.slug}`),
-        );
+        const team_list = ((realm as unknown as { team_list?: Array<{ scope: string; slug: string; version?: string }> })
+            .team_list) ?? [];
+        const team_list_set = new Set(team_list.map((e) => `${e.scope}/${e.slug}`));
+        const realm_versions = new Map(team_list.map((e) => [`${e.scope}/${e.slug}`, e.version ?? null]));
 
         // Daemons in realm — online count is the denominator for coverage.
         // Even with zero daemons we still surface realm.team_list rows below
@@ -1941,6 +1944,8 @@ export class RealmService {
             scope: string;
             slug: string;
             installed_daemon_ids: Set<string>;
+            /** daemon id → the version it has installed. */
+            daemon_versions: Map<string, string | null>;
             version: string | null;
             sample_team_id: string | null;
         };
@@ -1965,6 +1970,7 @@ export class RealmService {
                     row = {
                         scope, slug,
                         installed_daemon_ids: new Set<string>(),
+                        daemon_versions: new Map<string, string | null>(),
                         version: t.version ?? null,
                         sample_team_id: t.id ?? null,
                     };
@@ -1972,7 +1978,10 @@ export class RealmService {
                 }
                 const daemons_for_team = team_daemons.get(t.id);
                 if (daemons_for_team) {
-                    for (const d of daemons_for_team) row.installed_daemon_ids.add(d);
+                    for (const d of daemons_for_team) {
+                        row.installed_daemon_ids.add(d);
+                        row.daemon_versions.set(d, t.version ?? null);
+                    }
                 }
                 if (!row.version && t.version) row.version = t.version;
                 if (!row.sample_team_id && t.id) row.sample_team_id = t.id;
@@ -1990,6 +1999,7 @@ export class RealmService {
                 scope,
                 slug,
                 installed_daemon_ids: new Set<string>(),
+                daemon_versions: new Map<string, string | null>(),
                 version: null,
                 sample_team_id: null,
             });
@@ -2121,6 +2131,11 @@ export class RealmService {
             const origin: 'hub' | 'cli' = published_set.has(key) ? 'hub' : 'cli';
             const coverage_label = _coverage_label(installed_count, online_daemon_count);
             const last_run_at = r.sample_team_id ? (last_run_map.get(r.sample_team_id) ?? null) : null;
+            const realm_version = realm_versions.get(key) ?? null;
+            // Of the daemons online now, those not on the realm's version (offline ones aren't counted).
+            const online_stale = team_list_set.has(key)
+                ? [...online_daemon_ids].filter((d) => !realm_version || r.daemon_versions.get(d) !== realm_version).length
+                : null;
             return {
                 scope: r.scope,
                 slug: r.slug,
@@ -2129,7 +2144,8 @@ export class RealmService {
                 installed_count,
                 online_daemon_count,
                 coverage_label,
-                version: r.version,
+                version: team_list_set.has(key) ? realm_version : r.version,
+                online_stale,
                 sample_team_id: r.sample_team_id,
                 team_id: registry_id_by_key.get(key) ?? null,
                 origin,

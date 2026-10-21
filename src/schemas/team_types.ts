@@ -420,6 +420,8 @@ export const TeamData = z.object({
         .describe('Number of online daemons in the realm (coverage denominator)'),
     coverage_label: z.string().optional()
         .describe('Human-readable coverage summary (e.g. "2/3 daemons")'),
+    online_stale: z.number().int().nullable().optional()
+        .describe('Realm mode: online daemons not on the realm\'s version of this team (older, or not installed); null when the team isn\'t on the realm\'s list'),
     missing_agents: z.array(z.string()).optional()
         .describe('Agent names referenced by this team that are not registered in the org'),
     origin: z.enum(['hub', 'cli']).optional()

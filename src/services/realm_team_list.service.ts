@@ -12,6 +12,8 @@ import { DaemonRepository } from '../repositories/daemon_repository.js';
 import { RealmAgentSettingRepository } from '../repositories/realm_agent_setting_repository.js';
 import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
 import { ScopeRepository } from '../repositories/scope_repository.js';
+import { TeamRepository } from '../repositories/team_repository.js';
+import { TeamVersionRepository } from '../repositories/team_version_repository.js';
 import { OrgAgentSettingRepository } from '../repositories/org_agent_setting_repository.js';
 
 const _realm_repo_rtl = new RealmRepository();
@@ -20,6 +22,8 @@ const _daemon_repo_rtl = new DaemonRepository();
 const _ras_repo = new RealmAgentSettingRepository();
 const _realm_member_repo_rtl = new RealmMemberRepository();
 const _scope_repo_rtl = new ScopeRepository();
+const _team_repo_rtl = new TeamRepository();
+const _team_version_repo_rtl = new TeamVersionRepository();
 const _org_agent_setting_repo = new OrgAgentSettingRepository();
 import { RealmService } from './realm.service.js';
 import { DispatchService } from './dispatch.service.js';
@@ -131,7 +135,28 @@ export class RealmTeamListService {
         return deduped;
     }
 
-    /** Add a single team to the list. Idempotent. */
+    /**
+     * The version a realm records for a team: the one asked for (it must be published), else the latest.
+     *
+     * @throws ApiError 404 when the team isn't in the catalog, has no version, or the version doesn't exist.
+     */
+    static async resolve_version(scope: string, slug: string, version?: string): Promise<string> {
+        const team = await _team_repo_rtl.find_by_name_and_scope(slug, scope);
+        if (!team) throw ApiError.not_found(`Team '@${scope}/${slug}' isn't published`);
+        if (version) {
+            const row = await _team_version_repo_rtl.find_by_team_and_version(team.id, version);
+            if (!row) throw ApiError.not_found(`Version ${version} of '@${scope}/${slug}' doesn't exist`);
+            return version;
+        }
+        const latest = await _team_version_repo_rtl.find_latest_version(team.id);
+        if (!latest) throw ApiError.not_found(`Team '@${scope}/${slug}' has no published version`);
+        return latest;
+    }
+
+    /**
+     * Put a team on the list at a version (default: the latest published). A team already on the list moves to
+     * that version — so adding it again without one moves the realm to the latest (the builder's "update realms").
+     */
     static async add(
         realm_id: string,
         user_id: string,
@@ -143,16 +168,19 @@ export class RealmTeamListService {
 
         const current: TeamListEntry[] = (realm as any).team_list ?? [];
         const key = `${entry.scope}/${entry.slug}`;
-        if (current.some((e) => `${e.scope}/${e.slug}` === key)) {
-            return current;
-        }
+        const existing = current.find((e) => `${e.scope}/${e.slug}` === key);
+        const version = await RealmTeamListService.resolve_version(entry.scope, entry.slug, entry.version);
+        if (existing?.version === version) return current;
 
-        const updated = [...current, { scope: entry.scope, slug: entry.slug }];
+        const next: TeamListEntry = { scope: entry.scope, slug: entry.slug, version };
+        const updated = existing
+            ? current.map((e) => (`${e.scope}/${e.slug}` === key ? next : e))
+            : [...current, next];
         await _realm_repo_rtl.update_where(
             { id: realm_id } as any,
             { team_list: updated as any, updated_at: Date.now() } as any,
         );
-        log.info(`team list add: realm=${realm_id} team=${key}`);
+        log.info(`team list ${existing ? 'version' : 'add'}: realm=${realm_id} team=${key} version=${version}`);
         void import('./mesh_lifecycle.service.js')
             .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
             .catch(() => {});
@@ -176,9 +204,15 @@ export class RealmTeamListService {
         const current: TeamListEntry[] = (realm as any).team_list ?? [];
         const existing_keys = new Set(current.map((e) => `${e.scope}/${e.slug}`));
 
-        const to_add = BUILTIN_TEAMS.filter(
-            (t) => !existing_keys.has(`${t.scope}/${t.slug}`),
-        );
+        const to_add: TeamListEntry[] = [];
+        for (const t of BUILTIN_TEAMS) {
+            if (existing_keys.has(`${t.scope}/${t.slug}`)) continue;
+            try {
+                to_add.push({ ...t, version: await RealmTeamListService.resolve_version(t.scope, t.slug) });
+            } catch {
+                // Not published on this hub (e.g. a fresh local stack): nothing to seed.
+            }
+        }
 
         if (to_add.length === 0) return;
 
@@ -245,6 +279,7 @@ export class RealmTeamListService {
             try {
                 const install_result = await DispatchService.install_team({
                     team_id: team_ref,
+                    ...(entry.version ? { version: entry.version } : {}),
                     realm_id,
                     user_id,
                     scope_ids,
@@ -278,7 +313,7 @@ export class RealmTeamListService {
 
     /**
      * Force-sync one team onto every online daemon in the realm.
-     * Overwrites an already-installed copy with Hub's latest version
+     * Installs the version on the realm's list (over any other installed copy)
      * and pushes effective agent settings (same as inject).
      */
     static async sync_team(
@@ -293,10 +328,10 @@ export class RealmTeamListService {
         if (!realm) throw ApiError.not_found('Realm not found');
 
         const team_list: TeamListEntry[] = (realm as any).team_list ?? [];
-        const on_list = team_list.some(
+        const listed = team_list.find(
             (e) => e.scope === entry.scope && e.slug === entry.slug,
         );
-        if (!on_list) {
+        if (!listed) {
             throw ApiError.bad_request(
                 `Team '${entry.scope}/${entry.slug}' is not on this realm's team list`,
             );
@@ -312,6 +347,7 @@ export class RealmTeamListService {
         try {
             const install_result = await DispatchService.install_team({
                 team_id: team_ref,
+                ...(listed.version ? { version: listed.version } : {}),
                 realm_id,
                 user_id,
                 scope_ids,
@@ -375,6 +411,7 @@ export class RealmTeamListService {
                 try {
                     await DispatchService.install_team({
                         team_id: team_ref,
+                        ...(entry.version ? { version: entry.version } : {}),
                         daemon_ids: [daemon_id],
                         user_id,
                         scope_ids,

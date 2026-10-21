@@ -20,6 +20,8 @@ import {
     NotificationChannel,
     RealmDispatchKey,
     RealmA2aSetting,
+    Team,
+    TeamVersion,
 } from '../../src/models/index.js';
 import { register_mesh_adapter } from '../../src/mesh/registry.js';
 import type { Mesh_adapter } from '../../src/mesh/types.js';
@@ -234,12 +236,21 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
         // have already added @cliq/hello-world and triggered re_register.
         mesh_calls.re_register = 0;
 
+        // A realm records the version it runs, so the team must be published.
+        const existing = await Team.findOne({ where: { name: 'test-team', scope: 'cliq' }, attributes: ['id'], raw: true });
+        const team_id = existing?.id ?? (await Team.create({ name: 'test-team', scope: 'cliq', visibility: 'public', listed: 1, description: 'mesh test' } as never)).id;
+        if (!existing) await TeamVersion.create({ team_id, version: '1.0.0', package_path: 'test-team-1.0.0.zip', workflow_json: '{"phases":[]}', manifest_yaml: 'name: test-team\nphases: []\n' } as never);
+
         // Hard-cut: add_team replaces /v1/realms/team-list/add
         const add = await request(app)
             .post('/v1/realms/add_team')
             .set('Authorization', bearer(token))
             .send({ realm_id, scope: 'cliq', slug: 'test-team' });
-        expect(add.status).toBe(200);
+        expect(add.status, JSON.stringify(add.body)).toBe(200);
+        if (!existing) {
+            await TeamVersion.destroy({ where: { team_id } });
+            await Team.destroy({ where: { id: team_id } });
+        }
 
         await wait_for(() => mesh_calls.re_register >= 1);
         expect(mesh_calls.re_register).toBeGreaterThanOrEqual(1);

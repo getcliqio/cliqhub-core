@@ -6,6 +6,7 @@
 import { get_logger } from '../../lib/log.js';
 import { QueryTypes, type Sequelize } from 'sequelize';
 import yaml from 'js-yaml';
+import { SemVer } from '../../lib/semver.js';
 
 const _mig_log = get_logger('migrations');
 
@@ -1377,6 +1378,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_account_scopes(sq);
     await migrate_removed_event_rules(sq);
     await revoke_admin_test_tokens(sq);
+    await migrate_realm_team_list_versions(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -2089,5 +2091,70 @@ export async function revoke_admin_test_tokens(sq: Sequelize): Promise<void> {
         _mig_log.info('admin_test_tokens_revoked', { revoked: revoked.length });
     } catch (err) {
         _mig_log.error('admin_test_tokens_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+/** `cliq.settings` key marking the one-time realm team-list versions as done. */
+export const REALM_TEAM_LIST_VERSIONS_MIGRATION_KEY = 'migrate.realm_team_list_versions_2026_10';
+
+/**
+ * One time (Oct 2026, PLAN-realm-team-versions): the realm owns each team's version. Every entry on a realm's
+ * team list gets `version` — the one it already has when that version exists, else the team's latest published
+ * version. Entries whose team isn't in the catalog or has no version are removed (no daemon can install them).
+ * Prod before: 15 realms, 48 entries — 41 versioned, 7 removed. Safe to repeat; the key is recorded on success.
+ */
+export async function migrate_realm_team_list_versions(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.realms') AS r, to_regclass('cliq.team_versions') AS v`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; r: string | null; v: string | null }>;
+        if (!tables?.s || !tables?.r || !tables?.v) {
+            _mig_log.info('realm_team_list_versions_deferred', { reason: 'tables not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: REALM_TEAM_LIST_VERSIONS_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const versions = await sq.query(
+            `SELECT t."scope", t."name", v."version" FROM cliq."teams" t JOIN cliq."team_versions" v ON v."team_id" = t."id"`,
+            { type: QueryTypes.SELECT },
+        ) as Array<{ scope: string | null; name: string; version: string }>;
+        const by_team = new Map<string, string[]>();
+        for (const r of versions) {
+            const key = `${r.scope ?? ''}/${r.name}`;
+            by_team.set(key, [...(by_team.get(key) ?? []), r.version]);
+        }
+
+        const realms = await sq.query(
+            `SELECT "id", "team_list" FROM cliq."realms" WHERE jsonb_array_length(COALESCE("team_list", '[]'::jsonb)) > 0`,
+            { type: QueryTypes.SELECT },
+        ) as Array<{ id: string; team_list: Array<{ scope: string; slug: string; version?: string }> }>;
+
+        let realms_changed = 0;
+        let versioned = 0;
+        const removed: string[] = [];
+        for (const realm of realms) {
+            const next: Array<{ scope: string; slug: string; version: string }> = [];
+            for (const e of realm.team_list ?? []) {
+                const have = by_team.get(`${e.scope}/${e.slug}`) ?? [];
+                if (have.length === 0) { removed.push(`${realm.id}:@${e.scope}/${e.slug}`); continue; }
+                const version = e.version && have.includes(e.version)
+                    ? e.version
+                    : SemVer.sort_desc(have.map((v) => ({ version: v })))[0]!.version;
+                if (version !== e.version) versioned++;
+                next.push({ scope: e.scope, slug: e.slug, version });
+            }
+            if (JSON.stringify(next) === JSON.stringify(realm.team_list)) continue;
+            await sq.query(`UPDATE cliq."realms" SET "team_list" = CAST(:list AS jsonb), "updated_at" = :now WHERE "id" = :id`,
+                { replacements: { list: JSON.stringify(next), now: Date.now(), id: realm.id } });
+            realms_changed++;
+        }
+
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: REALM_TEAM_LIST_VERSIONS_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('realm_team_list_versions_migrated', { realms: realms.length, realms_changed, versioned, removed: removed.length, removed_entries: removed });
+    } catch (err) {
+        _mig_log.error('realm_team_list_versions_migration_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }

@@ -21,7 +21,7 @@ import { randomUUID } from 'node:crypto';
 import {
     AccountInvite, CustomEvent, Daemon, HubEvent, NotificationChannel, NotificationRule,
     Org, OrgMember, OrgRole, Realm, RealmInvite, RealmMember, Review, Run, StoredArtifact,
-    Team, User, Workspace,
+    Team, TeamVersion, User, Workspace,
 } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
@@ -169,11 +169,14 @@ export async function seed_authz(app: Express): Promise<Seed> {
     const team_private = randomUUID();
     await Team.create({ id: team_public, name: `azpub${stamp}`, scope: 'cliq', visibility: 'public', listed: 1, author_id: ben.id } as never);
     await Team.create({ id: team_private, name: `azpriv${stamp}`, scope: null, visibility: 'private', listed: 0, author_id: mia.id } as never);
+    // A published version, so realms can add the public team (a realm records the version it runs).
+    await TeamVersion.create({ team_id: team_public, version: '1.0.0', package_path: `azpub${stamp}-1.0.0.zip`, workflow_json: '{"phases":[]}', manifest_yaml: `name: azpub${stamp}\nphases: []\n` } as never);
 
     async function cleanup(): Promise<void> {
         const users = await User.findAll({ where: { username: { [Op.in]: usernames } }, attributes: ['id'], raw: true });
         const ids = users.map((u) => String(u.id));
         const realm_ids = [A1, A2, B1];
+        await TeamVersion.destroy({ where: { team_id: { [Op.in]: [team_public, team_private] } } });
         await Team.destroy({ where: { id: { [Op.in]: [team_public, team_private] } } });
         await AccountInvite.destroy({ where: { org_id: { [Op.in]: [acme, beta] } } });
         await RealmInvite.destroy({ where: { realm_id: { [Op.in]: realm_ids } } });
