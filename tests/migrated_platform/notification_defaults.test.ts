@@ -131,16 +131,16 @@ describe.skipIf(!has_postgres)('notification defaults (A1)', () => {
 			return realm.id;
 		}
 
-		it('All org members and All realm members: locked, in-app + email to members', async () => {
+		it('All org members and All realm members: locked, one shared in-app notice (members are reached their way)', async () => {
 			const org_id = await new_org();
 			const org_ch = (await NotificationChannel.findOne({ where: { org_id, system_key: ORG_IN_APP_CHANNEL_KEY }, raw: true }))!;
 			expect(org_ch).toMatchObject({ name: ORG_MEMBERS_CHANNEL_NAME, locked: true, enabled: 1 });
-			expect(await dest_types(org_ch.id)).toEqual(['cliqhub', 'email:members']);
+			expect(await dest_types(org_ch.id)).toEqual(['cliqhub']);
 
 			const realm_id = await new_realm();
 			const realm_ch = (await NotificationChannel.findByPk(realm_members_channel_id(realm_id), { raw: true }))!;
 			expect(realm_ch).toMatchObject({ system_key: REALM_MEMBERS_CHANNEL_KEY, locked: true, enabled: 1 });
-			expect(await dest_types(realm_ch.id)).toEqual(['cliqhub', 'email:members']);
+			expect(await dest_types(realm_ch.id)).toEqual(['cliqhub']);
 		});
 
 		it('a built-in channel can\'t be renamed, switched off, re-pointed or removed (409 locked)', async () => {

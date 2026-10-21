@@ -20,6 +20,7 @@ import {
 	postgres_reachable,
 } from './helpers/control_plane_store.js';
 import { RealmService } from '../../src/services/realm.service.js';
+import { ensure_personal_channel } from '../../src/services/per_user_channel.service.js';
 import { EventSubmitService } from '../../src/services/events_service.js';
 import { OrgSeedService } from '../../src/services/org_seed.service.js';
 import { DELIVERER_BY_PROVIDER } from '../../src/notifications/deliverers/index.js';
@@ -90,6 +91,7 @@ describe.skipIf(!has_postgres)('A4 — email to a built-in channel\'s members', 
 		await Realm.destroy({ where: { id: realms } });
 		await OrgMember.destroy({ where: { org_id: orgs } });
 		await Org.destroy({ where: { id: orgs } });
+		await NotificationChannel.destroy({ where: { user_id: users } as never });
 		await User.destroy({ where: { id: users }, force: true } as never);
 		await close_test_control_plane_store();
 		restore_env();
@@ -157,8 +159,10 @@ describe.skipIf(!has_postgres)('A4 — email to a built-in channel\'s members', 
 		await expect(email_deliverer.deliver({ members: true }, payload, { channel_id })).rejects.toThrow(/email delivery failed/);
 	});
 
-	it('end to end: Unknown channel reaches the realm through its fixed rule — in-app and by email', async () => {
+	it('end to end: Unknown channel reaches the realm through its fixed rule — in-app, and by email their way', async () => {
 		const amy = await person();
+		// Members are reached their way: through their personal channel (account email by default).
+		await ensure_personal_channel(amy.id, amy.email.split('@')[0]);
 		const realm_id = await realm_with([amy]);
 
 		const ev = await EventSubmitService.submit({

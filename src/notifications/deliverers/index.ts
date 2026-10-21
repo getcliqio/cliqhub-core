@@ -10,7 +10,7 @@ import { EmailDeliverer } from './email_deliverer.js';
 import { WebhookDeliverer } from './webhook_deliverer.js';
 import { CliqHubDeliverer } from './cliqhub_deliverer.js';
 
-export { AbstractChannelDeliverer } from './abstract_channel_deliverer.js';
+export { AbstractChannelDeliverer, EventSends } from './abstract_channel_deliverer.js';
 
 export const DELIVERER_BY_PROVIDER: Record<ChannelProvider, AbstractChannelDeliverer> = {
 	slack: new SlackDeliverer(),

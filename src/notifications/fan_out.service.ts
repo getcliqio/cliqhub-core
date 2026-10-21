@@ -14,7 +14,8 @@ import {
 	type NotificationPayload,
 } from './types.js';
 import type { Destination } from './channel_config.js';
-import type { DeliveryContext } from './deliverers/abstract_channel_deliverer.js';
+import { EventSends, type DeliveryContext } from './deliverers/abstract_channel_deliverer.js';
+import { ORG_IN_APP_CHANNEL_KEY, REALM_MEMBERS_CHANNEL_KEY } from './defaults.js';
 import { DELIVERER_BY_PROVIDER } from './deliverers/index.js';
 import type { EmailDeliverer } from './deliverers/email_deliverer.js';
 import { plan_fan_out, read_notify_channels_intent } from './notify_intent.js';
@@ -294,15 +295,20 @@ async function deliver_for_channel_ids(
 	channel_ids: string[],
 	event: SubmittedEvent,
 ): Promise<NotificationDispatchStatus> {
-	const channels = await NotificationService.find_enabled_channels(channel_ids);
-	if (channels.length === 0) return 'skipped';
+	const found = await NotificationService.find_enabled_channels(channel_ids);
+	if (found.length === 0) return 'skipped';
 
 	const payload = await to_payload(event);
 	let failures = 0;
+	// One event: each endpoint gets it once. Shared channels first, so their in-app notice covers members
+	// before any personal copy is considered.
+	const sends = new EventSends();
+	const channels = [...found].sort((a, b) => Number(Boolean((a as { user_id?: unknown }).user_id)) - Number(Boolean((b as { user_id?: unknown }).user_id)));
 
 	for (const channel of channels) {
 		const destinations = parse_channel_destinations(channel);
-		if (destinations.length === 0) {
+		const members_way = MEMBERS_CHANNEL_KEYS.has(String((channel as { system_key?: unknown }).system_key ?? ''));
+		if (destinations.length === 0 && !members_way) {
 			log.warn(`skip channel ${channel.id}: no destinations configured`);
 			failures += 1;
 			continue;
@@ -313,11 +319,13 @@ async function deliver_for_channel_ids(
 		 *  actually take effect at delivery time. */
 		const channel_secret = (channel as unknown as { secret: string | null }).secret ?? null;
 
-		const ok = await deliver_destinations(
+		let ok = await deliver_destinations(
 			destinations, payload, new Set(),
-			{ channel_id: channel.id },
+			{ channel_id: channel.id, sends },
 			channel_secret,
 		);
+		// "All org / realm members": each member also gets it their way (their personal channel's other destinations).
+		if (members_way && await deliver_to_members_their_way(channel, payload, sends)) ok = true;
 		if (!ok) {
 			failures += 1;
 			emit_notification_failed(event, channel.id, `All destinations failed for channel '${channel.name}'`).catch(() => {});
@@ -326,6 +334,40 @@ async function deliver_for_channel_ids(
 
 	if (failures > 0 && failures >= channels.length) return 'failed';
 	return 'dispatched';
+}
+
+/** The built-in channels whose audience is their members, each reached their own way. */
+const MEMBERS_CHANNEL_KEYS: ReadonlySet<string> = new Set([ORG_IN_APP_CHANNEL_KEY, REALM_MEMBERS_CHANNEL_KEY]);
+
+/**
+ * "All org members" / "All realm members": every member (active org members; the realm's member users) gets the
+ * event through their personal channel's destinations other than in-app — the channel's own in-app notice already
+ * reaches them. Shares the event's sends, so nobody gets an endpoint twice. True when anything was delivered.
+ */
+async function deliver_to_members_their_way(channel: unknown, payload: NotificationPayload, sends: EventSends): Promise<boolean> {
+	const c = channel as { id: string; realm_id?: string | null; org_id?: string | null };
+	const { RealmMember, OrgMember, User, NotificationChannel, ChannelDestination } = await import('../models/index.js');
+	const ids = c.realm_id
+		? (await RealmMember.findAll({ where: { realm_id: c.realm_id, member_type: 'user' } as never, attributes: ['member_id'], raw: true })).map((m) => String((m as { member_id: string }).member_id))
+		: c.org_id
+			? (await OrgMember.findAll({ where: { org_id: c.org_id, status: 'active' } as never, attributes: ['user_id'], raw: true })).map((m) => String((m as { user_id: string }).user_id))
+			: [];
+	if (ids.length === 0) return false;
+	// Only people who can be reached (not suspended or deleted).
+	const people = (await User.findAll({ where: { id: ids, status: 'active', deleted_at: null } as never, attributes: ['id'], raw: true })).map((u) => String((u as { id: string }).id));
+	if (people.length === 0) return false;
+	const personal = await NotificationChannel.findAll({
+		where: { user_id: people, enabled: 1 } as never,
+		include: [{ model: ChannelDestination, as: 'destinations_rows' }],
+	});
+	let any = false;
+	for (const pc of personal) {
+		const dests = parse_channel_destinations(pc).filter((d) => d.type !== 'cliqhub');
+		if (dests.length === 0) continue;
+		const secret = (pc as unknown as { secret: string | null }).secret ?? null;
+		if (await deliver_destinations(dests, payload, new Set(), { channel_id: pc.id, sends }, secret)) any = true;
+	}
+	return any;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,7 +413,10 @@ async function deliver_destinations(
 			}
 			visited.add(dest.name);
 
-			const target = await NotificationService.find_channel_by_name(dest.name);
+			// Within the event's realm and its org (never another org's channel of the same name).
+			const target = payload.realm_id
+				? await NotificationService.find_realm_usable_channel(dest.name, String(payload.realm_id))
+				: await NotificationService.find_channel_by_name(dest.name);
 			if (!target) {
 				log.warn(`channel_ref '${dest.name}' not found, skipping`);
 				continue;
@@ -382,7 +427,7 @@ async function deliver_destinations(
 				const child_secret = (target as unknown as { secret: string | null }).secret ?? null;
 				const ok = await deliver_destinations(
 					child_dests, payload, visited,
-					{ channel_id: target.id }, child_secret,
+					{ channel_id: target.id, sends: context?.sends }, child_secret,
 				);
 				if (ok) any_success = true;
 			}
@@ -408,6 +453,13 @@ async function deliver_destinations(
 			if (channel_secret) {
 				config.secret = channel_secret;
 			}
+		}
+
+		// Once per event: a Slack or webhook URL already posted to is skipped.
+		const url = provider === 'slack' ? config.webhook_url : provider === 'webhook' ? config.url : null;
+		if (context?.sends && typeof url === 'string' && url && !context.sends.take(`${provider}|${url}`)) {
+			any_success = true;
+			continue;
 		}
 
 		try {

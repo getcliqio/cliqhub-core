@@ -1382,6 +1382,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await revoke_admin_test_tokens(sq);
     await migrate_realm_team_list_versions(sq);
     await migrate_personal_channel_per_user(sq);
+    await migrate_builtin_members_their_way(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -2236,5 +2237,47 @@ export async function migrate_personal_channel_per_user(sq: Sequelize): Promise<
         _mig_log.info('personal_channel_per_user_migrated', { users: by_user.size, copies_merged: merged, destinations_moved: moved_destinations });
     } catch (err) {
         _mig_log.error('personal_channel_per_user_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+/** `cliq.settings` key marking the one-time switch of the built-in member channels as done. */
+export const BUILTIN_MEMBERS_THEIR_WAY_MIGRATION_KEY = 'migrate.builtin_members_their_way_2026_10';
+
+/**
+ * One time (Oct 2026, PLAN-personal-channel Core B): "All org members" / "All realm members" stop emailing every
+ * member themselves — each member is now reached their way through their personal channel (which has their account
+ * email by default). Removes their `email {members:true}` destination and updates their lock text. Safe to repeat.
+ */
+export async function migrate_builtin_members_their_way(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.channel_destinations') AS d`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; d: string | null }>;
+        if (!tables?.s || !tables?.d) {
+            _mig_log.info('builtin_members_their_way_deferred', { reason: 'tables not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: BUILTIN_MEMBERS_THEIR_WAY_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const removed = await sq.query(
+            `DELETE FROM cliq."channel_destinations" d USING cliq."notification_channels" c
+             WHERE d."channel_id" = c."id" AND c."system_key" IN ('org.in_app', 'realm.members')
+               AND d."type" = 'email' AND d."config"->>'members' = 'true'
+             RETURNING d."id"`,
+            { type: QueryTypes.SELECT },
+        );
+        await sq.query(
+            `UPDATE cliq."notification_channels" SET "lock_reason" = CASE "system_key"
+                 WHEN 'org.in_app' THEN 'Built in — everyone in the org, each the way they chose.'
+                 ELSE 'Built in — everyone in the realm, each the way they chose.' END
+             WHERE "system_key" IN ('org.in_app', 'realm.members')`,
+        );
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: BUILTIN_MEMBERS_THEIR_WAY_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('builtin_members_their_way_migrated', { email_destinations_removed: removed.length });
+    } catch (err) {
+        _mig_log.error('builtin_members_their_way_migration_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }

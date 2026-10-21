@@ -31,18 +31,20 @@ export const ORG_IN_APP_CHANNEL_KEY = 'org.in_app';
 /** Name of the org's built-in channel to all its members. */
 export const ORG_MEMBERS_CHANNEL_NAME = 'All org members';
 
-/** The two destinations of a built-in channel: in-app, and email to each of its members. */
+/**
+ * A built-in channel's own destination: one shared in-app notice. Each member is also reached their way — their
+ * personal channel's other destinations (email, Slack…) — when it is sent (fan_out `deliver_to_members_their_way`).
+ */
 const TO_MEMBERS: readonly BuiltinDestination[] = [
     { type: 'cliqhub', config: {} },
-    { type: 'email', config: { members: true } },
 ];
 
-/** The channels a new org starts with: "All org members" — in-app and email to every member of the org. */
+/** The channels a new org starts with: "All org members" — every member of the org, each the way they chose. */
 export const ORG_BUILTIN_CHANNELS: readonly BuiltinChannelSpec[] = [
     {
         system_key: ORG_IN_APP_CHANNEL_KEY,
         name: ORG_MEMBERS_CHANNEL_NAME,
-        lock_reason: 'Built in — in-app and email to every member of the org.',
+        lock_reason: 'Built in — everyone in the org, each the way they chose.',
         destinations: TO_MEMBERS,
     },
 ];
@@ -58,11 +60,11 @@ export function realm_members_channel_id(realm_id: string): string {
 /** `system_key` of a realm's "All realm members" channel. */
 export const REALM_MEMBERS_CHANNEL_KEY = 'realm.members';
 
-/** A realm's "All realm members" channel: in-app and email to every member of the realm. */
+/** A realm's "All realm members" channel: every member of the realm, each the way they chose. */
 export const REALM_MEMBERS_CHANNEL: BuiltinChannelSpec = {
     system_key: REALM_MEMBERS_CHANNEL_KEY,
     name: REALM_MEMBERS_CHANNEL_NAME,
-    lock_reason: 'Built in — in-app and email to every member of the realm.',
+    lock_reason: 'Built in — everyone in the realm, each the way they chose.',
     destinations: TO_MEMBERS,
 };
 

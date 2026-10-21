@@ -95,11 +95,11 @@ describe.skipIf(!has_postgres)('PLAN-channels E2: explicit channels', () => {
 		await close_test_control_plane_store();
 	});
 
-	it('a new realm gets "All realm members" (in-app + email to its members) and the default rules to it', async () => {
+	it('a new realm gets "All realm members" (in-app; members reached their way) and the default rules to it', async () => {
 		const realm = await new_realm();
 		const ch = await NotificationChannel.findOne({ where: { realm_id: realm.id, name: REALM_MEMBERS_CHANNEL_NAME }, raw: true });
 		expect(ch).toBeTruthy();
-		expect((await ChannelDestination.findAll({ where: { channel_id: ch!.id }, raw: true })).map((d) => d.type)).toEqual(['cliqhub', 'email']);
+		expect((await ChannelDestination.findAll({ where: { channel_id: ch!.id }, raw: true })).map((d) => d.type)).toEqual(['cliqhub']);
 		const rules = await NotificationRule.findAll({ where: { realm_id: realm.id }, raw: true });
 		expect(rules.map((r) => r.event).sort()).toEqual([...REALM_DEFAULT_RULE_EVENTS, ...REALM_FIXED_RULES.map((f) => f.event)].sort());
 		expect(rules.every((r) => r.channel_id === ch!.id)).toBe(true);

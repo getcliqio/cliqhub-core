@@ -174,6 +174,21 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 		if (to.length === 0 && config.account === true) {
 			to = await account_address(context?.channel_id);
 		}
+		let cc = addresses(config.cc);
+		let bcc = addresses(config.bcc);
+		// Once per event: an address this event already emailed is left out.
+		const sends = context?.sends;
+		if (sends) {
+			const fresh = (list: EmailAddress[]) => list.filter((a) => sends.take(`email|${a.email.toLowerCase()}`));
+			const any_before = to.length + cc.length + bcc.length > 0;
+			to = fresh(to); cc = fresh(cc); bcc = fresh(bcc);
+			if (to.length === 0 && cc.length > 0) { to = cc; cc = []; }
+			if (to.length === 0 && bcc.length > 0) { to = bcc; bcc = []; }
+			if (any_before && to.length === 0) {
+				log.debug('email_already_sent', { event: payload.event, channel_id: context?.channel_id ?? null });
+				return;
+			}
+		}
 		if (to.length === 0) {
 			log.warn(config.account === true ? 'email_account_without_address' : 'email_destination_without_to', {
 				event: payload.event, channel_id: context?.channel_id ?? null,
@@ -187,7 +202,7 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 		const rendered = render_channel_email(payload, public_app_url());
 		try {
 			await this._sender.send({
-				to, cc: addresses(config.cc), bcc: addresses(config.bcc),
+				to, cc, bcc,
 				subject: rendered.subject, html: rendered.html, text: rendered.text, tags: [payload.event],
 			});
 		} catch (err) {
@@ -197,7 +212,8 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 
 	/** One email per member of a built-in channel; a failure for one person doesn't stop the rest. */
 	private async _deliver_to_members(payload: NotificationPayload, context?: DeliveryContext): Promise<void> {
-		const people = await members_addresses(context?.channel_id);
+		const sends = context?.sends;
+		const people = (await members_addresses(context?.channel_id)).filter((p) => !sends || sends.take(`email|${p.email.toLowerCase()}`));
 		if (people.length === 0) {
 			log.debug('email_members_none', { event: payload.event, channel_id: context?.channel_id ?? null });
 			return;
