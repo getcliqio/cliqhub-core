@@ -304,6 +304,7 @@ export class OrgsService {
         }
         const channel_where: Record<string | symbol, unknown> = {
             [Op.or]: scopes,
+            user_id: { [Op.is]: null },
             enabled: 1,
         };
         if (query) {
@@ -316,10 +317,22 @@ export class OrgsService {
             limit: 100,
         });
 
-        return {
-            users: [],
-            channels: channel_rows.map((c) => ({ id: c.id, name: c.name })),
-        };
+        // People: the personal channels of the org's active members (names only — their destinations are theirs).
+        const { OrgMember } = await import('../models/index.js');
+        const member_ids = (await OrgMember.findAll({ where: { org_id, status: 'active' } as never, attributes: ['user_id'], raw: true }))
+            .map((m) => String((m as { user_id: string }).user_id));
+        const people = member_ids.length === 0 ? [] : await NotificationChannel.findAll({
+            where: { user_id: { [Op.in]: member_ids }, enabled: 1, ...(query ? { name: { [Op.iLike]: `%${query}%` } } : {}) } as never,
+            attributes: ['id', 'name'],
+            order: [['name', 'ASC']],
+            limit: 100,
+        });
+
+        const channels = [...channel_rows, ...people]
+            .map((c) => ({ id: c.id, name: c.name }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .slice(0, 100);
+        return { users: [], channels };
     }
 
     // ─── Create org (site admin) ────────────────────────────────────
@@ -569,16 +582,7 @@ export class OrgsService {
         // Revoke membership from all org realms
         await OrgRealmSyncService.sync_member_removed(params.org_id, params.user_id);
 
-        /** Delete personal notification channel — CASCADE removes its destinations. */
-        try {
-            const { NotificationChannel } = await import('../models/index.js');
-            await NotificationChannel.destroy({
-                where: { user_id: params.user_id, org_id: params.org_id },
-            });
-        } catch (err) {
-            log.debug('per_user_channel_remove_failed', { error: err instanceof Error ? err.message : String(err) });
-            /* Best-effort — channel may not exist. */
-        }
+        // Their personal channel belongs to the account, not the org: it stays.
 
         return { removed: true };
     }

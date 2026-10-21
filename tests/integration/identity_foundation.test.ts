@@ -162,7 +162,8 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
         it('the boot migrations keep org and personal channels and drop only orphan realm-less ones', async () => {
             const seeded = await NotificationChannel.findAll({ where: { org_id: s.acme, system_key: { [Op.ne]: null } }, attributes: ['id'], raw: true });
             expect(seeded).toHaveLength(1);
-            const personal = await NotificationChannel.findOne({ where: { org_id: s.acme, user_id: { [Op.ne]: null } }, attributes: ['id'], raw: true });
+            // Personal channels belong to the account (no org): an acme member's.
+            const personal = await NotificationChannel.findOne({ where: { user_id: s.user.omar }, attributes: ['id'], raw: true });
             expect(personal).toBeTruthy();
             const orphan_id = randomUUID();
             await NotificationChannel.create({

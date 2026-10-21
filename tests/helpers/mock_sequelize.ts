@@ -70,7 +70,7 @@ export function setup_sequelize_mocks() {
     }));
 
     vi.mock('../../src/services/per_user_channel.service.js', () => ({
-        ensure_per_user_channel: vi.fn().mockResolvedValue(undefined),
+        ensure_personal_channel: vi.fn().mockResolvedValue(undefined),
     }));
 
     vi.mock('../../src/lib/log.js', () => ({

@@ -23,7 +23,7 @@ import { NotificationService } from '../../src/services/notification.service.js'
 import { REALM_DEFAULT_RULE_EVENTS, REALM_FIXED_RULES, REALM_MEMBERS_CHANNEL_NAME } from '../../src/notifications/defaults.js';
 import { InAppNotificationService } from '../../src/services/in_app_notification.service.js';
 import { EventSubmitService } from '../../src/services/events_service.js';
-import { ensure_per_user_channel } from '../../src/services/per_user_channel.service.js';
+import { ensure_personal_channel } from '../../src/services/per_user_channel.service.js';
 import { CliqHubDeliverer } from '../../src/notifications/deliverers/cliqhub_deliverer.js';
 import {
 	add_realm_review_rule,
@@ -130,7 +130,7 @@ describe.skipIf(!has_postgres)('PLAN-channels E2: explicit channels', () => {
 
 	it('in-app to a personal channel reaches only its owner', async () => {
 		const realm = await new_realm();
-		const personal = await ensure_per_user_channel(AMY, realm.org_id, 'amy');
+		const personal = await ensure_personal_channel(AMY, 'amy');
 		await join(AMY, realm.org_id, realm.id);
 		await join(OUTSIDER, realm.org_id, realm.id);
 		await new CliqHubDeliverer().deliver({}, { event: 'run.failed', message: 'just-amy', realm_id: realm.id }, { channel_id: personal });

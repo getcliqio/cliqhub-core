@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Op } from 'sequelize';
 
 import { NotificationChannelRepository } from '../repositories/notification_channel_repository.js';
 import { ChannelDestinationRepository } from '../repositories/channel_destination_repository.js';
@@ -11,6 +12,7 @@ const destination_repo = new ChannelDestinationRepository();
 /**
  * Destinations a new personal channel starts with: in-app, and email to the
  * account's current address (`account: true` is resolved when sending).
+ * In-app always stays (the owner can't remove it).
  */
 export const PERSONAL_CHANNEL_DESTINATIONS: ReadonlyArray<{ type: string; config: Record<string, unknown> }> = [
     { type: 'cliqhub', config: {} },
@@ -18,27 +20,18 @@ export const PERSONAL_CHANNEL_DESTINATIONS: ReadonlyArray<{ type: string; config
 ];
 
 /**
- * Ensure a person's personal channel exists for the given user + org
- * combination. Idempotent — creates if missing, with in-app and email
- * ({@link PERSONAL_CHANNEL_DESTINATIONS}); an existing channel is left as it is.
- *
- * Uses `(user_id, org_id)` unique index for lookup. Channel ID is a
- * standard UUID. Returns the channel ID.
+ * A person's personal channel — "how to reach me". One per user for the whole account (no org, no realm),
+ * named after the username. Idempotent: creates it when missing, with {@link PERSONAL_CHANNEL_DESTINATIONS};
+ * an existing one is left as it is. Returns the channel id.
  */
-export async function ensure_per_user_channel(
-    user_id: string,
-    org_id: string,
-    username: string,
-): Promise<string> {
+export async function ensure_personal_channel(user_id: string, username: string): Promise<string> {
     const now = Date.now();
-
-    /** Look up by the proper columns, not a mangled ID. */
     const [channel, created] = await channel_repo.find_or_create({
-        where: { user_id, org_id },
+        where: { user_id },
         defaults: {
             id: randomUUID(),
             realm_id: null,
-            org_id,
+            org_id: null,
             user_id,
             name: username,
             enabled: 1,
@@ -60,9 +53,23 @@ export async function ensure_per_user_channel(
                 },
             });
         }
-
-        log.info('per_user_channel_created', { user_id, org_id, username, channel_id: channel.id });
+        log.info('personal_channel_created', { user_id, username, channel_id: channel.id });
     }
-
     return channel.id;
+}
+
+/**
+ * The personal channel of the user named `name`, when that user is an active member of `org_id` — how a name
+ * like "elan" reaches Elan from a realm of that org. Null when there's no such member.
+ */
+export async function find_member_personal_channel(name: string, org_id: string | null): Promise<{ id: string; user_id: string } | null> {
+    const username = name.trim().replace(/^@/, '');
+    if (!username || !org_id) return null;
+    const { User, OrgMember, NotificationChannel } = await import('../models/index.js');
+    const user = await User.findOne({ where: { username: { [Op.iLike]: username }, deleted_at: null } as never, attributes: ['id'], raw: true }) as { id: string } | null;
+    if (!user) return null;
+    const member = await OrgMember.findOne({ where: { org_id, user_id: String(user.id), status: 'active' } as never, attributes: ['user_id'], raw: true });
+    if (!member) return null;
+    const channel = await NotificationChannel.findOne({ where: { user_id: String(user.id), enabled: 1 } as never, attributes: ['id', 'user_id'], raw: true }) as { id: string; user_id: string } | null;
+    return channel ? { id: String(channel.id), user_id: String(channel.user_id) } : null;
 }

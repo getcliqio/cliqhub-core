@@ -23,7 +23,9 @@ export const NotificationChannelsGetInput = z.object({
     enabled: z.boolean().optional().describe('When true, only return enabled channels'),
     ids: z.array(z.string()).optional().describe('Optional id set; with enabled=true, resolves those ids then filters to the realm'),
     query: z.string().optional().describe('Substring match on channel name'),
+    mine: z.boolean().optional().describe('When true, only the caller\'s own personal channel (how to reach them), with its destinations'),
 }).superRefine((data, ctx) => {
+    if (data.mine) return;
     const has_realm = Boolean(data.realm_id?.trim());
     const want_account = data.account === true || !has_realm;
     if (want_account && has_realm) {

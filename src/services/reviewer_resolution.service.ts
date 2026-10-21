@@ -100,8 +100,8 @@ interface ResolvedChannel {
 }
 
 /**
- * Look up enabled channels by name: the realm's own (when given) and the org's (shared + personal).
- * A realm channel wins over an org channel of the same name.
+ * Look up enabled channels by name: the realm's own (when given), the org's, then the personal channel of
+ * a member of the org with that username. A realm channel wins over an org channel of the same name.
  * Returns a map of target string → channel info.
  */
 async function _resolve_channel_names(
@@ -132,6 +132,14 @@ async function _resolve_channel_names(
         if (original) {
             result.set(original, { id: ch.id, user_id: ch.user_id ?? null });
         }
+    }
+
+    // A name no org/realm channel has: the personal channel of the person with that username, when in the org.
+    const { find_member_personal_channel } = await import('./per_user_channel.service.js');
+    for (const t of targets) {
+        if (result.has(t)) continue;
+        const person = await find_member_personal_channel(t, org_id);
+        if (person) result.set(t, { id: person.id, user_id: person.user_id });
     }
 
     return result;

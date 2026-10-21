@@ -13,7 +13,7 @@ vi.mock('../../../src/auth/password.js', () => ({
 }));
 
 vi.mock('../../../src/services/per_user_channel.service.js', () => ({
-    ensure_per_user_channel: vi.fn().mockResolvedValue(undefined),
+    ensure_personal_channel: vi.fn().mockResolvedValue(undefined),
 }));
 
 import * as password from '../../../src/auth/password.js';

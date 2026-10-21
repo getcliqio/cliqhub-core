@@ -258,10 +258,14 @@ export class NotificationService {
 		/** Org context — filters org-level channels to this org. */
 		org_id?: string;
 		query?: string;
+		/** Only this user's personal channel. Without it, personal channels are never listed (they're private). */
+		mine_user_id?: string;
 	}): Promise<ChannelRecord[]> {
 		log.debug('list_channels', { realm_id: filters?.realm_id, org_id: filters?.org_id });
 		// Build scope filter: account (realm null) vs a concrete realm.
-		const where: Record<string, unknown> = {};
+		const where: Record<string, unknown> = filters?.mine_user_id
+			? { user_id: filters.mine_user_id }
+			: { user_id: { [Op.is]: null } };
 		if (filters?.account || filters?.org_id) {
 			where.realm_id = { [Op.is]: null };
 			if (filters?.org_id) {
@@ -343,8 +347,9 @@ export class NotificationService {
 	}
 
 	/**
-	 * A channel a realm can use, by name: the realm's own channel, else its org's (shared or a
-	 * person's). Used for names a run or a gate gives (notify channels, reviewers).
+	 * A channel a realm can use, by name: the realm's own channel, else its org's, else the personal channel of
+	 * the person with that username when they're in the realm's org. Used for names a run or a gate gives
+	 * (notify channels, reviewers, hug channels).
 	 */
 	static async find_realm_usable_channel(name: string, realm_id: string): Promise<ChannelRecord | null> {
 		const own = await NotificationService.find_channel_by_name(name, realm_id);
@@ -352,10 +357,14 @@ export class NotificationService {
 		const { Realm, ChannelDestination } = await import('../models/index.js');
 		const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'], raw: true });
 		if (!realm?.org_id) return null;
-		const ch = await channel_repo.find_one({ name, org_id: realm.org_id, realm_id: { [Op.is]: null } } as any, {
-			include: [{ model: ChannelDestination, as: 'destinations_rows' }],
-		});
-		return ch ? NotificationService.to_channel_record(ch) : null;
+		const include = [{ model: ChannelDestination, as: 'destinations_rows' }];
+		const ch = await channel_repo.find_one({ name, org_id: realm.org_id, realm_id: { [Op.is]: null }, user_id: { [Op.is]: null } } as any, { include });
+		if (ch) return NotificationService.to_channel_record(ch);
+		const { find_member_personal_channel } = await import('./per_user_channel.service.js');
+		const person = await find_member_personal_channel(name, realm.org_id);
+		if (!person) return null;
+		const row = await channel_repo.find_one({ id: person.id } as any, { include });
+		return row ? NotificationService.to_channel_record(row) : null;
 	}
 
 	/**
@@ -486,6 +495,10 @@ export class NotificationService {
 		}
 
 		if (data.destinations !== undefined) {
+			// A personal channel always keeps in-app, so its person can't miss everything.
+			if (existing.user_id && !data.destinations.some((d) => (d as { type?: unknown })?.type === 'cliqhub')) {
+				throw new ApiError('invalid_params', 'Your personal channel always keeps in-app (CliqHub) — add or remove the others', 422);
+			}
 			NotificationService.assert_account_email_owner(data.destinations, existing.user_id ?? null);
 			NotificationService.assert_no_members_email(data.destinations);
 			/** Replace all destination rows. */

@@ -15,7 +15,7 @@ import type { TokenRepository } from '../repositories/token_repository.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 import type { EnvConfig } from '../config/env.js';
 import { RealmService } from '../services/realm.service.js';
-import { ensure_per_user_channel } from '../services/per_user_channel.service.js';
+import { ensure_personal_channel } from '../services/per_user_channel.service.js';
 import { ensure_account_org, ensure_account_scope } from './account_org.js';
 import { get_logger } from '../lib/log.js';
 
@@ -163,9 +163,9 @@ export class AuthService {
             norm_username,
         );
 
-        /** Create per-user in-app notification channel for the new org (best-effort). */
+        /** Their personal channel — one for the whole account (best-effort). */
         try {
-            await ensure_per_user_channel(user.id, org_id, norm_username);
+            await ensure_personal_channel(String(user.id), norm_username);
         } catch (err) {
             log.warn('per_user_channel_failed', { error: err instanceof Error ? err.message : String(err) });
             /* Non-fatal — channel will be created on next login or backfill. */

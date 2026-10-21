@@ -44,7 +44,7 @@ vi.mock('../../../src/services/org_realm_sync_service.js', () => ({
 }));
 
 vi.mock('../../../src/services/per_user_channel.service.js', () => ({
-    ensure_per_user_channel: vi.fn().mockResolvedValue(undefined),
+    ensure_personal_channel: vi.fn().mockResolvedValue(undefined),
 }));
 
 /**

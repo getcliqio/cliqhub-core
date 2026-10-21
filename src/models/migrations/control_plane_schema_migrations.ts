@@ -993,8 +993,11 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     /** Add user_id column to notification_channels (must precede backfill). */
     await run(`ALTER TABLE cliq."notification_channels"
         ADD COLUMN IF NOT EXISTS "user_id" UUID`);
-    await run(`CREATE UNIQUE INDEX IF NOT EXISTS "notification_channels_user_org_uidx"
-        ON cliq."notification_channels" ("user_id", "org_id")
+    // One personal channel per user (PLAN-personal-channel). Fails quietly until the one-time merge of the
+    // old per-org copies has run (migrate_personal_channel_per_user creates it then).
+    await run(`DROP INDEX IF EXISTS cliq."notification_channels_user_org_uidx"`);
+    await run(`CREATE UNIQUE INDEX IF NOT EXISTS "notification_channels_user_uidx"
+        ON cliq."notification_channels" ("user_id")
         WHERE "user_id" IS NOT NULL`);
 
     /**
@@ -1324,7 +1327,7 @@ async function coerce_user_id_columns_to_uuid(sq: Sequelize): Promise<void> {
 
 async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     try {
-        /** Insert missing channel rows. */
+        /** A personal channel for every user who has none — one per account, no org (PLAN-personal-channel). */
         await sq.query(`
             INSERT INTO cliq."notification_channels"
                 ("id", "realm_id", "org_id", "user_id", "name",
@@ -1332,18 +1335,17 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
             SELECT
                 gen_random_uuid()::TEXT,
                 NULL,
-                om."org_id",
-                om."user_id",
+                NULL,
+                u."id",
                 u."username",
                 1,
                 EXTRACT(EPOCH FROM NOW()) * 1000,
                 EXTRACT(EPOCH FROM NOW()) * 1000
-            FROM cliq."org_members" om
-            JOIN cliq."users" u ON u."id" = om."user_id"
-            WHERE u."username" IS NOT NULL
+            FROM cliq."users" u
+            WHERE u."username" IS NOT NULL AND u."deleted_at" IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM cliq."notification_channels" nc
-                WHERE nc."user_id" = om."user_id" AND nc."org_id" = om."org_id"
+                WHERE nc."user_id"::text = u."id"::text
             )
         `);
 
@@ -1379,6 +1381,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_removed_event_rules(sq);
     await revoke_admin_test_tokens(sq);
     await migrate_realm_team_list_versions(sq);
+    await migrate_personal_channel_per_user(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -2156,5 +2159,82 @@ export async function migrate_realm_team_list_versions(sq: Sequelize): Promise<v
         _mig_log.info('realm_team_list_versions_migrated', { realms: realms.length, realms_changed, versioned, removed: removed.length, removed_entries: removed });
     } catch (err) {
         _mig_log.error('realm_team_list_versions_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+/** `cliq.settings` key marking the one-time merge of per-org personal channels as done. */
+export const PERSONAL_CHANNEL_PER_USER_MIGRATION_KEY = 'migrate.personal_channel_per_user_2026_10';
+
+/**
+ * One time (Oct 2026, PLAN-personal-channel): one personal channel per user, for the whole account. A user's
+ * per-org copies are merged into the oldest: it loses its org; the others' destinations it lacks (same type +
+ * config) move onto it; rules, subscriptions, review notifications and review policies that name a copy now name
+ * it; the copies are deleted. Then the one-per-user unique index. Safe to repeat; the key is recorded on success.
+ */
+export async function migrate_personal_channel_per_user(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.notification_channels') AS c`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; c: string | null }>;
+        if (!tables?.s || !tables?.c) {
+            _mig_log.info('personal_channel_per_user_deferred', { reason: 'tables not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: PERSONAL_CHANNEL_PER_USER_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const rows = await sq.query(
+            `SELECT "id", "user_id"::text AS "user_id", "org_id" FROM cliq."notification_channels"
+             WHERE "user_id" IS NOT NULL ORDER BY "user_id", "created_at" ASC, "id" ASC`,
+            { type: QueryTypes.SELECT },
+        ) as Array<{ id: string; user_id: string; org_id: string | null }>;
+        const by_user = new Map<string, string[]>();
+        for (const r of rows) by_user.set(r.user_id, [...(by_user.get(r.user_id) ?? []), r.id]);
+
+        let merged = 0;
+        let moved_destinations = 0;
+        await sq.transaction(async (t) => {
+            for (const [, ids] of by_user) {
+                const [keep, ...copies] = ids;
+                for (const copy of copies) {
+                    // Destinations the kept channel lacks move over; the rest go with the copy.
+                    const [, moved] = await sq.query(
+                        `UPDATE cliq."channel_destinations" d SET "channel_id" = :keep
+                         WHERE d."channel_id" = :copy AND NOT EXISTS (
+                             SELECT 1 FROM cliq."channel_destinations" k
+                             WHERE k."channel_id" = :keep AND k."type" = d."type" AND k."config"::jsonb = d."config"::jsonb)`,
+                        { replacements: { keep, copy }, transaction: t },
+                    ) as [unknown, number];
+                    moved_destinations += Number(moved ?? 0);
+                    // Rules: repoint unless the kept channel already has the same rule, then drop the copy's.
+                    await sq.query(
+                        `UPDATE cliq."notification_rules" r SET "channel_id" = :keep
+                         WHERE r."channel_id" = :copy AND NOT EXISTS (
+                             SELECT 1 FROM cliq."notification_rules" k WHERE k."channel_id" = :keep
+                               AND k."event" = r."event" AND k."realm_id" IS NOT DISTINCT FROM r."realm_id"
+                               AND k."org_id" IS NOT DISTINCT FROM r."org_id" AND k."team_slug" IS NOT DISTINCT FROM r."team_slug")`,
+                        { replacements: { keep, copy }, transaction: t },
+                    );
+                    await sq.query(`DELETE FROM cliq."notification_rules" WHERE "channel_id" = :copy`, { replacements: { copy }, transaction: t });
+                    await sq.query(`UPDATE cliq."notification_subscriptions" SET "channel_id" = :keep WHERE "channel_id" = :copy`, { replacements: { keep, copy }, transaction: t });
+                    await sq.query(`UPDATE cliq."review_notifications" SET "channel_id" = :keep WHERE "channel_id" = :copy`, { replacements: { keep, copy }, transaction: t });
+                    await sq.query(
+                        `UPDATE cliq."reviews" SET "policy" = REPLACE("policy"::text, :copy_q, :keep_q)::jsonb WHERE "policy"::text LIKE :copy_like`,
+                        { replacements: { copy_q: `"${copy}"`, keep_q: `"${keep}"`, copy_like: `%"${copy}"%` }, transaction: t },
+                    );
+                    await sq.query(`DELETE FROM cliq."notification_channels" WHERE "id" = :copy`, { replacements: { copy }, transaction: t });
+                    merged++;
+                }
+                await sq.query(`UPDATE cliq."notification_channels" SET "org_id" = NULL, "realm_id" = NULL WHERE "id" = :keep`, { replacements: { keep }, transaction: t });
+            }
+        });
+        await sq.query(`CREATE UNIQUE INDEX IF NOT EXISTS "notification_channels_user_uidx" ON cliq."notification_channels" ("user_id") WHERE "user_id" IS NOT NULL`);
+
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: PERSONAL_CHANNEL_PER_USER_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('personal_channel_per_user_migrated', { users: by_user.size, copies_merged: merged, destinations_moved: moved_destinations });
+    } catch (err) {
+        _mig_log.error('personal_channel_per_user_migration_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }

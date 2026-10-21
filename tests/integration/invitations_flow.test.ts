@@ -462,8 +462,9 @@ describe.skipIf(!has_postgres)('invitations, orgs/new and the invite sweep', () 
             });
             expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
             expect(accepted.body.data).toMatchObject({ user: { id: gone.id, username: gone.username, status: 'active' }, membership: { status: 'active' } });
-            // Joining the org gives the member their in-app channel there.
-            expect(await NotificationChannel.count({ where: { user_id: gone.id, org_id: s.acme } })).toBe(1);
+            // Their personal channel is one for the whole account (no org) — joining an org doesn't add another.
+            expect(await NotificationChannel.count({ where: { user_id: gone.id } })).toBe(1);
+            expect(await NotificationChannel.count({ where: { user_id: gone.id, org_id: s.acme } })).toBe(0);
             expect(typeof accepted.body.data.token).toBe('string');
             expect((await post('/v1/orgs/get', accepted.body.data.token)).status).toBe(200);
             const signed_in = await post('/internal/auth/authenticate_user', null, { username: gone.username, password: 'back-again-pass' });

@@ -24,7 +24,7 @@ import {
 import { HugReviewsService } from '../../src/services/hug_reviews.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
-import { ensure_per_user_channel } from '../../src/services/per_user_channel.service.js';
+import { ensure_personal_channel } from '../../src/services/per_user_channel.service.js';
 import { DELIVERER_BY_PROVIDER } from '../../src/notifications/deliverers/index.js';
 import type { EmailDeliverer } from '../../src/notifications/deliverers/email_deliverer.js';
 import { NoopEmailSender } from '../../src/lib/email/noop_email_sender.js';
@@ -39,6 +39,8 @@ import {
 	InAppNotification,
 	NotificationChannel,
 	NotificationRule,
+	Org,
+	OrgMember,
 	Realm,
 	RealmMember,
 	Review,
@@ -113,6 +115,10 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 		await Realm.destroy({ where: {} });
 		await User.destroy({ where: { id: KAI }, force: true } as never);
 		await User.create({ id: KAI, username: KAI_NAME, email: 'kai@cliq.test', status: 'active', role: 'user', password_hash: 'x' } as never);
+		// A name reaches a person from a realm of an org they're in.
+		await OrgMember.destroy({ where: { org_id: ORG, user_id: KAI } as never });
+		await Org.findOrCreate({ where: { id: ORG } as never, defaults: { id: ORG, slug: 'legacy-org-one', display_name: 'Legacy org' } as never });
+		await OrgMember.create({ org_id: ORG, user_id: KAI, role: 'member', status: 'active' } as never);
 		await Setting.destroy({ where: { key: PERSONAL_EMAIL_BACKFILL_KEY } });
 		stub = new StubSender();
 		email_deliverer.use_sender(stub);
@@ -122,6 +128,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 
 	afterAll(async () => {
 		if (!has_postgres) return;
+		await OrgMember.destroy({ where: { org_id: ORG, user_id: KAI } as never });
 		await User.destroy({ where: { id: KAI }, force: true } as never);
 		await Setting.destroy({ where: { key: PERSONAL_EMAIL_BACKFILL_KEY } });
 		await close_test_control_plane_store();
@@ -131,7 +138,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	// ── S3 ──────────────────────────────────────────────────────────────
 
 	it('a review to the personal channel arrives in-app and by email to the account address', async () => {
-		await ensure_per_user_channel(KAI, ORG, KAI_NAME);
+		await ensure_personal_channel(KAI, KAI_NAME);
 		const review_id = await review_to(KAI_NAME);
 		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, review_id }, raw: true }))).toBeTruthy();
 		await eventually(() => stub.sent.length > 0);
@@ -140,7 +147,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	});
 
 	it('the address is read when sending: changing the account email changes where the next one goes', async () => {
-		await ensure_per_user_channel(KAI, ORG, KAI_NAME);
+		await ensure_personal_channel(KAI, KAI_NAME);
 		await User.update({ email: 'kai.new@cliq.test' }, { where: { id: KAI } });
 		await review_to(KAI_NAME);
 		await eventually(() => stub.sent.length > 0);
@@ -148,7 +155,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	});
 
 	it('a suspended account gets no email; in-app still arrives', async () => {
-		await ensure_per_user_channel(KAI, ORG, KAI_NAME);
+		await ensure_personal_channel(KAI, KAI_NAME);
 		await User.update({ status: 'suspended' }, { where: { id: KAI } });
 		const review_id = await review_to(KAI_NAME);
 		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, review_id }, raw: true }))).toBeTruthy();
@@ -157,7 +164,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	});
 
 	it('removing the email destination from the channel stops the email; in-app stays', async () => {
-		const id = await ensure_per_user_channel(KAI, ORG, KAI_NAME);
+		const id = await ensure_personal_channel(KAI, KAI_NAME);
 		await NotificationService.update_channel({ id, destinations: [{ type: 'cliqhub' }] });
 		const review_id = await review_to(KAI_NAME);
 		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, review_id }, raw: true }))).toBeTruthy();
@@ -179,7 +186,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	});
 
 	it('Send test on a personal channel’s account email sends to the owner', async () => {
-		const id = await ensure_per_user_channel(KAI, ORG, KAI_NAME);
+		const id = await ensure_personal_channel(KAI, KAI_NAME);
 		const res = await NotificationService.test_channel(id);
 		expect(res.errors).toEqual([]);
 		expect(stub.sent).toHaveLength(1);
@@ -209,7 +216,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 
 	/** A personal channel as it is in prod today: in-app only. */
 	async function legacy_personal_channel(): Promise<string> {
-		const id = await ensure_per_user_channel(KAI, ORG, KAI_NAME);
+		const id = await ensure_personal_channel(KAI, KAI_NAME);
 		await ChannelDestination.destroy({ where: { channel_id: id, type: 'email' } });
 		return id;
 	}
@@ -236,7 +243,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	});
 
 	it('backfill leaves a channel that already has an email destination as it is', async () => {
-		const id = await ensure_per_user_channel(KAI, ORG, KAI_NAME);
+		const id = await ensure_personal_channel(KAI, KAI_NAME);
 		await backfill_personal_channel_email(NotificationChannel.sequelize!);
 		expect((await email_rows(id)).map((d) => d.config)).toEqual([{ account: true }]);
 	});

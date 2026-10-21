@@ -51,6 +51,11 @@ export class NotificationsController extends BaseController {
         log.debug('channels_get', { user_id });
         // Zod SoT — account mode requires org_id; never invent from X-Org-Id.
         const body = this.parse_body(NotificationChannelsGetInput, req);
+        if (body.mine) {
+            // The caller's own personal channel — nobody else's.
+            this.ok(res, await NotificationService.list_channels({ mine_user_id: user_id }));
+            return;
+        }
         const realm_id = body.realm_id?.trim();
         const want_account = body.account === true || !realm_id;
 

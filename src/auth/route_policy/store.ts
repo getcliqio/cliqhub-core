@@ -156,9 +156,8 @@ export class SequelizeAccessStore implements AccessStore {
             case 'channel': {
                 const c = await NotificationChannel.findOne({ where: { id }, attributes: ['realm_id', 'org_id', 'user_id'], ...raw }) as Row;
                 if (!c) return null;
-                if (!c.realm_id && !c.org_id && c.user_id && c.user_id === req.auth?.user?.id) {
-                    return { realm_ids: [], org_id: null, owner_user_id: String(c.user_id) };
-                }
+                // A personal channel belongs to its person only: the owner rule decides (others: site admins only).
+                if (c.user_id) return { realm_ids: [], org_id: null, owner_user_id: String(c.user_id) };
                 return { realm_id: c.realm_id as string | null, org_id: c.org_id as string | null };
             }
             case 'rule': {

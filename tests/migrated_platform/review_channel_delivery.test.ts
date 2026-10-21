@@ -2,7 +2,7 @@
  * PLAN-channels S0 — baseline: how a review reaches people today (no behaviour change).
  *
  * Reviews only go to channels. A reviewer name resolves to an org channel; a person's
- * personal channel (named after their username, made by `ensure_per_user_channel`) delivers to
+ * personal channel (named after their username, made by `ensure_personal_channel`) delivers to
  * their in-app inbox (and, since S3, their account email — see personal_channel_email.test.ts).
  * A name with no channel reaches nobody.
  */
@@ -21,21 +21,26 @@ import {
 } from './helpers/control_plane_store.js';
 import { HugReviewsService } from '../../src/services/hug_reviews.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
-import { ensure_per_user_channel } from '../../src/services/per_user_channel.service.js';
+import { ensure_personal_channel } from '../../src/services/per_user_channel.service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
 import {
 	ChannelDestination,
 	InAppNotification,
 	NotificationChannel,
+	Org,
+	OrgMember,
 	Realm,
 	RealmMember,
 	Review,
 	ReviewNotification,
+	User,
 } from '../../src/models/index.js';
 
 const has_postgres = await postgres_reachable();
 const ORG = hub_legacy_uuid(1);
 const ELAN = hub_legacy_uuid(7);
+/** Elan's username (unique per run): a name reaches a real member of the org. */
+const EL = `elan${Date.now().toString(36)}`;
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 /** Poll until `fn` returns a truthy value (delivery runs after the review is stored). */
@@ -64,6 +69,12 @@ describe.skipIf(!has_postgres)('PLAN-channels S0 baseline: reviews reach people 
 		await NotificationChannel.destroy({ where: {} });
 		await RealmMember.destroy({ where: {} });
 		await Realm.destroy({ where: {} });
+		// "elan" reaches Elan from a realm of an org he's in.
+		await User.destroy({ where: { id: ELAN }, force: true } as never);
+		await User.create({ id: ELAN, username: EL, email: `${EL}@cliq.test`, status: 'active', role: 'user', password_hash: 'x' } as never);
+		await OrgMember.destroy({ where: { org_id: ORG, user_id: ELAN } as never });
+		await Org.findOrCreate({ where: { id: ORG } as never, defaults: { id: ORG, slug: 'legacy-org-one', display_name: 'Legacy org' } as never });
+		await OrgMember.create({ org_id: ORG, user_id: ELAN, role: 'member', status: 'active' } as never);
 	});
 
 	afterAll(async () => {
@@ -72,25 +83,26 @@ describe.skipIf(!has_postgres)('PLAN-channels S0 baseline: reviews reach people 
 	});
 
 	it('a personal channel is named after the username and has in-app and account email (S3)', async () => {
-		const id = await ensure_per_user_channel(ELAN, ORG, 'elan');
+		const id = await ensure_personal_channel(ELAN, EL);
 		const ch = await NotificationChannel.findByPk(id, { raw: true });
-		expect(ch).toMatchObject({ name: 'elan', user_id: ELAN, org_id: ORG, enabled: 1 });
+		// One for the whole account: no org, no realm.
+		expect(ch).toMatchObject({ name: EL, user_id: ELAN, org_id: null, realm_id: null, enabled: 1 });
 		const dests = (await ChannelDestination.findAll({ where: { channel_id: id }, raw: true })).map((d) => [d.type, d.config]);
 		expect(dests.sort()).toEqual([['cliqhub', {}], ['email', { account: true }]]);
 		// Idempotent: a second call reuses the channel.
-		expect(await ensure_per_user_channel(ELAN, ORG, 'elan')).toBe(id);
+		expect(await ensure_personal_channel(ELAN, EL)).toBe(id);
 	});
 
 	it('a review to "elan" is recorded against Elan and lands in his in-app inbox', async () => {
-		await ensure_per_user_channel(ELAN, ORG, 'elan');
+		await ensure_personal_channel(ELAN, EL);
 		const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews', { org_id: ORG });
 		const created = await HugReviewsService.create({
 			run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id,
 			payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: ORG,
-			reviewers: [{ policy: 'any', channels: ['elan'] }],
+			reviewers: [{ policy: 'any', channels: [EL] }],
 		});
 		const rows = await ReviewNotification.findAll({ where: { review_id: created.review_id }, raw: true });
-		expect(rows.map((r) => [r.channel_target, r.user_id])).toEqual([['elan', ELAN]]);
+		expect(rows.map((r) => [r.channel_target, r.user_id])).toEqual([[EL, ELAN]]);
 		const inbox = await eventually(() => InAppNotification.findOne({ where: { user_id: ELAN, review_id: created.review_id }, raw: true }));
 		expect(inbox).toBeTruthy();
 	});
