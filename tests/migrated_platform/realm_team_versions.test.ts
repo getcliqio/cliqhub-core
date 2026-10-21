@@ -126,10 +126,13 @@ describe.skipIf(!has_postgres)('the realm owns each team\'s version', () => {
         expect(row.version).toBe('1.10.0');
         // d_on_old (1.9.0) and d_on_none (not installed) are online and not on 1.10.0; d_off_old is offline.
         expect(row.online_stale).toBe(2);
+        expect(row.current_daemon_ids).toEqual([]);
 
         await RealmTeamListService.add(realm_id, user_id, { ...alpha(), version: '1.9.0' });
         const again = (await RealmService.list_team_coverage({ realm_id }, user_id)).rows.find((r) => r.slug === 'alpha')!;
         expect(again).toMatchObject({ version: '1.9.0', online_stale: 1 });
+        // On the realm's version, online or not.
+        expect([...again.current_daemon_ids].sort()).toEqual([d_on_old, d_off_old].sort());
     });
 
     it('every install the realm sends asks for the realm\'s version', async () => {

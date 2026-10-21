@@ -207,6 +207,7 @@ export class TeamsController extends BaseController {
                 online_daemon_count: result.online_daemon_count,
                 coverage_label: r.coverage_label,
                 online_stale: r.online_stale,
+                current_daemon_ids: r.current_daemon_ids,
                 missing_agents: r.missing_agents,
                 last_run_at: r.last_run_at,
                 sample_team_id: r.sample_team_id,

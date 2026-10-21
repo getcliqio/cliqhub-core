@@ -1869,6 +1869,8 @@ export class RealmService {
             version: string | null;
             /** Online daemons not on the realm's version (older, or not installed); null for a team not on the list. */
             online_stale: number | null;
+            /** Daemons (any status) that have the realm's version installed; empty for a team not on the list. */
+            current_daemon_ids: string[];
             sample_team_id: string | null;
             /** Catalog (`cliq.teams`) id of a Hub-published team — what `/v1/teams/install` takes; null for CLI-installed teams. */
             team_id: string | null;
@@ -2146,6 +2148,7 @@ export class RealmService {
                 coverage_label,
                 version: team_list_set.has(key) ? realm_version : r.version,
                 online_stale,
+                current_daemon_ids: realm_version ? [...r.installed_daemon_ids].filter((d) => r.daemon_versions.get(d) === realm_version) : [],
                 sample_team_id: r.sample_team_id,
                 team_id: registry_id_by_key.get(key) ?? null,
                 origin,
