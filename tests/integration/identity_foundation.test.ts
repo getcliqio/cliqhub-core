@@ -135,11 +135,13 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
     // ── seeding ───────────────────────────────────────────────────────
 
     describe('org seeding', () => {
-        it('signup seeds the account org: just the built-in All org members channel (locked), no rules — invite and account messages are built in', async () => {
-            const channels = await NotificationChannel.findAll({ where: { org_id: s.acme, system_key: { [Op.ne]: null } }, raw: true });
-            expect(channels.map((c) => c.system_key)).toEqual(['org.in_app']);
+        it('signup seeds the account org: the built-in All org members and All realm members channels (locked), and one rule — a failed run → All realm members; invite and account messages are built in', async () => {
+            const channels = await NotificationChannel.findAll({ where: { org_id: s.acme, system_key: { [Op.ne]: null } }, order: [['system_key', 'ASC']], raw: true });
+            expect(channels.map((c) => c.system_key)).toEqual(['org.in_app', 'org.realm_members']);
             expect(channels[0]).toMatchObject({ name: 'All org members', locked: true, enabled: 1 });
-            expect(await NotificationRule.count({ where: { org_id: s.acme, realm_id: null, system_key: { [Op.ne]: null } } })).toBe(0);
+            expect(channels[1]).toMatchObject({ name: 'All realm members', locked: true, enabled: 1 });
+            expect((await NotificationRule.findAll({ where: { org_id: s.acme, realm_id: null, system_key: { [Op.ne]: null } }, raw: true })).map((r) => [r.event, r.channel_id]))
+                .toEqual([['run.failed', channels[1]!.id]]);
             // The built-in messages (not rules) still cover invites and account emails.
             expect(default_rule_specs(true).find((m) => m.system_key === 'invite.sent.invitee')).toMatchObject({ recipients: ['invitee'] });
             expect((await Org.findByPk(s.acme, { raw: true }))!.notifications_seeded_at).toBeTruthy();
@@ -154,14 +156,14 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
             extra_orgs.push(org.id);
             const first = await OrgSeedService.backfill();
             expect(first.orgs_seeded).toBeGreaterThanOrEqual(1);
-            expect((await NotificationChannel.findAll({ where: { org_id: org.id }, raw: true })).map((c) => c.system_key)).toEqual(['org.in_app']);
-            expect(await NotificationRule.count({ where: { org_id: org.id } })).toBe(0);
+            expect((await NotificationChannel.findAll({ where: { org_id: org.id }, raw: true })).map((c) => c.system_key).sort()).toEqual(['org.in_app', 'org.realm_members']);
+            expect(await NotificationRule.count({ where: { org_id: org.id } })).toBe(1);
             expect((await OrgSeedService.backfill()).orgs_seeded).toBe(0);
         });
 
         it('the boot migrations keep org and personal channels and drop only orphan realm-less ones', async () => {
             const seeded = await NotificationChannel.findAll({ where: { org_id: s.acme, system_key: { [Op.ne]: null } }, attributes: ['id'], raw: true });
-            expect(seeded).toHaveLength(1);
+            expect(seeded).toHaveLength(2);
             // Personal channels belong to the account (no org): an acme member's.
             const personal = await NotificationChannel.findOne({ where: { user_id: s.user.omar }, attributes: ['id'], raw: true });
             expect(personal).toBeTruthy();
@@ -174,7 +176,7 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
             await run_core_api_schema_migrations(get_sequelize());
 
             const kept = await NotificationChannel.findAll({ where: { id: { [Op.in]: [...seeded.map((c) => c.id), personal!.id] } }, attributes: ['id'], raw: true });
-            expect(kept).toHaveLength(2);
+            expect(kept).toHaveLength(3);
             expect(await NotificationChannel.findByPk(orphan_id)).toBeNull();
         });
 
@@ -187,7 +189,7 @@ describe.skipIf(!has_postgres)('identity lifecycle foundation', () => {
             const org = await Org.findByPk(org_id, { raw: true });
             expect(org).toMatchObject({ owner_id: s.user.ben, status: 'waiting_for_owner', activated_at: null });
             expect(await NotificationChannel.count({ where: { org_id, system_key: 'org.in_app' } })).toBe(1);
-            expect(await NotificationRule.count({ where: { org_id } })).toBe(0);
+            expect(await NotificationRule.count({ where: { org_id } })).toBe(1);
         });
     });
 

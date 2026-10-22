@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { postgres_reachable } from '../migrated_platform/helpers/control_plane_store.js';
 import { open_live_hub_app, close_live_hub_app } from '../migrated_platform/helpers/live_hub_app.js';
 import { seed_authz, type Seed } from '../helpers/authz_seed.js';
-import { NotificationChannel, Run } from '../../src/models/index.js';
+import { NotificationChannel, Run, User } from '../../src/models/index.js';
 import { RunService } from '../../src/services/run.service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
 import { NotificationFanOutService } from '../../src/notifications/fan_out.service.js';
@@ -141,7 +141,7 @@ describe.skipIf(!has_postgres)('run start options', () => {
     it('the run form picker: with realm_id, the realm\'s own channels too — only for a realm of that org the caller can see', async () => {
         const targets = (who: string, body: Record<string, unknown>) => request(app).post('/v1/orgs/get_reviewable_targets')
             .set('Authorization', `Bearer ${s.token[who as keyof typeof s.token]}`).send({ org_id: s.acme, ...body });
-        const names = (res: request.Response) => (res.body.data.channels as Array<{ name: string }>).map((c) => c.name);
+        const names = (res: request.Response) => (res.body.data.channels.items as Array<{ name: string }>).map((c) => c.name);
 
         const without = await targets('omar', {});
         expect(without.status, JSON.stringify(without.body)).toBe(200);
@@ -153,5 +153,32 @@ describe.skipIf(!has_postgres)('run start options', () => {
 
         expect((await targets('nora', { realm_id: s.A1 })).status).toBe(404);
         expect((await targets('omar', { realm_id: s.B1 })).status).toBe(404);
+    });
+
+    it('the picker: channels (with whose they are) and people, apart; a realm lists its own members; searchable; paged per group', async () => {
+        const targets = (body: Record<string, unknown>) => request(app).post('/v1/orgs/get_reviewable_targets')
+            .set('Authorization', `Bearer ${s.token.omar}`).send({ org_id: s.acme, ...body });
+        const people = (res: request.Response) => (res.body.data.people.items as Array<{ user_id: string }>).map((p) => p.user_id);
+
+        const in_realm = await targets({ realm_id: s.A1, limit: 100 });
+        expect(in_realm.status, JSON.stringify(in_realm.body)).toBe(200);
+        expect(people(in_realm)).toEqual(expect.arrayContaining([s.user.omar, s.user.mia, s.user.sam]));
+        expect(people(in_realm)).not.toContain(s.user.nora);
+        expect(in_realm.body.data.channels.items.find((c: { name: string }) => c.name === channel_name)).toMatchObject({ level: 'realm' });
+        expect(in_realm.body.data.channels.items.every((c: { level: string }) => c.level === 'realm' || c.level === 'org')).toBe(true);
+
+        const org_wide = await targets({ limit: 100 });
+        expect(people(org_wide)).toContain(s.user.nora);
+
+        const mia = (await User.findByPk(s.user.mia, { attributes: ['username'], raw: true }))!.username;
+        const found = await targets({ realm_id: s.A1, query: mia.slice(2, 8).toUpperCase() });
+        expect(people(found)).toContain(s.user.mia);
+
+        const first = await targets({ realm_id: s.A1, kind: 'person', limit: 1 });
+        const second = await targets({ realm_id: s.A1, kind: 'person', limit: 1, offset: 1 });
+        expect(first.body.data.people.items).toHaveLength(1);
+        expect(first.body.data.people.total).toBeGreaterThanOrEqual(3);
+        expect(people(second)).not.toEqual(people(first));
+        expect(first.body.data.channels).toEqual({ items: [], total: 0 });
     });
 });

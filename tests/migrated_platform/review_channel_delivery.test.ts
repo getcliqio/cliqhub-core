@@ -96,6 +96,8 @@ describe.skipIf(!has_postgres)('PLAN-channels S0 baseline: reviews reach people 
 	it('a review to "elan" is recorded against Elan and lands in his in-app inbox', async () => {
 		await ensure_personal_channel(ELAN, EL);
 		const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews', { org_id: ORG });
+		// A person's name reaches them from a realm they're a member of.
+		await RealmMember.create({ id: `${realm.id}:${ELAN}`, realm_id: realm.id, member_type: 'user', member_id: ELAN, role: 'member', created_at: Date.now() } as never);
 		const created = await HugReviewsService.create({
 			run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id,
 			payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: ORG,

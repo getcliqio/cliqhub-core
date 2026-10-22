@@ -81,6 +81,8 @@ async function review_to(channel: string): Promise<string> {
 	// Only the named reviewer channel: the realm's own review default (All realm members, which emails its
 	// members) would add emails these tests aren't about.
 	await NotificationRule.destroy({ where: { realm_id: realm.id, event: 'hug.review_requested' } });
+	// A person's name reaches them from a realm they're a member of.
+	await RealmMember.create({ id: `${realm.id}:${KAI}`, realm_id: realm.id, member_type: 'user', member_id: KAI, role: 'member', created_at: Date.now() } as never);
 	const created = await HugReviewsService.create({
 		run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id,
 		payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: ORG,

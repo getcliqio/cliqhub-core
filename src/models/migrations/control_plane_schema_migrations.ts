@@ -1383,6 +1383,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_realm_team_list_versions(sq);
     await migrate_personal_channel_per_user(sq);
     await migrate_builtin_members_their_way(sq);
+    await migrate_org_run_failed_default(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -2279,5 +2280,51 @@ export async function migrate_builtin_members_their_way(sq: Sequelize): Promise<
         _mig_log.info('builtin_members_their_way_migrated', { email_destinations_removed: removed.length });
     } catch (err) {
         _mig_log.error('builtin_members_their_way_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+export const ORG_RUN_FAILED_DEFAULT_MIGRATION_KEY = 'migrate.org_run_failed_default_2026_10';
+
+/**
+ * One time (Oct 2026): nothing goes to a realm's "All realm members" by default any more — the org's one default
+ * (a failed run → everyone in that run's realm) replaces it, added by the org defaults upgrade (version 4). Deletes,
+ * on every realm's "All realm members" channel, the rules CliqHub made: the October defaults (run failed / crashed,
+ * phase idle / timed out, the locked unknown-channel rule) and the August wildcards (`daemon.*`, `hug.*`, `phase.*`,
+ * `realm.*`, `run.*`, not built in, made before 2026-09-01). Rules people added stay.
+ * Frozen spec (prod before: 9 orgs; 75 defaults in 15 realms + 45 wildcards in 9 realms; 0 others). Safe to repeat.
+ */
+export async function migrate_org_run_failed_default(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.notification_rules') AS r`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; r: string | null }>;
+        if (!tables?.s || !tables?.r) {
+            _mig_log.info('org_run_failed_default_deferred', { reason: 'tables not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: ORG_RUN_FAILED_DEFAULT_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const removed = await sq.query(
+            `DELETE FROM cliq."notification_rules" nr USING cliq."notification_channels" c
+             WHERE nr."channel_id" = c."id" AND c."system_key" = 'realm.members'
+               AND (nr."system_key" IN ('realm.members.run.failed', 'realm.members.run.crashed', 'realm.members.phase.idle',
+                                        'realm.members.phase.timed_out', 'realm.members.notification.unknown_channel')
+                    OR (nr."system_key" IS NULL
+                        AND nr."event" IN ('daemon.*', 'hug.*', 'phase.*', 'realm.*', 'run.*')
+                        AND nr."created_at" < 1788220800000))
+             RETURNING nr."event", nr."system_key"`,
+            { type: QueryTypes.SELECT },
+        ) as Array<{ event: string; system_key: string | null }>;
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: ORG_RUN_FAILED_DEFAULT_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('org_run_failed_default_migrated', {
+            rules_removed: removed.length,
+            defaults_removed: removed.filter((r) => r.system_key).length,
+            wildcards_removed: removed.filter((r) => !r.system_key).length,
+        });
+    } catch (err) {
+        _mig_log.error('org_run_failed_default_migration_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }

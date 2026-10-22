@@ -31,7 +31,7 @@ import {
     type OrgEventType,
 } from '../notifications/org_events.js';
 import type { RecipientSelector } from '../notifications/recipients.js';
-import { ORG_BUILTIN_CHANNELS, ORG_IN_APP_CHANNEL_KEY } from '../notifications/defaults.js';
+import { ORG_BUILTIN_CHANNELS, ORG_DEFAULT_RULES, ORG_IN_APP_CHANNEL_KEY } from '../notifications/defaults.js';
 
 const log = get_logger('svc.org_seed');
 
@@ -55,9 +55,10 @@ export interface DefaultRuleSpec {
  * Version of the org defaults. 1: Email rules, in-app for invite outcomes
  * and abandoned orgs. 2: in-app copies of the invite and account email rules
  * (except the set-password email: that person cannot sign in yet). 3: those
- * are built-in messages, not rules; only the In-app channel is created.
+ * are built-in messages, not rules; only the In-app channel is created. 4: the "All realm members" channel
+ * and its rule — a failed run reaches everyone in that run's realm ({@link ORG_DEFAULT_RULES}).
  */
-export const DEFAULTS_VERSION = 3;
+export const DEFAULTS_VERSION = 4;
 
 const NOTIFY: RecipientSelector[] = ['org_owners', 'inviter'];
 
@@ -111,8 +112,8 @@ export interface SeedResult {
  */
 export class OrgSeedService {
     /**
-     * Creates the default channel (`In-app`) if `org_id` is missing it and marks the org seeded.
-     * There are no default rules: invite and account messages are built in.
+     * Creates the built-in channels `org_id` is missing ("All org members", "All realm members") and its default
+     * rules newer than `since_version`, and marks the org seeded. Invite and account messages are built in.
      *
      * @param org_id - The org.
      * @param opts.account - Whether it is a user's account org (adds account email rules).
@@ -143,6 +144,20 @@ export class OrgSeedService {
             }
             channel_ids.set(spec.system_key, id);
             result.channels_created += 1;
+        }
+
+        // The org's default rules of versions it doesn't have yet (a rule the org removed stays removed).
+        for (const rule of ORG_DEFAULT_RULES) {
+            if (rule.version <= (opts.since_version ?? 0)) continue;
+            const channel_id = channel_ids.get(rule.channel_key);
+            if (!channel_id) continue;
+            const existing = await NotificationRule.findOne({ where: { org_id, realm_id: { [Op.is]: null }, system_key: rule.system_key }, attributes: ['id'], transaction });
+            if (existing) continue;
+            await NotificationRule.create({
+                id: randomUUID(), realm_id: null, org_id, team_slug: null, event: rule.event, channel_id, priority: 0,
+                recipients: null, system_key: rule.system_key, locked: false, lock_reason: null, enabled: true, created_at: now, updated_at: now,
+            } as never, { transaction });
+            result.rules_created += 1;
         }
 
         await Org.update({ notifications_seeded_at: new Date() }, { where: { id: org_id, notifications_seeded_at: { [Op.is]: null } }, transaction });

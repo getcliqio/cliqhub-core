@@ -113,8 +113,12 @@ describe.skipIf(!has_postgres)('CliqHubDeliverer — persist in-app notification
 		expect(rows[0].message).toBe('failed in test');
 	});
 
-	it('a new realm sends run.failed to "All realm members" through its default rule', async () => {
-		const realm = await RealmService.create(test_user_id, `c-${uid()}`.slice(0, 40), 'Defaults');
+	it('a failed run reaches "All realm members" through its org\'s one default rule', async () => {
+		const { Org } = await import('../../src/models/index.js');
+		const { OrgSeedService } = await import('../../src/services/org_seed.service.js');
+		const org = await Org.create({ slug: `cd-${uid()}`.slice(0, 40), display_name: 'Defaults', activated_at: new Date() } as never);
+		await OrgSeedService.seed_org(String(org.id), { account: false });
+		const realm = await RealmService.create(test_user_id, `c-${uid()}`.slice(0, 40), 'Defaults', { org_id: String(org.id) });
 		const event = await EventSubmitService.submit({
 			type: 'run.failed',
 			realm_id: realm.id,
@@ -125,9 +129,10 @@ describe.skipIf(!has_postgres)('CliqHubDeliverer — persist in-app notification
 		const rows = await InAppNotification.findAll({ raw: true });
 		expect(rows).toHaveLength(1);
 		expect(rows[0]).toMatchObject({ realm_id: realm.id, user_id: null });
+		await Org.destroy({ where: { id: org.id } });
 	});
 
-	it('with the default rules removed nothing is sent (no hidden all-users fallback)', async () => {
+	it('with no rules nothing is sent (no hidden all-users fallback)', async () => {
 		const realm = await RealmService.create(test_user_id, `c-${uid()}`.slice(0, 40), 'Empty');
 		await NotificationRule.destroy({ where: { realm_id: realm.id } });
 		const event = await EventSubmitService.submit({

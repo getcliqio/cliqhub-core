@@ -20,7 +20,7 @@ import {
 } from './helpers/control_plane_store.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
-import { REALM_DEFAULT_RULE_EVENTS, REALM_FIXED_RULES, REALM_MEMBERS_CHANNEL_NAME } from '../../src/notifications/defaults.js';
+import { REALM_MEMBERS_CHANNEL_NAME } from '../../src/notifications/defaults.js';
 import { InAppNotificationService } from '../../src/services/in_app_notification.service.js';
 import { EventSubmitService } from '../../src/services/events_service.js';
 import { ensure_personal_channel } from '../../src/services/per_user_channel.service.js';
@@ -95,16 +95,12 @@ describe.skipIf(!has_postgres)('PLAN-channels E2: explicit channels', () => {
 		await close_test_control_plane_store();
 	});
 
-	it('a new realm gets "All realm members" (in-app; members reached their way) and the default rules to it', async () => {
+	it('a new realm gets "All realm members" (in-app; members reached their way) and no rules', async () => {
 		const realm = await new_realm();
 		const ch = await NotificationChannel.findOne({ where: { realm_id: realm.id, name: REALM_MEMBERS_CHANNEL_NAME }, raw: true });
 		expect(ch).toBeTruthy();
 		expect((await ChannelDestination.findAll({ where: { channel_id: ch!.id }, raw: true })).map((d) => d.type)).toEqual(['cliqhub']);
-		const rules = await NotificationRule.findAll({ where: { realm_id: realm.id }, raw: true });
-		expect(rules.map((r) => r.event).sort()).toEqual([...REALM_DEFAULT_RULE_EVENTS, ...REALM_FIXED_RULES.map((f) => f.event)].sort());
-		expect(rules.every((r) => r.channel_id === ch!.id)).toBe(true);
-		// The defaults are editable; the fixed rules are locked.
-		expect(rules.filter((r) => r.locked).map((r) => r.event)).toEqual(REALM_FIXED_RULES.map((f) => f.event));
+		expect(await NotificationRule.count({ where: { realm_id: realm.id } })).toBe(0);
 	});
 
 	it('in-app to a realm channel reaches that realm’s members, as they join', async () => {
@@ -146,7 +142,8 @@ describe.skipIf(!has_postgres)('PLAN-channels E2: explicit channels', () => {
 	it('no rules → nothing is sent (no hidden all-users fallback)', async () => {
 		const realm = await new_realm();
 		await NotificationRule.destroy({ where: { realm_id: realm.id } });
-		const ev = await EventSubmitService.submit({ type: 'run.failed', realm_id: realm.id, run_id: `r-${uid()}`, daemon_id: 'd1' });
+		// An event no org or realm rule names (a failed run is the org's one default).
+		const ev = await EventSubmitService.submit({ type: 'run.crashed', realm_id: realm.id, run_id: `r-${uid()}`, daemon_id: 'd1' });
 		expect(ev.notifications).toBe('skipped');
 		expect(await InAppNotification.count()).toBe(0);
 	});

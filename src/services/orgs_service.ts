@@ -4,6 +4,7 @@ import { get_logger } from '../lib/log.js';
 import { RESERVED_SCOPES, SLUG_PATTERN } from '../config/env.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { AuthContext } from '../schemas/auth_types.js';
+import type { OrgsReviewableTargetsData } from '../schemas/org_types.js';
 import { Op, col, fn, literal } from 'sequelize';
 import { equals_first, list_order, type SortColumns, type SortDir } from '../lib/list_sort.js';
 import {
@@ -278,15 +279,16 @@ export class OrgsService {
     }
 
     /**
-     * Org-scoped picker targets for HUG reviewers / dispatch destinations:
-     * notification channels (and users when wired). Caller must be an org member.
-     * `org_id` is required — no header-based fallback. With `realm_id` (a realm of that org the caller
-     * can see, else 404) the realm's own channels are listed too — the channels that realm can use.
+     * What a channel, run or review can name, searchable and paged per group: channels (the org's, and the
+     * realm's own with `realm_id`) and people (the realm's members with `realm_id`, else the org's active
+     * members; a person's name reaches their personal channel). Caller must be an org member; `org_id` is
+     * required — no header-based fallback; `realm_id` must be a realm of that org the caller can see (else 404).
+     * `kind` pages one group only ("show more").
      */
     async get_reviewable_targets(
         auth: AuthContext,
-        params: { org_id: string; query?: string; realm_id?: string },
-    ): Promise<{ users: Array<{ username: string; display_name?: string }>; channels: Array<{ id: string; name: string }> }> {
+        params: { org_id: string; query?: string; realm_id?: string; kind?: 'channel' | 'person'; limit?: number; offset?: number },
+    ): Promise<OrgsReviewableTargetsData> {
         log.debug('get_reviewable_targets', { org_id: params.org_id, user_id: auth.user?.id });
         this._require_auth(auth);
 
@@ -294,45 +296,55 @@ export class OrgsService {
         if (!org_id) throw new ApiError('invalid_params', 'org_id is required', 400);
 
         // Route policy: member of org_id.
-        const query = (params.query ?? '').trim().toLowerCase();
-        const { NotificationChannel } = await import('../models/index.js');
-        const scopes: Record<string, unknown>[] = [{ org_id }];
+        const query = (params.query ?? '').trim();
+        const like = query ? `%${query}%` : null;
+        const limit = params.limit ?? 20;
+        const offset = params.offset ?? 0;
+        const { NotificationChannel, OrgMember, RealmMember, User } = await import('../models/index.js');
         if (params.realm_id) {
             const visible = await visible_realm_ids(String(auth.user!.id), { org_id });
             if (!visible.includes(params.realm_id)) throw new ApiError('not_found', 'Realm not found', 404);
-            scopes.push({ realm_id: params.realm_id });
         }
-        const channel_where: Record<string | symbol, unknown> = {
-            [Op.or]: scopes,
-            user_id: { [Op.is]: null },
-            enabled: 1,
-        };
-        if (query) {
-            channel_where.name = { [Op.iLike]: `%${query}%` };
+
+        const empty = { items: [], total: 0 };
+        let channels: OrgsReviewableTargetsData['channels'] = empty;
+        if (params.kind !== 'person') {
+            // The org's channels, and the realm's own when given (people's personal channels are listed as people).
+            const scopes: Record<string, unknown>[] = [{ org_id, realm_id: { [Op.is]: null } }];
+            if (params.realm_id) scopes.push({ realm_id: params.realm_id });
+            const where: Record<string | symbol, unknown> = { [Op.or]: scopes, user_id: { [Op.is]: null }, enabled: 1 };
+            if (like) where.name = { [Op.iLike]: like };
+            const { rows, count } = await NotificationChannel.findAndCountAll({
+                where, attributes: ['id', 'name', 'realm_id'], order: [['name', 'ASC'], ['id', 'ASC']], limit, offset,
+            });
+            channels = {
+                items: rows.map((c) => ({ id: String(c.id), name: c.name, level: c.realm_id ? 'realm' as const : 'org' as const })),
+                total: count,
+            };
         }
-        const channel_rows = await NotificationChannel.findAll({
-            where: channel_where,
-            attributes: ['id', 'name'],
-            order: [['name', 'ASC']],
-            limit: 100,
-        });
 
-        // People: the personal channels of the org's active members (names only — their destinations are theirs).
-        const { OrgMember } = await import('../models/index.js');
-        const member_ids = (await OrgMember.findAll({ where: { org_id, status: 'active' } as never, attributes: ['user_id'], raw: true }))
-            .map((m) => String((m as { user_id: string }).user_id));
-        const people = member_ids.length === 0 ? [] : await NotificationChannel.findAll({
-            where: { user_id: { [Op.in]: member_ids }, enabled: 1, ...(query ? { name: { [Op.iLike]: `%${query}%` } } : {}) } as never,
-            attributes: ['id', 'name'],
-            order: [['name', 'ASC']],
-            limit: 100,
-        });
-
-        const channels = [...channel_rows, ...people]
-            .map((c) => ({ id: c.id, name: c.name }))
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .slice(0, 100);
-        return { users: [], channels };
+        let people: OrgsReviewableTargetsData['people'] = empty;
+        if (params.kind !== 'channel') {
+            // The realm's members when given, else the org's active members.
+            const member_ids = params.realm_id
+                ? (await RealmMember.findAll({ where: { realm_id: params.realm_id, member_type: 'user' } as never, attributes: ['member_id'], raw: true }))
+                    .map((m) => String((m as { member_id: string }).member_id))
+                : (await OrgMember.findAll({ where: { org_id, status: 'active' } as never, attributes: ['user_id'], raw: true }))
+                    .map((m) => String((m as { user_id: string }).user_id));
+            if (member_ids.length > 0) {
+                const where: Record<string | symbol, unknown> = { id: { [Op.in]: member_ids }, deleted_at: null, status: 'active' };
+                if (like) where[Op.or] = [{ username: { [Op.iLike]: like } }, { display_name: { [Op.iLike]: like } }];
+                const { rows, count } = await User.findAndCountAll({
+                    where: where as never, attributes: ['id', 'username', 'display_name'], order: [['username', 'ASC']], limit, offset, raw: true,
+                });
+                people = {
+                    items: (rows as unknown as Array<{ id: string; username: string; display_name: string | null }>)
+                        .map((u) => ({ user_id: String(u.id), username: u.username, display_name: u.display_name ?? null })),
+                    total: count,
+                };
+            }
+        }
+        return { channels, people };
     }
 
     // ─── Create org (site admin) ────────────────────────────────────

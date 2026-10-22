@@ -4,8 +4,8 @@
  * A run's notify channels and a gate's reviewers are channel names; teams are written offline and names
  * can arrive as run-time inputs, so a missing name can't always be stopped up front. When one is met, the
  * channels that exist still deliver and CliqHub raises `notification.unknown_channel` for each missing
- * name. Its fixed rule sends it to the realm's "All realm members" (in-app + email). Raised once per run
- * per name, so a run's several lifecycle events don't repeat the same notice.
+ * name. It goes wherever the org or realm sends it (nothing by default since 2026-10-22). Raised once per
+ * run per name, so a run's several lifecycle events don't repeat the same notice.
  */
 import { get_logger } from '../lib/log.js';
 import { HubEvent } from '../models/index.js';

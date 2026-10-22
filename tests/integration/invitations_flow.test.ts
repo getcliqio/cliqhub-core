@@ -190,9 +190,10 @@ describe.skipIf(!has_postgres)('invitations, orgs/new and the invite sweep', () 
             // Their own account org (seeded) and the org's default realm.
             const account_org = (await Org.findOne({ where: { slug: username }, raw: true }))!;
             expect(account_org).toBeTruthy();
-            // Seeded with its In-app channel; the password emails are built in (not rules).
+            // Seeded with its In-app channel and its one default (a failed run → All realm members); the password
+            // emails are built in (not rules).
             expect(await NotificationChannel.count({ where: { org_id: account_org.id, system_key: 'org.in_app' } })).toBe(1);
-            expect(await NotificationRule.count({ where: { org_id: account_org.id, system_key: { [Op.ne]: null } } })).toBe(0);
+            expect((await NotificationRule.findAll({ where: { org_id: account_org.id, system_key: { [Op.ne]: null } }, raw: true })).map((r) => r.system_key)).toEqual(['org.default.run.failed']);
             expect(await Realm.count({ where: { org_id: org.id, slug: 'default', deleted: false } })).toBe(1);
 
             // Signed in with the returned token, they run their org.

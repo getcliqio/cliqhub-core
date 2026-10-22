@@ -159,11 +159,14 @@ describe.skipIf(!has_postgres)('A4 — email to a built-in channel\'s members', 
 		await expect(email_deliverer.deliver({ members: true }, payload, { channel_id })).rejects.toThrow(/email delivery failed/);
 	});
 
-	it('end to end: Unknown channel reaches the realm through its fixed rule — in-app, and by email their way', async () => {
+	it('end to end: Unknown channel, sent to the realm\'s members by a rule, reaches them in-app and by email their way', async () => {
 		const amy = await person();
 		// Members are reached their way: through their personal channel (account email by default).
 		await ensure_personal_channel(amy.id, amy.email.split('@')[0]);
 		const realm_id = await realm_with([amy]);
+		// Nothing goes there by default any more; the realm sends it.
+		const { NotificationService } = await import('../../src/services/notification.service.js');
+		await NotificationService.set_rule({ realm_id, event: 'notification.unknown_channel', channel_id: realm_members_channel_id(realm_id) });
 
 		const ev = await EventSubmitService.submit({
 			type: 'notification.unknown_channel', realm_id, run_id: `run-${uid()}`,

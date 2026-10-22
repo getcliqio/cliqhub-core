@@ -51,17 +51,23 @@ describe('resolve_recipients', () => {
 describe('OrgSeedService.seed_org', () => {
     beforeEach(() => vi.clearAllMocks());
 
-    it('creates the built-in All org members channel — locked, one shared in-app notice (members reached their way; no rules: invite and account messages are built in) — in the caller transaction, then marks the org', async () => {
+    it('creates the built-in All org members and All realm members channels — locked, one shared in-app notice (members reached their way) — and one rule (a failed run → All realm members), in the caller transaction, then marks the org', async () => {
         const t = { id: 'tx' } as never;
         const result = await OrgSeedService.seed_org('org-1', { account: true, transaction: t });
-        expect(result).toEqual({ channels_created: 1, rules_created: 0 });
+        expect(result).toEqual({ channels_created: 2, rules_created: 1 });
         const channels = vi.mocked(NotificationChannel.create).mock.calls.map((c) => c[0] as Record<string, unknown>);
-        expect(channels).toEqual([expect.objectContaining({ org_id: 'org-1', name: 'All org members', system_key: 'org.in_app', locked: true })]);
+        expect(channels).toEqual([
+            expect.objectContaining({ org_id: 'org-1', name: 'All org members', system_key: 'org.in_app', locked: true }),
+            expect.objectContaining({ org_id: 'org-1', name: 'All realm members', system_key: 'org.realm_members', locked: true }),
+        ]);
         expect(vi.mocked(ChannelDestination.create).mock.calls.map((c) => c[0])).toEqual([
+            expect.objectContaining({ type: 'cliqhub', config: {} }),
             expect.objectContaining({ type: 'cliqhub', config: {} }),
         ]);
         expect(vi.mocked(NotificationChannel.create).mock.calls.every((c) => (c[1] as { transaction: unknown }).transaction === t)).toBe(true);
-        expect(NotificationRule.create).not.toHaveBeenCalled();
+        const rule = vi.mocked(NotificationRule.create).mock.calls.map((c) => c[0] as Record<string, unknown>);
+        expect(rule).toEqual([expect.objectContaining({ org_id: 'org-1', realm_id: null, event: 'run.failed', channel_id: channels[1]!.id, system_key: 'org.default.run.failed', locked: false })]);
+        expect((vi.mocked(NotificationRule.create).mock.calls[0]![1] as { transaction: unknown }).transaction).toBe(t);
         expect(vi.mocked(Org.update).mock.calls[0][1]).toMatchObject({ where: { id: 'org-1' }, transaction: t });
         // The built-in messages still cover invites and account emails.
         expect(default_rule_specs(true).some((m) => m.system_key === 'user.setup.user')).toBe(true);

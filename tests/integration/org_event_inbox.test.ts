@@ -119,7 +119,7 @@ describe.skipIf(!has_postgres)('org events in the inbox', () => {
         expect(items[0].title).toBe('Your password was changed');
     });
 
-    it('orgs seeded by an older defaults version are raised to the current one at boot, once, without adding rules', async () => {
+    it('orgs seeded by an older defaults version are raised to the current one at boot, once, adding only the newer default (a failed run → All realm members)', async () => {
         const org = await Org.create({ slug: uniq('seedv'), display_name: 'Seed v', activated_at: new Date() } as never);
         await OrgSeedService.seed_org(org.id, { account: false });
         await Org.update({ notifications_seed_version: null } as never, { where: { id: org.id } });
@@ -129,19 +129,20 @@ describe.skipIf(!has_postgres)('org events in the inbox', () => {
 
         expect((await Org.findByPk(org.id, { raw: true }))!.notifications_seed_version).toBe(DEFAULTS_VERSION);
         expect(await NotificationChannel.count({ where: { org_id: org.id, system_key: 'org.in_app' } })).toBe(1);
-        expect(await NotificationRule.count({ where: { org_id: org.id } })).toBe(0);
+        expect((await NotificationRule.findAll({ where: { org_id: org.id }, raw: true })).map((r) => r.system_key)).toEqual(['org.default.run.failed']);
 
+        await NotificationRule.destroy({ where: { org_id: org.id } });
         const channels = (await NotificationChannel.findAll({ where: { org_id: org.id }, attributes: ['id'], raw: true })).map((c) => c.id);
         await ChannelDestination.destroy({ where: { channel_id: { [Op.in]: channels } } });
         await NotificationChannel.destroy({ where: { org_id: org.id } });
         await Org.destroy({ where: { id: org.id } });
     });
 
-    it('new orgs get the In-app channel and no rules: invite and account messages are built in', async () => {
+    it('new orgs get the In-app channel and one rule (a failed run → All realm members): invite and account messages are built in', async () => {
         const u = await s.signup('defaults');
         expect(await NotificationChannel.count({ where: { org_id: u.org_id, system_key: 'org.in_app' } })).toBe(1);
         expect(await NotificationChannel.count({ where: { org_id: u.org_id, system_key: 'org.email' } })).toBe(0);
-        expect(await NotificationRule.count({ where: { org_id: u.org_id } })).toBe(0);
+        expect((await NotificationRule.findAll({ where: { org_id: u.org_id }, raw: true })).map((r) => [r.event, r.system_key])).toEqual([['run.failed', 'org.default.run.failed']]);
         expect((await Org.findByPk(u.org_id, { raw: true }))!.notifications_seed_version).toBe(DEFAULTS_VERSION);
     });
 

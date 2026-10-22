@@ -87,6 +87,7 @@ describe.skipIf(!has_postgres)('members reached their way; once per event', () =
 		if (!has_postgres) return;
 		await InAppNotification.destroy({ where: { realm_id: realms } });
 		await InAppNotification.destroy({ where: { user_id: users } as never });
+		await ChannelDestination.destroy({ where: { channel_id: channels } });
 		await NotificationChannel.destroy({ where: { id: channels } });
 		await NotificationChannel.destroy({ where: { user_id: users } as never });
 		await RealmMember.destroy({ where: { realm_id: realms } });
@@ -127,6 +128,21 @@ describe.skipIf(!has_postgres)('members reached their way; once per event', () =
 		await send(realm_id, [amy.channel_id, realm_members_channel_id(realm_id)]);
 		expect(await InAppNotification.count({ where: { realm_id, user_id: null } as never })).toBe(1);
 		expect(await InAppNotification.count({ where: { user_id: amy.id } as never })).toBe(0);
+		expect(emailed()).toEqual([amy.email]);
+	});
+
+	it('the org\'s "All realm members" reaches the realm the event comes from — its notice and its members their way', async () => {
+		const amy = await person();
+		const realm_id = await realm_with([amy]);
+		const org_channel = await NotificationChannel.create({
+			id: randomUUID(), realm_id: null, org_id: null, user_id: null, name: `arm-${uid()}`.slice(0, 40), enabled: 1,
+			system_key: 'org.realm_members', locked: true, lock_reason: 'Built in', created_at: Date.now(), updated_at: Date.now(),
+		} as never);
+		channels.push(org_channel.id);
+		await ChannelDestination.create({ id: randomUUID(), channel_id: org_channel.id, type: 'cliqhub', config: {}, created_at: Date.now() } as never);
+
+		await send(realm_id, [org_channel.id]);
+		expect(await InAppNotification.count({ where: { realm_id, user_id: null } as never })).toBe(1);
 		expect(emailed()).toEqual([amy.email]);
 	});
 

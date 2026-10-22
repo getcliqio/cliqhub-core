@@ -4,8 +4,8 @@
  *  - Made once per account (no org, no realm); a second call reuses it.
  *  - Private: the channel list never shows personal channels; `mine` returns only the caller's own.
  *  - Only its owner may change it (route policy); its in-app destination can't be removed.
- *  - A name reaches a person from a realm of an org they're in — not from other orgs. A channel may take any
- *    name; when a channel and a person share one, the channel wins (either order of creation).
+ *  - A name reaches a person from a realm they're a member of — not from other realms. A channel may take any
+ *    name; when a channel and a person share one, both get it.
  *  - The one-time merge folds per-org copies into one, keeping every destination and repointing rules.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -100,19 +100,24 @@ describe.skipIf(!has_postgres)('one personal channel per person', () => {
         expect((await ChannelDestination.findAll({ where: { channel_id: id }, raw: true })).map((d) => d.type).sort()).toEqual(['cliqhub', 'slack']);
     });
 
-    it('a name reaches a person from a realm of an org they\'re in — not from another org', async () => {
+    const reached = async (name: string, realm_id: string) => (await NotificationService.find_realm_usable_channels(name, realm_id)).map((c) => c.id);
+
+    it('a name reaches a person from a realm they\'re a member of — not from another realm', async () => {
         const id = await ensure_personal_channel(ana.id, ana.username);
-        expect((await NotificationService.find_realm_usable_channel(ana.username, realm_a))?.id).toBe(id);
-        expect(await NotificationService.find_realm_usable_channel(ana.username, realm_b)).toBeNull();
+        expect(await reached(ana.username, realm_a)).toEqual([id]);
+        expect(await reached(ana.username, realm_b)).toEqual([]);
+        // In the org but not the realm: not reached from it.
+        const realm_a2 = (await RealmService.create(ben.id, `pcra2${stamp}`.slice(0, 40), 'A2 realm', { org_id: org_a })).id;
+        realms.push(realm_a2);
+        expect(await reached(ana.username, realm_a2)).toEqual([]);
     });
 
-    it('a channel may take a member\'s name; then the name means the channel', async () => {
+    it('a channel may take a member\'s name; then the name reaches both', async () => {
         const id = await ensure_personal_channel(ana.id, ana.username);
         const shared = await NotificationService.create_channel({ org_id: org_a, name: ana.username, destinations: [{ type: 'cliqhub' }] });
-        expect((await NotificationService.find_realm_usable_channel(ana.username, realm_a))?.id).toBe(shared.id);
+        expect(await reached(ana.username, realm_a)).toEqual([shared.id, id]);
         await NotificationChannel.destroy({ where: { id: shared.id } });
-        // Gone again: the name reaches Ana.
-        expect((await NotificationService.find_realm_usable_channel(ana.username, realm_a))?.id).toBe(id);
+        expect(await reached(ana.username, realm_a)).toEqual([id]);
     });
 
     it('migration: per-org copies fold into one — every destination kept, rules repointed — once', async () => {

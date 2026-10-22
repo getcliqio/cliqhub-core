@@ -71,18 +71,21 @@ export async function resolve_reviewer_groups(
             const target = ch.trim();
             if (!target) continue;
 
-            const channel = channel_map.get(target);
-            if (!channel) {
+            const matches = channel_map.get(target) ?? [];
+            if (matches.length === 0) {
                 log.warn('reviewer_unresolved', { target, org_id });
                 continue;
             }
 
-            destinations.push({
-                target,
-                user_id: channel.user_id,
-                channel_id: channel.user_id ? channel.id : null,
-                named_channel_id: channel.user_id ? null : channel.id,
-            });
+            // A channel and a person of the same name: both are asked.
+            for (const channel of matches) {
+                destinations.push({
+                    target,
+                    user_id: channel.user_id,
+                    channel_id: channel.user_id ? channel.id : null,
+                    named_channel_id: channel.user_id ? null : channel.id,
+                });
+            }
         }
 
         resolved.push({ policy: group.policy, destinations });
@@ -100,15 +103,16 @@ interface ResolvedChannel {
 }
 
 /**
- * Look up enabled channels by name: the realm's own (when given), the org's, then the personal channel of
- * a member of the org with that username. A realm channel wins over an org channel of the same name.
- * Returns a map of target string → channel info.
+ * Look up enabled channels by name: the channel (the realm's own when given, else the org's — a realm channel
+ * wins over an org channel of the same name) and the personal channel of the person with that username (a
+ * member of the realm when given, else of the org). Both, when both exist.
+ * Returns a map of target string → the channels it reaches.
  */
 async function _resolve_channel_names(
     org_id: string,
     targets: string[],
     realm_id: string | null,
-): Promise<Map<string, ResolvedChannel>> {
+): Promise<Map<string, ResolvedChannel[]>> {
     if (targets.length === 0) return new Map();
 
     const scopes: Record<string, unknown>[] = [{ org_id, realm_id: { [Op.is]: null } }];
@@ -124,22 +128,24 @@ async function _resolve_channel_names(
     /** Org channels first, so a realm channel of the same name replaces it. */
     channels.sort((a, b) => Number(Boolean(a.realm_id)) - Number(Boolean(b.realm_id)));
 
-    const result = new Map<string, ResolvedChannel>();
+    const named = new Map<string, ResolvedChannel>();
     for (const ch of channels) {
         const original = targets.find(
             (t) => t.toLowerCase() === ch.name.toLowerCase(),
         );
         if (original) {
-            result.set(original, { id: ch.id, user_id: ch.user_id ?? null });
+            named.set(original, { id: ch.id, user_id: ch.user_id ?? null });
         }
     }
 
-    // A name no org/realm channel has: the personal channel of the person with that username, when in the org.
+    // And the personal channel of the person with that username.
     const { find_member_personal_channel } = await import('./per_user_channel.service.js');
+    const result = new Map<string, ResolvedChannel[]>();
     for (const t of targets) {
-        if (result.has(t)) continue;
-        const person = await find_member_personal_channel(t, org_id);
-        if (person) result.set(t, { id: person.id, user_id: person.user_id });
+        const found = named.has(t) ? [named.get(t)!] : [];
+        const person = await find_member_personal_channel(t, { org_id, realm_id });
+        if (person) found.push({ id: person.id, user_id: person.user_id });
+        if (found.length > 0) result.set(t, found);
     }
 
     return result;

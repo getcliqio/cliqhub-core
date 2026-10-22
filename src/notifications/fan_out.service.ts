@@ -15,7 +15,7 @@ import {
 } from './types.js';
 import type { Destination } from './channel_config.js';
 import { EventSends, type DeliveryContext } from './deliverers/abstract_channel_deliverer.js';
-import { ORG_IN_APP_CHANNEL_KEY, REALM_MEMBERS_CHANNEL_KEY } from './defaults.js';
+import { ORG_IN_APP_CHANNEL_KEY, ORG_REALM_MEMBERS_CHANNEL_KEY, REALM_MEMBERS_CHANNEL_KEY, realm_members_channel_id } from './defaults.js';
 import { DELIVERER_BY_PROVIDER } from './deliverers/index.js';
 import type { EmailDeliverer } from './deliverers/email_deliverer.js';
 import { plan_fan_out, read_notify_channels_intent } from './notify_intent.js';
@@ -243,12 +243,15 @@ async function resolve_channel_refs(realm_id: string, refs: string[]): Promise<{
 		}
 		let found = false;
 		for (const name of candidates) {
-			const ch = await NotificationService.find_realm_usable_channel(name, realm_id);
-			if (!ch) continue;
+			// A name can reach a channel and a person: both get it.
+			const matches = await NotificationService.find_realm_usable_channels(name, realm_id);
+			if (matches.length === 0) continue;
 			found = true;
-			if (seen.has(ch.id)) break;
-			seen.add(ch.id);
-			ids.push(ch.id);
+			for (const ch of matches) {
+				if (seen.has(ch.id)) continue;
+				seen.add(ch.id);
+				ids.push(ch.id);
+			}
 			break;
 		}
 		if (!found && !missing.includes(ref)) missing.push(ref);
@@ -295,7 +298,7 @@ async function deliver_for_channel_ids(
 	channel_ids: string[],
 	event: SubmittedEvent,
 ): Promise<NotificationDispatchStatus> {
-	const found = await NotificationService.find_enabled_channels(channel_ids);
+	const found = await realm_members_for_org_channel(await NotificationService.find_enabled_channels(channel_ids), event.realm_id ?? null);
 	if (found.length === 0) return 'skipped';
 
 	const payload = await to_payload(event);
@@ -334,6 +337,21 @@ async function deliver_for_channel_ids(
 
 	if (failures > 0 && failures >= channels.length) return 'failed';
 	return 'dispatched';
+}
+
+/**
+ * An org's "All realm members" stands for the realm the event comes from: it is replaced by that realm's own
+ * "All realm members" channel (its shared notice and members, each their way); with no realm it reaches no one.
+ */
+async function realm_members_for_org_channel<C extends { id: string }>(channels: C[], realm_id: string | null): Promise<C[]> {
+	const is_org_realm_members = (c: C) => (c as { system_key?: unknown }).system_key === ORG_REALM_MEMBERS_CHANNEL_KEY;
+	if (!channels.some(is_org_realm_members)) return channels;
+	const rest = channels.filter((c) => !is_org_realm_members(c));
+	if (!realm_id) return rest;
+	const realm_channel_id = realm_members_channel_id(realm_id);
+	if (rest.some((c) => c.id === realm_channel_id)) return rest;
+	const [realm_channel] = await NotificationService.find_enabled_channels([realm_channel_id]) as unknown as C[];
+	return realm_channel ? [...rest, realm_channel] : rest;
 }
 
 /** The built-in channels whose audience is their members, each reached their own way. */
@@ -413,17 +431,19 @@ async function deliver_destinations(
 			}
 			visited.add(dest.name);
 
-			// Within the event's realm and its org (never another org's channel of the same name).
-			const target = payload.realm_id
-				? await NotificationService.find_realm_usable_channel(dest.name, String(payload.realm_id))
-				: await NotificationService.find_channel_by_name(dest.name);
-			if (!target) {
+			// Within the event's realm and its org (never another org's channel of the same name); a channel and
+			// a person of that name both get it.
+			const targets = payload.realm_id
+				? await NotificationService.find_realm_usable_channels(dest.name, String(payload.realm_id))
+				: [await NotificationService.find_channel_by_name(dest.name)].filter((c): c is NonNullable<typeof c> => Boolean(c));
+			if (targets.length === 0) {
 				log.warn(`channel_ref '${dest.name}' not found, skipping`);
 				continue;
 			}
 
-			const child_dests = parse_channel_destinations(target);
-			if (child_dests.length > 0) {
+			for (const target of targets) {
+				const child_dests = parse_channel_destinations(target);
+				if (child_dests.length === 0) continue;
 				const child_secret = (target as unknown as { secret: string | null }).secret ?? null;
 				const ok = await deliver_destinations(
 					child_dests, payload, visited,

@@ -103,12 +103,16 @@ describe.skipIf(!has_postgres)('B2 — unknown channel names', () => {
 		expect(await notices(run_id)).toHaveLength(0);
 	});
 
-	it('the notice reaches the realm: in-app through All realm members (its fixed rule)', async () => {
+	it('the notice goes nowhere by default; a rule sends it on — in-app through All realm members', async () => {
 		const s = await setup();
-		const run_id = `run-${uid()}`;
-		await failed(s.realm_id, run_id, ['nobody-here']);
-		const inbox = await InAppNotification.findAll({ where: { realm_id: s.realm_id, event: 'notification.unknown_channel' }, raw: true });
-		expect(inbox.length).toBeGreaterThan(0);
-		expect(inbox[0].message).toBe(unknown_channel_message('nobody-here'));
+		const inbox = () => InAppNotification.findAll({ where: { realm_id: s.realm_id, event: 'notification.unknown_channel' }, raw: true });
+		await failed(s.realm_id, `run-${uid()}`, ['nobody-here']);
+		expect(await inbox()).toHaveLength(0);
+
+		await NotificationService.set_rule({ realm_id: s.realm_id, event: 'notification.unknown_channel', channel_id: realm_members_channel_id(s.realm_id) });
+		await failed(s.realm_id, `run-${uid()}`, ['nobody-here']);
+		const rows = await inbox();
+		expect(rows.length).toBeGreaterThan(0);
+		expect(rows[0].message).toBe(unknown_channel_message('nobody-here'));
 	});
 });

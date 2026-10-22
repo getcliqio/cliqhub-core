@@ -25,10 +25,9 @@ import {
 	ORG_IN_APP_CHANNEL_KEY,
 	ORG_MEMBERS_CHANNEL_NAME,
 	REALM_MEMBERS_CHANNEL_KEY,
-	REALM_DEFAULT_RULE_EVENTS,
-	REALM_FIXED_RULES,
+	ORG_DEFAULT_RULES,
+	ORG_REALM_MEMBERS_CHANNEL_KEY,
 	REALM_MEMBERS_CHANNEL,
-	realm_default_rule_key,
 	realm_members_channel_id,
 } from '../../src/notifications/defaults.js';
 import { OrgSeedService } from '../../src/services/org_seed.service.js';
@@ -38,8 +37,10 @@ import { ChannelDestination, NotificationChannel, NotificationRule, Org, Realm, 
 import {
 	BUILTIN_CHANNELS_MIGRATION_KEY,
 	DEFAULT_RULES_MIGRATION_KEY,
+	ORG_RUN_FAILED_DEFAULT_MIGRATION_KEY,
 	migrate_builtin_channels,
 	migrate_default_rules,
+	migrate_org_run_failed_default,
 } from '../../src/models/migrations/control_plane_schema_migrations.js';
 
 const has_postgres = await postgres_reachable();
@@ -93,7 +94,23 @@ describe.skipIf(!has_postgres)('notification defaults (A1)', () => {
 		expect(await org_channels(org.id)).toEqual(expected);
 	});
 
-	it('a new realm gets its "All realm members" channel and exactly the default rules, and ensuring again adds nothing', async () => {
+	it('a new org\'s one default: a failed run → its "All realm members" (an ordinary org rule); removed, it stays removed', async () => {
+		const org = await Org.create({ id: randomUUID(), slug: `dflr-${uid()}`.slice(0, 40), display_name: 'Default rule', activated_at: new Date() } as never);
+		orgs.push(org.id);
+		const first = await OrgSeedService.seed_org(org.id, { account: false });
+		expect(first.rules_created).toBe(ORG_DEFAULT_RULES.length);
+		const channel = (await NotificationChannel.findOne({ where: { org_id: org.id, system_key: ORG_REALM_MEMBERS_CHANNEL_KEY }, raw: true }))!;
+		expect(channel).toMatchObject({ name: 'All realm members', locked: true, realm_id: null });
+		const rules = await NotificationRule.findAll({ where: { org_id: org.id }, raw: true });
+		expect(rules.map((r) => [r.event, r.channel_id, r.locked])).toEqual([['run.failed', channel.id, false]]);
+
+		await NotificationRule.destroy({ where: { org_id: org.id } });
+		await OrgSeedService.seed_org(org.id, { account: false, since_version: 4 });
+		expect(await NotificationRule.count({ where: { org_id: org.id } })).toBe(0);
+		await NotificationRule.destroy({ where: { org_id: org.id } });
+	});
+
+	it('a new realm gets its "All realm members" channel and no rules, and ensuring again adds nothing', async () => {
 		const realm = await RealmService.create(OWNER, `dflt-${uid()}`.slice(0, 40), 'Defaults');
 		realms.push(realm.id);
 		const channel_id = realm_members_channel_id(realm.id);
@@ -104,14 +121,10 @@ describe.skipIf(!has_postgres)('notification defaults (A1)', () => {
 			.toEqual(REALM_MEMBERS_CHANNEL.destinations.map((d) => d.type).sort());
 		const rules = async () => (await NotificationRule.findAll({ where: { realm_id: realm.id }, raw: true }))
 			.map((r) => `${r.event}|${r.channel_id}|${r.system_key}|${r.locked}`).sort();
-		const expected = [
-			...REALM_DEFAULT_RULE_EVENTS.map((e) => `${e}|${channel_id}|${realm_default_rule_key(e)}|false`),
-			...REALM_FIXED_RULES.map((f) => `${f.event}|${channel_id}|${realm_default_rule_key(f.event)}|true`),
-		].sort();
-		expect(await rules()).toEqual(expected);
+		expect(await rules()).toEqual([]);
 
 		await NotificationService.ensure_realm_members_channel(realm.id);
-		expect(await rules()).toEqual(expected);
+		expect(await rules()).toEqual([]);
 		expect(await ChannelDestination.count({ where: { channel_id } })).toBe(REALM_MEMBERS_CHANNEL.destinations.length);
 	});
 
@@ -196,11 +209,11 @@ describe.skipIf(!has_postgres)('notification defaults (A1)', () => {
 			expect(await NotificationChannel.findByPk(cid, { raw: true })).toMatchObject({ name: 'All realm members', system_key: REALM_MEMBERS_CHANNEL_KEY, locked: true, enabled: 1 });
 			expect(await dest_types(cid)).toEqual(['cliqhub', 'email:members']);
 			// Its rules are left alone.
-			expect(await NotificationRule.count({ where: { realm_id: legacy_realm } })).toBe(REALM_DEFAULT_RULE_EVENTS.length + REALM_FIXED_RULES.length);
+			expect(await NotificationRule.count({ where: { realm_id: legacy_realm } })).toBe(0);
 
 			const bare = (await NotificationChannel.findByPk(realm_members_channel_id(bare_realm), { raw: true }))!;
 			expect(bare).toMatchObject({ system_key: REALM_MEMBERS_CHANNEL_KEY, locked: true });
-			expect(await NotificationRule.count({ where: { realm_id: bare_realm, channel_id: { [Op.eq]: bare.id } } })).toBe(REALM_DEFAULT_RULE_EVENTS.length + REALM_FIXED_RULES.length);
+			expect(await NotificationRule.count({ where: { realm_id: bare_realm, channel_id: { [Op.eq]: bare.id } } })).toBe(0);
 			expect(await Setting.findByPk(BUILTIN_CHANNELS_MIGRATION_KEY)).toBeTruthy();
 		});
 	});
@@ -212,16 +225,29 @@ describe.skipIf(!has_postgres)('notification defaults (A1)', () => {
 			return realm.id;
 		}
 
-		it('the fixed Unknown channel rule can\'t be changed, switched off or removed (409 locked)', async () => {
+		it('the one-time cleanup removes what CliqHub sent to "All realm members" (October defaults, August wildcards) and keeps people\'s own rules, once', async () => {
 			const realm_id = await new_realm();
-			const fixed = (await NotificationRule.findOne({ where: { realm_id, event: 'notification.unknown_channel' }, raw: true }))!;
-			expect(fixed).toMatchObject({ locked: true, channel_id: realm_members_channel_id(realm_id) });
-			await expect(NotificationService.set_rule({ realm_id, event: 'notification.unknown_channel', channel_id: fixed.channel_id, enabled: false }))
-				.rejects.toMatchObject({ status: 409, code: 'locked' });
-			await expect(NotificationService.remove_rule(fixed.id)).rejects.toMatchObject({ status: 409, code: 'locked' });
-			// The editable defaults stay editable.
-			const run_failed = (await NotificationRule.findOne({ where: { realm_id, event: 'run.failed' }, raw: true }))!;
-			await expect(NotificationService.set_rule({ realm_id, event: 'run.failed', channel_id: run_failed.channel_id, enabled: false })).resolves.toBeTruthy();
+			const channel_id = realm_members_channel_id(realm_id);
+			const now = Date.now();
+			const rule = (event: string, system_key: string | null, created_at: number, locked = false) => NotificationRule.create({
+				id: randomUUID(), realm_id, org_id: null, team_slug: null, event, channel_id, priority: 0, recipients: null,
+				system_key, locked, lock_reason: null, enabled: true, created_at, updated_at: created_at,
+			} as never);
+			for (const e of ['run.failed', 'run.crashed', 'phase.idle', 'phase.timed_out']) await rule(e, `realm.members.${e}`, now);
+			await rule('notification.unknown_channel', 'realm.members.notification.unknown_channel', now, true);
+			const august = Date.UTC(2026, 7, 20);
+			for (const e of ['daemon.*', 'hug.*', 'phase.*', 'realm.*', 'run.*']) await rule(e, null, august);
+			await rule('run.*', null, now);            // someone added this later: stays
+			await rule('hug.review_requested', null, august);  // someone's own exact rule: stays
+
+			await Setting.destroy({ where: { key: ORG_RUN_FAILED_DEFAULT_MIGRATION_KEY } });
+			await migrate_org_run_failed_default(NotificationRule.sequelize!);
+			await rule('run.failed', 'realm.members.run.failed', now);
+			await migrate_org_run_failed_default(NotificationRule.sequelize!); // once
+
+			const left = (await NotificationRule.findAll({ where: { realm_id }, raw: true })).map((r) => `${r.event}|${r.system_key ?? '-'}`).sort();
+			expect(left).toEqual(['hug.review_requested|-', 'run.*|-', 'run.failed|realm.members.run.failed']);
+			expect(await Setting.findByPk(ORG_RUN_FAILED_DEFAULT_MIGRATION_KEY)).toBeTruthy();
 		});
 
 		it('the one-time migration adds the fixed rule to every realm once and leaves the realm\'s other rules', async () => {

@@ -13,11 +13,8 @@ import type { Destination } from '../notifications/channel_config.js';
 import type { NotificationRuleData } from '../schemas/notification_types.js';
 
 import {
-	REALM_DEFAULT_RULE_EVENTS,
-	REALM_FIXED_RULES,
 	REALM_MEMBERS_CHANNEL,
 	REALM_MEMBERS_CHANNEL_NAME,
-	realm_default_rule_key,
 	realm_members_channel_id,
 } from '../notifications/defaults.js';
 
@@ -347,24 +344,30 @@ export class NotificationService {
 	}
 
 	/**
-	 * A channel a realm can use, by name: the realm's own channel, else its org's, else the personal channel of
-	 * the person with that username when they're in the realm's org. Used for names a run or a gate gives
-	 * (notify channels, reviewers, hug channels).
+	 * What a name reaches from a realm: the channel of that name (the realm's own, else its org's) and the
+	 * personal channel of the person with that username when they're a member of the realm — both, when both
+	 * exist. Empty when neither does. Used for names a run or a gate gives (notify channels, hug channels).
 	 */
-	static async find_realm_usable_channel(name: string, realm_id: string): Promise<ChannelRecord | null> {
-		const own = await NotificationService.find_channel_by_name(name, realm_id);
-		if (own) return own;
+	static async find_realm_usable_channels(name: string, realm_id: string): Promise<ChannelRecord[]> {
 		const { Realm, ChannelDestination } = await import('../models/index.js');
-		const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'], raw: true });
-		if (!realm?.org_id) return null;
 		const include = [{ model: ChannelDestination, as: 'destinations_rows' }];
-		const ch = await channel_repo.find_one({ name, org_id: realm.org_id, realm_id: { [Op.is]: null }, user_id: { [Op.is]: null } } as any, { include });
-		if (ch) return NotificationService.to_channel_record(ch);
+		const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'], raw: true });
+		const found: ChannelRecord[] = [];
+		// The channel of that name: the realm's, else the org's.
+		const own = await NotificationService.find_channel_by_name(name, realm_id);
+		if (own) found.push(own);
+		else if (realm?.org_id) {
+			const ch = await channel_repo.find_one({ name, org_id: realm.org_id, realm_id: { [Op.is]: null }, user_id: { [Op.is]: null } } as any, { include });
+			if (ch) found.push(NotificationService.to_channel_record(ch));
+		}
+		// And the person of that name, when they're in the realm — both get it.
 		const { find_member_personal_channel } = await import('./per_user_channel.service.js');
-		const person = await find_member_personal_channel(name, realm.org_id);
-		if (!person) return null;
-		const row = await channel_repo.find_one({ id: person.id } as any, { include });
-		return row ? NotificationService.to_channel_record(row) : null;
+		const person = await find_member_personal_channel(name, { org_id: realm?.org_id ?? null, realm_id });
+		if (person) {
+			const row = await channel_repo.find_one({ id: person.id } as any, { include });
+			if (row) found.push(NotificationService.to_channel_record(row));
+		}
+		return found;
 	}
 
 	/**
@@ -876,10 +879,10 @@ export class NotificationService {
 	}
 
 	/**
-	 * The realm's "All realm members" channel (built in, locked): in-app and email to every member of
-	 * the realm. A new channel starts with the realm's default rules ({@link REALM_DEFAULT_RULE_EVENTS}
-	 * → this channel); an existing one (also the legacy `cliqhub` realm channel) is brought in line —
-	 * name, on, built in, locked, its destinations — and its rules are left as people set them.
+	 * The realm's "All realm members" channel (built in, locked): everyone in the realm, each the way they
+	 * chose. It starts with no rules (the org's default sends failed runs to its realm's members); an existing
+	 * one (also the legacy `cliqhub` realm channel) is brought in line — name, on, built in, locked, its
+	 * destinations — and its rules are left as people set them.
 	 */
 	static async ensure_realm_members_channel(realm_id: string): Promise<ChannelRecord> {
 		log.debug('ensure_realm_members_channel', { realm_id });
@@ -913,21 +916,7 @@ export class NotificationService {
 			updated_at: now,
 		} as any);
 		await NotificationService._ensure_destinations(channel_id, REALM_MEMBERS_CHANNEL.destinations);
-		for (const event of REALM_DEFAULT_RULE_EVENTS) {
-			await rule_repo.create_one({
-				realm_id: trimmed, org_id: null, team_slug: null, event, channel_id, priority: 0,
-				recipients: null, system_key: realm_default_rule_key(event), locked: false, lock_reason: null,
-				created_at: now, updated_at: now,
-			} as any);
-		}
-		for (const fixed of REALM_FIXED_RULES) {
-			await rule_repo.create_one({
-				realm_id: trimmed, org_id: null, team_slug: null, event: fixed.event, channel_id, priority: 0,
-				recipients: null, system_key: realm_default_rule_key(fixed.event), locked: true, lock_reason: fixed.lock_reason,
-				created_at: now, updated_at: now,
-			} as any);
-		}
-		log.info('realm_members_channel_created', { realm_id: trimmed, channel_id, rules: REALM_DEFAULT_RULE_EVENTS.length + REALM_FIXED_RULES.length });
+		log.info('realm_members_channel_created', { realm_id: trimmed, channel_id });
 		return NotificationService.to_channel_record(row);
 	}
 

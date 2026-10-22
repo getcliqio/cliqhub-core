@@ -59,16 +59,21 @@ export async function ensure_personal_channel(user_id: string, username: string)
 }
 
 /**
- * The personal channel of the user named `name`, when that user is an active member of `org_id` — how a name
- * like "elan" reaches Elan from a realm of that org. Null when there's no such member.
+ * The personal channel of the user named `name` — how a name like "elan" reaches Elan. From a realm, Elan must
+ * be a member of that realm; otherwise an active member of `org_id`. Null when there's no such member.
  */
-export async function find_member_personal_channel(name: string, org_id: string | null): Promise<{ id: string; user_id: string } | null> {
+export async function find_member_personal_channel(
+    name: string,
+    where: { org_id: string | null; realm_id?: string | null },
+): Promise<{ id: string; user_id: string } | null> {
     const username = name.trim().replace(/^@/, '');
-    if (!username || !org_id) return null;
-    const { User, OrgMember, NotificationChannel } = await import('../models/index.js');
+    if (!username || (!where.org_id && !where.realm_id)) return null;
+    const { User, OrgMember, RealmMember, NotificationChannel } = await import('../models/index.js');
     const user = await User.findOne({ where: { username: { [Op.iLike]: username }, deleted_at: null } as never, attributes: ['id'], raw: true }) as { id: string } | null;
     if (!user) return null;
-    const member = await OrgMember.findOne({ where: { org_id, user_id: String(user.id), status: 'active' } as never, attributes: ['user_id'], raw: true });
+    const member = where.realm_id
+        ? await RealmMember.findOne({ where: { realm_id: where.realm_id, member_type: 'user', member_id: String(user.id) } as never, attributes: ['id'], raw: true })
+        : await OrgMember.findOne({ where: { org_id: where.org_id, user_id: String(user.id), status: 'active' } as never, attributes: ['user_id'], raw: true });
     if (!member) return null;
     const channel = await NotificationChannel.findOne({ where: { user_id: String(user.id), enabled: 1 } as never, attributes: ['id', 'user_id'], raw: true }) as { id: string; user_id: string } | null;
     return channel ? { id: String(channel.id), user_id: String(channel.user_id) } : null;

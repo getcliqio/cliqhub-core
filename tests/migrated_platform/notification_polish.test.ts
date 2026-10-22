@@ -62,8 +62,15 @@ describe.skipIf(!has_postgres)('one notification per run end', () => {
 		await close_test_control_plane_store();
 	});
 
-	it('Core’s report then the daemon’s → one event (actor and message filled in), one inbox row, readable title', async () => {
+	/** A realm whose failed runs go to its members (a realm of no org has no org default). */
+	async function realm_sending_failures() {
 		const realm = await RealmService.create(OWNER, `p-${uid()}`.slice(0, 40), 'Polish');
+		await NotificationService.set_rule({ realm_id: realm.id, event: 'run.failed', channel_id: `cliqhub-${realm.id}` });
+		return realm;
+	}
+
+	it('Core’s report then the daemon’s → one event (actor and message filled in), one inbox row, readable title', async () => {
+		const realm = await realm_sending_failures();
 		const run_id = `run-${uid()}`;
 		// Core's own end-of-run report: no actor, the error in the payload.
 		const first = await EventSubmitService.submit({ type: 'run.failed', realm_id: realm.id, run_id, daemon_id: 'd1', payload: { error: 'Phase boom failed: exit 1' } });
@@ -81,7 +88,7 @@ describe.skipIf(!has_postgres)('one notification per run end', () => {
 	});
 
 	it('a run that started again in between ends again: that end is kept', async () => {
-		const realm = await RealmService.create(OWNER, `p-${uid()}`.slice(0, 40), 'Polish');
+		const realm = await realm_sending_failures();
 		const run_id = `run-${uid()}`;
 		await EventSubmitService.submit({ type: 'run.failed', realm_id: realm.id, run_id, daemon_id: 'd1' });
 		await EventSubmitService.submit({ type: 'run.started', realm_id: realm.id, run_id, daemon_id: 'd1' });

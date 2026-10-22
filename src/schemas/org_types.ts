@@ -191,10 +191,38 @@ export const OrgsGetReviewableTargetsInput = z.object({
     org_id: z.string().uuid()
         .describe('Org UUID; required — no header fallback'),
     query: z.string().optional()
-        .describe('Substring filter on usernames or channel names'),
+        .describe('Substring filter on channel names and on people\'s usernames and display names'),
     realm_id: z.string().uuid().optional()
-        .describe("Also list this realm's own channels (a realm of org_id the caller can see)"),
+        .describe("A realm of org_id the caller can see: its channels and the org's, and the realm's members (else the org's channels and members)"),
+    kind: z.enum(['channel', 'person']).optional()
+        .describe('Page only this group (for "show more"); both groups when omitted'),
+    limit: z.number().int().min(1).max(100).optional()
+        .describe('Items per group (default 20)'),
+    offset: z.number().int().min(0).optional()
+        .describe('Items to skip in each group returned (default 0)'),
 });
+
+/** One page of a reviewable-targets group, with how many match in all. */
+const reviewable_page = <T extends z.ZodTypeAny>(item: T) => z.object({
+    items: z.array(item),
+    total: z.number().int().describe('How many match in all'),
+});
+
+/** POST /v1/orgs/get_reviewable_targets — channels and people a channel, run or review can name. */
+export const OrgsReviewableTargetsData = z.object({
+    channels: reviewable_page(z.object({
+        id: z.string(),
+        name: z.string(),
+        level: z.enum(['realm', 'org']).describe("Whose channel it is: the realm's or the org's"),
+    })),
+    people: reviewable_page(z.object({
+        user_id: z.string(),
+        username: z.string().describe('Also the name that reaches them (their personal channel)'),
+        display_name: z.string().nullable(),
+    })),
+});
+
+export type OrgsReviewableTargetsData = z.infer<typeof OrgsReviewableTargetsData>;
 
 export type OrgsGetReviewableTargetsInput = z.infer<typeof OrgsGetReviewableTargetsInput>;
 
