@@ -219,6 +219,7 @@ export const OrgsReviewableTargetsData = z.object({
         user_id: z.string(),
         username: z.string().describe('Also the name that reaches them (their personal channel)'),
         display_name: z.string().nullable(),
+        channel_id: z.string().nullable().describe('Their personal channel: an event rule can point at it (they get it their way)'),
     })),
 });
 

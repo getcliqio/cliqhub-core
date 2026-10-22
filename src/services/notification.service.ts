@@ -747,7 +747,22 @@ export class NotificationService {
 			}
 		}
 		const rows = await rule_repo.find_all(where as any, { order: [['event', 'ASC'], ['priority', 'DESC']] });
-		return rows.map(to_rule_data);
+		return NotificationService._with_people(rows.map(to_rule_data));
+	}
+
+	/** Names the person a rule goes to (a personal channel) — name only, never their destinations. */
+	private static async _with_people(rules: NotificationRuleData[]): Promise<NotificationRuleData[]> {
+		const ids = [...new Set(rules.map((r) => r.channel_id))];
+		if (ids.length === 0) return rules;
+		const { NotificationChannel, User } = await import('../models/index.js');
+		const personal = await NotificationChannel.findAll({ where: { id: ids, user_id: { [Op.ne]: null } } as never, attributes: ['id', 'user_id'], raw: true }) as unknown as Array<{ id: string; user_id: string }>;
+		if (personal.length === 0) return rules;
+		const users = await User.findAll({ where: { id: personal.map((c) => c.user_id) } as never, attributes: ['id', 'username', 'display_name'], raw: true }) as unknown as Array<{ id: string; username: string; display_name: string | null }>;
+		const by_channel = new Map(personal.map((c) => [String(c.id), users.find((u) => String(u.id) === String(c.user_id))]));
+		return rules.map((r) => {
+			const u = by_channel.get(r.channel_id);
+			return u ? { ...r, person: { user_id: String(u.id), username: u.username, display_name: u.display_name ?? null } } : r;
+		});
 	}
 
 	/** The rules in play in a realm: the org's and the realm's own — both apply. */
@@ -798,7 +813,18 @@ export class NotificationService {
 		const channel = await channel_repo.find_by_id(channel_id);
 		if (!channel) throw new ApiError('not_found', `notification channel '${channel_id}' not found`, 404);
 
-		if (realm_id) {
+		if (channel.user_id) {
+			// A person (their personal channel — they get it their way): a member of this realm, or of this org.
+			const { RealmMember, OrgMember } = await import('../models/index.js');
+			const member = realm_id
+				? await RealmMember.findOne({ where: { realm_id, member_type: 'user', member_id: String(channel.user_id) } as never, attributes: ['id'], raw: true })
+				: org_id
+					? await OrgMember.findOne({ where: { org_id, user_id: String(channel.user_id), status: 'active' } as never, attributes: ['user_id'], raw: true })
+					: null;
+			if (!member) {
+				throw new ApiError('forbidden', `That person isn't a member of this ${realm_id ? 'realm' : 'organization'}`, 403);
+			}
+		} else if (realm_id) {
 			// Realm rule: channel must be in this realm, or be an org-level channel from the realm's org.
 			if (channel.realm_id !== null && channel.realm_id !== realm_id) {
 				throw new ApiError('forbidden', `Channel '${channel_id}' does not belong to this realm or its organization`, 403);

@@ -169,6 +169,9 @@ describe.skipIf(!has_postgres)('run start options', () => {
 
         const org_wide = await targets({ limit: 100 });
         expect(people(org_wide)).toContain(s.user.nora);
+        // Each person comes with their personal channel (what an event rule points at).
+        const nora = org_wide.body.data.people.items.find((p: { user_id: string }) => p.user_id === s.user.nora);
+        expect(nora.channel_id).toBe((await NotificationChannel.findOne({ where: { user_id: s.user.nora }, raw: true }))?.id ?? null);
 
         const mia = (await User.findByPk(s.user.mia, { attributes: ['username'], raw: true }))!.username;
         const found = await targets({ realm_id: s.A1, query: mia.slice(2, 8).toUpperCase() });

@@ -337,9 +337,13 @@ export class OrgsService {
                 const { rows, count } = await User.findAndCountAll({
                     where: where as never, attributes: ['id', 'username', 'display_name'], order: [['username', 'ASC']], limit, offset, raw: true,
                 });
+                const users = rows as unknown as Array<{ id: string; username: string; display_name: string | null }>;
+                const personal = users.length === 0 ? [] : await NotificationChannel.findAll({
+                    where: { user_id: users.map((u) => String(u.id)) } as never, attributes: ['id', 'user_id'], raw: true,
+                }) as unknown as Array<{ id: string; user_id: string }>;
+                const channel_of = new Map(personal.map((c) => [String(c.user_id), String(c.id)]));
                 people = {
-                    items: (rows as unknown as Array<{ id: string; username: string; display_name: string | null }>)
-                        .map((u) => ({ user_id: String(u.id), username: u.username, display_name: u.display_name ?? null })),
+                    items: users.map((u) => ({ user_id: String(u.id), username: u.username, display_name: u.display_name ?? null, channel_id: channel_of.get(String(u.id)) ?? null })),
                     total: count,
                 };
             }

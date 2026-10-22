@@ -120,6 +120,22 @@ describe.skipIf(!has_postgres)('one personal channel per person', () => {
         expect(await reached(ana.username, realm_a)).toEqual([id]);
     });
 
+    it('an event rule may go to a person — a member of that org or realm (by name, never their addresses); not to anyone else', async () => {
+        const ana_ch = await ensure_personal_channel(ana.id, ana.username);
+        const ben_ch = await ensure_personal_channel(ben.id, ben.username);
+        const org_rule = await NotificationService.set_rule({ org_id: org_a, event: 'run.failed', channel_id: ana_ch });
+        const realm_rule = await NotificationService.set_rule({ realm_id: realm_a, event: 'run.crashed', channel_id: ana_ch });
+        // Ben is in neither org A nor realm A.
+        await expect(NotificationService.set_rule({ org_id: org_a, event: 'run.failed', channel_id: ben_ch })).rejects.toMatchObject({ status: 403 });
+        await expect(NotificationService.set_rule({ realm_id: realm_a, event: 'run.failed', channel_id: ben_ch })).rejects.toMatchObject({ status: 403 });
+
+        const listed = await NotificationService.list_rules({ org_id: org_a });
+        expect(listed.find((r) => r.id === org_rule.id)?.person).toEqual({ user_id: ana.id, username: ana.username, display_name: 'ana' });
+        expect(JSON.stringify(listed)).not.toContain('@pc.test');
+        expect((await NotificationService.list_rules({ realm_id: realm_a })).find((r) => r.id === realm_rule.id)?.person?.user_id).toBe(ana.id);
+        await NotificationRule.destroy({ where: { id: [org_rule.id, realm_rule.id] } });
+    });
+
     it('migration: per-org copies fold into one — every destination kept, rules repointed — once', async () => {
         const cy = await person('cy');
         await member(org_a, cy.id);

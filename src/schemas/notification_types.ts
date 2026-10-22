@@ -208,6 +208,11 @@ export const NotificationRuleData = z.object({
 	locked: z.boolean().describe('True when the rule cannot be changed or removed (409 locked)'),
 	lock_reason: z.string().nullable().describe('Why the rule is locked'),
 	enabled: z.boolean().describe('False when switched off: the rule sends nothing (a realm rule that is off still replaces the org\'s for its event)'),
+	person: z.object({
+		user_id: z.string(),
+		username: z.string(),
+		display_name: z.string().nullable(),
+	}).nullable().optional().describe('When the rule goes to a person (their personal channel — they get it their way): who; never their addresses'),
 });
 export type NotificationRuleData = z.infer<typeof NotificationRuleData>;
 
