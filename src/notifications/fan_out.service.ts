@@ -80,11 +80,8 @@ export class NotificationFanOutService {
 			org_id,
 		});
 
-		if (channel_ids.length > 0) {
-			return deliver_for_channel_ids(channel_ids, event);
-		}
-
-		return 'skipped';
+		// Even with no rule, the person layer may send it (someone switched it on; Runs I start).
+		return deliver_for_channel_ids(channel_ids, event);
 	}
 
 	/**
@@ -298,17 +295,25 @@ async function deliver_for_channel_ids(
 	channel_ids: string[],
 	event: SubmittedEvent,
 ): Promise<NotificationDispatchStatus> {
-	const found = await realm_members_for_org_channel(await NotificationService.find_enabled_channels(channel_ids), event.realm_id ?? null);
-	if (found.length === 0) return 'skipped';
+	const found = channel_ids.length > 0
+		? await realm_members_for_org_channel(await NotificationService.find_enabled_channels(channel_ids), event.realm_id ?? null)
+		: [];
+	// The person layer: someone who switched this event on, and the person who started the run (Runs I start).
+	const people = await person_layer_channels(event);
+	if (found.length === 0 && people.length === 0) return 'skipped';
 
 	const payload = await to_payload(event);
 	let failures = 0;
 	// One event: each endpoint gets it once. Shared channels first, so their in-app notice covers members
 	// before any personal copy is considered.
 	const sends = new EventSends();
+	sends.event = event.type;
 	const channels = [...found].sort((a, b) => Number(Boolean((a as { user_id?: unknown }).user_id)) - Number(Boolean((b as { user_id?: unknown }).user_id)));
 
 	for (const channel of channels) {
+		// A person who switched this event off for themselves isn't sent it (their choice wins over realm and org).
+		const owner = (channel as { user_id?: string | null }).user_id;
+		if (owner && await sends.person_off(String(owner))) continue;
 		const destinations = parse_channel_destinations(channel);
 		const members_way = MEMBERS_CHANNEL_KEYS.has(String((channel as { system_key?: unknown }).system_key ?? ''));
 		if (destinations.length === 0 && !members_way) {
@@ -335,8 +340,45 @@ async function deliver_for_channel_ids(
 		}
 	}
 
-	if (failures > 0 && failures >= channels.length) return 'failed';
+	for (const { channel, force } of people) {
+		// Runs I start is the person's own (more specific) choice; switched on for everyone in a realm, off still wins.
+		if (!force && await sends.person_off(String(channel.user_id))) continue;
+		const secret = (channel as unknown as { secret: string | null }).secret ?? null;
+		await deliver_destinations(parse_channel_destinations(channel), payload, new Set(), { channel_id: channel.id, sends }, secret);
+	}
+
+	if (channels.length > 0 && failures > 0 && failures >= channels.length) return 'failed';
 	return 'dispatched';
+}
+
+/**
+ * The person layer's own recipients for an event (PLAN-notification-layers D): the person who started the run when
+ * "Runs I start" has the event on (`force` — that wins over their general off), and the realm's members who switched
+ * the event on for themselves. Their personal channels (they get it their way); each once.
+ */
+async function person_layer_channels(event: SubmittedEvent): Promise<Array<{ channel: { id: string; user_id: string }; force: boolean }>> {
+	const { PersonSettingsService } = await import('../services/person_settings.service.js');
+	const wanted = new Map<string, boolean>();
+	if (event.run_id) {
+		const { Run } = await import('../models/index.js');
+		const run = await Run.findByPk(String(event.run_id), { attributes: ['started_by'], raw: true }) as { started_by: string | null } | null;
+		if (run?.started_by && await PersonSettingsService.my_runs_on(run.started_by, event.type)) wanted.set(run.started_by, true);
+	}
+	if (event.realm_id) {
+		for (const user_id of await PersonSettingsService.on_in_realm(event.type, String(event.realm_id))) {
+			if (!wanted.has(user_id)) wanted.set(user_id, false);
+		}
+	}
+	if (wanted.size === 0) return [];
+	const { User, NotificationChannel, ChannelDestination } = await import('../models/index.js');
+	const live = (await User.findAll({ where: { id: [...wanted.keys()], status: 'active', deleted_at: null } as never, attributes: ['id'], raw: true }))
+		.map((u) => String((u as { id: string }).id));
+	if (live.length === 0) return [];
+	const personal = await NotificationChannel.findAll({
+		where: { user_id: live, enabled: 1 } as never,
+		include: [{ model: ChannelDestination, as: 'destinations_rows' }],
+	});
+	return personal.map((pc) => ({ channel: pc as unknown as { id: string; user_id: string }, force: wanted.get(String((pc as { user_id: string }).user_id)) === true }));
 }
 
 /**
@@ -380,6 +422,7 @@ async function deliver_to_members_their_way(channel: unknown, payload: Notificat
 	});
 	let any = false;
 	for (const pc of personal) {
+		if (await sends.person_off(String((pc as { user_id: string }).user_id))) continue;
 		const dests = parse_channel_destinations(pc).filter((d) => d.type !== 'cliqhub');
 		if (dests.length === 0) continue;
 		const secret = (pc as unknown as { secret: string | null }).secret ?? null;
@@ -444,6 +487,7 @@ async function deliver_destinations(
 			}
 
 			for (const target of targets) {
+				if (target.user_id && context?.sends && await context.sends.person_off(String(target.user_id))) continue;
 				const child_dests = parse_channel_destinations(target);
 				if (child_dests.length === 0) continue;
 				const child_secret = (target as unknown as { secret: string | null }).secret ?? null;

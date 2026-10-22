@@ -31,6 +31,20 @@ export class EventSends {
 		this._keys.add(key);
 		return true;
 	}
+
+	/** The event type (for the person layer: who switched it off for themselves). */
+	event = '';
+	private readonly _off = new Map<string, boolean>();
+
+	/** Whether this person switched this event off for themselves (PLAN-notification-layers D). Cached per event. */
+	async person_off(user_id: string): Promise<boolean> {
+		const hit = this._off.get(user_id);
+		if (hit !== undefined) return hit;
+		const { PersonSettingsService } = await import('../../services/person_settings.service.js');
+		const off = this.event ? (await PersonSettingsService.off_for([user_id], this.event)).has(user_id) : false;
+		this._off.set(user_id, off);
+		return off;
+	}
 }
 
 export abstract class AbstractChannelDeliverer {

@@ -446,7 +446,8 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
             expect((await NotificationChannel.findByPk(locked.id, { raw: true }))!.enabled).toBe(1);
 
             const in_app = (await NotificationChannel.findOne({ where: { org_id: s.acme, system_key: 'org.in_app' }, raw: true }))!;
-            const built_in = await post('/v1/notification_channels/update', s.token.olivia, { id: in_app.id, name: in_app.name });
+            // A valid name (letters, digits, - and _), so the lock is what answers.
+            const built_in = await post('/v1/notification_channels/update', s.token.olivia, { id: in_app.id, name: 'renamed-built-in' });
             expect(built_in.status, JSON.stringify(built_in.body)).toBe(409);
             expect(err(built_in)).toMatchObject({ code: 'locked', details: { system_key: 'org.in_app' } });
         });

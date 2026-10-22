@@ -269,6 +269,20 @@ export class InAppNotificationService {
 
 		const and_parts: Record<string, unknown>[] = [{ ...realm_clause }];
 
+		// Events this person switched off for themselves: their shared (realm / org) notices are hidden for them.
+		const { PersonSettingsService } = await import('./person_settings.service.js');
+		const muted = await PersonSettingsService.muted_events(user_id);
+		if (muted.length > 0) {
+			const exact = muted.filter((e) => !e.includes('*'));
+			const families = muted.filter((e) => e.endsWith('.*')).map((e) => `${e.slice(0, -1)}%`);
+			const hidden: Record<string | symbol, unknown>[] = muted.includes('*')
+				? [{}]
+				: [...(exact.length ? [{ event: { [Op.in]: exact } }] : []), ...families.map((f) => ({ event: { [Op.like]: f } }))];
+			if (hidden.length > 0) {
+				and_parts.push({ [Op.not]: { [Op.and]: [{ user_id: { [Op.is]: null } }, { [Op.or]: hidden }] } });
+			}
+		}
+
 		// Org boundary: restrict to the active org when provided.
 		if (opts.org_id) and_parts.push({ org_id: opts.org_id });
 

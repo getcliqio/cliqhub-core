@@ -54,6 +54,9 @@ export async function ensure_personal_channel(user_id: string, username: string)
             });
         }
         log.info('personal_channel_created', { user_id, username, channel_id: channel.id });
+        // A new person's "Runs I start": the events that mean trouble switched on.
+        const { PersonSettingsService } = await import('./person_settings.service.js');
+        await PersonSettingsService.ensure_seeded(user_id);
     }
     return channel.id;
 }

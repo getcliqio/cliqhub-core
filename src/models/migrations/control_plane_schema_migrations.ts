@@ -1146,6 +1146,12 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     // and seed from cliq.teams.manifest instead. SPA uses this with
     // teams/get_phases so older runs keep the workflow they started on.
     await run(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "team_version_id" TEXT`);
+    // Who started a run (PLAN-notification-layers C).
+    await run(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "started_by" TEXT`);
+    // A person's own on / off per event (PLAN-notification-layers D).
+    await run(PERSON_SETTINGS_TABLE_SQL);
+    await run(PERSON_SETTINGS_INDEX_SQL);
+    await run(`CREATE INDEX IF NOT EXISTS "notification_person_settings_scope_event_state" ON cliq."notification_person_settings" ("scope", "event", "state")`);
     await run(`CREATE INDEX IF NOT EXISTS "team_runs_team_version_id_idx"
                ON cliq."team_runs" ("team_version_id")
                WHERE "team_version_id" IS NOT NULL`);
@@ -1384,6 +1390,8 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_personal_channel_per_user(sq);
     await migrate_builtin_members_their_way(sq);
     await migrate_org_run_failed_default(sq);
+    await migrate_run_started_by(sq);
+    await migrate_person_settings_seed(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -2328,3 +2336,94 @@ export async function migrate_org_run_failed_default(sq: Sequelize): Promise<voi
         _mig_log.error('org_run_failed_default_migration_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }
+
+export const RUN_STARTED_BY_MIGRATION_KEY = 'migrate.run_started_by_2026_10';
+
+/**
+ * One time (Oct 2026, PLAN-notification-layers C): runs made before `team_runs.started_by` existed get it from their
+ * Hub queue entry (`realm_dispatch_queue.submitted_by`) where there is one; the rest stay unknown.
+ * Frozen spec (prod before: 363 runs, 92 with a queue submitter). Safe to repeat.
+ */
+export async function migrate_run_started_by(sq: Sequelize): Promise<void> {
+    try {
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.realm_dispatch_queue') AS q`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; q: string | null }>;
+        if (!tables?.s || !tables?.q) {
+            _mig_log.info('run_started_by_deferred', { reason: 'tables not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: RUN_STARTED_BY_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+        // Whichever runs first, the column exists before it's filled.
+        await sq.query(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "started_by" TEXT`);
+
+        const filled = await sq.query(
+            `UPDATE cliq."team_runs" r SET "started_by" = q."submitted_by"
+             FROM cliq."realm_dispatch_queue" q
+             WHERE q."run_id" = r."run_id" AND r."started_by" IS NULL AND q."submitted_by" IS NOT NULL AND q."submitted_by" <> ''
+             RETURNING r."run_id"`,
+            { type: QueryTypes.SELECT },
+        );
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: RUN_STARTED_BY_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('run_started_by_migrated', { runs_filled: filled.length });
+    } catch (err) {
+        _mig_log.error('run_started_by_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+export const PERSON_SETTINGS_SEED_MIGRATION_KEY = 'migrate.person_settings_seed_2026_10';
+
+/**
+ * One time (Oct 2026, PLAN-notification-layers D): every live person who has no "Runs I start" settings gets them
+ * seeded — run failed, run crashed, phase failed, phase timed out, phase idle, waiting for input, gate escalated, on.
+ * Frozen spec (prod before: 7 live people → 49 rows). New people are seeded with their personal channel. Safe to repeat.
+ */
+export async function migrate_person_settings_seed(sq: Sequelize): Promise<void> {
+    try {
+        await sq.query(PERSON_SETTINGS_TABLE_SQL);
+        await sq.query(PERSON_SETTINGS_INDEX_SQL);
+        const [tables] = await sq.query(`SELECT to_regclass('cliq.settings') AS s, to_regclass('cliq.users') AS p`, { type: QueryTypes.SELECT }) as Array<{ s: string | null; p: string | null }>;
+        if (!tables?.s || !tables?.p) {
+            _mig_log.info('person_settings_seed_deferred', { reason: 'tables not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: PERSON_SETTINGS_SEED_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+
+        const events = ['run.failed', 'run.crashed', 'phase.failed', 'phase.timed_out', 'phase.idle', 'phase.input_required', 'phase.escalated'];
+        const now = Date.now();
+        const inserted = await sq.query(
+            `INSERT INTO cliq."notification_person_settings" ("id", "user_id", "scope", "event", "state", "created_at", "updated_at")
+             SELECT gen_random_uuid(), u."id"::text, 'my_runs', e.event, 'on', :now, :now
+             FROM cliq."users" u CROSS JOIN unnest(ARRAY[:events]::text[]) AS e(event)
+             WHERE u."deleted_at" IS NULL
+               AND NOT EXISTS (SELECT 1 FROM cliq."notification_person_settings" p WHERE p."user_id" = u."id"::text AND p."scope" = 'my_runs')
+             ON CONFLICT DO NOTHING
+             RETURNING "user_id"`,
+            { replacements: { now, events }, type: QueryTypes.SELECT },
+        ) as Array<{ user_id: string }>;
+        await sq.query(
+            `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW()) ON CONFLICT ("key") DO NOTHING`,
+            { replacements: { key: PERSON_SETTINGS_SEED_MIGRATION_KEY, value: new Date().toISOString() } },
+        );
+        _mig_log.info('person_settings_seeded', { people: new Set(inserted.map((r) => r.user_id)).size, rows: inserted.length });
+    } catch (err) {
+        _mig_log.error('person_settings_seed_migration_failed', { error: (err as Error)?.message ?? String(err) });
+    }
+}
+
+/** The person-settings table and its one-row-per-choice index (made by the schema migrations and by the seed). */
+const PERSON_SETTINGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."notification_person_settings" (
+    "id" UUID PRIMARY KEY,
+    "user_id" TEXT NOT NULL,
+    "scope" TEXT NOT NULL,
+    "event" TEXT NOT NULL,
+    "state" TEXT NOT NULL,
+    "created_at" BIGINT NOT NULL,
+    "updated_at" BIGINT NOT NULL
+)`;
+const PERSON_SETTINGS_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS "notification_person_settings_user_scope_event" ON cliq."notification_person_settings" ("user_id", "scope", "event")`;

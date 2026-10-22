@@ -78,6 +78,11 @@ export type NotificationChannelsCreateInput = z.infer<typeof NotificationChannel
 export const NotificationChannelsUpdateInput = z.object({
     id: z.string().describe('Channel id to update'),
     name: channel_name.optional().describe('New name (must remain unique in scope): letters, digits, - and _'),
+    person_settings: z.array(z.object({
+        scope: z.enum(['my_runs', 'all']).describe('my_runs: about runs you started; all: what reaches you from your org and realms'),
+        event: z.string().trim().min(1).max(200).describe('Event type (or a family wildcard like run.*)'),
+        state: z.enum(['on', 'off']).nullable().describe('on / off for you; null = follow the realm and org again'),
+    })).max(100).optional().describe('Your own channel only: your on / off per event (the person layer — wins over realm and org for you)'),
     destinations: z.array(destination_schema).min(1).optional().describe('Replace the full destinations list when set'),
     enabled: z.boolean().optional().describe('Enable or disable the channel'),
 });
@@ -180,6 +185,11 @@ export const NotificationChannelData = z.object({
 	created_at: z.number().describe('Create time (unix ms)'),
 	updated_at: z.number().describe('Last update time (unix ms)'),
 	rule_count: z.number().optional().describe('Number of notification rules pointing at this channel'),
+	person: z.object({
+		my_runs_events: z.array(z.string()).describe('The events "Runs I start" lists'),
+		settings: z.array(z.object({ scope: z.enum(['my_runs', 'all']), event: z.string(), state: z.enum(['on', 'off']) })),
+		reaches_me: z.array(z.object({ event: z.string(), via: z.array(z.string()).describe('What it comes through, e.g. "All realm members", "oncall names you", "sent to you"') })),
+	}).optional().describe('Only on your own channel (`mine`): your settings and what reaches you'),
 	system_key: z.string().nullable().describe('Stable key of a channel CliqHub seeded (e.g. org.email), else null'),
 	locked: z.boolean().describe('True when the channel cannot be changed or removed (409 locked)'),
 	lock_reason: z.string().nullable().describe('Why the channel is locked'),

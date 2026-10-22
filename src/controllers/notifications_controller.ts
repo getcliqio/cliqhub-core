@@ -10,6 +10,7 @@
  * - Id-keyed mutate: load row → authz; no soft header org gate.
  */
 
+import { ApiError } from '../lib/api_error.js';
 import { BaseController } from './base_controller.js';
 import { get_logger } from '../lib/log.js';
 import { NotificationService } from '../services/notification.service.js';
@@ -52,8 +53,15 @@ export class NotificationsController extends BaseController {
         // Zod SoT — account mode requires org_id; never invent from X-Org-Id.
         const body = this.parse_body(NotificationChannelsGetInput, req);
         if (body.mine) {
-            // The caller's own personal channel — nobody else's.
-            this.ok(res, await NotificationService.list_channels({ mine_user_id: user_id }));
+            // The caller's own personal channel — nobody else's — with their settings and what reaches them.
+            const mine = await NotificationService.list_channels({ mine_user_id: user_id });
+            const { PersonSettingsService, MY_RUNS_EVENTS, reaches_me } = await import('../services/person_settings.service.js');
+            const person = {
+                my_runs_events: [...MY_RUNS_EVENTS],
+                settings: await PersonSettingsService.list(user_id),
+                reaches_me: await reaches_me(user_id, String(req.auth?.user?.username ?? '')),
+            };
+            this.ok(res, mine.map((c) => ({ ...c, person })));
             return;
         }
         const realm_id = body.realm_id?.trim();
@@ -134,7 +142,17 @@ export class NotificationsController extends BaseController {
         // Route policy checked the channel's realm / org / personal owner.
         const existing = await NotificationService.get_channel(data.id);
 
-        const updated = await NotificationService.update_channel(data);
+        const { person_settings, ...change } = data;
+        if (person_settings?.length) {
+            // Your own choices, on your own channel only.
+            if (!existing.user_id || String(existing.user_id) !== user_id) {
+                throw ApiError.forbidden('Notification settings are set on your own channel');
+            }
+            const { PersonSettingsService } = await import('../services/person_settings.service.js');
+            for (const s of person_settings) await PersonSettingsService.set(user_id, s.scope, s.event, s.state);
+            log.info('person_settings_changed', { user_id, count: person_settings.length });
+        }
+        const updated = Object.keys(change).length > 1 ? await NotificationService.update_channel(change) : existing;
         log.info('channel_updated', { id: data.id });
         this.ok(res, updated);
     }

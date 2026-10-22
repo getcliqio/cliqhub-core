@@ -125,7 +125,7 @@ export class NotificationService {
 	 *
 	 * Example: `phase.escalated` → `['phase.escalated', 'phase.*', '*']`
 	 */
-	private static build_matching_selectors(event: string): string[] {
+	static build_matching_selectors(event: string): string[] {
 		// Rules may match exact, family wildcard (phase.*), or global *.
 		const selectors = [event];
 		const dot = event.indexOf('.');

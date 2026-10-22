@@ -191,6 +191,8 @@ export class RunController extends BaseController {
             context_labels: body.context_labels,
             execution_type: body.execution_type,
             origin: body.origin,
+            // The person behind the token: a user's own, or a daemon token's creator.
+            started_by: req.auth?.user?.id ? String(req.auth.user.id) : null,
         });
         const data: RunCreateData = { run_id };
         log.info('run_created', { run_id });

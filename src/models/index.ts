@@ -40,6 +40,7 @@ import { InAppNotification } from './in_app_notification.model.js';
 import { NotificationChannel } from './notification_channel.model.js';
 import { NotificationRule } from './notification_rule.model.js';
 import { NotificationSubscription } from './notification_subscription.model.js';
+import { NotificationPersonSetting } from './notification_person_setting.model.js';
 import { RealmA2aSetting } from './realm_a2a_setting.model.js';
 import { RealmAgentSetting } from './realm_agent_setting.model.js';
 import { RealmDispatchKey } from './realm_dispatch_key.model.js';
@@ -74,7 +75,7 @@ export {
     Agent, AgentCatalog, AccountMeshSetting,
     Container, CustomEvent, Daemon, DaemonConfig, DaemonTeam,
     HubEvent, ChannelDestination, InAppNotification,
-    NotificationChannel, NotificationRule, NotificationSubscription,
+    NotificationChannel, NotificationRule, NotificationSubscription, NotificationPersonSetting,
     RealmA2aSetting, RealmAgentSetting, RealmDispatchKey, RealmDispatchQueue,
     Realm, RealmMember,
     Review, ReviewMessage, ReviewNotification,
@@ -144,6 +145,7 @@ export function init_models(sequelize: Sequelize): void {
     AgentCatalog.register(sequelize);
     NotificationRule.register(sequelize);
     NotificationSubscription.register(sequelize);
+    NotificationPersonSetting.register(sequelize);
     CustomEvent.register(sequelize);
     RealmA2aSetting.register(sequelize);
     AccountMeshSetting.register(sequelize);

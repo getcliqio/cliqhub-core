@@ -242,6 +242,7 @@ export class DispatchService {
             execution_type: input.execution_type,
             notify_channels: input.notify_channels,
             origin: 'hub',
+            started_by: input.user_id,
         });
 
         // The daemon names the run with the name stored here (generated when none

@@ -1031,6 +1031,8 @@ export class RunService {
             notify_channels?: string[];
             /** Who initiated this run: `'cli'` (local) or `'hub'` (Hub-dispatched). */
             origin?: string;
+            /** The person who started it (Hub submitter, or the person behind the creating token). Kept once set. */
+            started_by?: string | null;
         },
     ): Promise<string> {
         log.debug('create', { workspace_id, team_id, daemon_id: opts?.daemon_id });
@@ -1096,6 +1098,7 @@ export class RunService {
                 context_labels: context_labels_json ?? existing.context_labels,
                 notify_channels: notify_channels_json ?? existing.notify_channels,
                 origin: opts?.origin ?? existing.origin ?? null,
+                started_by: existing.started_by ?? opts?.started_by ?? null,
                 error: null,
                 completed_at: null,
                 started_at: existing.started_at ?? now,
@@ -1135,6 +1138,7 @@ export class RunService {
             external_id: opts?.external_id ?? null,
             context_labels: context_labels_json,
             notify_channels: notify_channels_json,
+            started_by: opts?.started_by ?? null,
             started_at: now,
             completed_at: null,
             error: null,

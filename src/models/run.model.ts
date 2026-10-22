@@ -46,6 +46,8 @@ export class Run extends BaseModel {
     declare lease_expires_at: number | null;
     /** Who initiated this run: `'cli'` (local) or `'hub'` (Hub-dispatched). */
     declare origin: string | null;
+    /** The person who started it: the Hub submitter, or the person behind the token that created it (a daemon token: its creator). */
+    declare started_by: string | null;
     declare started_at: number;
     declare completed_at: number | null;
 
@@ -76,6 +78,7 @@ export class Run extends BaseModel {
             notify_channels: { type: DataTypes.TEXT, allowNull: true },
             lease_expires_at: { type: DataTypes.BIGINT, allowNull: true },
             origin: { type: DataTypes.TEXT, allowNull: true },
+            started_by: { type: DataTypes.TEXT, allowNull: true },
             started_at: { type: DataTypes.BIGINT, allowNull: false },
             completed_at: { type: DataTypes.BIGINT },
         }, ModelConfig.table_options(sequelize, 'team_runs'));
@@ -109,6 +112,7 @@ export type RunAttributes = {
     lease_expires_at: number | null;
     /** Who initiated this run: `'cli'` (local) or `'hub'` (Hub-dispatched). */
     origin: string | null;
+    started_by?: string | null;
     started_at: number;
     completed_at: number | null;
 };
