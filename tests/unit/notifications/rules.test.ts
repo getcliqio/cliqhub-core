@@ -13,7 +13,9 @@ vi.mock('../../../src/models/index.js', () => {
     const mock_rule_rows: Array<Record<string, unknown>> = [];
 
     return {
-        NotificationChannel: {},
+        // No personal channels here: rules name no people.
+        NotificationChannel: { findAll: vi.fn(async () => []) },
+        User: { findAll: vi.fn(async () => []) },
         NotificationRule: {
             findAll: vi.fn(async (opts: { where: Record<string, unknown> }) => {
                 return mock_rule_rows.filter((r) => {
@@ -42,7 +44,6 @@ vi.mock('../../../src/models/index.js', () => {
         },
         Realm: { findByPk: vi.fn(async () => ({ id: 'realm-1' })) },
         Org: {},
-        NotificationChannel: {},
     };
 });
 
@@ -153,6 +154,18 @@ describe('resolve_rules — the org\'s rules and the realm\'s both apply (PLAN-n
 describe('rules on / off — a rule sends only when it (and its channel) is on', () => {
     const ORG = 'org-1';
     beforeEach(() => seed_rules([]));
+
+    it('a realm switching an org default off for a channel stops it in that realm only (the realm overrides the org)', async () => {
+        seed_rules([
+            { org_id: ORG, event: 'run.failed', channel_id: 'ch-org' },
+            { org_id: ORG, event: 'run.*', channel_id: 'ch-org-wide' },
+            { realm_id: 'realm-1', event: 'run.failed', channel_id: 'ch-org', enabled: false },
+        ]);
+        expect(await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-1', org_id: ORG })).toEqual(['ch-org-wide']);
+        expect((await NotificationService.resolve_rules({ event: 'run.failed', realm_id: 'realm-2', org_id: ORG })).sort()).toEqual(['ch-org', 'ch-org-wide']);
+        // Only for that event: the org's run.* still reaches ch-org's other events in realm-1.
+        expect(await NotificationService.resolve_rules({ event: 'run.crashed', realm_id: 'realm-1', org_id: ORG })).toEqual(['ch-org-wide']);
+    });
 
     it('a realm switching its own rule off stops only that rule — the org\'s still sends', async () => {
         seed_rules([

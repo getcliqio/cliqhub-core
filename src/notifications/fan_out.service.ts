@@ -406,7 +406,9 @@ function parse_channel_destinations(channel: unknown): Destination[] {
 			...r.config,
 		})) as Destination[];
 	}
-	return [];
+	// A channel record (from a lookup by name — what a channel_ref reaches) carries them as `destinations`.
+	const destinations = (channel as { destinations?: unknown }).destinations;
+	return Array.isArray(destinations) ? destinations as Destination[] : [];
 }
 
 /**

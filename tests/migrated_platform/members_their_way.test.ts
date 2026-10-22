@@ -146,6 +146,21 @@ describe.skipIf(!has_postgres)('members reached their way; once per event', () =
 		expect(emailed()).toEqual([amy.email]);
 	});
 
+	it('channels may loop (a → b → a); each address and person still gets it once', async () => {
+		const amy = await person();
+		const realm_id = await realm_with([amy]);
+		const name_a = `loopa-${uid()}`.replace(/[^a-z0-9-]/g, '').slice(0, 30);
+		const name_b = `loopb-${uid()}`.replace(/[^a-z0-9-]/g, '').slice(0, 30);
+		const amy_name = amy.email.split('@')[0]!;
+		const a = await NotificationService.create_channel({ realm_id, name: name_a, destinations: [{ type: 'email', address: 'shared@cliq.test' }, { type: 'channel_ref', name: name_b }] });
+		const b = await NotificationService.create_channel({ realm_id, name: name_b, destinations: [{ type: 'email', address: 'shared@cliq.test' }, { type: 'channel_ref', name: name_a }, { type: 'channel_ref', name: amy_name }] });
+		channels.push(a.id, b.id);
+
+		await send(realm_id, [a.id, b.id]);
+		expect(emailed()).toEqual([amy.email, 'shared@cliq.test'].sort());
+		expect(await InAppNotification.count({ where: { user_id: amy.id } as never })).toBe(1);
+	});
+
 	it('a suspended member isn\'t reached their way', async () => {
 		const amy = await person();
 		const sus = await person('suspended');

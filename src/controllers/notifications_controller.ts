@@ -96,11 +96,6 @@ export class NotificationsController extends BaseController {
         const data = this.parse_body(NotificationChannelsCreateInput, req);
         const realm_id = data.realm_id?.trim();
 
-        // channel_ref destinations must not form a cycle with existing channels.
-        if (data.destinations) {
-            await NotificationService.detect_channel_ref_cycles(data.name, data.destinations, realm_id ?? null);
-        }
-
         if (realm_id) {
             // Realm create (policy: operate + channels.manage.realm); org_id on row stays null.
             const channel = await NotificationService.create_channel({
@@ -138,10 +133,6 @@ export class NotificationsController extends BaseController {
         const data = this.parse_body(NotificationChannelsUpdateInput, req);
         // Route policy checked the channel's realm / org / personal owner.
         const existing = await NotificationService.get_channel(data.id);
-
-        if (data.destinations) {
-            await NotificationService.detect_channel_ref_cycles(data.name ?? existing.name, data.destinations, existing.realm_id);
-        }
 
         const updated = await NotificationService.update_channel(data);
         log.info('channel_updated', { id: data.id });

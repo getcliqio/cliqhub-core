@@ -136,51 +136,6 @@ export class NotificationService {
 		return selectors;
 	}
 
-	/**
-	 * Reject `channel_ref` destination graphs that cycle back to `channel_name`.
-	 */
-	static async detect_channel_ref_cycles(channel_name: string, destinations: Destination[], realm_id: string | null): Promise<void> {
-		log.debug('detect_channel_ref_cycles', { channel_name, realm_id });
-		// Only channel_ref destinations can form a graph; others are leaves.
-		const refs = destinations
-			.filter((d): d is Destination & { type: 'channel_ref' } => d.type === 'channel_ref')
-			.map((d) => d.name);
-		if (refs.length === 0) return;
-
-		// Seed visited with the channel being written so A→…→A is caught.
-		const visited = new Set<string>([channel_name]);
-		for (const ref of refs) {
-			await NotificationService.walk_channel_ref(ref, [channel_name], visited, realm_id);
-		}
-	}
-
-	private static async walk_channel_ref(ref_name: string, path: string[], visited: Set<string>, realm_id: string | null): Promise<void> {
-		// Re-entering a name already on the path means a cycle.
-		if (visited.has(ref_name)) {
-			throw new ApiError('bad_request', `Channel reference cycle detected: ${[...path, ref_name].join(' → ')}`, 400);
-		}
-		visited.add(ref_name);
-
-		// Missing targets are ignored — they fail at delivery time, not at save.
-		const target = await NotificationService.find_channel_by_name(ref_name, realm_id ?? undefined);
-		if (!target) return;
-
-		let child_destinations: Destination[] = [];
-		try {
-			const raw = target.destinations;
-			child_destinations = Array.isArray(raw) ? (raw as Destination[]) : [];
-		} catch {
-			return;
-		}
-
-		const child_refs = child_destinations
-			.filter((d): d is Destination & { type: 'channel_ref' } => d.type === 'channel_ref')
-			.map((d) => d.name);
-
-		for (const child_ref of child_refs) {
-			await NotificationService.walk_channel_ref(child_ref, [...path, ref_name], visited, realm_id);
-		}
-	}
 
 	/** Throw conflict if `name` is already taken in the given realm/org scope, or crosses scopes within the same org. */
 	private static async assert_channel_name_available(name: string, realm_id: string | null, org_id: string | null): Promise<void> {
@@ -667,9 +622,9 @@ export class NotificationService {
 	// ── Rules ─────────────────────────────────────────────────────
 
 	/**
-	 * The channels an event goes to: the org's rules **and** the realm's own (PLAN-notifications-v2 B1).
-	 * They're separate and both apply — a realm's rule adds to the org's for that realm, never replaces
-	 * it; a switched-off rule only stops itself. Selectors: exact, family wildcard (`run.*`) or `*`.
+	 * The channels an event goes to: the org's rules (the defaults) **and** the realm's own. A realm's rule adds
+	 * to the org's; a realm rule switched off for a channel switches that channel off in the realm, the org's rule
+	 * to it included (PLAN-notification-layers B). Selectors: exact, family wildcard (`run.*`) or `*`.
 	 * The org is the realm's org (given or looked up), so another org's rules never apply.
 	 *
 	 * @returns Channel ids, each once.
@@ -685,15 +640,20 @@ export class NotificationService {
 
 		const event_selectors = NotificationService.build_matching_selectors(event);
 		const channels: string[] = [];
+		// A realm rule that's switched off for a channel switches that channel off in this realm — the org's rule to
+		// it too (the realm overrides the org's default; other realms keep it).
+		const off_here = new Set<string>();
 
 		if (realm_id) {
 			const realm_rules = await rule_repo.find_all({
 				realm_id,
 				team_slug: { [Op.is]: null },
 				event: { [Op.in]: event_selectors },
-				enabled: true,
 			} as any);
-			channels.push(...realm_rules.map((r) => r.channel_id));
+			for (const r of realm_rules) {
+				if (r.enabled === false) off_here.add(r.channel_id);
+				else channels.push(r.channel_id);
+			}
 		}
 
 		// The org's rules — always the realm's org; with neither an org nor a realm there's nothing to match.
@@ -706,7 +666,7 @@ export class NotificationService {
 				event: { [Op.in]: event_selectors },
 				enabled: true,
 			} as any);
-			channels.push(...org_rules.map((r) => r.channel_id));
+			channels.push(...org_rules.map((r) => r.channel_id).filter((id) => !off_here.has(id)));
 		}
 
 		return [...new Set(channels)];

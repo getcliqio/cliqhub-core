@@ -207,7 +207,7 @@ export const NotificationRuleData = z.object({
 	system_key: z.string().nullable().describe('Stable key of a rule CliqHub seeded (e.g. invite.sent.invitee), else null'),
 	locked: z.boolean().describe('True when the rule cannot be changed or removed (409 locked)'),
 	lock_reason: z.string().nullable().describe('Why the rule is locked'),
-	enabled: z.boolean().describe('False when switched off: the rule sends nothing (a realm rule that is off still replaces the org\'s for its event)'),
+	enabled: z.boolean().describe('False when switched off: the rule sends nothing. A realm rule that is off for a channel also switches the org\'s rules to that channel off in that realm (other realms keep them)'),
 	person: z.object({
 		user_id: z.string(),
 		username: z.string(),

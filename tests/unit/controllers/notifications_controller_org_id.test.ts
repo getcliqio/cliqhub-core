@@ -19,7 +19,6 @@ vi.mock('../../../src/services/notification.service.js', () => ({
         update_channel: vi.fn(),
         remove_channel: vi.fn().mockResolvedValue(true),
         test_channel: vi.fn().mockResolvedValue({ delivered: 1, errors: [] }),
-        detect_channel_ref_cycles: vi.fn().mockResolvedValue(undefined),
         find_enabled_channels: vi.fn().mockResolvedValue([]),
         list_rules: vi.fn().mockResolvedValue([]),
         list_effective_rules: vi.fn().mockResolvedValue([]),
