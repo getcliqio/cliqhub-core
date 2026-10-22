@@ -46,11 +46,19 @@ export const NotificationChannelsGetInput = z.object({
 });
 export type NotificationChannelsGetInput = z.infer<typeof NotificationChannelsGetInput>;
 
+/**
+ * A channel name people give: letters, digits, `-` and `_` (1–64). Names are written in team.yml (notify channels,
+ * reviewers), where `#` starts a comment and spaces need quoting — so neither is allowed. CliqHub's own channels
+ * (built in, personal) are named by CliqHub and don't come through here.
+ */
+export const CHANNEL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const channel_name = z.string().trim().regex(CHANNEL_NAME_PATTERN, 'A channel name can use letters, digits, - and _ only (up to 64)');
+
 /** POST /v1/notification_channels/create */
 export const NotificationChannelsCreateInput = z.object({
     org_id: org_id_field.optional(),
     realm_id: z.string().min(1).optional().describe('When set, create a realm channel; omit for an org/account channel'),
-    name: z.string().describe('Unique channel name within the realm or org scope'),
+    name: channel_name.describe('Unique channel name within the realm or org scope: letters, digits, - and _'),
     destinations: z.array(destination_schema).min(1).describe('One or more delivery destinations (slack, email, webhook, cliqhub, channel_ref, …)'),
     enabled: z.boolean().optional().describe('When false, channel is created disabled (default enabled)'),
 }).superRefine((data, ctx) => {
@@ -69,7 +77,7 @@ export type NotificationChannelsCreateInput = z.infer<typeof NotificationChannel
 /** POST /v1/notification_channels/update */
 export const NotificationChannelsUpdateInput = z.object({
     id: z.string().describe('Channel id to update'),
-    name: z.string().optional().describe('New name (must remain unique in scope)'),
+    name: channel_name.optional().describe('New name (must remain unique in scope): letters, digits, - and _'),
     destinations: z.array(destination_schema).min(1).optional().describe('Replace the full destinations list when set'),
     enabled: z.boolean().optional().describe('Enable or disable the channel'),
 });

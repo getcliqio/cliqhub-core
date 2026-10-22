@@ -67,6 +67,7 @@ import { ApiError } from '../../../src/lib/api_error.js';
 import type { AuthContext } from '../../../src/schemas/auth_types.js';
 import {
     NotificationChannelsCreateInput,
+    NotificationChannelsUpdateInput,
     NotificationChannelsGetInput,
     NotificationRulesListInput,
     NotificationRulesSetInput,
@@ -137,6 +138,15 @@ describe('Notification Zod org_id refinements', () => {
             destinations: [{ type: 'cliqhub' }],
         });
         expect(r.success).toBe(true);
+    });
+
+    it('a channel name uses letters, digits, - and _ only (create and rename)', () => {
+        const create = (name: string) => NotificationChannelsCreateInput.safeParse({ org_id: ORG_A, name, destinations: [{ type: 'cliqhub' }] }).success;
+        expect(['prod-oncall', 'QA_mail', 'a', 'x'.repeat(64)].map(create)).toEqual([true, true, true, true]);
+        expect(['#oncall', 'prod oncall', 'ops!', 'café', '', 'x'.repeat(65)].map(create)).toEqual([false, false, false, false, false, false]);
+        expect(NotificationChannelsUpdateInput.safeParse({ id: 'c1', name: '#ops' }).success).toBe(false);
+        expect(NotificationChannelsUpdateInput.safeParse({ id: 'c1', name: 'ops-2' }).success).toBe(true);
+        expect(NotificationChannelsUpdateInput.safeParse({ id: 'c1', enabled: false }).success).toBe(true);
     });
 
     it('account channel get requires org_id', () => {
