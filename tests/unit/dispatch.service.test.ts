@@ -829,7 +829,9 @@ describe('DispatchService.push_agent_settings_to_realm', () => {
     it('enqueues settings/set with the plain input for each key', async () => {
         vi.spyOn(DispatchService as unknown as { _get_online_daemons_for_realm: () => Promise<unknown[]> }, '_get_online_daemons_for_realm')
             .mockResolvedValueOnce([make_daemon()]);
-        await DispatchService.push_agent_settings_to_realm({ realm_id: 'realm-1', agent_name: 'git', settings: { token_ttl: '60' }, user_id: 'user-1' });
+        await DispatchService.push_agent_settings_to_realm({ realm_id: 'realm-1', agent_name: 'git', settings: { token_ttl: '60', provider: null } });
         expect(mock_enqueue).toHaveBeenCalledWith('daemon-1', '/v1/settings/set', { workspace_dir: null, key: 'agents.git.token_ttl', value: '60' });
+        // A null value removes the key on the daemon.
+        expect(mock_enqueue).toHaveBeenCalledWith('daemon-1', '/v1/settings/set', { workspace_dir: null, key: 'agents.git.provider', value: null });
     });
 });

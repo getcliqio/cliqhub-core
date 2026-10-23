@@ -1968,15 +1968,13 @@ export class DispatchService {
     /**
      * Push updated agent settings to all online daemons in a realm.
      * Each key is written with the daemon's `/v1/settings/set`
-     * (`{ workspace_dir: null, key, value }`, daemon-scoped `agents.<name>.<key>`). `/v1/settings/pull`
-     * is a different op (daemon pulls org defaults from Hub) and must
-     * not be used for push.
+     * (`{ workspace_dir: null, key, value }`, daemon-scoped `agents.<name>.<key>`);
+     * a null value removes the key on the daemon.
      */
     static async push_agent_settings_to_realm(input: {
         realm_id: string;
         agent_name: string;
-        settings: Record<string, string>;
-        user_id: string;
+        settings: Record<string, string | null>;
     }): Promise<void> {
         const daemons = await DispatchService._get_online_daemons_for_realm(input.realm_id);
         if (daemons.length === 0) return;

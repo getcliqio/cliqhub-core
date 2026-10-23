@@ -482,10 +482,18 @@ export class AgentService {
         // realm_id present → write realm overrides; otherwise org defaults.
         if (realm_id) {
             await this._write_realm_settings(realm_id, name, settings);
-            return true;
+        } else {
+            await this._write_org_settings(org_id, name, settings);
         }
 
-        await this._write_org_settings(org_id, name, settings);
+        // Daemons pick the change up for their next run; a failed push never fails the save.
+        try {
+            // Loaded here: the team-list service pulls in the daemon and realm stack this service doesn't otherwise need.
+            const { RealmTeamListService } = await import('./realm_team_list.service.js');
+            await RealmTeamListService.push_settings_change({ org_id, realm_id, agent_name: name, keys: all_keys });
+        } catch (err) {
+            log.warn('settings_push_failed', { org_id, realm_id, agent_name: name, error: err instanceof Error ? err.message : String(err) });
+        }
         return true;
     }
 

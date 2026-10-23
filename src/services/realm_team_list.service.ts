@@ -27,6 +27,7 @@ const _team_version_repo_rtl = new TeamVersionRepository();
 const _org_agent_setting_repo = new OrgAgentSettingRepository();
 import { RealmService } from './realm.service.js';
 import { DispatchService } from './dispatch.service.js';
+import { command_outbox_enqueue } from './command_outbox.service.js';
 import { InAppNotificationService } from './in_app_notification.service.js';
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
@@ -83,6 +84,59 @@ export class RealmTeamListService {
         }
 
         return out;
+    }
+
+    /**
+     * Send changed agent settings to the online daemons they affect. A realm save goes to that
+     * realm; an org save goes to every realm of the org, minus keys a realm sets itself. Each key
+     * carries its effective value (realm over org), or null when neither sets it.
+     */
+    static async push_settings_change(input: {
+        org_id: string;
+        realm_id?: string;
+        agent_name: string;
+        keys: string[];
+    }): Promise<void> {
+        if (input.keys.length === 0) return;
+        const realm_ids = input.realm_id
+            ? [input.realm_id]
+            : (await _realm_repo_rtl.find_all_q({ where: { org_id: input.org_id, deleted: false }, attributes: ['id'] }))
+                .map((r) => r.id);
+
+        for (const realm_id of realm_ids) {
+            let keys = input.keys;
+            if (!input.realm_id) {
+                const own = await _ras_repo.find_all_q({
+                    where: { realm_id, agent_name: input.agent_name, setting_key: keys },
+                });
+                const overridden = new Set(own
+                    .filter((row) => String(row.setting_value ?? '').trim())
+                    .map((row) => row.setting_key));
+                keys = keys.filter((key) => !overridden.has(key));
+                if (keys.length === 0) continue;
+            }
+            const effective = (await RealmTeamListService.load_effective_agent_settings(realm_id, ''))[input.agent_name] ?? {};
+            const settings: Record<string, string | null> = {};
+            for (const key of keys) settings[key] = effective[key] ?? null;
+            await DispatchService.push_agent_settings_to_realm({ realm_id, agent_name: input.agent_name, settings });
+        }
+    }
+
+    /**
+     * Send one daemon the realm's full effective agent settings (realm over org), so a daemon that
+     * was offline while settings were saved catches up when it registers.
+     */
+    static async push_settings_to_daemon(realm_id: string, daemon_id: string): Promise<void> {
+        const effective = await RealmTeamListService.load_effective_agent_settings(realm_id, '');
+        for (const [agent_name, keys] of Object.entries(effective)) {
+            for (const [key, value] of Object.entries(keys)) {
+                await command_outbox_enqueue(daemon_id, '/v1/settings/set', {
+                    workspace_dir: null,
+                    key: `agents.${agent_name}.${key}`,
+                    value,
+                });
+            }
+        }
     }
 
     /**

@@ -334,14 +334,25 @@ export class DaemonService {
         return result;
     }
 
-    /** Fire-and-forget: install the realm's team list onto a newly registered daemon. */
+    /**
+     * Fire-and-forget: send the realm's agent settings, then install the realm's team list onto a
+     * newly registered daemon.
+     */
     private static _inject_team_list(realm_id: string, daemon_id: string, user_id: string): void {
-        RealmTeamListService.inject_for_daemon(realm_id, daemon_id, user_id).catch((err) => {
-            log.warn(
-                `team list inject failed: realm=${realm_id} daemon=${daemon_id}: `
-                + (err instanceof Error ? err.message : String(err)),
-            );
-        });
+        RealmTeamListService.push_settings_to_daemon(realm_id, daemon_id)
+            .catch((err) => {
+                log.warn(
+                    `settings push failed: realm=${realm_id} daemon=${daemon_id}: `
+                    + (err instanceof Error ? err.message : String(err)),
+                );
+            })
+            .then(() => RealmTeamListService.inject_for_daemon(realm_id, daemon_id, user_id))
+            .catch((err) => {
+                log.warn(
+                    `team list inject failed: realm=${realm_id} daemon=${daemon_id}: `
+                    + (err instanceof Error ? err.message : String(err)),
+                );
+            });
     }
 
     static async heartbeat(daemon_id: string): Promise<void> {
