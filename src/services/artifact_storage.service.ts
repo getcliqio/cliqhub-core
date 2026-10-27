@@ -288,7 +288,8 @@ export interface UploadOutput {
 export interface DownloadOutput {
     body: ReadableStream<Uint8Array>;
     status: 200 | 206;
-    content_length: number;
+    /** Null when storage didn't say: the response is then sent without Content-Length. */
+    content_length: number | null;
     content_type: string;
     content_range?: string;
     name: string;

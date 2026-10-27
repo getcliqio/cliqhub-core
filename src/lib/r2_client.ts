@@ -80,17 +80,20 @@ export class R2Client {
 
     /**
      * GET an object as a stream, passing `range` through (206 for a partial body). Null on 404.
-     * Only Core talks to R2: callers stream the body on to theirs.
+     * Only Core talks to R2: callers stream the body on to theirs. Asks for the stored bytes as they
+     * are: fetch offers gzip by default, R2 then compresses text and drops `content-length`.
+     * `content_length` is null when R2 still doesn't say.
      */
     async get_object_stream(key: string, opts: { range?: string } = {}): Promise<{
         body: ReadableStream<Uint8Array>;
         status: 200 | 206;
-        content_length: number;
+        content_length: number | null;
         content_type: string;
         content_range?: string;
     } | null> {
         const headers = this._s3_headers('GET', key, 'UNSIGNED-PAYLOAD');
         if (opts.range) headers['range'] = opts.range;
+        headers['accept-encoding'] = 'identity';
         const res = await fetch(this._s3_url(key), { method: 'GET', headers });
         if (res.status === 404) return null;
         if (!(res.status === 200 || res.status === 206) || !res.body) {
@@ -100,7 +103,7 @@ export class R2Client {
         return {
             body: res.body,
             status: res.status as 200 | 206,
-            content_length: Number(res.headers.get('content-length') ?? 0),
+            content_length: res.headers.has('content-length') ? Number(res.headers.get('content-length')) : null,
             content_type: res.headers.get('content-type') ?? 'application/octet-stream',
             ...(res.headers.get('content-range') ? { content_range: res.headers.get('content-range')! } : {}),
         };

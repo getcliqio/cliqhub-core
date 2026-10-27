@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PassThrough } from 'node:stream';
 import type { Request, Response, NextFunction } from 'express';
 import { ArtifactsController } from '../../../src/controllers/artifacts_controller.js';
 
@@ -90,6 +91,39 @@ describe('ArtifactsController', () => {
             await controller.wrap(controller.upload)({ query: { name: 'n' }, headers: { 'content-length': '1' }, auth: {} } as unknown as Request, mock_res(), next);
             expect(next).toHaveBeenLastCalledWith(expect.objectContaining({ status: 422 }));
             expect(mock_storage.upload).not.toHaveBeenCalled();
+        });
+    });
+
+    // ── download ─────────────────────────────────────────────────────
+
+    describe('download', () => {
+        /** A writable response that records headers and collects the body. */
+        function file_res() {
+            const sink = new PassThrough();
+            const headers: Record<string, string> = {};
+            const chunks: Buffer[] = [];
+            sink.on('data', (c: Buffer) => chunks.push(c));
+            Object.assign(sink, { status: vi.fn().mockReturnThis(), setHeader: (k: string, v: string) => { headers[k] = v; } });
+            return { res: sink as unknown as Response, headers, body: () => Buffer.concat(chunks).toString() };
+        }
+        const stored = (content_length: number | null) => ({
+            body: new Response('Hi Ada').body, status: 200, content_length, content_type: 'text/plain', name: 'review.txt', mime_type: 'text/plain',
+        });
+
+        it('streams the file with its length', async () => {
+            (mock_storage as any).download = vi.fn().mockResolvedValue(stored(6));
+            const out = file_res();
+            await controller.wrap(controller.download)({ method: 'GET', query: { artifact_id: 'a-1' }, headers: {}, auth: { user: { id: 'u-1' } } } as unknown as Request, out.res, next);
+            expect(out.headers['Content-Length']).toBe('6');
+            expect(out.body()).toBe('Hi Ada');
+        });
+
+        it('a length storage did not report is left off — never Content-Length: 0 on a file that has bytes', async () => {
+            (mock_storage as any).download = vi.fn().mockResolvedValue(stored(null));
+            const out = file_res();
+            await controller.wrap(controller.download)({ method: 'GET', query: { artifact_id: 'a-1' }, headers: {}, auth: { user: { id: 'u-1' } } } as unknown as Request, out.res, next);
+            expect(out.headers).not.toHaveProperty('Content-Length');
+            expect(out.body()).toBe('Hi Ada');
         });
     });
 

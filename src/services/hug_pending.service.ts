@@ -2,7 +2,9 @@
  * The Hugs a person can answer — their inbox list and the badge counts (PLAN-hug-requests §6.3).
  *
  * A person can answer a Hug addressed to them (their own channel, or a shared channel) in a realm
- * where they have `runs.view` — the same rule `hugs/respond` applies.
+ * where they have `runs.view` — the same rule `hugs/respond` applies. What's waiting on a person (the
+ * badge, realm cards, the dashboard's list) leaves out Hugs they've already answered: a Hug that
+ * waits on several people stays open after one of them responds.
  */
 
 import { Op, literal } from 'sequelize';
@@ -42,12 +44,13 @@ export interface HugListItem {
 
 /** The Hugs a person can answer. */
 export class HugPendingService {
-    /** A person's Hugs, newest first (default: open ones). */
+    /** A person's Hugs, newest first (default: open ones; `unanswered`: only those they haven't responded to). */
     static async list_for_user(opts: {
         user_id: string;
         realm_id?: string;
         org_id?: string;
         statuses?: string[];
+        unanswered?: boolean;
         limit?: number;
         offset?: number;
     }): Promise<{ hugs: HugListItem[]; total: number }> {
@@ -61,7 +64,7 @@ export class HugPendingService {
             status: { [Op.in]: opts.statuses?.length ? opts.statuses : ['open'] },
             ...(opts.realm_id?.trim() ? { realm_id: opts.realm_id.trim() } : {}),
             ...(opts.org_id ? { org_id: opts.org_id } : {}),
-        });
+        }, { unanswered: opts.unanswered === true });
         if (!where) return { hugs: [], total: 0 };
 
         const [total, rows] = await Promise.all([
@@ -102,11 +105,11 @@ export class HugPendingService {
         };
     }
 
-    /** How many open Hugs a person can answer (sidebar badge). */
+    /** How many open Hugs are waiting on a person — addressed to them, not yet answered by them (sidebar badge). */
     static async count_open_for_user(opts: { user_id: string; org_id?: string }): Promise<number> {
         const user_id = opts.user_id.trim();
         if (!user_id) return 0;
-        const where = await reachable_where(user_id, { status: 'open', ...(opts.org_id ? { org_id: opts.org_id } : {}) });
+        const where = await reachable_where(user_id, { status: 'open', ...(opts.org_id ? { org_id: opts.org_id } : {}) }, { unanswered: true });
         return where ? Hug.count({ where }) : 0;
     }
 
@@ -115,7 +118,7 @@ export class HugPendingService {
         const counts = new Map<string, number>();
         const user_id = opts.user_id.trim();
         if (!user_id || opts.realm_ids.length === 0) return counts;
-        const where = await reachable_where(user_id, { status: 'open', realm_id: { [Op.in]: opts.realm_ids } });
+        const where = await reachable_where(user_id, { status: 'open', realm_id: { [Op.in]: opts.realm_ids } }, { unanswered: true });
         if (!where) return counts;
         const rows = await Hug.findAll({ where, attributes: ['realm_id'], raw: true });
         for (const row of rows) counts.set(row.realm_id, (counts.get(row.realm_id) ?? 0) + 1);
@@ -125,11 +128,21 @@ export class HugPendingService {
 
 /**
  * `where` for Hugs addressed to `user_id` (their own channel, or a shared channel) in realms where
- * they have `runs.view`, combined with `extra`. Null when nothing can match.
+ * they have `runs.view`, combined with `extra`; with `unanswered`, not those they've responded to.
+ * Null when nothing can match.
  */
-async function reachable_where(user_id: string, extra: Record<string | symbol, unknown>): Promise<Record<string | symbol, unknown> | null> {
+async function reachable_where(
+    user_id: string,
+    extra: Record<string | symbol, unknown>,
+    opts: { unanswered?: boolean } = {},
+): Promise<Record<string | symbol, unknown> | null> {
     const realm_ids = await visible_realm_ids(user_id, { perm: 'runs.view' });
     if (realm_ids.length === 0) return null;
-    const addressed = literal(`(SELECT "hug_id" FROM cliq."hug_deliveries" WHERE "user_id" IS NULL OR "user_id" = ${get_sequelize().escape(user_id)})`);
-    return { ...extra, [Op.and]: [{ id: { [Op.in]: addressed } }, { realm_id: { [Op.in]: realm_ids } }] };
+    const user = get_sequelize().escape(user_id);
+    const addressed = literal(`(SELECT "hug_id" FROM cliq."hug_deliveries" WHERE "user_id" IS NULL OR "user_id" = ${user})`);
+    const conditions: Array<Record<string | symbol, unknown>> = [{ id: { [Op.in]: addressed } }, { realm_id: { [Op.in]: realm_ids } }];
+    if (opts.unanswered) {
+        conditions.push({ id: { [Op.notIn]: literal(`(SELECT "hug_id" FROM cliq."hug_responses" WHERE "responder_user_id" = ${user})`) } });
+    }
+    return { ...extra, [Op.and]: conditions };
 }

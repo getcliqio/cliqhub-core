@@ -90,7 +90,7 @@ export class ArtifactsController extends BaseController {
         const file = await this._storage.download(artifact_id, user_id, range);
         res.status(file.status);
         res.setHeader('Content-Type', file.mime_type || file.content_type);
-        res.setHeader('Content-Length', String(file.content_length));
+        if (file.content_length !== null) res.setHeader('Content-Length', String(file.content_length));
         res.setHeader('Content-Disposition', content_disposition(file.name));
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Cache-Control', 'private, no-store');

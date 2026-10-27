@@ -445,13 +445,17 @@ describe.skipIf(!has_postgres)('Hugs (Core)', () => {
 	});
 
 	describe('inbox', () => {
-		it("lists the open Hugs addressed to a person, with whether they've answered; counts match", async () => {
+		it("lists the open Hugs addressed to a person, with whether they've answered; what's waiting on them leaves out the answered ones", async () => {
 			const a = await open();
 			const b = await open();
+			const c = await open();
+			// a: answered but still open (a Hug can wait on several people); b: closed; c: waiting.
 			await HugsService.respond({ hug_id: a.hug_id, user_id: OWNER, values: { release: 'x' } });
 			await HugsService.close({ hug_id: b.hug_id, outcome: 'done', daemon_id: 'daemon-1' });
 			const { hugs } = await HugPendingService.list_for_user({ user_id: OWNER, realm_id });
-			expect(hugs.map((h) => [h.hug_id, h.responded])).toEqual([[a.hug_id, true]]);
+			expect(hugs.map((h) => [h.hug_id, h.responded])).toEqual([[c.hug_id, false], [a.hug_id, true]]);
+			const waiting = await HugPendingService.list_for_user({ user_id: OWNER, realm_id, unanswered: true });
+			expect([waiting.total, waiting.hugs.map((h) => h.hug_id)]).toEqual([1, [c.hug_id]]);
 			expect(await HugPendingService.count_open_by_realm_for_user({ user_id: OWNER, realm_ids: [realm_id] })).toEqual(new Map([[realm_id, 1]]));
 			expect((await HugPendingService.list_for_user({ user_id: OUTSIDER, realm_id })).hugs).toEqual([]);
 			const closed = await HugPendingService.list_for_user({ user_id: OWNER, realm_id, statuses: ['closed'] });

@@ -84,9 +84,17 @@ export async function assert_team_lints(team_yml: ParsedTeamYml | Record<string,
     }
     const agents = new Map<string, AgentInputs>();
     if (names.size) {
-        const rows = await AgentCatalog.findAll({ where: { name: { [Op.in]: [...names] }, deleted: false }, attributes: ['name', 'manifest'], raw: true });
-        // A name can exist as a built-in and as custom agents in several orgs: any of them accepting a line is enough.
+        const rows = await AgentCatalog.findAll({ where: { name: { [Op.in]: [...names] }, deleted: false }, attributes: ['name', 'org_id', 'version', 'manifest'], raw: true });
+        // The catalog keeps a row per version: only the newest of each (name, org) counts, so an input an
+        // older version required (hug 1.0.0's `role`) doesn't outlive it.
+        const newest = new Map<string, (typeof rows)[number]>();
         for (const row of rows) {
+            const key = `${row.name}\u0000${row.org_id ?? ''}`;
+            const seen = newest.get(key);
+            if (!seen || SemVer.compare(row.version ?? '', seen.version ?? '') > 0) newest.set(key, row);
+        }
+        // A name can exist as a built-in and as custom agents in several orgs: any of them accepting a line is enough.
+        for (const row of newest.values()) {
             const inputs = ((row.manifest ?? {}) as { inputs?: AgentInputs }).inputs ?? {};
             agents.set(row.name, { ...(agents.get(row.name) ?? {}), ...inputs });
         }

@@ -72,6 +72,15 @@ describe('R2Client requests', () => {
         expect(await client.get_object_stream('missing')).toBeNull();
     });
 
+    it('GET asks for the stored bytes uncompressed (R2 gzips text and drops content-length); no length is null, not 0', async () => {
+        const fetch = vi.fn(async () => new Response('Hi Ada', { status: 200, headers: { 'content-type': 'text/plain' } }));
+        vi.stubGlobal('fetch', fetch);
+        const file = await client.get_object_stream('a1');
+        expect((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].headers).toMatchObject({ 'accept-encoding': 'identity' });
+        expect(file).toMatchObject({ status: 200, content_length: null });
+        expect(await new Response(file!.body).text()).toBe('Hi Ada');
+    });
+
     it('has no way to hand out an R2 URL (no presigned URLs)', () => {
         const methods = Object.getOwnPropertyNames(R2Client.prototype);
         expect(methods.filter((m) => /presign|url/i.test(m) && m !== '_s3_url')).toEqual([]);

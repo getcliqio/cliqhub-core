@@ -311,7 +311,8 @@ export class DashboardController extends BaseController {
             run_where_base
                 ? _run_repo_dc.find_count_q({ where: run_where_base })
                 : Promise.resolve(0),
-            HugPendingService.list_for_user({ user_id, org_id, limit: 5, offset: 0 }),
+            // What's waiting on the caller: open Hugs they haven't answered yet.
+            HugPendingService.list_for_user({ user_id, org_id, unanswered: true, limit: 5, offset: 0 }),
         ]);
 
         const live_enriched = [...live_awaiting.runs, ...live_running.runs]
