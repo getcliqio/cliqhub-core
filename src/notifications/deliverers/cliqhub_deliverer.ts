@@ -20,11 +20,12 @@ async function covered_by_shared(user_id: string, sends: EventSends): Promise<bo
  *
  * In-app delivery is a destination type like any other (Slack, email,
  * webhook). Who sees it follows the channel that owns it:
- *   - a personal channel (`user_id`) → that person's inbox;
+ *   - a personal channel (`user_id`) → that person's inbox (not sent when they may not see the event);
  *   - a realm channel (`realm_id`) → every member of that realm;
- *   - an org channel → every member of the org (the org "In-app" channel).
+ *   - an org channel → every member of the org (the org "In-app" channel); the row keeps the event's realm.
  * Realm and org audiences are worked out when people read their inbox, so
- * they follow joins and leaves.
+ * they follow joins and leaves; so is access — a row about a realm is read only by people who may see
+ * that event there (notifications/event_access.ts).
  */
 export class CliqHubDeliverer extends AbstractChannelDeliverer {
     readonly provider = 'cliqhub';
@@ -40,6 +41,7 @@ export class CliqHubDeliverer extends AbstractChannelDeliverer {
         // notice gets no personal copy.
         if (sends) {
             if (channel?.user_id) {
+                if (!await sends.may_receive(String(channel.user_id))) return;
                 if (!sends.take(`inbox|user|${channel.user_id}`) || await covered_by_shared(String(channel.user_id), sends)) return;
             } else if (channel?.realm_id) {
                 if (!sends.take(`inbox|realm|${channel.realm_id}`)) return;
@@ -51,11 +53,11 @@ export class CliqHubDeliverer extends AbstractChannelDeliverer {
         }
         let row;
         if (channel?.user_id) {
-            row = await InAppNotificationService.create_from_payload(payload, channel.user_id);
+            row = await InAppNotificationService.create_from_payload(payload, channel.user_id, null, 'person');
         } else if (channel?.realm_id) {
-            row = await InAppNotificationService.create_from_payload({ ...payload, realm_id: channel.realm_id }, null);
+            row = await InAppNotificationService.create_from_payload({ ...payload, realm_id: channel.realm_id }, null, null, 'realm');
         } else if (channel?.org_id) {
-            row = await InAppNotificationService.create_from_payload({ ...payload, realm_id: null }, null, String(channel.org_id));
+            row = await InAppNotificationService.create_from_payload(payload, null, String(channel.org_id), 'org');
         } else {
             // No channel context (legacy callers): the event's own realm.
             row = await InAppNotificationService.create_from_payload(payload, null);

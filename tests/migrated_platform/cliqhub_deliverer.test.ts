@@ -78,7 +78,7 @@ describe.skipIf(!has_postgres)('CliqHubDeliverer — persist in-app notification
 
 		const deliverer = new CliqHubDeliverer();
 		await deliverer.deliver({}, {
-			event: 'hug.review_requested',
+			event: 'hug.reminded',
 			message: 'please review',
 			realm_id: 'realm-2',
 			run_id: 'run-2',

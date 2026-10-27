@@ -1,7 +1,8 @@
 /**
  * Publishing refuses a team with lines cliq would ignore (cliq-sdk `lint_team`), with every problem
  * listed, and writes nothing; the same team fixed publishes. Publishing a saved draft is checked
- * too; changing an already-published team's tags is not. Architect v0.1.28 is the fixture.
+ * too; changing an already-published team's tags is not. Architect v0.1.28 is the fixture. A
+ * `type: team` phase must give its sub-team (from the catalog) every input it requires (§14).
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -78,6 +79,23 @@ describe.skipIf(!has_postgres)('publish refuses lines cliq would ignore', () => 
         const res = await post('/v1/teams/publish', { team_id: created.body.data.id });
         expect(res.status, JSON.stringify(res.body)).toBe(422);
         expect(err(res).code).toBe('invalid_team');
+    });
+
+    it("a team phase must give its catalog sub-team every input it requires (args)", async () => {
+        const child = 'name: subby\ndescription: child\ninputs:\n  - name: ticket\n    type: string\n    required: true\nphases:\n  - name: go\n    type: standard\n    agent: exec\n    commands:\n      - run: echo "{{inputs.ticket}}"\n';
+        const sub = await post('/v1/teams/publish', { name: 'subby', scope: me.username, version: '1.0.0', data_base64: pkg(child, 'subby') });
+        expect(sub.status, JSON.stringify(sub.body)).toBe(200);
+        team_ids.push(sub.body.data.id);
+
+        const parent = (args: string) => `name: parenty\ndescription: parent\nphases:\n  - name: child\n    type: team\n    team: "@${me.username}/subby"\n${args}`;
+        const bad = await post('/v1/teams/publish', { name: 'parenty', scope: me.username, version: '1.0.0', data_base64: pkg(parent(''), 'parenty') });
+        expect(bad.status, JSON.stringify(bad.body)).toBe(422);
+        expect(err(bad).code).toBe('invalid_team');
+        expect(err(bad).message).toContain(`sub-team @${me.username}/subby needs input \`ticket\` — add it to args`);
+
+        const good = await post('/v1/teams/publish', { name: 'parenty', scope: me.username, version: '1.0.0', data_base64: pkg(parent('    args:\n      ticket: T-1\n'), 'parenty') });
+        expect(good.status, JSON.stringify(good.body)).toBe(200);
+        team_ids.push(good.body.data.id);
     });
 
     it('dependencies.yml: published with the team, returned by get_by_id, packed in the download; a broken one is refused', async () => {

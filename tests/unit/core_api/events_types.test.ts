@@ -13,8 +13,9 @@ describe('event types catalog', () => {
 		// Retired (PLAN-notifications-v2 B4.5): a phase that needs a person posts its own Hug to its channels.
 		expect(EVENT_TYPES).not.toContain('hug.review_requested');
 		expect(EVENT_TYPES).not.toContain('phase.input_required');
-		expect(EVENT_TYPES).toContain('hug.routing_requested');
-		expect(EVENT_TYPES).toContain('hug.review_responded');
+		// Hugs (PLAN-hug-requests §6.8): opening one is not an event; routing is the gate's meaning.
+		for (const t of ['hug.reminded', 'hug.responded', 'hug.closed', 'hug.expired', 'phase.resumed']) expect(EVENT_TYPES).toContain(t);
+		for (const t of ['hug.routing_requested', 'hug.review_responded', 'hug.opened', 'phase.inputs_supplied']) expect(EVENT_TYPES).not.toContain(t);
 		expect(EVENT_TYPES).toContain('team.published');
 		expect(EVENT_TYPES).toContain('daemon.removed');
 		expect(EVENT_TYPES).toContain('realm.key_rotated');

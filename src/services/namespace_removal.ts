@@ -165,7 +165,7 @@ export async function user_delete_blocker(user: { id: string; username: string |
  * revoked and the invites they sent that are still pending are revoked.
  *
  * Kept: the user row (username and email stay taken), their scopes, drafts,
- * settings and channels, and all history (runs, events, reviews, audit).
+ * settings and channels, and all history (runs, events, Hugs, audit).
  *
  * @param at - The deletion time (shared with the account org and its realms).
  */

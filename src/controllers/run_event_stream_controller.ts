@@ -50,7 +50,7 @@ export class RunEventStreamController {
      * POST /v1/runs/report_activity
      *
      * Daemon batch of phase/lifecycle activity rows for the run timeline + SSE.
-     * Lifecycle types (e.g. phase.input_required) update `runs.state` as a side effect.
+     * Lifecycle types (e.g. phase.waiting) update `runs.state` as a side effect.
      *
      * Not telemetry: tokens/cost/OTEL go to `POST /v1/runs/report_telemetry`.
      */

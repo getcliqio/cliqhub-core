@@ -34,6 +34,12 @@ describe('route policy coverage', () => {
         expect(routes.length).toBeGreaterThan(170);
     });
 
+    it('no review, chat, supply-inputs, multipart-submit or Hug upload route is mounted (PLAN-hug-requests §12, §17)', () => {
+        const gone = routes.filter((r) => /\/v1\/reviews\/|get_messages|send_message|stream_messages|claim_review|\/v1\/runs\/supply_inputs|\/v1\/artifacts\/submit|\/v1\/hugs\/upload|remind/.test(r));
+        expect(gone).toEqual([]);
+        expect(routes).toEqual(expect.arrayContaining(['POST /v1/hugs/respond', 'POST /v1/artifacts/upload', 'GET /v1/artifacts/download']));
+    });
+
     it('every mounted route has a policy', () => {
         expect(check_route_policies(routes).missing).toEqual([]);
     });
@@ -71,12 +77,17 @@ describe('route policy coverage', () => {
     });
 
     it('daemon-callable routes are exactly these (replaces the daemon allowlist)', () => {
+        const daemon_callable = (p: (typeof ROUTE_POLICY)[string]): boolean =>
+            p.kind === 'daemon_self' || p.kind === 'daemon_realm' || ('daemon' in p && Boolean(p.daemon))
+            || (p.kind === 'by_body' && (daemon_callable(p.when_present) || daemon_callable(p.otherwise)));
         const daemon = Object.entries(ROUTE_POLICY)
-            .filter(([, p]) => p.kind === 'daemon_self' || p.kind === 'daemon_realm' || ('daemon' in p && p.daemon))
+            .filter(([, p]) => daemon_callable(p))
             .map(([k]) => k).sort();
         expect(daemon).toMatchInlineSnapshot(`
           [
-            "POST /v1/artifacts/submit",
+            "POST /v1/artifacts/download",
+            "POST /v1/artifacts/get_by_id",
+            "POST /v1/artifacts/upload",
             "POST /v1/auth/acl",
             "POST /v1/auth/validate_token",
             "POST /v1/daemons/ack_command",
@@ -85,11 +96,10 @@ describe('route policy coverage', () => {
             "POST /v1/daemons/register",
             "POST /v1/daemons/register_teams",
             "POST /v1/events/submit",
-            "POST /v1/reviews/ack",
-            "POST /v1/reviews/create",
-            "POST /v1/reviews/get_by_id",
-            "POST /v1/reviews/remind",
-            "POST /v1/reviews/send_message",
+            "POST /v1/hugs/close",
+            "POST /v1/hugs/create",
+            "POST /v1/hugs/get_by_id",
+            "POST /v1/hugs/get_events",
             "POST /v1/runs/append_logs",
             "POST /v1/runs/claim",
             "POST /v1/runs/complete",

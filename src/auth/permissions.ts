@@ -31,7 +31,6 @@ export const ALL_PERMISSIONS = [
     // ── Team Execution ──────────────────────────────────────────────
     'teams.run',
     'teams.cancel',
-    'teams.inputs',
     'teams.install',
     'runs.view',
 
@@ -53,10 +52,6 @@ export const ALL_PERMISSIONS = [
     'agents.manage.realm',
     'agents.view',
     'agents.reveal',
-
-    // ── HUG Reviews ─────────────────────────────────────────────────
-    'reviews.verdict',
-    'reviews.view',
 ] as const;
 
 export type Permission = (typeof ALL_PERMISSIONS)[number];
@@ -86,7 +81,6 @@ export const OPERATOR_PERMISSIONS: readonly Permission[] = [
     'daemons.view',
     'teams.run',
     'teams.cancel',
-    'teams.inputs',
     'teams.install',
     'teams.publish',
     'teams.catalog.view',
@@ -96,8 +90,6 @@ export const OPERATOR_PERMISSIONS: readonly Permission[] = [
     'inbox.view',
     'agents.manage.realm',
     'agents.view',
-    'reviews.verdict',
-    'reviews.view',
 ];
 
 /** Member: read-only observer. */
@@ -107,7 +99,6 @@ export const MEMBER_PERMISSIONS: readonly Permission[] = [
     'runs.view',
     'teams.catalog.view',
     'inbox.view',
-    'reviews.view',
     'agents.view',
 ];
 

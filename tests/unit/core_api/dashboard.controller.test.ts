@@ -13,7 +13,7 @@ vi.mock('../../../src/models/index.js', () => ({
     },
     InAppNotification: { findAll: vi.fn(async () => []) },
     RealmMember: { findAll: vi.fn(async () => []) },
-    Review: { findAll: vi.fn(async () => []) },
+    Hug: { findAll: vi.fn(async () => []) },
 }));
 
 // The caller's realm levels (route_policy/visible.ts): admin everywhere in these tests.
@@ -40,9 +40,10 @@ vi.mock('../../../src/services/run.service.js', () => ({
     },
 }));
 
-vi.mock('../../../src/services/review_pending.service.js', () => ({
-    ReviewPendingService: {
-        list_for_user: vi.fn(async () => ({ reviews: [], total: 0 })),
+vi.mock('../../../src/services/hug_pending.service.js', () => ({
+    HugPendingService: {
+        list_for_user: vi.fn(async () => ({ hugs: [], total: 0 })),
+        count_open_by_realm_for_user: vi.fn(async () => new Map()),
     },
 }));
 

@@ -15,9 +15,9 @@ import {
     stop_webhook_delivery_retention,
 } from './services/webhook_delivery.service.js';
 import {
-    start_review_expiry_sweep,
-    stop_review_expiry_sweep,
-} from './services/review_expiry_sweep.service.js';
+    start_hug_sweep,
+    stop_hug_sweep,
+} from './services/hug_expiry_sweep.service.js';
 import { start_invite_sweep, stop_invite_sweep } from './services/invite_sweep.service.js';
 import { settle_background } from './lib/background.js';
 const log = get_logger('server');
@@ -42,7 +42,7 @@ async function main() {
     start_dedup_gc();
     start_command_outbox_worker();
     start_webhook_delivery_retention();
-    start_review_expiry_sweep();
+    start_hug_sweep();
     start_invite_sweep();
 
     // Bind explicitly to '::' so the backend is reachable on Railway's
@@ -57,7 +57,7 @@ async function main() {
         stop_dedup_gc();
         stop_command_outbox_worker();
         stop_webhook_delivery_retention();
-        stop_review_expiry_sweep();
+        stop_hug_sweep();
         stop_invite_sweep();
         server.close();
         await settle_background();

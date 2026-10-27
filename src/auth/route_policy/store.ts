@@ -5,7 +5,7 @@
 
 import {
     AccountInvite, CustomEvent, HubEvent, NotificationChannel, NotificationRule,
-    Org, OrgMember, OrgRole, Realm, RealmInvite, RealmMember, Review, ReviewNotification, Run,
+    Hug, Org, OrgMember, OrgRole, Realm, RealmInvite, RealmMember, Run,
     RunArtifact, StoredArtifact, Team, Workspace,
 } from '../../models/index.js';
 import { DEFAULT_ROLES } from '../permissions.js';
@@ -105,16 +105,10 @@ export class SequelizeAccessStore implements AccessStore {
             }
             case 'run':
                 return run_scope(id);
-            case 'review': {
-                const r = await Review.findOne({ where: { id }, attributes: ['realm_id', 'org_id'], ...raw }) as Row;
-                if (!r) return null;
-                // A reviewer assigned by name (user-targeted notification) may act on
-                // the review even without a realm membership.
-                const user_id = req.auth?.auth_via === 'daemon_token' ? undefined : req.auth?.user?.id;
-                const assigned = user_id
-                    ? Boolean(await ReviewNotification.findOne({ where: { review_id: id, user_id }, attributes: ['id'], ...raw }))
-                    : false;
-                return { realm_id: r.realm_id as string | null, org_id: r.org_id as string | null, assigned_user: assigned };
+            case 'hug': {
+                // Seen like its run: the route needs runs.view on the Hug's realm.
+                const h = await Hug.findOne({ where: { id }, attributes: ['realm_id', 'org_id'], ...raw }) as Row;
+                return h ? { realm_id: h.realm_id as string | null, org_id: h.org_id as string | null } : null;
             }
             case 'artifact': {
                 // `rec:<id>` is a run record (artifacts/get with include_records).

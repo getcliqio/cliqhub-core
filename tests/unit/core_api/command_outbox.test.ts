@@ -244,6 +244,34 @@ describe('command_outbox.service', () => {
             expect(Date.now() - bumped_to).toBeLessThan(5_000);
         });
 
+        it('a Hug delivery (deliver_until) waits for a daemon with no public_url without burning attempts', async () => {
+            mock_query
+                .mockResolvedValueOnce([{
+                    tx_id: 'tx-h', daemon_id: 'd-1', endpoint: '/v1/hugs/deliver',
+                    payload: JSON.stringify({ tx_id: 'tx-h' }), attempts: 7, max_attempts: 5,
+                    created_at: Date.now() - 10 * 60 * 1000, deliver_until: Date.now() + 60 * 60 * 1000,
+                }])
+                .mockResolvedValueOnce([1]);
+            vi.mocked(Daemon.findByPk).mockResolvedValue({ id: 'd-1', public_url: null, status: 'offline' } as never);
+
+            await _test_poll_cycle();
+
+            const [select_sql, select_opts] = mock_query.mock.calls[0];
+            expect(select_sql).toContain('OR "deliver_until" > :now');
+            expect(typeof select_opts.replacements.now).toBe('number');
+            const [update_sql] = mock_query.mock.calls[1];
+            expect(update_sql).toContain('"created_at" = :now');
+            expect(update_sql).not.toContain('"attempts" = "attempts" + 1');
+        });
+
+        it('enqueue stores deliver_until', async () => {
+            mock_query.mockResolvedValueOnce([1]);
+            await command_outbox_enqueue('d-1', '/v1/hugs/deliver', { hug_id: 'h' }, { deliver_until: 123 });
+            const [sql, opts] = mock_query.mock.calls[0];
+            expect(sql).toContain('"deliver_until"');
+            expect(opts.replacements.deliver_until).toBe(123);
+        });
+
         it('no-ops when outbox is empty', async () => {
             mock_query.mockResolvedValueOnce([]);
 

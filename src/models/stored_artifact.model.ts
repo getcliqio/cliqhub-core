@@ -20,6 +20,14 @@ export class StoredArtifact extends BaseModel {
     declare storage_key: string;
     declare uploaded_by: string | null;
     declare created_at: number;
+    /** `pending` until a Hug response uses it (responder uploads); `ready` otherwise (PLAN-hug-requests §6.6). */
+    declare status: 'pending' | 'ready';
+    /** Who uploaded it: the daemon (run artifacts) or a Hug responder. */
+    declare source: 'daemon' | 'hug';
+    declare hug_id: string | null;
+    declare hug_requested_input: string | null;
+    /** Hex SHA-256 of the content, computed by Core while streaming the upload. */
+    declare sha256: string | null;
 
     static register(sequelize: Sequelize): void {
         StoredArtifact.init({
@@ -33,6 +41,11 @@ export class StoredArtifact extends BaseModel {
             storage_key: { type: DataTypes.TEXT, allowNull: false },
             uploaded_by: { type: DataTypes.TEXT, allowNull: true },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
+            status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'ready' },
+            source: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'daemon' },
+            hug_id: { type: DataTypes.TEXT, allowNull: true },
+            hug_requested_input: { type: DataTypes.TEXT, allowNull: true },
+            sha256: { type: DataTypes.TEXT, allowNull: true },
         }, {
             sequelize,
             schema: 'cliq',
@@ -59,4 +72,9 @@ export type StoredArtifactAttributes = {
     storage_key: string;
     uploaded_by: string | null;
     created_at: number;
+    status: 'pending' | 'ready';
+    source: 'daemon' | 'hug';
+    hug_id: string | null;
+    hug_requested_input: string | null;
+    sha256: string | null;
 };

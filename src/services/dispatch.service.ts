@@ -344,8 +344,8 @@ export class DispatchService {
 
         await command_outbox_enqueue(daemon!.id, '/v1/cancel', { run_id });
 
-        const { HugReviewsService } = await import('./hug_reviews.service.js');
-        await HugReviewsService.expire_pending_for_run(run_id).catch(() => {});
+        const { HugsService } = await import('./hugs.service.js');
+        await HugsService.cancel_for_run(run_id).catch(() => {});
 
         log.info(`dispatched cancel run ${run_id} to daemon ${run.daemon_id}`);
         return { cancelled: true, mode: 'queued' };
@@ -440,8 +440,8 @@ export class DispatchService {
             by_user: user_id, trigger,
         });
 
-        const { HugReviewsService } = await import('./hug_reviews.service.js');
-        await HugReviewsService.close_reviews_for_ended_run(run_id).catch(() => {});
+        const { HugsService } = await import('./hugs.service.js');
+        await HugsService.cancel_for_run(run_id).catch(() => {});
     }
 
     /**
@@ -496,42 +496,6 @@ export class DispatchService {
             eligible: false,
             blocker: 'daemon is heartbeating and no cancel has been queued long enough',
         };
-    }
-
-    /** Supply missing inputs to a run waiting on the daemon, then mirror state on Hub. */
-    static async supply_inputs(input: {
-        run_id: string;
-        inputs: Record<string, unknown>;
-        user_id: string;
-    }): Promise<{ supplied: boolean; run_id: string }> {
-        if (!input.user_id) throw ApiError.forbidden('Not authenticated');
-        if (!input.inputs || Object.keys(input.inputs).length === 0) {
-            throw ApiError.bad_request('inputs must not be empty');
-        }
-
-        const run = await _run_repo.find_by_id(input.run_id);
-        if (!run) throw ApiError.not_found(`Run '${input.run_id}' not found`);
-        await DispatchService._ensure_daemon_assignment(run);
-
-        // Callers authorized this: the supply_inputs route (operate + teams.inputs)
-        // or a review verdict (the reviewer may act on the review).
-        const daemon = await DispatchService._check_daemon_reachable(run);
-
-        await command_outbox_enqueue(daemon.id, '/v1/runs/supply_inputs', {
-            run_id: input.run_id,
-            inputs: input.inputs,
-        });
-
-        try {
-            await RunService.set_inputs(input.run_id, input.inputs);
-            await RunService.resume(input.run_id);
-        } catch (err) {
-            log.warn('hub_input_mirror_failed', { error: err instanceof Error ? err.message : String(err) });
-            /* daemon is source of truth; Hub mirror is best-effort */
-        }
-
-        log.info(`dispatched supply_inputs for run ${input.run_id} to daemon ${daemon.id}`);
-        return { supplied: true, run_id: input.run_id };
     }
 
     /**
@@ -1733,7 +1697,7 @@ export class DispatchService {
     /**
      * Heartbeat window past which the daemon is treated as "stranded"
      * (very unlikely to come back — the pod's ephemeral state is
-     * almost certainly gone). At this point resume/supply_inputs
+     * almost certainly gone). At this point resume
      * against the owning daemon cannot succeed and the UI should
      * offer "Run again" as the only path forward.
      */

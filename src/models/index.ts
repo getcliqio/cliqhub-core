@@ -47,9 +47,7 @@ import { RealmDispatchKey } from './realm_dispatch_key.model.js';
 import { RealmDispatchQueue } from './realm_dispatch_queue.model.js';
 import { Realm } from './realm.model.js';
 import { RealmMember } from './realm_member.model.js';
-import { Review } from './review.model.js';
-import { ReviewMessage } from './review_message.model.js';
-import { ReviewNotification } from './review_notification.model.js';
+import { Hug, HugDelivery, HugEventRow, HugResponse } from './hug.model.js';
 import { Run } from './run.model.js';
 import { RunArtifact } from './run_artifact.model.js';
 import { RunEvent } from './run_event.model.js';
@@ -78,14 +76,14 @@ export {
     NotificationChannel, NotificationRule, NotificationSubscription, NotificationPersonSetting,
     RealmA2aSetting, RealmAgentSetting, RealmDispatchKey, RealmDispatchQueue,
     Realm, RealmMember,
-    Review, ReviewMessage, ReviewNotification,
+    Hug, HugDelivery, HugEventRow, HugResponse,
     Run, RunArtifact, RunEvent, RunLog, RunLogLine, RunPhase, RunSpan,
     StoredArtifact, WebhookDelivery,
     Workspace, WorkspaceSecret, WorkspaceTeam,
 };
 
 /**
- * Register all 58 models on a single Sequelize instance and set up
+ * Register all 59 models on a single Sequelize instance and set up
  * associations. Called once at application boot.
  */
 export function init_models(sequelize: Sequelize): void {
@@ -138,9 +136,10 @@ export function init_models(sequelize: Sequelize): void {
     RealmMember.register(sequelize);
     RealmDispatchQueue.register(sequelize);
     HubEvent.register(sequelize);
-    Review.register(sequelize);
-    ReviewMessage.register(sequelize);
-    ReviewNotification.register(sequelize);
+    Hug.register(sequelize);
+    HugDelivery.register(sequelize);
+    HugResponse.register(sequelize);
+    HugEventRow.register(sequelize);
     RealmAgentSetting.register(sequelize);
     AgentCatalog.register(sequelize);
     NotificationRule.register(sequelize);
@@ -250,11 +249,8 @@ export function init_models(sequelize: Sequelize): void {
     NotificationChannel.hasMany(ChannelDestination, { foreignKey: 'channel_id', as: 'destinations_rows' });
     ChannelDestination.belongsTo(NotificationChannel, { foreignKey: 'channel_id', as: 'channel' });
 
-    Review.hasMany(ReviewMessage, { foreignKey: 'review_id', as: 'messages' });
-    ReviewMessage.belongsTo(Review, { foreignKey: 'review_id', as: 'review' });
-
-    Review.hasMany(ReviewNotification, { foreignKey: 'review_id', as: 'notifications' });
-    ReviewNotification.belongsTo(Review, { foreignKey: 'review_id', as: 'review' });
+    Hug.hasMany(HugDelivery, { foreignKey: 'hug_id', as: 'deliveries' });
+    Hug.hasMany(HugResponse, { foreignKey: 'hug_id', as: 'responses' });
 }
 
 let _inited_for: Sequelize | null = null;

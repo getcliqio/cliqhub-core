@@ -36,6 +36,23 @@ export class EventSends {
 	event = '';
 	private readonly _off = new Map<string, boolean>();
 
+	/** The realm the event is about (null: an org or account event — nobody is filtered). */
+	realm_id: string | null = null;
+	private readonly _may = new Map<string, boolean>();
+
+	/**
+	 * Whether this person may receive the event: access to its realm with the event's permission
+	 * (notifications/event_access.ts). Every delivery to a known person asks first. Cached per event.
+	 */
+	async may_receive(user_id: string): Promise<boolean> {
+		const hit = this._may.get(user_id);
+		if (hit !== undefined) return hit;
+		const { can_receive } = await import('../event_access.js');
+		const may = await can_receive(user_id, this.realm_id, this.event);
+		this._may.set(user_id, may);
+		return may;
+	}
+
 	/** Whether this person switched this event off for themselves (PLAN-notification-layers D). Cached per event. */
 	async person_off(user_id: string): Promise<boolean> {
 		const hit = this._off.get(user_id);

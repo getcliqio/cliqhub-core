@@ -74,7 +74,7 @@ vi.mock('../../src/models/index.js', () => ({
     CustomEvent: {},
     Review: {},
     ReviewMessage: {},
-    ReviewNotification: {},
+    HugDelivery: {},
     StoredArtifact: {},
 }));
 
@@ -139,10 +139,9 @@ vi.mock('../../src/lib/sequelize.js', () => ({
     }),
 }));
 
-vi.mock('../../src/services/hug_reviews.service.js', () => ({
-    HugReviewsService: {
-        expire_pending_for_run: vi.fn(async () => undefined),
-        close_reviews_for_ended_run: vi.fn(async () => ({ expired: 0, completed: 0 })),
+vi.mock('../../src/services/hugs.service.js', () => ({
+    HugsService: {
+        cancel_for_run: vi.fn(async () => 0),
     },
 }));
 

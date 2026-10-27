@@ -2,14 +2,13 @@
  * Stored Artifacts controller — durable file storage for run outputs.
  *
  * Routes (1:1 with this controller):
- *   POST /v1/artifacts/submit     — daemon uploads artifact to R2
+ *   POST /v1/artifacts/upload     — stream a file in (daemon run artifact, or a Hug responder's file)
+ *   POST|GET /v1/artifacts/download — stream a file out
  *   POST /v1/artifacts/get        — list artifacts for a run
- *   POST /v1/artifacts/get_by_id  — single artifact + presigned URL
+ *   POST /v1/artifacts/get_by_id  — one artifact's metadata
  *   POST /v1/artifacts/delete     — remove artifact (R2 + metadata)
  *
- * The submit endpoint accepts both JSON (base64 content) and
- * multipart/form-data (raw file) transports. The daemon chooses
- * multipart for files > 1 MB to avoid base64 bloat.
+ * Every byte goes through Core; only Core talks to R2 (PLAN-hug-requests §6.6).
  *
  * Instance methods per implementation-standards.mdc.
  */
@@ -17,16 +16,23 @@
 import { BaseController } from './base_controller.js';
 import { ArtifactStorageService } from '../services/artifact_storage.service.js';
 import type { ApiOkResponse, ApiRequest, BooleanData } from '../types/api_response.js';
-import type {
-    ArtifactData,
-    ArtifactsSubmitOutput,
-} from '../schemas/artifacts_schemas.js';
+import type { ArtifactData } from '../schemas/artifacts_schemas.js';
 import {
-    ArtifactsSubmitInput,
+    ArtifactsDownloadInput,
     ArtifactsGetInput,
     ArtifactsGetByIdInput,
     ArtifactsDeleteInput,
+    ArtifactsUploadQuery,
 } from '../schemas/artifacts_schemas.js';
+import type { Request, Response } from 'express';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as WebReadableStream } from 'node:stream/web';
+import type { RequestedInput } from '@getcliqio/cliq-sdk';
+import { ApiError } from '../errors/api_error.js';
+import { Hug, StoredArtifact } from '../models/index.js';
+import { assert_answerable, HugsService } from '../services/hugs.service.js';
+import type { UploadTarget } from '../services/artifact_storage.service.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('ctrl.artifacts');
@@ -40,34 +46,57 @@ export class ArtifactsController extends BaseController {
     }
 
     /**
-     * Upload an artifact from a daemon/agent and persist to R2.
+     * POST /v1/artifacts/upload?… — stream one file in (§6.6.3). The body is the raw file
+     * (`Content-Type` and `Content-Length` are the file's); metadata is in the query so the route
+     * policy authorizes before the body is read. The daemon names `run_id` + `phase`; a responder
+     * names `hug_id` + `requested_input` (a `file` input of an open Hug that reached them).
      *
-     * Accepts two content types:
-     *   - `application/json` — base64-encoded content in the JSON body (≤ 1 MB)
-     *   - `multipart/form-data` — raw file + metadata fields (> 1 MB)
-     *
-     * @param req - Body: {@link ArtifactsSubmitInput} (JSON) or multipart fields
-     * @param res - `{ ok: true, data: ArtifactsSubmitOutput }`
+     * @param req - Query: {@link ArtifactsUploadQuery}; body: the file
+     * @param res - 201 `{ ok: true, data: UploadOutput }`
      */
-    async submit(
-        req: ApiRequest<ArtifactsSubmitInput, ArtifactsSubmitOutput>,
-        res: ApiOkResponse<ArtifactsSubmitOutput>,
-    ): Promise<void> {
-        log.debug('submit', { user_id: req.auth?.user?.id });
-        const content_type = req.headers['content-type'] ?? '';
-
-        let body: ArtifactsSubmitInput;
-
-        if (content_type.includes('multipart/form-data')) {
-            body = await _parse_multipart_submit(req);
-        } else {
-            body = this.parse_body(ArtifactsSubmitInput, req);
+    async upload(req: Request, res: Response): Promise<void> {
+        const query = this.parse_query(ArtifactsUploadQuery, req);
+        const content_length = Number(req.headers['content-length']);
+        if (req.headers['content-length'] === undefined || !Number.isFinite(content_length)) {
+            throw new ApiError('ARTIFACT_LENGTH_REQUIRED', 'Content-Length is required', 411);
         }
+        const user_id = req.auth?.auth_via === 'daemon_token' ? null : (req.auth?.user?.id ?? null);
+        const target = query.hug_id
+            ? await hug_upload_target(query.hug_id, query.requested_input, user_id)
+            : { kind: 'run' as const, run_id: query.run_id!, phase: query.phase! };
+        const data = await this._storage.upload({
+            stream: req,
+            content_length,
+            content_type: String(req.headers['content-type'] ?? 'application/octet-stream'),
+            name: query.name,
+            description: query.description,
+            target,
+            uploaded_by: user_id,
+        });
+        this.ok(res, data, 201);
+    }
 
-        const uploaded_by = req.auth?.user?.id ?? undefined;
-        const result = await this._storage.submit(body, uploaded_by);
-        log.info('artifact_submitted', { run_id: body.run_id });
-        this.ok(res, result, 201);
+    /**
+     * POST|GET /v1/artifacts/download — stream one stored file out (§6.6.4). Range requests pass
+     * through (206). Sent as an attachment, never sniffed or cached by the browser.
+     *
+     * @param req - Body or query: {@link ArtifactsDownloadInput}
+     * @param res - the file bytes
+     */
+    async download(req: Request, res: Response): Promise<void> {
+        const { artifact_id } = req.method === 'GET' ? this.parse_query(ArtifactsDownloadInput, req) : this.parse_body(ArtifactsDownloadInput, req);
+        const user_id = req.auth?.auth_via === 'daemon_token' ? null : (req.auth?.user?.id ?? null);
+        const range = typeof req.headers.range === 'string' ? req.headers.range : undefined;
+        const file = await this._storage.download(artifact_id, user_id, range);
+        res.status(file.status);
+        res.setHeader('Content-Type', file.mime_type || file.content_type);
+        res.setHeader('Content-Length', String(file.content_length));
+        res.setHeader('Content-Disposition', content_disposition(file.name));
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('Accept-Ranges', 'bytes');
+        if (file.content_range) res.setHeader('Content-Range', file.content_range);
+        await pipeline(Readable.fromWeb(file.body as unknown as WebReadableStream<Uint8Array>), res);
     }
 
     /**
@@ -87,7 +116,7 @@ export class ArtifactsController extends BaseController {
     }
 
     /**
-     * Fetch a single artifact's metadata and a fresh presigned download URL.
+     * Fetch a single artifact's metadata (its `download_url` is a Hub URL).
      *
      * @param req - Body: {@link ArtifactsGetByIdInput}
      * @param res - `{ ok: true, data: ArtifactData }`
@@ -120,117 +149,29 @@ export class ArtifactsController extends BaseController {
     }
 }
 
-// ─── Multipart parser ────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────
 
-import type { Request } from 'express';
-import { ApiError } from '../errors/api_error.js';
-import type { ArtifactsSubmitInput as SubmitInputType } from '../schemas/artifacts_schemas.js';
-
-/**
- * Parse a multipart/form-data request into ArtifactsSubmitInput.
- *
- * Minimal parser — no external deps. Reads the raw body, splits on the
- * boundary, and extracts text fields + one file part. The file content
- * is base64-encoded into the standard input shape so the service layer
- * handles both transports uniformly.
- */
-async function _parse_multipart_submit(req: Request): Promise<SubmitInputType> {
-    const content_type = req.headers['content-type'] ?? '';
-    const boundary_match = content_type.match(/boundary=([^\s;]+)/);
-    if (!boundary_match) throw new ApiError('invalid_request', 'Missing multipart boundary');
-
-    const boundary = boundary_match[1];
-    const raw = await _read_raw_body(req);
-    const parts = _split_multipart(raw, boundary);
-
-    const fields: Record<string, string> = {};
-    let file_content: Buffer | null = null;
-
-    for (const part of parts) {
-        const header_end = part.indexOf('\r\n\r\n');
-        if (header_end === -1) continue;
-
-        const header_str = part.subarray(0, header_end).toString('utf8');
-        const body_buf = part.subarray(header_end + 4);
-
-        const name_match = header_str.match(/name="([^"]+)"/);
-        if (!name_match) continue;
-        const name = name_match[1];
-
-        // File part has a filename attribute.
-        if (header_str.includes('filename=')) {
-            file_content = body_buf;
-            continue;
-        }
-
-        // Text field.
-        fields[name] = body_buf.toString('utf8').trimEnd();
+/** The upload target for a responder's file: the Hug must be open, reach them, and have this `file` input. */
+async function hug_upload_target(hug_id: string, requested_input: string | undefined, user_id: string | null): Promise<UploadTarget> {
+    if (!user_id) throw new ApiError('forbidden', 'Only a person can upload a file for a Hug', 403);
+    if (!requested_input) throw new ApiError('invalid_request', 'requested_input is required with hug_id', 400);
+    const hug = await Hug.findByPk(hug_id);
+    if (!hug) throw new ApiError('not_found', 'Hug not found', 404);
+    assert_answerable(hug);
+    if ((await HugsService.channels_reaching(hug, user_id)).length === 0) throw new ApiError('forbidden', 'This Hug was not sent to you', 403);
+    const input = (hug.requested_inputs as RequestedInput[]).find((i) => i.name === requested_input);
+    if (!input || input.type !== 'file') {
+        throw new ApiError('HUG_FILE_INVALID', `'${requested_input}' is not a file input of this Hug`, 422);
     }
-
-    if (!fields.run_id) throw new ApiError('invalid_request', 'Missing run_id in multipart');
-    if (!fields.phase) throw new ApiError('invalid_request', 'Missing phase in multipart');
-    if (!fields.name) throw new ApiError('invalid_request', 'Missing name in multipart');
-    if (!file_content) throw new ApiError('invalid_request', 'Missing file part in multipart');
-
+    const pending_count = await StoredArtifact.count({ where: { hug_id, uploaded_by: user_id, status: 'pending' } });
     return {
-        run_id: fields.run_id,
-        phase: fields.phase,
-        name: fields.name,
-        content: file_content.toString('base64'),
-        encoding: 'base64',
-        mime_type: fields.mime_type,
-        description: fields.description,
+        kind: 'hug', run_id: hug.run_id, phase: hug.phase, hug_id, requested_input,
+        accept: input.accept, max_bytes: input.max_bytes, pending_count,
     };
 }
 
-/** Max raw body size for multipart uploads (55 MB — 50 MB file + overhead). */
-const MAX_MULTIPART_BYTES = 55 * 1024 * 1024;
-
-/** Read the raw request body into a Buffer, enforcing a size limit. */
-function _read_raw_body(req: Request): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        let total = 0;
-        req.on('data', (chunk: Buffer) => {
-            total += chunk.length;
-            if (total > MAX_MULTIPART_BYTES) {
-                req.destroy();
-                reject(new ApiError('invalid_request', `Multipart body exceeds ${MAX_MULTIPART_BYTES} bytes`));
-                return;
-            }
-            chunks.push(chunk);
-        });
-        req.on('end', () => resolve(Buffer.concat(chunks)));
-        req.on('error', reject);
-    });
-}
-
-/** Split a multipart body into individual part buffers. */
-function _split_multipart(raw: Buffer, boundary: string): Buffer[] {
-    const delim = Buffer.from(`--${boundary}`);
-    const parts: Buffer[] = [];
-    let start = 0;
-
-    while (true) {
-        const idx = raw.indexOf(delim, start);
-        if (idx === -1) break;
-
-        if (start > 0) {
-            // Strip leading \r\n from the part body.
-            let part_start = start;
-            if (raw[part_start] === 0x0d && raw[part_start + 1] === 0x0a) part_start += 2;
-            // Strip trailing \r\n before the next boundary.
-            let part_end = idx;
-            if (raw[part_end - 2] === 0x0d && raw[part_end - 1] === 0x0a) part_end -= 2;
-            if (part_end > part_start) {
-                parts.push(raw.subarray(part_start, part_end));
-            }
-        }
-
-        start = idx + delim.length;
-        // Check for closing `--` after the boundary.
-        if (raw[start] === 0x2d && raw[start + 1] === 0x2d) break;
-    }
-
-    return parts;
+/** `attachment` with an ASCII fallback name and the exact UTF-8 one (RFC 6266). */
+function content_disposition(name: string): string {
+    const ascii = name.replace(/[^\x20-\x7e]|["\\]/g, '_');
+    return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }

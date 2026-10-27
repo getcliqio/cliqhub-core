@@ -19,7 +19,7 @@ export const LEVEL_RANK: Record<Level, number> = { view: 1, operate: 2, admin: 3
 export type RecordKind =
     | 'realm'
     | 'run'
-    | 'review'
+    | 'hug'
     | 'artifact'
     | 'event'
     | 'custom_event'
@@ -30,7 +30,7 @@ export type RecordKind =
     | 'rule'
     | 'team';
 
-/** Where to read an id from: `body.run_id`, `query.review_id`, `params.slug`. First present wins. */
+/** Where to read an id from: `body.run_id`, `query.hug_id`, `params.slug`. First present wins. */
 export type FieldRef = `${'body' | 'query' | 'params'}.${string}`;
 
 /**

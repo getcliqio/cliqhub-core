@@ -11,7 +11,7 @@ describe('required_fields_for', () => {
 		expect(required_fields_for('phase.escalated')).toEqual([
 			'realm_id', 'run_id', 'phase', 'daemon_id',
 		]);
-		expect(required_fields_for('hug.review_requested')).toEqual([
+		expect(required_fields_for('hug.responded')).toEqual([
 			'realm_id', 'run_id', 'daemon_id',
 		]);
 		expect(required_fields_for('daemon.enrolled')).toEqual(['realm_id', 'daemon_id']);
@@ -75,8 +75,8 @@ describe('event_submit_schema', () => {
 		expect(result.error.issues.some((i) => i.path[0] === 'phase')).toBe(true);
 	});
 
-	it('refuses the retired events: a phase that needs a person posts its own Hug (PLAN-notifications-v2 B4.5)', () => {
-		for (const type of ['phase.input_required', 'hug.review_requested']) {
+	it('refuses retired events: a Hug is posted straight to its channels, and routing is the gate\'s meaning', () => {
+		for (const type of ['phase.input_required', 'phase.inputs_supplied', 'hug.review_requested', 'hug.routing_requested', 'hug.opened']) {
 			expect(event_submit_schema.safeParse({
 				type, realm_id: 'realm-1', run_id: 'run-1', daemon_id: 'daemon-1', phase: 'implement',
 				payload: { kind: 'requested_inputs', summary: 'Pick target env' },

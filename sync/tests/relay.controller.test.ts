@@ -132,7 +132,7 @@ describe('RelayController', () => {
 
         const input = { run_id: 'r-1', inputs: { a: 1 }, tx_id: 'tx-9' };
         const req = mock_req({
-            params: { daemon_id: 'daemon-1', path: 'v1/runs/supply_inputs' },
+            params: { daemon_id: 'daemon-1', path: 'v1/runs/resume' },
             body: input,
             headers: { 'content-type': 'application/json' },
         });
@@ -141,7 +141,7 @@ describe('RelayController', () => {
         await controller.relay(req, res, mock_next);
 
         const insert_call = pool.query.mock.calls[2];
-        expect(insert_call[1][3]).toBe('/v1/runs/supply_inputs');
+        expect(insert_call[1][3]).toBe('/v1/runs/resume');
         expect(JSON.parse(insert_call[1][5])).toEqual(input);
         expect(res.status).toHaveBeenCalledWith(404);
         expect(res.json).toHaveBeenCalledWith(reply);

@@ -27,8 +27,10 @@ import { OrgMemberRepository as OrgMemberRepoClass } from '../repositories/org_m
 
 import { get_logger } from '../lib/log.js';
 import { escape_like } from '../lib/search.js';
-import { lint_team, type AgentInputs } from '@getcliqio/cliq-sdk';
+import { lint_team, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
 import { AgentCatalog } from '../models/agent_catalog.model.js';
+import { Team } from '../models/team.model.js';
+import { TeamVersionRepository as TeamVersionRepoClass } from '../repositories/team_version_repository.js';
 
 const log = get_logger('svc.teams');
 
@@ -66,7 +68,9 @@ function resolve_manifest_yaml(params: {
 /**
  * Refuse a team whose phases carry lines cliq would silently ignore (cliq-sdk `lint_team`, shared with cliqd): a line
  * that's neither a phase field nor an input its agent declares, a required agent input missing, or
- * a field a team input doesn't have. Agent inputs come from the agent catalog (built-in and custom).
+ * a field a team input doesn't have, or a `type: team` phase whose `args` miss an input its sub-team
+ * requires (PLAN-hug-requests §14). Agent inputs come from the agent catalog (built-in and custom);
+ * sub-team inputs from the catalog's latest version of each sub-team.
  *
  * @throws ApiError 422 `invalid_team` with `details.problems` (phase, line, message) when there are any.
  */
@@ -89,9 +93,33 @@ export async function assert_team_lints(team_yml: ParsedTeamYml | Record<string,
     }
     // roles/<phase>.md is that phase's role brief.
     const briefs = new Set(role_files.map((r) => r.name.replace(/^.*\//, '').replace(/\.md$/, '')));
-    const problems = lint_team(team, agents, briefs);
+    const problems = lint_team(team, agents, briefs, await sub_team_inputs(team));
     if (!problems.length) return;
     throw new ApiError('invalid_team', `This team has ${problems.length} problem${problems.length === 1 ? '' : 's'}: ${problems.map((p) => p.message).join('; ')}`, 422, { problems });
+}
+
+/**
+ * The declared inputs of the catalog teams this team's `type: team` phases run (latest version), by
+ * ref (`@scope/slug`). A sub-team not in the catalog is left out (not checked here).
+ */
+async function sub_team_inputs(team: Record<string, unknown>): Promise<Map<string, TeamInputDef[]>> {
+    const out = new Map<string, TeamInputDef[]>();
+    const versions = new TeamVersionRepoClass();
+    for (const p of Array.isArray(team['phases']) ? team['phases'] : []) {
+        const phase = p as { type?: unknown; team?: unknown } | null;
+        if (phase?.type !== 'team' || typeof phase.team !== 'string' || out.has(phase.team)) continue;
+        const ref = /^@?([^/\s@]+)\/([^/\s@]+)$/.exec(phase.team);
+        if (!ref) continue;
+        const row = await Team.findOne({ where: { scope: ref[1], name: ref[2] }, attributes: ['id'], raw: true });
+        const detail = row ? await versions.find_latest_detail(row.id) : null;
+        const manifest = detail?.manifest_yaml ? parse_manifest_yaml(detail.manifest_yaml) as { inputs?: unknown } | null : null;
+        if (!manifest) continue;
+        const decls = (Array.isArray(manifest.inputs) ? manifest.inputs : [])
+            .filter((i): i is { name: string; required?: boolean; default?: unknown } => !!i && typeof (i as { name?: unknown }).name === 'string')
+            .map((i) => ({ name: i.name, required: i.required, default: i.default }));
+        out.set(phase.team, decls);
+    }
+    return out;
 }
 
 function parse_manifest_yaml(manifest_yaml: string): ParsedTeamYml | null {

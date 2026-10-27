@@ -57,7 +57,7 @@ describe('command outbox ← cliqd replies (fixture)', () => {
     }
 
     it('only a 404 RUN_NOT_FOUND is "run state lost"', () => {
-        const body = WIRE.outbox.supply_inputs_unknown_run!.body;
+        const body = WIRE.outbox.resume_unknown_run!.body;
         expect(is_daemon_run_not_found(404, body)).toBe(true);
         expect(is_daemon_run_not_found(500, body)).toBe(false);
         expect(is_daemon_run_not_found(404, { ok: false, error: { code: 'NOT_FOUND', message: 'Run x not found' } })).toBe(false);

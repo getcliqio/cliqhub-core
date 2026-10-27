@@ -308,12 +308,14 @@ async function deliver_for_channel_ids(
 	// before any personal copy is considered.
 	const sends = new EventSends();
 	sends.event = event.type;
+	sends.realm_id = event.realm_id?.trim() || null;
 	const channels = [...found].sort((a, b) => Number(Boolean((a as { user_id?: unknown }).user_id)) - Number(Boolean((b as { user_id?: unknown }).user_id)));
 
 	for (const channel of channels) {
 		// A person who switched this event off for themselves isn't sent it (their choice wins over realm and org).
 		const owner = (channel as { user_id?: string | null }).user_id;
-		if (owner && await sends.person_off(String(owner))) continue;
+		// A personal channel is its person: nothing reaches them that they may not see, on any endpoint.
+		if (owner && (!await sends.may_receive(String(owner)) || await sends.person_off(String(owner)))) continue;
 		const destinations = parse_channel_destinations(channel);
 		const members_way = MEMBERS_CHANNEL_KEYS.has(String((channel as { system_key?: unknown }).system_key ?? ''));
 		if (destinations.length === 0 && !members_way) {
@@ -342,6 +344,7 @@ async function deliver_for_channel_ids(
 
 	for (const { channel, force } of people) {
 		// Runs I start is the person's own (more specific) choice; switched on for everyone in a realm, off still wins.
+		if (!await sends.may_receive(String(channel.user_id))) continue;
 		if (!force && await sends.person_off(String(channel.user_id))) continue;
 		const secret = (channel as unknown as { secret: string | null }).secret ?? null;
 		await deliver_destinations(parse_channel_destinations(channel), payload, new Set(), { channel_id: channel.id, sends }, secret);
@@ -422,7 +425,8 @@ async function deliver_to_members_their_way(channel: unknown, payload: Notificat
 	});
 	let any = false;
 	for (const pc of personal) {
-		if (await sends.person_off(String((pc as { user_id: string }).user_id))) continue;
+		const member = String((pc as { user_id: string }).user_id);
+		if (!await sends.may_receive(member) || await sends.person_off(member)) continue;
 		const dests = parse_channel_destinations(pc).filter((d) => d.type !== 'cliqhub');
 		if (dests.length === 0) continue;
 		const secret = (pc as unknown as { secret: string | null }).secret ?? null;
@@ -487,7 +491,7 @@ async function deliver_destinations(
 			}
 
 			for (const target of targets) {
-				if (target.user_id && context?.sends && await context.sends.person_off(String(target.user_id))) continue;
+				if (target.user_id && context?.sends && (!await context.sends.may_receive(String(target.user_id)) || await context.sends.person_off(String(target.user_id)))) continue;
 				const child_dests = parse_channel_destinations(target);
 				if (child_dests.length === 0) continue;
 				const child_secret = (target as unknown as { secret: string | null }).secret ?? null;

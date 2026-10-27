@@ -32,7 +32,7 @@ function is_realm_event(event: SubmittedEvent): boolean {
 	}
 
 	// Always about a realm: its fixed rule sends it to the realm's All realm members.
-	if (t === 'notification.unknown_channel') return true;
+	if (t === 'notification.unknown_channel' || t === 'notification.no_access') return true;
 
 	if (t.startsWith('team.') || t.startsWith('auth.')) return false;
 

@@ -539,7 +539,6 @@ export async function migrate_hub_schema(sequelize: Sequelize): Promise<void> {
     await migrate_identity_lifecycle(sequelize);
 
     await align_org_with_realm(sequelize);
-    await close_decided_reviews_of_ended_runs(sequelize);
     await wire_scope_foreign_keys(sequelize);
     await drop_public_schema(sequelize);
 }
@@ -599,12 +598,12 @@ async function wire_scope_foreign_keys(sequelize: Sequelize): Promise<void> {
 }
 
 /** Realm-scoped rows whose `org_id` must equal their realm's org. */
-const REALM_SCOPED_TABLES = ['in_app_notifications', 'team_runs', 'reviews'] as const;
+const REALM_SCOPED_TABLES = ['in_app_notifications', 'team_runs', 'hugs'] as const;
 
 /**
  * The realm's org is the tenancy source of truth. Rows written before a realm
  * moved org (personal `default` realms → account orgs) kept the old org and
- * showed up under the wrong org in inbox, runs and review lists.
+ * showed up under the wrong org in inbox, runs and Hug lists.
  */
 async function align_org_with_realm(sequelize: Sequelize): Promise<void> {
     for (const tbl of REALM_SCOPED_TABLES) {
@@ -620,21 +619,6 @@ async function align_org_with_realm(sequelize: Sequelize): Promise<void> {
         const updated = (meta as { rowCount?: number } | undefined)?.rowCount ?? 0;
         if (updated > 0) log.info('org_aligned_with_realm', { table: tbl, rows: updated });
     }
-}
-
-/** An ended run never acks a verdict; its `decided` reviews would stay open forever. */
-async function close_decided_reviews_of_ended_runs(sequelize: Sequelize): Promise<void> {
-    if (!(await table_exists(sequelize, 'cliq', 'reviews')) || !(await table_exists(sequelize, 'cliq', 'team_runs'))) return;
-    const [, meta] = await sequelize.query(`
-        UPDATE cliq.reviews AS r
-           SET status = 'completed', completed_at = NOW()
-          FROM cliq.team_runs AS tr
-         WHERE tr.run_id = r.run_id
-           AND r.status = 'decided'
-           AND tr.state NOT IN ('running', 'awaiting_input')
-    `);
-    const updated = (meta as { rowCount?: number } | undefined)?.rowCount ?? 0;
-    if (updated > 0) log.info('decided_reviews_closed', { rows: updated });
 }
 
 /** Leftovers of the public → cliq move that nothing reads any more. */

@@ -32,7 +32,6 @@ import {
     RunsGetInput,
     RunsGetStatusInput,
     RunsResumeInput,
-    RunsSupplyInputsInput,
     RunsUpdateStatusInput,
 } from '../schemas/run_types.js';
 import type {
@@ -45,7 +44,6 @@ import type {
     RunIdData,
     RunPhaseData,
     RunResumeData,
-    RunSupplyInputsData,
 } from '../schemas/run_types.js';
 import { validate_run_start_options } from '../services/run_start_options.js';
 
@@ -285,26 +283,6 @@ export class RunController extends BaseController {
             mode: result.mode,
         };
         log.info('run_cancelled', { run_id });
-        this.ok(res, data);
-    }
-
-    /** POST /v1/runs/supply_inputs */
-    async supply_inputs(
-        req: ApiRequest<RunsSupplyInputsInput, RunSupplyInputsData>,
-        res: ApiOkResponse<RunSupplyInputsData>,
-    ): Promise<void> {
-        log.debug('supply_inputs', { run_id: req.body?.run_id, user_id: req.auth?.user?.id });
-        const body = this.parse_body(RunsSupplyInputsInput, req);
-        const result = await DispatchService.supply_inputs({
-            run_id: body.run_id,
-            inputs: body.inputs,
-            user_id: req.auth?.user?.id ?? '',
-        });
-        log.info('run_inputs_supplied', { run_id: body.run_id, input_keys: Object.keys(body.inputs ?? {}) });
-        const data: RunSupplyInputsData = {
-            supplied: result.supplied,
-            run_id: result.run_id,
-        };
         this.ok(res, data);
     }
 

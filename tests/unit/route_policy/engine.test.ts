@@ -38,8 +38,8 @@ const RECORDS: Record<string, RecordScope> = {
     'run:r-a1': { realm_id: 'A1', org_id: 'acme' },
     'run:r-b1': { realm_id: 'B1', org_id: 'beta' },
     'run:r-none': { realm_id: null, org_id: null },
-    'review:rv-a1': { realm_id: 'A1', org_id: 'acme' },
-    'review:rv-assigned': { realm_id: 'A1', org_id: 'acme', assigned_user: true },
+    'hug:h-a1': { realm_id: 'A1', org_id: 'acme' },
+    'artifact:a-a1': { realm_id: 'A1', org_id: 'acme' },
     'daemon:d-a1': { realm_ids: ['A1'] },
     'daemon:d-multi': { realm_ids: ['A1', 'B1'] },
     'channel:ch-acme': { realm_id: null, org_id: 'acme' },
@@ -70,11 +70,11 @@ function auth(who: Who): AuthContext | undefined {
     return { ...base, user: { id: who, role: 'user' }, auth_via: 'pat' } as AuthContext;
 }
 
-async function check(key: string, who: Who, body: Record<string, unknown> = {}, pat = true) {
+async function check(key: string, who: Who, body: Record<string, unknown> = {}, pat = true, query_in?: Record<string, unknown>) {
     const policy = ROUTE_POLICY[key];
     if (!policy) throw new Error(`no policy for ${key}`);
     const [method, path] = key.split(' ');
-    const query = method === 'GET' ? body : {};
+    const query = query_in ?? (method === 'GET' ? body : {});
     const d = await decide(policy, { method, path, body, query, auth: auth(who) }, store, { allow_pat_daemon_writes: pat });
     return d.allow ? { status: 200, ...d } : d;
 }
@@ -108,7 +108,7 @@ describe('realm levels', () => {
     });
     it('another org gets 404', async () => {
         expect(await status('POST /v1/runs/get_by_id', 'ben', { run_id: 'r-a1' })).toBe(404);
-        expect(await status('POST /v1/reviews/get_messages', 'ben', { review_id: 'rv-a1' })).toBe(404);
+        expect(await status('POST /v1/hugs/get_by_id', 'ben', { hug_id: 'h-a1' })).toBe(404);
     });
     it('personal realm owner is admin', async () => {
         expect(await status('POST /v1/realms/update', 'pat', { realm_id: 'P' })).toBe(200);
@@ -177,7 +177,8 @@ describe('tokens and callers', () => {
     it('daemon token pushes state only into its own realm', async () => {
         expect(await status('POST /v1/runs/complete', 'daemon_a1', { run_id: 'r-a1' })).toBe(200);
         expect(await check('POST /v1/runs/complete', 'daemon_a1', { run_id: 'r-b1' })).toMatchObject({ status: 404, reason: 'daemon_other_realm' });
-        expect(await status('POST /v1/reviews/create', 'daemon_b1', { realm_id: 'A1' })).toBe(404);
+        expect(await status('POST /v1/hugs/create', 'daemon_b1', { realm_id: 'A1' })).toBe(404);
+        expect(await status('POST /v1/hugs/create', 'daemon_a1', { realm_id: 'A1' })).toBe(200);
     });
     it('daemon token is refused on user routes', async () => {
         expect(await check('POST /v1/runs/cancel', 'daemon_a1', { run_id: 'r-a1' })).toMatchObject({ status: 403, reason: 'daemon_not_allowed' });
@@ -190,9 +191,31 @@ describe('tokens and callers', () => {
         expect(await check('POST /v1/auth/generate_token', 'daemon_a1')).toMatchObject({ status: 403, reason: 'daemon_not_allowed' });
         expect(await check('POST /v1/auth/get_tokens', 'daemon_a1')).toMatchObject({ status: 403, reason: 'daemon_not_allowed' });
     });
-    it('daemon reads a review in its realm only', async () => {
-        expect(await status('POST /v1/reviews/get_by_id', 'daemon_a1', { review_id: 'rv-a1' })).toBe(200);
-        expect(await status('POST /v1/reviews/get_by_id', 'daemon_b1', { review_id: 'rv-a1' })).toBe(404);
+    it('daemon reads and closes a Hug in its realm only', async () => {
+        expect(await status('POST /v1/hugs/get_by_id', 'daemon_a1', { hug_id: 'h-a1' })).toBe(200);
+        expect(await status('POST /v1/hugs/get_by_id', 'daemon_b1', { hug_id: 'h-a1' })).toBe(404);
+        expect(await status('POST /v1/hugs/close', 'daemon_a1', { hug_id: 'h-a1' })).toBe(200);
+        expect(await status('POST /v1/hugs/close', 'daemon_b1', { hug_id: 'h-a1' })).toBe(404);
+    });
+    it('get_events is daemon-only', async () => {
+        expect(await status('POST /v1/hugs/get_events', 'daemon_a1')).toBe(200);
+        expect(await status('POST /v1/hugs/get_events', 'omar')).toBe(403);
+    });
+    it('one upload route: a run artifact for the daemon, a Hug file for a responder', async () => {
+        expect(await status('POST /v1/artifacts/upload', 'daemon_a1', {}, true, { run_id: 'r-a1', phase: 'p', name: 'n' })).toBe(200);
+        expect(await status('POST /v1/artifacts/upload', 'daemon_b1', {}, true, { run_id: 'r-a1', phase: 'p', name: 'n' })).toBe(404);
+        expect(await status('POST /v1/artifacts/upload', 'omar', {}, true, { hug_id: 'h-a1', requested_input: 'f', name: 'n' })).toBe(200);
+        expect(await status('POST /v1/artifacts/upload', 'mia', {}, true, { hug_id: 'h-a1', requested_input: 'f', name: 'n' })).toBe(200);
+        expect(await status('POST /v1/artifacts/upload', 'daemon_a1', {}, true, { hug_id: 'h-a1', requested_input: 'f', name: 'n' })).not.toBe(200);
+        expect(await status('POST /v1/artifacts/upload', 'nick', {}, true, { hug_id: 'h-a1', requested_input: 'f', name: 'n' })).toBe(403);
+        expect(await status('POST /v1/artifacts/upload', 'nora', {}, true, { hug_id: 'h-a1', requested_input: 'f', name: 'n' })).toBe(404);
+    });
+    it("downloads: realm viewers and the realm's daemons, nobody else", async () => {
+        expect(await status('POST /v1/artifacts/download', 'mia', { artifact_id: 'a-a1' })).toBe(200);
+        expect(await status('POST /v1/artifacts/download', 'daemon_a1', { artifact_id: 'a-a1' })).toBe(200);
+        expect(await status('POST /v1/artifacts/download', 'ben', { artifact_id: 'a-a1' })).toBe(404);
+        expect(await status('POST /v1/artifacts/download', 'daemon_b1', { artifact_id: 'a-a1' })).toBe(404);
+        expect(await status('GET /v1/artifacts/download', 'mia', { artifact_id: 'a-a1' })).toBe(200);
     });
     it('user token pushing daemon state: allowed with a warning during the transition, operate needed', async () => {
         const d = await check('POST /v1/runs/complete', 'omar', { run_id: 'r-a1' }, true);
@@ -203,14 +226,21 @@ describe('tokens and callers', () => {
     });
 });
 
-describe('assigned reviewers', () => {
-    it('a reviewer named on the review reads, chats and decides without a realm membership', async () => {
-        expect(await status('POST /v1/reviews/get_by_id', 'nora', { review_id: 'rv-assigned' })).toBe(200);
-        expect(await status('POST /v1/reviews/send_message', 'nora', { review_id: 'rv-assigned' })).toBe(200);
-        expect(await status('POST /v1/reviews/verdict', 'nora', { review_id: 'rv-assigned' })).toBe(200);
+describe('Hugs are seen and answered like their run (runs.view)', () => {
+    it('anyone with runs.view on the realm passes the route (the service checks it was addressed to them)', async () => {
+        for (const who of ['mia', 'omar']) {
+            expect(await status('POST /v1/hugs/get_by_id', who, { hug_id: 'h-a1' })).toBe(200);
+            expect(await status('POST /v1/hugs/respond', who, { hug_id: 'h-a1' })).toBe(200);
+        }
     });
-    it('being assigned does not allow daemon-only pushes', async () => {
-        expect(await status('POST /v1/reviews/ack', 'nora', { review_id: 'rv-assigned' })).toBe(404);
+    it('no realm membership, or no runs.view, means no Hug — however it was addressed', async () => {
+        expect(await status('POST /v1/hugs/get_by_id', 'nora', { hug_id: 'h-a1' })).toBe(404);
+        expect(await status('POST /v1/hugs/respond', 'nora', { hug_id: 'h-a1' })).toBe(404);
+        expect(await status('POST /v1/hugs/get_by_id', 'nick', { hug_id: 'h-a1' })).toBe(403);
+        expect(await status('POST /v1/hugs/respond', 'nick', { hug_id: 'h-a1' })).toBe(403);
+    });
+    it('people never make daemon-only pushes', async () => {
+        expect(await status('POST /v1/hugs/close', 'mia', { hug_id: 'h-a1' })).toBe(403);
     });
 });
 

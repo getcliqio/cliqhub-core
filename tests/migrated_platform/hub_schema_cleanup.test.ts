@@ -8,7 +8,7 @@ import { migrate_hub_schema } from '../../src/models/migrations/hub_schema_migra
 import { run_core_api_schema_migrations } from '../../src/models/migrations/control_plane_schema_migrations.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
-import { InAppNotification, Org, Realm, Review, Run } from '../../src/models/index.js';
+import { Hug, InAppNotification, Org, Realm, Run } from '../../src/models/index.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
 
 const has_postgres = await postgres_reachable();
@@ -136,7 +136,7 @@ describe.skipIf(!has_postgres)('hub schema cleanup (boot)', () => {
         expect(await scalar(`SELECT nspname AS v FROM pg_namespace WHERE nspname = 'public'`)).toBeNull();
     });
 
-    it('aligns realm-scoped org_id with the realm and closes decided reviews of ended runs', async () => {
+    it('aligns realm-scoped org_id (runs, notifications, Hugs) with the realm', async () => {
         const realm = await RealmService.create(hub_legacy_uuid(1), `r-${uid()}`.slice(0, 40), 'Moved');
         const stale_org = await Org.create({ slug: uid(), display_name: 'Old org' } as never);
         const stale_org_id = stale_org.get('id') as string;
@@ -147,12 +147,10 @@ describe.skipIf(!has_postgres)('hub schema cleanup (boot)', () => {
         for (const [run_id, state] of [[ended_run, 'failed'], [live_run, 'running']] as const) {
             await Run.create({ run_id, workspace_id: ws.id, team_id: 't', state, started_at: Date.now(), realm_id: realm.id, org_id: stale_org_id } as never);
         }
-        const review = (run_id: string) => Review.create({
-            id: randomUUID(), run_id, realm_id: realm.id, org_id: stale_org_id, status: 'decided',
-            payload: {}, timeout_at: new Date(Date.now() + 3_600_000),
+        const hug = await Hug.create({
+            id: randomUUID(), run_id: live_run, phase: 'p', daemon_id: 'd', realm_id: realm.id, org_id: stale_org_id,
+            title: 't', prompt: 'p', requested_inputs: [], channels: ['c'], status: 'open', expires_at: new Date(Date.now() + 3_600_000),
         } as never);
-        const closed = await review(ended_run);
-        const open = await review(live_run);
         const notif = await InAppNotification.create({
             id: randomUUID(), event: 'run.failed', realm_id: realm.id, org_id: stale_org_id, created_at: Date.now(),
         } as never);
@@ -163,9 +161,6 @@ describe.skipIf(!has_postgres)('hub schema cleanup (boot)', () => {
         expect(realm_org).not.toBe(stale_org_id);
         expect((await Run.findByPk(ended_run, { raw: true }) as { org_id: string }).org_id).toBe(realm_org);
         expect((await InAppNotification.findByPk(notif.get('id') as string, { raw: true }) as { org_id: string }).org_id).toBe(realm_org);
-        const closed_row = await Review.findByPk(closed.get('id') as string, { raw: true }) as { org_id: string; status: string; completed_at: Date | null };
-        expect(closed_row).toMatchObject({ org_id: realm_org, status: 'completed' });
-        expect(closed_row.completed_at).toBeTruthy();
-        expect((await Review.findByPk(open.get('id') as string, { raw: true }) as { status: string }).status).toBe('decided');
+        expect((await Hug.findByPk(hug.get('id') as string, { raw: true }) as { org_id: string }).org_id).toBe(realm_org);
     });
 });

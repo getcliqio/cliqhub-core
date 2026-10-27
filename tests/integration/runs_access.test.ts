@@ -46,7 +46,9 @@ describe.skipIf(!has_postgres)('runs and artifacts access (Core API 5)', () => {
             expect((await post('/v1/runs/complete', s.token.dB, { run_id: s.run_a1, state: 'failed' })).status).toBe(404);
             expect((await post('/v1/runs/append_logs', s.token.dB, { run_id: s.run_a1, chunk: 'x' })).status).toBe(404);
             expect((await post('/v1/runs/update_status', s.token.ben, { run_id: s.run_a1, phases: [] })).status).toBe(404);
-            expect((await post('/v1/artifacts/submit', s.token.dB, { run_id: s.run_a1, phase: 'p', name: 'x', content: 'x' })).status).toBe(404);
+            const upload = await request(app).post('/v1/artifacts/upload').query({ run_id: s.run_a1, phase: 'p', name: 'x' })
+                .set('Authorization', `Bearer ${s.token.dB}`).set('Content-Type', 'text/plain').send('x');
+            expect(upload.status).toBe(404);
             const run = await Run.findOne({ where: { run_id: s.run_a1 }, raw: true });
             expect(run?.state).toBe('running');
         });
@@ -142,9 +144,8 @@ describe.skipIf(!has_postgres)('runs and artifacts access (Core API 5)', () => {
     });
 
     describe('S15 — run control needs operate', () => {
-        it('a viewer cannot cancel or supply inputs', async () => {
+        it('a viewer cannot cancel', async () => {
             expect((await post('/v1/runs/cancel', s.token.mia, { run_id: s.run_a1 })).status).toBe(403);
-            expect((await post('/v1/runs/supply_inputs', s.token.mia, { run_id: s.run_a1, inputs: { a: 1 } })).status).toBe(403);
         });
 
         it('the org owner can cancel a run in a realm they were never added to', async () => {

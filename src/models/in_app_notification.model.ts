@@ -16,7 +16,13 @@ export class InAppNotification extends BaseModel {
     declare phase: string | null;
     declare severity: string | null;
     /** Denormalized from payload for HUG event queries. */
-    declare review_id: string | null;
+    declare hug_id: string | null;
+    /**
+     * Who it is for: `person` (`user_id`), `realm` (the members of `realm_id`) or `org` (the members of
+     * `org_id`; `realm_id` is then the realm the event is about). NULL on older rows: inferred the same
+     * way (user → person, realm → realm, else org).
+     */
+    declare audience: 'person' | 'realm' | 'org' | null;
     declare payload_json: string;
     declare created_at: number;
 
@@ -33,7 +39,8 @@ export class InAppNotification extends BaseModel {
             run_id: { type: DataTypes.TEXT, allowNull: true },
             phase: { type: DataTypes.TEXT, allowNull: true },
             severity: { type: DataTypes.TEXT, allowNull: true },
-            review_id: { type: DataTypes.TEXT, allowNull: true },
+            hug_id: { type: DataTypes.TEXT, allowNull: true },
+            audience: { type: DataTypes.TEXT, allowNull: true },
             payload_json: { type: DataTypes.TEXT, allowNull: false, defaultValue: '{}' },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
         }, {
@@ -47,7 +54,7 @@ export class InAppNotification extends BaseModel {
                 { fields: ['org_id'] },
                 { fields: ['event'] },
                 { fields: ['user_id'] },
-                { fields: ['review_id'] },
+                { fields: ['hug_id'] },
             ],
         });
     }
@@ -65,7 +72,7 @@ export type InAppNotificationAttributes = {
     run_id: string | null;
     phase: string | null;
     severity: string | null;
-    review_id: string | null;
+    hug_id: string | null;
     payload_json: string;
     created_at: number;
 };

@@ -63,7 +63,6 @@ function next_event_created_at_ms(): number {
 
 const RUN_CONTROL_ENDPOINTS = [
     '/v1/cancel',
-    '/v1/runs/supply_inputs',
     // Resume is a control command like cancel — the user needs to know
     // when it's been picked up by the daemon, otherwise clicking Resume
     // and watching an unchanged run for two minutes feels like a bug.
@@ -939,7 +938,7 @@ export class RunService {
     /**
      * Fire one lifecycle event onto the Hub event bus for a run
      * transition (run.started, run.completed, run.failed, run.crashed,
-     * run.cancelled, phase.input_required, phase.inputs_supplied).
+     * run.cancelled, phase.waiting, phase.resumed).
      *
      * Best-effort. This is the ONLY way lifecycle events reach the bus
      * — callers must not emit directly, so we keep dedup / gating logic
@@ -1212,8 +1211,8 @@ export class RunService {
         );
         if (count > 0) {
             await this._emit_lifecycle(run_id, `run.${state}` as EventType, { error: error ?? null });
-            const { HugReviewsService } = await import('./hug_reviews.service.js');
-            await HugReviewsService.close_reviews_for_ended_run(run_id).catch(() => {});
+            const { HugsService } = await import('./hugs.service.js');
+            await HugsService.cancel_for_run(run_id).catch(() => {});
         }
     }
 
@@ -1242,7 +1241,7 @@ export class RunService {
             } as any,
         );
         if (count > 0) {
-            await this._emit_lifecycle(run_id, 'phase.inputs_supplied');
+            await this._emit_lifecycle(run_id, 'phase.resumed');
         }
     }
 
@@ -2471,10 +2470,11 @@ export class RunService {
         // Durable run-state side effects (replaces POST set_awaiting_input).
         // Idempotent: each helper only transitions when state actually changes.
         const types = new Set(events.map((e) => e.event_type));
-        if (types.has('phase.input_required')) {
+        // A phase waiting on open Hugs parks the run; resuming it runs again (PLAN-hug-requests §15).
+        if (types.has('phase.waiting')) {
             await this.set_awaiting_input(run_id).catch(() => {});
         }
-        if (types.has('phase.inputs_supplied')) {
+        if (types.has('phase.resumed')) {
             await this.resume(run_id).catch(() => {});
         }
 

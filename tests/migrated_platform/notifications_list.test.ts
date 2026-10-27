@@ -131,7 +131,7 @@ describe.skipIf(!has_postgres)('POST /v1/notifications/get', () => {
 			message: 'a-fail',
 		});
 		await InAppNotificationService.create_from_payload({
-			event: 'hug.review_requested',
+			event: 'hug.reminded',
 			realm_id: realm_a.id,
 			message: 'a-hug',
 		});

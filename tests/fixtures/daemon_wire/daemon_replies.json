@@ -1,19 +1,12 @@
 {
     "_comment": "cliqd replies as Core, the agent-side SDK and cliq-agents read them. Pinned against the daemon's real replies by daemon/tests/spec/contracts/core_wire.spec.ts and agent_wire.spec.ts (exact: byte-equal body; otherwise the real reply must have every key of the sample, with the same JSON type). Copies — keep in sync: cliqhub-core tests/fixtures/daemon_wire/daemon_replies.json, cliq-sdk tests/fixtures/daemon_replies.json, cliq-agents tests/fixtures/daemon_replies.json.",
     "outbox": {
-        "supply_inputs_unknown_run": {
-            "request": { "path": "/v1/runs/supply_inputs", "body": { "run_id": "no-such-run", "inputs": { "a": 1 } } },
-            "status": 404,
+        "hugs_deliver_unknown_hug": {
+            "request": { "path": "/v1/hugs/deliver", "body": { "hug_id": "no-such-hug", "seq": 1, "type": "expired", "payload": {} } },
+            "status": 200,
             "exact": true,
-            "body": { "ok": false, "error": { "code": "RUN_NOT_FOUND", "message": "Run 'no-such-run' not found" } },
-            "core": { "delivered": false, "retryable": false, "run_not_found": true, "error_msg": "HTTP 404: RUN_NOT_FOUND: Run 'no-such-run' not found" }
-        },
-        "supply_inputs_invalid_state": {
-            "request": { "path": "/v1/runs/supply_inputs", "body": { "run_id": "<completed run>", "inputs": { "a": 1 } } },
-            "status": 409,
-            "exact": true,
-            "body": { "ok": false, "error": { "code": "RUN_INVALID_STATE", "message": "Run is in state 'completed', not 'awaiting_input'" } },
-            "core": { "delivered": false, "retryable": false, "run_not_found": false, "error_msg": "HTTP 409: RUN_INVALID_STATE: Run is in state 'completed', not 'awaiting_input'" }
+            "body": { "ok": true, "data": { "stored": false } },
+            "core": { "delivered": true, "retryable": false, "run_not_found": false, "error_msg": "" }
         },
         "resume_unknown_run": {
             "request": { "path": "/v1/resume", "body": { "run_id": "no-such-run", "from_phase": "build" } },
@@ -98,11 +91,17 @@
             "exact": true,
             "body": { "ok": true, "data": { "artifact_id": "art-1", "name": "plan.md", "mime_type": "text/markdown", "size_bytes": 5, "download_url": "https://dl/art-1" } }
         },
-        "hug_poll": {
-            "request": { "path": "/v1/hug/poll_verdict", "body": { "review_id": "<review>" } },
+        "hugs_open": {
+            "request": { "path": "/v1/hugs/open", "body": { "run_id": "<run>", "phase": "go", "iteration": 0, "title": "Approve?", "prompt": "Ship it?", "requested_inputs": [{ "name": "ok", "type": "boolean" }], "channels": ["ops"], "expires_in_min": 60 } },
             "status": 200,
             "exact": false,
-            "body": { "ok": true, "data": { "entries": [{ "type": "verdict", "role": "user", "payload": { "action": "approve", "comment": "ship it" } }] } }
+            "body": { "ok": true, "data": { "hug_id": "<hug>" } }
+        },
+        "hugs_next": {
+            "request": { "path": "/v1/hugs/next", "body": { "hug_ids": ["<hug>"], "after": {}, "wait_ms": 0 } },
+            "status": 200,
+            "exact": false,
+            "body": { "ok": true, "data": { "events": [{ "hug_id": "<hug>", "seq": 1, "type": "response", "response": { "response_id": "r", "responder": { "user_id": "u", "name": "n" }, "via": [], "values": { "ok": true }, "responded_at": "t" } }], "hugs": [{ "hug_id": "<hug>", "status": "open" }] } }
         }
     }
 }

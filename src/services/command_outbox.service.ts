@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { QueryTypes } from 'sequelize';
+import { QueryTypes, type Transaction } from 'sequelize';
 
 import { get_sequelize } from '../lib/sequelize.js';
 import { get_logger } from '../lib/log.js';
@@ -36,6 +36,8 @@ const STALE_ACK_INTERVAL_MS = 5 * 60 * 1000;  // 5 minutes
 const STALE_ACK_DEFAULT_THRESHOLD_MS = 5 * 60 * 1000;
 const STALE_ACK_EXECUTE_THRESHOLD_MS = 30 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 30_000;
+/** Longest wait between retries of an entry kept alive by `deliver_until`. */
+const MAX_UNTIL_BACKOFF_MS = 60_000;
 
 // ── Enqueue ──────────────────────────────────────────────────────────
 
@@ -53,7 +55,17 @@ export async function command_outbox_enqueue(
     daemon_id: string,
     endpoint: string,
     payload: Record<string, unknown>,
-    opts?: { max_attempts?: number },
+    opts?: {
+        max_attempts?: number;
+        /**
+         * Epoch ms: keep retrying until then instead of giving up after `max_attempts`, and wait
+         * (rather than burn attempts) while the daemon has no public URL. Hug deliveries use it so a
+         * daemon that is asleep or restarting still gets its responses (PLAN-hug-requests §9).
+         */
+        deliver_until?: number;
+        /** Insert inside the caller's transaction (the entry exists only if it commits); delivery starts after the commit. */
+        transaction?: Transaction;
+    },
 ): Promise<EnqueueResult> {
     const sq = get_sequelize();
     const tx_id = randomUUID();
@@ -65,8 +77,8 @@ export async function command_outbox_enqueue(
 
     await sq.query(
         `INSERT INTO cliq."command_outbox"
-            ("tx_id", "daemon_id", "endpoint", "payload", "attempts", "max_attempts", "created_at")
-         VALUES (:tx_id, :daemon_id, :endpoint, :payload, 0, :max_attempts, :created_at)`,
+            ("tx_id", "daemon_id", "endpoint", "payload", "attempts", "max_attempts", "created_at", "deliver_until")
+         VALUES (:tx_id, :daemon_id, :endpoint, :payload, 0, :max_attempts, :created_at, :deliver_until)`,
         {
             replacements: {
                 tx_id,
@@ -75,17 +87,21 @@ export async function command_outbox_enqueue(
                 payload: JSON.stringify(enriched),
                 max_attempts,
                 created_at: now,
+                deliver_until: opts?.deliver_until ?? null,
             },
             type: QueryTypes.INSERT,
+            ...(opts?.transaction ? { transaction: opts.transaction } : {}),
         },
     );
 
     log.info('command_enqueued', { tx_id, daemon_id, endpoint });
 
     /** Deliver immediately instead of waiting for the next poll interval. */
-    if (_running) {
-        _poll_cycle().catch(() => {});
-    }
+    const kick = () => {
+        if (_running) _poll_cycle().catch(() => {});
+    };
+    if (opts?.transaction) opts.transaction.afterCommit(kick);
+    else kick();
 
     return { tx_id };
 }
@@ -105,6 +121,7 @@ interface PendingEntry {
     attempts: number;
     max_attempts: number;
     created_at: number;
+    deliver_until: number | null;
 }
 
 /**
@@ -125,13 +142,13 @@ async function _poll_cycle(): Promise<void> {
     try {
         const rows = await sq.query<PendingEntry>(
             `SELECT "tx_id", "daemon_id", "endpoint", "payload"::text,
-                    "attempts", "max_attempts", "created_at"
+                    "attempts", "max_attempts", "created_at", "deliver_until"
              FROM cliq."command_outbox"
              WHERE "delivered_at" IS NULL
-               AND "attempts" < "max_attempts"
+               AND ("attempts" < "max_attempts" OR "deliver_until" > :now)
              ORDER BY "created_at" ASC
              LIMIT :limit`,
-            { replacements: { limit: POLL_BATCH_SIZE }, type: QueryTypes.SELECT },
+            { replacements: { limit: POLL_BATCH_SIZE, now: Date.now() }, type: QueryTypes.SELECT },
         );
 
         if (rows.length === 0) return;
@@ -161,14 +178,23 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
     // across many poll cycles.
     const attempts = Number(entry.attempts);
     const created_at = Number(entry.created_at);
+    const until = entry.deliver_until == null ? null : Number(entry.deliver_until);
     if (attempts > 0) {
-        const backoff_ms = BASE_BACKOFF_MS * (2 ** (attempts - 1));
-        const next_eligible = created_at + backoff_ms * attempts;
-        if (Date.now() < next_eligible) return;
+        // Entries kept alive by `deliver_until` back off up to a minute, not exponentially forever.
+        const backoff_ms = until === null
+            ? BASE_BACKOFF_MS * (2 ** (attempts - 1)) * attempts
+            : Math.min(BASE_BACKOFF_MS * (2 ** Math.min(attempts - 1, 5)), MAX_UNTIL_BACKOFF_MS);
+        if (Date.now() < created_at + backoff_ms) return;
     }
 
     try {
         const daemon = await _daemon_repo.find_by_id(entry.daemon_id);
+        if (!daemon?.public_url && until !== null) {
+            // A daemon asleep or restarting: wait for it without burning attempts (§9).
+            await _bump_created_at(entry.tx_id);
+            log.debug('deliver_wait_no_url', { tx_id: entry.tx_id, daemon_id: entry.daemon_id });
+            return;
+        }
         if (!daemon?.public_url) {
             // Daemon has no public URL (offline, deregistered, or never
             // registered a URL). Increment attempts so the entry eventually
@@ -260,7 +286,7 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
             await _handle_daemon_run_not_found(entry);
             await sq.query(
                 `UPDATE cliq."command_outbox"
-                 SET "attempts" = "max_attempts", "error" = :error
+                 SET "attempts" = "max_attempts", "deliver_until" = NULL, "error" = :error
                  WHERE "tx_id" = :tx_id`,
                 { replacements: { tx_id: entry.tx_id, error: error_msg }, type: QueryTypes.UPDATE },
             );
@@ -273,7 +299,7 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
             // Permanent failure — exhaust attempts.
             await sq.query(
                 `UPDATE cliq."command_outbox"
-                 SET "attempts" = "max_attempts", "error" = :error
+                 SET "attempts" = "max_attempts", "deliver_until" = NULL, "error" = :error
                  WHERE "tx_id" = :tx_id`,
                 { replacements: { tx_id: entry.tx_id, error: error_msg }, type: QueryTypes.UPDATE },
             );
@@ -381,9 +407,6 @@ function _endpoint_label_for_log(endpoint: string): string | null {
     if (endpoint === '/v1/cancel') return 'Cancel';
     if (endpoint === '/v1/resume') return 'Resume';
     if (endpoint === '/v1/execute') return 'Start';
-    if (endpoint === '/v1/runs/supply_inputs') {
-        return 'Supply inputs';
-    }
     return null;
 }
 
@@ -459,6 +482,7 @@ async function _handle_daemon_run_not_found(entry: PendingEntry): Promise<void> 
         await sq.query(
             `UPDATE cliq."command_outbox"
                 SET "attempts" = "max_attempts",
+                    "deliver_until" = NULL,
                     "error" = COALESCE("error" || ' | ', '') || 'superseded by orphaned-run detection'
               WHERE "acked_at" IS NULL
                 AND "delivered_at" IS NULL

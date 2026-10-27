@@ -27,7 +27,7 @@ import {
 } from '../store/connect.js';
 import { migrate_store } from '../store/migrate.js';
 
-import { run_core_api_schema_migrations } from '../models/migrations/control_plane_schema_migrations.js';
+import { migrate_hugs_before_sync, run_core_api_schema_migrations } from '../models/migrations/control_plane_schema_migrations.js';
 import { move_registry_to_cliq_schema } from '../models/migrations/hub_schema_migrations.js';
 import { init_core_api_models, reset_core_api_models } from '../models/index.js';
 import { get_logger } from '../lib/log.js';
@@ -68,6 +68,8 @@ export async function init_control_plane_store(
             // daemon-catalog tables BEFORE sequelize.sync() so FK constraints
             // (e.g. scope_members → scopes) resolve against the registry tables.
             await move_registry_to_cliq_schema(connection.sequelize);
+            // Hug columns and tables the models' sync relies on (renames, constraints) come first.
+            await migrate_hugs_before_sync(connection.sequelize);
             await migrate_store(connection.sequelize);
             init_core_api_models(connection.sequelize);
             await run_core_api_schema_migrations(connection.sequelize);

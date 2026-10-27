@@ -55,10 +55,9 @@ vi.mock('../../../src/services/command_outbox.service.js', () => ({
     command_outbox_enqueue: mocks.command_outbox_enqueue,
 }));
 
-vi.mock('../../../src/services/hug_reviews.service.js', () => ({
-    HugReviewsService: {
-        expire_pending_for_run: mocks.expire_pending,
-        close_reviews_for_ended_run: mocks.expire_pending,
+vi.mock('../../../src/services/hugs.service.js', () => ({
+    HugsService: {
+        cancel_for_run: mocks.expire_pending,
     },
 }));
 

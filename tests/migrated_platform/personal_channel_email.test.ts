@@ -7,6 +7,7 @@
  * an email destination one, tagged `added_by: 'backfill-2026-10'`; it never runs twice, so an
  * email destination removed later stays removed.
  */
+import { randomUUID } from 'node:crypto';
 import { vi, describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { use_test_link_env } from '../helpers/link_env.js';
@@ -21,9 +22,10 @@ import {
 	open_test_control_plane_store,
 	postgres_reachable,
 } from './helpers/control_plane_store.js';
-import { HugReviewsService } from '../../src/services/hug_reviews.service.js';
+import { HugsService } from '../../src/services/hugs.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
+import { NotificationFanOutService } from '../../src/notifications/fan_out.service.js';
 import { ensure_personal_channel } from '../../src/services/per_user_channel.service.js';
 import { DELIVERER_BY_PROVIDER } from '../../src/notifications/deliverers/index.js';
 import type { EmailDeliverer } from '../../src/notifications/deliverers/email_deliverer.js';
@@ -41,10 +43,11 @@ import {
 	NotificationRule,
 	Org,
 	OrgMember,
+	OrgRole,
 	Realm,
 	RealmMember,
-	Review,
-	ReviewNotification,
+	Hug,
+	HugDelivery,
 	Setting,
 	User,
 } from '../../src/models/index.js';
@@ -66,7 +69,7 @@ class StubSender implements EmailSender {
 	}
 }
 
-/** Poll until `fn` returns a truthy value (delivery runs after the review is stored). */
+/** Poll until `fn` returns a truthy value (delivery runs after the Hug is stored). */
 async function eventually<T>(fn: () => Promise<T> | T, ms = 3000): Promise<T> {
 	const end = Date.now() + ms;
 	for (;;) {
@@ -76,19 +79,17 @@ async function eventually<T>(fn: () => Promise<T> | T, ms = 3000): Promise<T> {
 	}
 }
 
-async function review_to(channel: string): Promise<string> {
-	const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Reviews', { org_id: ORG });
-	// Only the named reviewer channel: the realm's own review default (All realm members, which emails its
-	// members) would add emails these tests aren't about.
-	await NotificationRule.destroy({ where: { realm_id: realm.id, event: 'hug.review_requested' } });
+/** Open a Hug that asks `channel` (posted straight to it, PLAN-hug-requests); returns its id. */
+async function hug_to(channel: string): Promise<string> {
+	const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Hugs', { org_id: ORG });
 	// A person's name reaches them from a realm they're a member of.
 	await RealmMember.create({ id: `${realm.id}:${KAI}`, realm_id: realm.id, member_type: 'user', member_id: KAI, role: 'member', created_at: Date.now() } as never);
-	const created = await HugReviewsService.create({
-		run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id,
-		payload: { phase: 'human-review' }, timeout_minutes: 60, actor_id: ORG,
-		reviewers: [{ policy: 'any', channels: [channel] }],
+	const created = await HugsService.create({
+		run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id, phase: 'human-review', iteration: 0,
+		spec: { title: 'Approve the release', prompt: 'Approve?', requested_inputs: [], channels: [channel], expires_in_min: 60 },
+		actor_id: ORG,
 	});
-	return created.review_id;
+	return created.hug_id;
 }
 
 const email_deliverer = DELIVERER_BY_PROVIDER.email as EmailDeliverer;
@@ -109,8 +110,8 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	beforeEach(async () => {
 		if (!has_postgres) return;
 		await InAppNotification.destroy({ where: {} });
-		await ReviewNotification.destroy({ where: {} });
-		await Review.destroy({ where: {} });
+		await HugDelivery.destroy({ where: {} });
+		await Hug.destroy({ where: {} });
 		await ChannelDestination.destroy({ where: {} });
 		await NotificationChannel.destroy({ where: {} });
 		await RealmMember.destroy({ where: {} });
@@ -139,10 +140,10 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 
 	// ── S3 ──────────────────────────────────────────────────────────────
 
-	it('a review to the personal channel arrives in-app and by email to the account address', async () => {
+	it('a Hug to the personal channel arrives in-app and by email to the account address', async () => {
 		await ensure_personal_channel(KAI, KAI_NAME);
-		const review_id = await review_to(KAI_NAME);
-		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, review_id }, raw: true }))).toBeTruthy();
+		const hug_id = await hug_to(KAI_NAME);
+		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, hug_id }, raw: true }))).toBeTruthy();
 		await eventually(() => stub.sent.length > 0);
 		expect(stub.sent).toHaveLength(1);
 		expect(recipients(stub.sent[0])).toEqual(['kai@cliq.test']);
@@ -151,7 +152,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	it('the address is read when sending: changing the account email changes where the next one goes', async () => {
 		await ensure_personal_channel(KAI, KAI_NAME);
 		await User.update({ email: 'kai.new@cliq.test' }, { where: { id: KAI } });
-		await review_to(KAI_NAME);
+		await hug_to(KAI_NAME);
 		await eventually(() => stub.sent.length > 0);
 		expect(recipients(stub.sent[0])).toEqual(['kai.new@cliq.test']);
 	});
@@ -159,8 +160,8 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	it('a suspended account gets no email; in-app still arrives', async () => {
 		await ensure_personal_channel(KAI, KAI_NAME);
 		await User.update({ status: 'suspended' }, { where: { id: KAI } });
-		const review_id = await review_to(KAI_NAME);
-		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, review_id }, raw: true }))).toBeTruthy();
+		const hug_id = await hug_to(KAI_NAME);
+		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, hug_id }, raw: true }))).toBeTruthy();
 		await new Promise((r) => setTimeout(r, 300));
 		expect(stub.sent).toHaveLength(0);
 	});
@@ -168,13 +169,13 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	it('removing the email destination from the channel stops the email; in-app stays', async () => {
 		const id = await ensure_personal_channel(KAI, KAI_NAME);
 		await NotificationService.update_channel({ id, destinations: [{ type: 'cliqhub' }] });
-		const review_id = await review_to(KAI_NAME);
-		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, review_id }, raw: true }))).toBeTruthy();
+		const hug_id = await hug_to(KAI_NAME);
+		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, hug_id }, raw: true }))).toBeTruthy();
 		await new Promise((r) => setTimeout(r, 300));
 		expect(stub.sent).toHaveLength(0);
 		// …and an admin can put it back.
 		await NotificationService.update_channel({ id, destinations: [{ type: 'cliqhub' }, { type: 'email', account: true }] });
-		await review_to(KAI_NAME);
+		await hug_to(KAI_NAME);
 		await eventually(() => stub.sent.length > 0);
 		expect(recipients(stub.sent[0])).toEqual(['kai@cliq.test']);
 	});
@@ -209,9 +210,48 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 
 	it('a shared channel with a fixed address still emails that address', async () => {
 		await NotificationService.create_channel({ org_id: ORG, name: 'qa-fixed', destinations: [{ type: 'email', address: 'qa@cliq.test' }] });
-		await review_to('qa-fixed');
+		await hug_to('qa-fixed');
 		await eventually(() => stub.sent.length > 0);
 		expect(recipients(stub.sent[0])).toEqual(['qa@cliq.test']);
+	});
+
+	describe('access filter: only people who may see a realm event are emailed it', () => {
+		/** A realm with KAI as a member whose org role holds `permissions`; its "All realm members" channel. */
+		async function realm_with_kai(permissions: string[]) {
+			const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Access', { org_id: ORG });
+			await RealmMember.create({ id: `${realm.id}:${KAI}`, realm_id: realm.id, member_type: 'user', member_id: KAI, role: 'member', created_at: Date.now() } as never);
+			const role = await OrgRole.create({
+				id: randomUUID(), org_id: ORG, slug: `r-${uid()}`.slice(0, 40), name: 'Custom', permissions, is_system: false, is_default: false, created_at: new Date(),
+			} as never);
+			await OrgMember.update({ role_id: role.id } as never, { where: { org_id: ORG, user_id: KAI } as never });
+			const members = await NotificationService.ensure_realm_members_channel(realm.id);
+			return { realm_id: realm.id, members_id: members.id, role_id: role.id };
+		}
+		const run_failed = (realm_id: string) => ({ id: randomUUID(), type: 'run.failed', occurred_at: new Date().toISOString(), realm_id, run_id: `r-${uid()}`, daemon_id: 'd1', message: 'boom' }) as never;
+		const to_kai = () => stub.sent.filter((m) => recipients(m).includes('kai@cliq.test'));
+
+		it('"All realm members" reaches a member their way (personal email) only with runs.view', async () => {
+			await ensure_personal_channel(KAI, KAI_NAME);
+			const r = await realm_with_kai(['realms.view']);
+			await NotificationFanOutService.deliver_to_channels([r.members_id], run_failed(r.realm_id));
+			await new Promise((res) => setTimeout(res, 300));
+			expect(to_kai()).toHaveLength(0);
+			await OrgRole.update({ permissions: ['realms.view', 'runs.view'] } as never, { where: { id: r.role_id } });
+			await NotificationFanOutService.deliver_to_channels([r.members_id], run_failed(r.realm_id));
+			await eventually(() => to_kai().length > 0);
+			expect(to_kai()).toHaveLength(1);
+		});
+
+		it('an email destination with members: true leaves out members without access to the event\'s realm', async () => {
+			const r = await realm_with_kai(['realms.view']);
+			const email = DELIVERER_BY_PROVIDER.email as EmailDeliverer;
+			const payload = { event: 'run.failed', title: 'Run failed', message: 'boom', realm_id: r.realm_id };
+			await email.deliver({ members: true }, payload, { channel_id: r.members_id });
+			expect(to_kai()).toHaveLength(0);
+			await OrgRole.update({ permissions: ['realms.view', 'runs.view'] } as never, { where: { id: r.role_id } });
+			await email.deliver({ members: true }, payload, { channel_id: r.members_id });
+			expect(to_kai()).toHaveLength(1);
+		});
 	});
 
 	// ── S4 ──────────────────────────────────────────────────────────────

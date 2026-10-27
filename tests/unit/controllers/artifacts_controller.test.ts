@@ -34,15 +34,18 @@ const FAKE_ARTIFACT = {
     description: null,
     mime_type: 'text/markdown',
     size_bytes: 42,
-    download_url: 'https://r2.example.com/signed',
+    download_url: 'https://api.cliqhub.io/v1/artifacts/download?artifact_id=art-001',
     created_at: 1700000000000,
 };
 
-const FAKE_SUBMIT_RESULT = {
+const FAKE_UPLOAD_RESULT = {
     artifact_id: 'art-001',
     name: 'report.md',
-    download_url: 'https://r2.example.com/signed',
-    size_bytes: 42,
+    size: 42,
+    content_type: 'text/markdown',
+    sha256: 'abc',
+    status: 'ready',
+    download_url: 'https://api.cliqhub.io/v1/artifacts/download?artifact_id=art-001',
 };
 
 describe('ArtifactsController', () => {
@@ -50,7 +53,7 @@ describe('ArtifactsController', () => {
     let next: NextFunction;
 
     const mock_storage = {
-        submit: vi.fn().mockResolvedValue(FAKE_SUBMIT_RESULT),
+        upload: vi.fn().mockResolvedValue(FAKE_UPLOAD_RESULT),
         get: vi.fn().mockResolvedValue([FAKE_ARTIFACT]),
         get_by_id: vi.fn().mockResolvedValue(FAKE_ARTIFACT),
         delete: vi.fn().mockResolvedValue(true),
@@ -62,33 +65,31 @@ describe('ArtifactsController', () => {
         next = vi.fn();
     });
 
-    // ── submit ───────────────────────────────────────────────────────
+    // ── upload ───────────────────────────────────────────────────────
 
-    describe('submit', () => {
-        it('delegates to service and responds 201', async () => {
+    describe('upload', () => {
+        it('streams the raw body to the service as a daemon run artifact and responds 201', async () => {
             const res = mock_res();
-            const handler = controller.wrap(controller.submit);
-            await handler(
-                make_req({ run_id: 'run-1', phase: 'analyst', name: 'report.md', content: 'hello' }),
-                res,
-                next,
-            );
-
-            expect(mock_storage.submit).toHaveBeenCalledWith(
-                expect.objectContaining({ run_id: 'run-1', phase: 'analyst', name: 'report.md' }),
-                'u-1',
-            );
+            const req = {
+                query: { run_id: 'run-1', phase: 'analyst', name: 'report.md' },
+                headers: { 'content-type': 'text/markdown', 'content-length': '42' },
+                auth: { auth_via: 'daemon_token', realm_id: 'realm-1' },
+            } as unknown as Request;
+            await controller.wrap(controller.upload)(req, res, next);
+            expect(mock_storage.upload).toHaveBeenCalledWith(expect.objectContaining({
+                stream: req, content_length: 42, content_type: 'text/markdown', name: 'report.md',
+                target: { kind: 'run', run_id: 'run-1', phase: 'analyst' }, uploaded_by: null,
+            }));
             expect(res.status).toHaveBeenCalledWith(201);
-            expect(res.json).toHaveBeenCalledWith({ ok: true, data: FAKE_SUBMIT_RESULT });
+            expect(res.json).toHaveBeenCalledWith({ ok: true, data: FAKE_UPLOAD_RESULT });
         });
 
-        it('rejects missing required fields with 422', async () => {
-            const res = mock_res();
-            const handler = controller.wrap(controller.submit);
-            await handler(make_req({ run_id: 'run-1' }), res, next);
-
-            // Validation error is forwarded via next().
-            expect(next).toHaveBeenCalledWith(expect.objectContaining({ status: 422 }));
+        it('refuses a missing Content-Length (411) and a bad query (422)', async () => {
+            await controller.wrap(controller.upload)({ query: { run_id: 'r', phase: 'p', name: 'n' }, headers: {}, auth: {} } as unknown as Request, mock_res(), next);
+            expect(next).toHaveBeenLastCalledWith(expect.objectContaining({ status: 411 }));
+            await controller.wrap(controller.upload)({ query: { name: 'n' }, headers: { 'content-length': '1' }, auth: {} } as unknown as Request, mock_res(), next);
+            expect(next).toHaveBeenLastCalledWith(expect.objectContaining({ status: 422 }));
+            expect(mock_storage.upload).not.toHaveBeenCalled();
         });
     });
 

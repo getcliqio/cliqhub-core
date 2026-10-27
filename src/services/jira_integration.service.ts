@@ -59,7 +59,7 @@ export const JIRA_LIFECYCLE_EVENTS = [
     'run.failed',
     'run.cancelled',
     'run.crashed',
-    'phase.inputs_supplied',
+    'phase.resumed',
 ] as const;
 
 /** Scopes required when the PAT opts into least-privilege (slice 1.6). */

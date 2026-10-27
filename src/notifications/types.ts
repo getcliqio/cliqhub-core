@@ -147,16 +147,14 @@ export interface NotificationPayload {
 
 /** Readable names for event types people see as notification titles (the rest are worded from the type). */
 const EVENT_TITLES: Record<string, string> = {
-	'phase.input_required': 'Input needed',
-	'phase.inputs_supplied': 'Input supplied',
+	'phase.resumed': 'Phase resumed',
 	'phase.idle': 'Phase idle',
 	'phase.timed_out': 'Phase timed out',
-	'hug.review_requested': 'Review requested',
-	'hug.review_reminded': 'Review reminder',
-	'hug.review_resolved': 'Review resolved',
-	'hug.review_responded': 'Review answered',
-	'hug.review_expired': 'Review expired',
-	'hug.routing_requested': 'Routing requested',
+	'hug.opened': 'Input requested',
+	'hug.reminded': 'Reminder: input requested',
+	'hug.responded': 'Hug answered',
+	'hug.closed': 'Hug closed',
+	'hug.expired': 'Hug expired',
 };
 
 /**

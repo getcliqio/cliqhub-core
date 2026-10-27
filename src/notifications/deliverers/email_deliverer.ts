@@ -93,9 +93,10 @@ async function account_address(channel_id: string | undefined): Promise<EmailAdd
 /**
  * The members of a built-in channel (`members: true`): a realm channel → the realm's people, an org
  * channel → the org's active members — each at their own account address. Suspended, deleted and
- * address-less accounts are left out. Worked out at send time, so it follows joins and leaves.
+ * address-less accounts are left out, and so is anyone `may` refuses (no access to the event's realm).
+ * Worked out at send time, so it follows joins and leaves.
  */
-async function members_addresses(channel_id: string | undefined): Promise<EmailAddress[]> {
+async function members_addresses(channel_id: string | undefined, may: (user_id: string) => Promise<boolean>): Promise<EmailAddress[]> {
 	if (!channel_id) return [];
 	const channel = await NotificationChannel.findByPk(channel_id, { attributes: ['realm_id', 'org_id', 'user_id'], raw: true }) as
 		{ realm_id: string | null; org_id: string | null; user_id: string | null } | null;
@@ -111,11 +112,12 @@ async function members_addresses(channel_id: string | undefined): Promise<EmailA
 	if (user_ids.length === 0) return [];
 	const users = await User.findAll({
 		where: { id: { [Op.in]: [...new Set(user_ids)] }, deleted_at: null, status: { [Op.ne]: 'suspended' } },
-		attributes: ['email', 'display_name'], raw: true,
-	}) as Array<{ email: string | null; display_name: string | null }>;
+		attributes: ['id', 'email', 'display_name'], raw: true,
+	}) as Array<{ id: string; email: string | null; display_name: string | null }>;
 	const seen = new Set<string>();
 	const out: EmailAddress[] = [];
 	for (const u of users) {
+		if (!await may(String(u.id))) continue;
 		const email = u.email?.trim();
 		if (!email || seen.has(email.toLowerCase())) continue;
 		seen.add(email.toLowerCase());
@@ -213,7 +215,9 @@ export class EmailDeliverer extends AbstractChannelDeliverer {
 	/** One email per member of a built-in channel; a failure for one person doesn't stop the rest. */
 	private async _deliver_to_members(payload: NotificationPayload, context?: DeliveryContext): Promise<void> {
 		const sends = context?.sends;
-		const people = (await members_addresses(context?.channel_id)).filter((p) => !sends || sends.take(`email|${p.email.toLowerCase()}`));
+		const { can_receive } = await import('../event_access.js');
+		const may = (user_id: string) => (sends ? sends.may_receive(user_id) : can_receive(user_id, payload.realm_id, String(payload.event ?? '')));
+		const people = (await members_addresses(context?.channel_id, may)).filter((p) => !sends || sends.take(`email|${p.email.toLowerCase()}`));
 		if (people.length === 0) {
 			log.debug('email_members_none', { event: payload.event, channel_id: context?.channel_id ?? null });
 			return;

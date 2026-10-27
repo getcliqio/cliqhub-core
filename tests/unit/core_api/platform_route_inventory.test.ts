@@ -30,7 +30,6 @@ const PLATFORM_BFF_ROUTES: Array<{ method: 'GET' | 'POST'; path: string }> = [
 	{ method: 'POST', path: '/runs/claim' },
 	{ method: 'POST', path: '/runs/cancel' },
 	{ method: 'POST', path: '/runs/resume' },
-	{ method: 'POST', path: '/runs/supply_inputs' },
 	// Phase 4 / AG-1b: get_details (was get_by_id); catalog is get/get_details/register/deregister.
 	{ method: 'POST', path: '/agents/get' },
 	{ method: 'POST', path: '/agents/get_details' },
@@ -68,7 +67,7 @@ const PLATFORM_BFF_ROUTES: Array<{ method: 'GET' | 'POST'; path: string }> = [
 	{ method: 'POST', path: '/events/submit' },
 	{ method: 'POST', path: '/events/get_by_id' },
 	{ method: 'POST', path: '/events/types/list' },
-	{ method: 'POST', path: '/reviews/get' },
+	{ method: 'POST', path: '/hugs/get' },
 	{ method: 'POST', path: '/notification_channels/get' },
 	{ method: 'POST', path: '/notification_channels/create' },
 	{ method: 'POST', path: '/notification_channels/update' },

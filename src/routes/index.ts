@@ -28,7 +28,7 @@ import { register_orgs_routes } from './v1/orgs.js';
 import { register_invitations_routes } from './v1/invitations.js';
 import { register_control_scopes_routes } from './v1/scopes.js';
 import { register_events_routes } from './v1/events.js';
-import { register_reviews_routes } from './v1/reviews.js';
+import { register_hugs_routes } from './v1/hugs.js';
 import { register_agents_routes } from './v1/agents.js';
 import { register_workspaces_routes } from './v1/workspaces.js';
 import { register_runs_routes } from './v1/runs.js';
@@ -59,7 +59,7 @@ function register_control_resources(router: Router): void {
     register_dispatch_key_routes(router);
     register_control_scopes_routes(router);
     register_events_routes(router);
-    register_reviews_routes(router);
+    register_hugs_routes(router);
     register_notification_channels_routes(router);
     register_notifications_routes(router);
     register_agents_routes(router);
@@ -111,7 +111,7 @@ export function register_routes(app: Application, container: Container): void {
     register_orgs_routes(router, container);
     register_invitations_routes(router, container);
     register_events_routes(router);
-    register_reviews_routes(router);
+    register_hugs_routes(router);
     register_agents_routes(router);
     register_workspaces_routes(router);
     register_runs_routes(router);

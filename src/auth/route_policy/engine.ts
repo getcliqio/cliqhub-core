@@ -45,8 +45,6 @@ export interface RecordScope {
     org_id?: string | null;
     /** Personal records (a user's own notification channel). */
     owner_user_id?: string | null;
-    /** The caller was assigned this record by name (a review's user-targeted notification). */
-    assigned_user?: boolean;
     team?: TeamAccess;
 }
 
@@ -397,10 +395,6 @@ export async function decide(policy: Policy, req: RequestLike, store: AccessStor
                 const d = await judge_realm(store, req, await store.realm(rid), policy.level, policy.perm, policy.daemon, opts);
                 if (d.allow) return with_record(d, policy.record, f.value);
                 if (!last || rank_deny(d) > rank_deny(last)) last = d;
-            }
-            // A named reviewer may view and act on their review (not daemon pushes).
-            if (scope_.assigned_user && !is_daemon(auth) && policy.level !== null && policy.level !== 'admin') {
-                return allow({ realm_id: realm_ids[0], level: policy.level, record: { kind: policy.record, id: f.value } });
             }
             return with_record(last!, policy.record, f.value);
         }

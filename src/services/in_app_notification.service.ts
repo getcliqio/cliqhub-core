@@ -141,8 +141,15 @@ export class InAppNotificationService {
 	 *
 	 * @param user_id - The one user it is for; null for a realm-wide row.
 	 * @param org_id - The event's org, used when the payload has no realm.
+	 * @param audience - Who it is for; by default a person (`user_id`), else the realm, else the org. An `org`
+	 *   row keeps the payload's realm: the realm its event is about, which decides who may read it.
 	 */
-	static async create_from_payload(payload: NotificationPayload, user_id?: string | null, org_id_hint?: string | null): Promise<InAppNotificationRecord> {
+	static async create_from_payload(
+		payload: NotificationPayload,
+		user_id?: string | null,
+		org_id_hint?: string | null,
+		audience?: 'person' | 'realm' | 'org',
+	): Promise<InAppNotificationRecord> {
 		log.debug('create_from_payload', { event: payload.event, realm_id: payload.realm_id, user_id });
 		// event is the routing key for rules and the inbox type filter.
 		const event = String(payload.event ?? '').trim();
@@ -150,9 +157,9 @@ export class InAppNotificationService {
 
 		const id = randomUUID();
 		const created_at = Date.now();
-		/** Extract review_id from payload for HUG event indexing. */
-		const review_id = typeof payload.review_id === 'string'
-			? payload.review_id.trim() || null
+		/** The Hug a hug.* notification is about, for indexing. */
+		const hug_id = typeof payload.hug_id === 'string'
+			? payload.hug_id.trim() || null
 			: null;
 
 		// Denormalize org_id from realm so org-scoped inbox queries stay cheap.
@@ -178,7 +185,8 @@ export class InAppNotificationService {
 			run_id: payload.run_id?.trim() || null,
 			phase: payload.phase_name?.trim() || null,
 			severity: payload.severity?.trim() || null,
-			review_id,
+			hug_id,
+			audience: audience ?? (user_id ? 'person' : realm_id_val ? 'realm' : 'org'),
 			payload_json: JSON.stringify(InAppNotificationService.extra_payload(payload)),
 			created_at,
 		});
@@ -187,9 +195,13 @@ export class InAppNotificationService {
 	}
 
 	/**
-	 * Visibility: realm-wide rows of the caller's realms, org-wide rows (no
-	 * realm, no user) of the caller's orgs, and rows addressed to the caller. A row addressed to one
-	 * user (`user_id`) is shown to that user only.
+	 * Visibility — the row's audience, then access (notifications/event_access.ts):
+	 *   - `person` rows addressed to the caller;
+	 *   - `realm` rows of realms the caller is a member of;
+	 *   - `org` rows of the caller's orgs (or no org: account-wide announcements);
+	 * and, for any row about a realm, only when the caller may see that event there (a standing in the
+	 * realm with the event's permission). Worked out at read time, so it follows joins, leaves and role
+	 * changes.
 	 */
 	static async list_for_user(opts: {
 		user_id: string;
@@ -247,27 +259,34 @@ export class InAppNotificationService {
 			return { notifications: [], total: 0 };
 		}
 
-		// Visibility: realm-wide rows of the caller's realms, org-wide rows
-		// (no realm, no user) of the caller's orgs, and rows addressed to the caller.
+		// Audience: rows for the caller, their realms, their orgs. Older rows have no `audience`: user → person,
+		// realm → realm, neither → org.
 		const shared = { user_id: { [Op.is]: null } };
-		const realm_clause = allowed.length > 0
-			? {
-				[Op.or]: [
-					{ realm_id: { [Op.in]: allowed }, ...shared },
-					{ user_id },
-				],
-			}
-			: {
-				[Op.or]: [
-					{ realm_id: { [Op.is]: null }, ...shared, [Op.or]: [{ org_id: { [Op.is]: null } }, { org_id: { [Op.in]: member_org_ids } }] },
-					{ user_id },
-					...(member_realm_ids.length > 0
-						? [{ realm_id: { [Op.in]: member_realm_ids }, ...shared }]
-						: []),
-				],
-			};
+		const realm_rows = { ...shared, realm_id: { [Op.in]: member_realm_ids }, [Op.or]: [{ audience: 'realm' }, { audience: { [Op.is]: null } }] };
+		const org_rows = {
+			...shared,
+			[Op.and]: [
+				{ [Op.or]: [{ audience: 'org' }, { audience: { [Op.is]: null }, realm_id: { [Op.is]: null } }] },
+				{ [Op.or]: [{ org_id: { [Op.is]: null } }, { org_id: { [Op.in]: member_org_ids } }] },
+			],
+		};
+		const audience_clause = { [Op.or]: [{ user_id }, ...(member_realm_ids.length > 0 ? [realm_rows] : []), org_rows] };
 
-		const and_parts: Record<string, unknown>[] = [{ ...realm_clause }];
+		// Access: a row about a realm is read only by people who may see that event there.
+		const { receivable_realms } = await import('../notifications/event_access.js');
+		const can = await receivable_realms(user_id);
+		const access_clause = {
+			[Op.or]: [
+				{ realm_id: { [Op.is]: null } },
+				{ event: { [Op.like]: 'daemon.%' }, realm_id: { [Op.in]: can.daemons } },
+				{ event: { [Op.like]: 'realm.%' }, realm_id: { [Op.in]: can.visible } },
+				{ [Op.and]: [{ event: { [Op.notLike]: 'daemon.%' } }, { event: { [Op.notLike]: 'realm.%' } }, { realm_id: { [Op.in]: can.runs } }] },
+			],
+		};
+
+		const and_parts: Record<string, unknown>[] = [audience_clause, access_clause];
+		// A realm facet: rows about those realms, plus the caller's own.
+		if (allowed.length > 0) and_parts.push({ [Op.or]: [{ realm_id: { [Op.in]: allowed } }, { user_id }] });
 
 		// Events this person switched off for themselves: their shared (realm / org) notices are hidden for them.
 		const { PersonSettingsService } = await import('./person_settings.service.js');

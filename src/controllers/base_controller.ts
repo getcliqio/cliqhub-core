@@ -23,6 +23,11 @@ export abstract class BaseController {
         return result.data;
     }
 
+    /** {@link parse_body} for the query string (routes whose body is a stream, GET routes). */
+    protected parse_query<S extends ZodTypeAny>(schema: S, req: Request): z.infer<S> {
+        return this.parse_body(schema, { body: req.query } as Request);
+    }
+
     protected ok<T>(res: Response, data: T, status: number = 200): void {
         res.status(status).json({ ok: true, data });
     }

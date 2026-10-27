@@ -80,7 +80,7 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     // ── Lists: realm or org filter checked here, rest scoped in the service ──
     'POST /v1/realms/get': scope({ org: { from: ORG, perm: 'member' }, otherwise: 'none' }),
     'POST /v1/daemons/get': scope({ realm: { from: REALM, level: 'view', perm: 'daemons.view' }, org: { from: ORG, perm: 'daemons.view' }, otherwise: 'none' }),
-    'POST /v1/reviews/get': scope({ realm: { from: REALM, level: 'view', perm: 'reviews.view' }, org: { from: ORG, perm: 'reviews.view' }, otherwise: 'none' }),
+    'POST /v1/hugs/get': scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, org: { from: ORG, perm: 'runs.view' }, otherwise: 'none', handler: 'only Hugs addressed to the caller, in realms where they have runs.view' }),
     'POST /v1/runs/get': scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, org: { from: ORG, perm: 'runs.view' }, otherwise: 'none', handler: 'other filters stay inside visible realms (S5)' }),
     'POST /v1/runs/get_logs': scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, otherwise: 'none', handler: 'run_ids / daemon_ids filtered to visible realms' }),
     'POST /v1/workspaces/get': scope({ realm: { from: REALM, level: 'view' }, otherwise: 'none' }),
@@ -189,23 +189,26 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'POST /v1/runs/append_logs': record('run', RUN, null, { daemon: 'write' }),
     'POST /v1/runs/report_telemetry': record('run', RUN, null, { daemon: 'write' }),
     'POST /v1/runs/cancel': record('run', RUN, 'operate', { perm: 'teams.cancel' }),
-    'POST /v1/runs/supply_inputs': record('run', RUN, 'operate', { perm: 'teams.inputs' }),
     'POST /v1/runs/enqueue': realm(REALM, 'operate', { perm: 'teams.run', daemons: 'body.daemon_id', handler: 'token scope dispatch' }),
     'POST /v1/runs/create_rdr': record('run', RUN, null, { daemon: 'write' }),
     'POST /v1/artifacts/get': record('run', RUN, 'view', { perm: 'runs.view' }),
-    'POST /v1/artifacts/get_by_id': record('artifact', 'body.artifact_id', 'view', { perm: 'runs.view' }),
-    'POST /v1/artifacts/submit': record('run', RUN, null, { daemon: 'write' }),
+    'POST /v1/artifacts/get_by_id': record('artifact', 'body.artifact_id', 'view', { perm: 'runs.view', daemon: 'read' }),
+    // One upload route (PLAN-hug-requests §6.6.3): a responder's file for a Hug, or the daemon's run artifact.
+    'POST /v1/artifacts/upload': by_body(
+        'query.hug_id',
+        record('hug', 'query.hug_id', 'view', { perm: 'runs.view', handler: 'addressed to the caller; open; a file input' }),
+        record('run', 'query.run_id', null, { daemon: 'write' }),
+    ),
+    'POST /v1/artifacts/download': record('artifact', 'body.artifact_id', 'view', { perm: 'runs.view', daemon: 'read', handler: 'pending: uploader only' }),
+    'GET /v1/artifacts/download': record('artifact', 'query.artifact_id', 'view', { perm: 'runs.view', handler: 'pending: uploader only' }),
     'POST /v1/artifacts/delete': record('artifact', 'body.artifact_id', 'admin'),
 
-    // ── Reviews ─────────────────────────────────────────────────────
-    'POST /v1/reviews/create': realm(REALM, null, { daemon: 'write' }),
-    'POST /v1/reviews/get_by_id': record('review', 'body.review_id', 'view', { perm: 'reviews.view', daemon: 'read', handler: 'notification holder may view' }),
-    'POST /v1/reviews/get_messages': record('review', 'body.review_id', 'view', { perm: 'reviews.view' }),
-    'GET /v1/reviews/stream_messages': record('review', 'query.review_id', 'view', { perm: 'reviews.view' }),
-    'POST /v1/reviews/verdict': record('review', 'body.review_id', 'operate', { perm: 'reviews.verdict', handler: 'notification holder' }),
-    'POST /v1/reviews/send_message': record('review', 'body.review_id', 'operate', { daemon: 'write' }),
-    'POST /v1/reviews/remind': record('review', 'body.review_id', null, { daemon: 'write' }),
-    'POST /v1/reviews/ack': record('review', 'body.review_id', null, { daemon: 'write' }),
+    // ── Hugs (PLAN-hug-requests §6.3) ───────────────────────────────
+    'POST /v1/hugs/create': realm(REALM, null, { daemon: 'write', handler: 'run in the realm; daemon of the realm' }),
+    'POST /v1/hugs/close': record('hug', 'body.hug_id', null, { daemon: 'write' }),
+    'POST /v1/hugs/get_events': daemon_only('own Hugs only (daemon_id of the token realm)'),
+    'POST /v1/hugs/get_by_id': record('hug', 'body.hug_id', 'view', { perm: 'runs.view', daemon: 'read' }),
+    'POST /v1/hugs/respond': record('hug', 'body.hug_id', 'view', { perm: 'runs.view', handler: 'addressed to the caller' }),
 
     // ── Teams ───────────────────────────────────────────────────────
     'POST /v1/teams/get_phases': record('team', 'body.team_id', 'view'),

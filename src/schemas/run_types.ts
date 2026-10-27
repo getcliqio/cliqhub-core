@@ -120,7 +120,7 @@ export const RunsCreateInput = z.object({
      * Required. Older daemon builds dropped this field when
      * get_daemon_id() returned empty during a boot race — Hub then
      * wrote `daemon_id: null` and every downstream dispatch endpoint
-     * (resume/cancel/supply_inputs) hard-failed with
+     * (resume/cancel) hard-failed with
      * "no daemon assignment" on that run forever. Refuse to accept
      * daemon-less run creates so the daemon operator sees the boot
      * bug at ingest time instead of debugging a dead run later.
@@ -159,15 +159,6 @@ export const RunsCancelInput = z.object({
     reason: z.string().max(500).optional(),
 });
 export type RunsCancelInput = z.infer<typeof RunsCancelInput>;
-
-/** POST /v1/runs/supply_inputs */
-export const RunsSupplyInputsInput = z.object({
-    run_id: z.string().min(1),
-    inputs: z.record(z.unknown()).refine((v) => Object.keys(v).length > 0, {
-        message: 'inputs must not be empty',
-    }),
-});
-export type RunsSupplyInputsInput = z.infer<typeof RunsSupplyInputsInput>;
 
 /** Notification channel refs chosen at run start (channel name or id in the run's realm). */
 export const RunNotifyChannelsField = z.array(z.string().trim().min(1).max(200)).min(1).max(5);
@@ -359,7 +350,7 @@ export const RunPendingControlData = z.object({
     delivered_at: z.number().nullable().describe('When last delivered to daemon (unix ms)'),
     last_error: z.string().nullable().describe('Last delivery error message'),
     ack_status: z.string().nullable().describe('Ack status when partially acked'),
-}).describe('Pending cancel/resume/supply_inputs command, if any');
+}).describe('Pending cancel/resume command, if any');
 export type RunPendingControlData = z.infer<typeof RunPendingControlData>;
 
 /** Force-terminate eligibility / outcome for the detail banner. */
@@ -474,12 +465,6 @@ export const RunResumeData = z.object({
 }).passthrough();
 export type RunResumeData = z.infer<typeof RunResumeData>;
 
-/** Supply-inputs control result. */
-export const RunSupplyInputsData = z.object({
-    supplied: z.boolean().describe('True when inputs were queued to the daemon'),
-    run_id: z.string().describe('Target run id'),
-}).passthrough();
-export type RunSupplyInputsData = z.infer<typeof RunSupplyInputsData>;
 
 /** Realm dispatch queue item. */
 export const QueueItemData = z.object({
@@ -570,7 +555,6 @@ export type RunsData =
     | RunDispatchData
     | RunCancelData
     | RunResumeData
-    | RunSupplyInputsData
     | RunEnqueueData
     | QueueItemData
     | RunPhaseData[]

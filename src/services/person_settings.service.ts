@@ -22,13 +22,13 @@ export type PersonState = 'on' | 'off';
 
 /** "Runs I start", switched on when a person's settings are seeded: the events that mean a run is in trouble. */
 export const MY_RUNS_SEEDED_ON: readonly string[] = [
-    'run.failed', 'run.crashed', 'phase.failed', 'phase.timed_out', 'phase.idle', 'phase.input_required', 'phase.escalated',
+    'run.failed', 'run.crashed', 'phase.failed', 'phase.timed_out', 'phase.idle', 'phase.escalated',
 ];
 
 /** The events "Runs I start" lists (seeded off unless in {@link MY_RUNS_SEEDED_ON}). */
 export const MY_RUNS_EVENTS: readonly string[] = [
     ...MY_RUNS_SEEDED_ON, 'run.cancelled', 'run.started', 'run.completed', 'run.resumed',
-    'phase.started', 'phase.completed', 'phase.skipped', 'phase.inputs_supplied',
+    'phase.started', 'phase.completed', 'phase.skipped', 'phase.resumed',
 ];
 
 export interface PersonSettingData {

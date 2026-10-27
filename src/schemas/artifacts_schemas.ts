@@ -2,7 +2,8 @@
  * Stored Artifacts API — Zod request/response schemas.
  *
  * All endpoints are POST, single verb:
- *   /v1/artifacts/submit     — daemon uploads a file
+ *   /v1/artifacts/upload     — stream a file in
+ *   /v1/artifacts/download   — stream a file out
  *   /v1/artifacts/get        — list artifacts for a run
  *   /v1/artifacts/get_by_id  — single artifact metadata + download URL
  *   /v1/artifacts/delete     — remove artifact (R2 + metadata)
@@ -12,17 +13,30 @@ import { z } from 'zod';
 
 // ── Inputs ───────────────────────────────────────────────────────────
 
-/** POST /v1/artifacts/submit — daemon uploads artifact content. */
-export const ArtifactsSubmitInput = z.object({
-    run_id: z.string().min(1).describe('Run that produced this artifact'),
-    phase: z.string().min(1).describe('Phase that produced this artifact'),
-    name: z.string().min(1).describe('Display name / filename'),
-    content: z.string().min(1).describe('File content (raw string or base64)'),
-    mime_type: z.string().optional().describe('MIME type; defaults to application/octet-stream'),
-    description: z.string().optional().describe('Human-readable description shown in UI'),
-    encoding: z.enum(['utf8', 'base64']).optional().describe('Content encoding; defaults to utf8'),
+/**
+ * POST /v1/artifacts/upload — query (the body is the raw file). Exactly one target: a run artifact
+ * (`run_id` + `phase`, the daemon) or a Hug's file input (`hug_id` + `requested_input`, a responder).
+ */
+export const ArtifactsUploadQuery = z.object({
+    run_id: z.string().min(1).optional().describe('Run the artifact belongs to (daemon uploads)'),
+    phase: z.string().min(1).optional().describe('Phase that produced it (daemon uploads)'),
+    hug_id: z.string().min(1).optional().describe('Hug whose file input this answers (responder uploads)'),
+    requested_input: z.string().min(1).optional().describe('The Hug file input it answers'),
+    name: z.string().min(1).max(255).describe('File name'),
+    description: z.string().max(2_000).optional().describe('Human-readable description shown in UI'),
+}).superRefine((q, ctx) => {
+    const run = Boolean(q.run_id || q.phase);
+    const hug = Boolean(q.hug_id || q.requested_input);
+    if (run === hug) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'give either run_id + phase or hug_id + requested_input' });
+    if (run && !(q.run_id && q.phase)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'run_id and phase go together' });
 });
-export type ArtifactsSubmitInput = z.infer<typeof ArtifactsSubmitInput>;
+export type ArtifactsUploadQuery = z.infer<typeof ArtifactsUploadQuery>;
+
+/** POST|GET /v1/artifacts/download — one stored file's bytes. */
+export const ArtifactsDownloadInput = z.object({
+    artifact_id: z.string().min(1).describe('Artifact UUID'),
+});
+export type ArtifactsDownloadInput = z.infer<typeof ArtifactsDownloadInput>;
 
 /** POST /v1/artifacts/get — list artifacts for a run. */
 export const ArtifactsGetInput = z.object({
@@ -58,18 +72,10 @@ export const ArtifactData = z.object({
     description: z.string().nullable().describe('Human-readable description'),
     mime_type: z.string().describe('MIME type'),
     size_bytes: z.number().describe('File size in bytes'),
-    download_url: z.string().nullable().describe('Presigned R2 GET URL (5-min TTL); null for a run record'),
+    download_url: z.string().nullable().describe('Hub URL that streams the file (/v1/artifacts/download — needs Hub authentication); null for a run record'),
     content_preview: z.string().nullable().describe('First ~2 KB of a run record; null for a stored file'),
     content: z.string().optional().describe('Full text of a run record (get_by_id only)'),
     created_at: z.number().describe('Unix timestamp ms'),
 });
 export type ArtifactData = z.infer<typeof ArtifactData>;
 
-/** POST /v1/artifacts/submit response. */
-export const ArtifactsSubmitOutput = z.object({
-    artifact_id: z.string().describe('Created artifact UUID'),
-    name: z.string().describe('Display name'),
-    download_url: z.string().describe('Presigned download URL'),
-    size_bytes: z.number().describe('Stored file size'),
-});
-export type ArtifactsSubmitOutput = z.infer<typeof ArtifactsSubmitOutput>;

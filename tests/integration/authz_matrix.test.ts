@@ -29,7 +29,7 @@ import { ROUTE_POLICY } from '../../src/auth/route_policy/table.js';
 const has_postgres = await postgres_reachable();
 
 type Body = (s: Seed) => Record<string, unknown>;
-interface Row { expect: string; body?: Body }
+interface Row { expect: string; body?: Body; /** Query string (routes whose body is a file). */ query?: Body }
 
 // Common rows (see header for codes).
 const ALL = 'YYYYYYYYYYY';
@@ -113,7 +113,7 @@ const MATRIX: Record<string, Row> = {
     'POST /internal/dashboard/realms': { expect: ACME_MEMBER },
     'POST /v1/realms/get': { expect: ACME_MEMBER },
     'POST /v1/daemons/get': { expect: A1_VIEW },
-    'POST /v1/reviews/get': { expect: A1_VIEW },
+    'POST /v1/hugs/get': { expect: A1_VIEW },
     'POST /v1/runs/get': { expect: A1_VIEW },
     'POST /v1/runs/get_logs': { expect: A1_VIEW },
     'POST /v1/workspaces/get': { expect: A1_VIEW },
@@ -222,23 +222,22 @@ const MATRIX: Record<string, Row> = {
     'POST /v1/runs/append_logs': { expect: A1_DAEMON_WRITE },
     'POST /v1/runs/report_telemetry': { expect: A1_DAEMON_WRITE },
     'POST /v1/runs/cancel': { expect: A1_OPERATE },
-    'POST /v1/runs/supply_inputs': { expect: A1_OPERATE },
     'POST /v1/runs/enqueue': { expect: A1_OPERATE },
     'POST /v1/runs/create_rdr': { expect: A1_DAEMON_WRITE },
     'POST /v1/artifacts/get': { expect: A1_VIEW },
-    'POST /v1/artifacts/get_by_id': { expect: A1_VIEW },
-    'POST /v1/artifacts/submit': { expect: A1_DAEMON_WRITE },
+    'POST /v1/artifacts/get_by_id': { expect: '1YYYYY44Y4Y' },
+    // The daemon's branch; a responder's branch (query.hug_id) is covered by the engine tests.
+    'POST /v1/artifacts/upload': { expect: A1_DAEMON_WRITE, query: (s) => ({ run_id: s.run_a1, phase: 'p', name: 'a.txt' }) },
+    'POST /v1/artifacts/download': { expect: '1YYYYY44Y4Y' },
+    'GET /v1/artifacts/download': { expect: A1_VIEW, body: (s) => ({ artifact_id: s.artifact_a1 }) },
     'POST /v1/artifacts/delete': { expect: A1_ADMIN },
 
-    // reviews
-    'POST /v1/reviews/create': { expect: A1_DAEMON_WRITE },
-    'POST /v1/reviews/get_by_id': { expect: '1YYYYY44Y4Y' },
-    'POST /v1/reviews/get_messages': { expect: A1_VIEW },
-    'GET /v1/reviews/stream_messages': { expect: A1_VIEW },
-    'POST /v1/reviews/verdict': { expect: A1_OPERATE },
-    'POST /v1/reviews/send_message': { expect: A1_DAEMON_WRITE },
-    'POST /v1/reviews/remind': { expect: A1_DAEMON_WRITE },
-    'POST /v1/reviews/ack': { expect: A1_DAEMON_WRITE },
+    // hugs
+    'POST /v1/hugs/create': { expect: A1_DAEMON_WRITE },
+    'POST /v1/hugs/close': { expect: A1_DAEMON_WRITE },
+    'POST /v1/hugs/get_events': { expect: DAEMON_ONLY },
+    'POST /v1/hugs/get_by_id': { expect: '1YYYYY44Y4Y' },
+    'POST /v1/hugs/respond': { expect: A1_VIEW },
 
     // teams (default team = Mia's private team)
     'POST /v1/teams/get_phases': { expect: TEAM_PRIVATE },
@@ -256,7 +255,7 @@ const MATRIX: Record<string, Row> = {
 /** Default request body: every id points at the Acme / A1 record of its kind. */
 function default_body(s: Seed): Record<string, unknown> {
     return {
-        realm_id: s.A1, org_id: s.acme, run_id: s.run_a1, review_id: s.review_a1,
+        realm_id: s.A1, org_id: s.acme, run_id: s.run_a1, hug_id: s.hug_a1,
         artifact_id: s.artifact_a1, daemon_id: s.daemon_a1, workspace_id: s.workspace_a1,
         invite_id: s.invite_acme, team_id: s.team_private,
     };
@@ -312,7 +311,9 @@ describe.skipIf(!has_postgres)('authorization matrix (route policy, enforce mode
         let out = '';
         for (const who of CALLERS) {
             const target = allow_pat ? app : pat_off_app;
-            let r = method === 'GET' ? request(target).get(path).query(body as Record<string, string>) : request(target).post(path).send(body);
+            let r = method === 'GET'
+                ? request(target).get(path).query(body as Record<string, string>)
+                : request(target).post(path).query((row.query?.(seed) ?? {}) as Record<string, string>).send(body);
             if (who !== 'anon') r = r.set('Authorization', `Bearer ${seed.token[who as Exclude<Caller, 'anon'>]}`);
             const res = await r;
             out += CODE[res.status] ?? `(${res.status})`;

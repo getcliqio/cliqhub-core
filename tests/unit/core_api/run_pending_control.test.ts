@@ -132,7 +132,7 @@ describe('RunService.load_pending_control', () => {
         // without them, hitting Resume and watching an unchanged run
         // for 30s looked like a bug.
         expect((opts as { replacements: { endpoints: string[] } }).replacements.endpoints)
-            .toEqual(['/v1/cancel', '/v1/runs/supply_inputs', '/v1/resume', '/v1/execute']);
+            .toEqual(['/v1/cancel', '/v1/resume', '/v1/execute']);
 
         // Filter on daemon + run_id inside JSONB payload.
         expect(sql).toMatch(/"daemon_id"\s*=\s*:daemon_id/);
@@ -147,7 +147,7 @@ describe('RunService.load_pending_control', () => {
         expect(sql).toMatch(/"acked_at"\s*IS\s*NULL/);
         expect(sql).toMatch(/"attempts"\s*<\s*"max_attempts"/);
 
-        // Newest first — if a supply_inputs and a later cancel both
+        // Newest first — if a resume and a later cancel both
         // exist, the cancel wins.
         expect(sql).toMatch(/ORDER BY\s+"created_at"\s+DESC/i);
         expect(sql).toMatch(/LIMIT\s+1/);

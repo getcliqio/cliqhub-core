@@ -7,7 +7,6 @@
  * POST   /v1/runs/complete
  * POST   /v1/runs/resume
  * POST   /v1/runs/cancel
- * POST   /v1/runs/supply_inputs
  * POST   /v1/runs/enqueue
  * POST   /v1/runs/claim
  * POST   /v1/runs/append_logs
@@ -38,7 +37,6 @@ export function register_runs_routes(router: Router): void {
     router.post('/runs/complete', with_dedup(runs.wrap(runs.complete)));
     router.post('/runs/resume', with_dedup(runs.wrap(runs.resume)));
     router.post('/runs/cancel', runs.wrap(runs.cancel));
-    router.post('/runs/supply_inputs', runs.wrap(runs.supply_inputs));
     router.post('/runs/enqueue', require_token_scope('dispatch'), runs.wrap(runs.enqueue));
     router.post('/runs/claim', runs.wrap(runs.claim));
 

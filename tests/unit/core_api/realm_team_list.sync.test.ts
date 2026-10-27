@@ -57,7 +57,7 @@ vi.mock('../../../src/models/index.js', () => ({
     TeamVersion: {},
     Review: {},
     ReviewMessage: {},
-    ReviewNotification: {},
+    HugDelivery: {},
     StoredArtifact: {},
 }));
 

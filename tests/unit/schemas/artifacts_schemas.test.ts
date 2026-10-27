@@ -1,38 +1,35 @@
 /**
  * Unit tests for stored artifacts Zod schemas — validates accept/reject
- * boundaries for all four endpoint input schemas.
+ * boundaries for the artifacts endpoint inputs.
  */
 
 import { describe, it, expect } from 'vitest';
 import {
-    ArtifactsSubmitInput,
+    ArtifactsDownloadInput,
+    ArtifactsUploadQuery,
     ArtifactsGetInput,
     ArtifactsGetByIdInput,
     ArtifactsDeleteInput,
 } from '../../../src/schemas/artifacts_schemas.js';
 
-describe('ArtifactsSubmitInput', () => {
-    const valid = { run_id: 'run-1', phase: 'analyst', name: 'report.md', content: 'hello' };
-
-    it('accepts minimal valid input', () => {
-        expect(ArtifactsSubmitInput.parse(valid)).toMatchObject(valid);
+describe('ArtifactsUploadQuery', () => {
+    it('takes a run target (daemon) or a Hug target (responder)', () => {
+        expect(ArtifactsUploadQuery.parse({ run_id: 'r', phase: 'p', name: 'lld.md' })).toMatchObject({ run_id: 'r', phase: 'p' });
+        expect(ArtifactsUploadQuery.parse({ hug_id: 'h', requested_input: 'contract', name: 'MSA.pdf' })).toMatchObject({ hug_id: 'h' });
     });
 
-    it('accepts optional fields', () => {
-        const full = { ...valid, mime_type: 'text/markdown', description: 'Weekly report', encoding: 'base64' as const };
-        expect(ArtifactsSubmitInput.parse(full)).toMatchObject(full);
+    it('refuses both targets, neither, half a run target, and a missing name', () => {
+        expect(() => ArtifactsUploadQuery.parse({ run_id: 'r', phase: 'p', hug_id: 'h', requested_input: 'c', name: 'n' })).toThrow();
+        expect(() => ArtifactsUploadQuery.parse({ name: 'n' })).toThrow();
+        expect(() => ArtifactsUploadQuery.parse({ run_id: 'r', name: 'n' })).toThrow();
+        expect(() => ArtifactsUploadQuery.parse({ run_id: 'r', phase: 'p' })).toThrow();
     });
+});
 
-    it('rejects empty run_id', () => {
-        expect(() => ArtifactsSubmitInput.parse({ ...valid, run_id: '' })).toThrow();
-    });
-
-    it('rejects missing content', () => {
-        expect(() => ArtifactsSubmitInput.parse({ run_id: 'r', phase: 'p', name: 'n' })).toThrow();
-    });
-
-    it('rejects invalid encoding', () => {
-        expect(() => ArtifactsSubmitInput.parse({ ...valid, encoding: 'gzip' })).toThrow();
+describe('ArtifactsDownloadInput', () => {
+    it('takes an artifact id', () => {
+        expect(ArtifactsDownloadInput.parse({ artifact_id: 'a' })).toEqual({ artifact_id: 'a' });
+        expect(() => ArtifactsDownloadInput.parse({})).toThrow();
     });
 });
 

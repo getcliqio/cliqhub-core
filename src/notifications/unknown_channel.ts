@@ -20,7 +20,7 @@ export interface UnknownChannelInput {
 	/** The missing channel name, as written; null when the phase names no channel at all. */
 	name: string | null;
 	source: UnknownChannelSource;
-	/** The event that named it (e.g. run.failed, hug.review_requested). */
+	/** The event that named it (e.g. run.failed, hug.opened). */
 	for_event: string;
 	run_id?: string | null;
 	phase?: string | null;

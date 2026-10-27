@@ -20,7 +20,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
     AccountInvite, CustomEvent, Daemon, HubEvent, NotificationChannel, NotificationRule,
-    Org, OrgMember, OrgRole, Realm, RealmInvite, RealmMember, Review, Run, StoredArtifact,
+    Hug, Org, OrgMember, OrgRole, Realm, RealmInvite, RealmMember, Run, StoredArtifact,
     Team, TeamVersion, User, Workspace,
 } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
@@ -40,7 +40,7 @@ export interface Seed {
     B1: string;
     run_a1: string;
     run_b1: string;
-    review_a1: string;
+    hug_a1: string;
     artifact_a1: string;
     event_a1: string;
     custom_event_a1: string;
@@ -146,8 +146,11 @@ export async function seed_authz(app: Express): Promise<Seed> {
     const run_a1 = await mk_run(A1, acme);
     const run_b1 = await mk_run(B1, beta);
 
-    const review_a1 = `azrv${stamp}`;
-    await Review.create({ id: review_a1, run_id: run_a1, realm_id: A1, org_id: acme, payload: {}, status: 'pending', timeout_at: new Date(now + 3_600_000) } as never);
+    const hug_a1 = `azh${stamp}`;
+    await Hug.create({
+        id: hug_a1, run_id: run_a1, phase: 'p', daemon_id: 'authz-daemon', realm_id: A1, org_id: acme, title: 'Authz', prompt: 'p',
+        requested_inputs: [], channels: ['a1'], status: 'open', expires_at: new Date(now + 3_600_000),
+    } as never);
     const artifact_a1 = randomUUID();
     await StoredArtifact.create({ id: artifact_a1, run_id: run_a1, phase: 'p', name: 'a.txt', mime_type: 'text/plain', size_bytes: 1, storage_key: `authz/${stamp}`, created_at: now } as never);
     const event_a1 = `aze${stamp}`;
@@ -185,7 +188,7 @@ export async function seed_authz(app: Express): Promise<Seed> {
         await CustomEvent.destroy({ where: { id: custom_event_a1 } });
         await HubEvent.destroy({ where: { id: event_a1 } });
         await StoredArtifact.destroy({ where: { id: artifact_a1 } });
-        await Review.destroy({ where: { id: review_a1 } });
+        await Hug.destroy({ where: { id: hug_a1 } });
         await Run.destroy({ where: { run_id: { [Op.in]: [run_a1, run_b1] } } });
         await Workspace.destroy({ where: { id: workspace_a1 } });
         await Daemon.destroy({ where: { id: daemon_a1 } });
@@ -212,7 +215,7 @@ export async function seed_authz(app: Express): Promise<Seed> {
         token: { sam: sam.token, olivia: olivia.token, adam: adam.token, omar: omar.token, mia: mia.token, nora: nora.token, ben: ben.token, dA, dB, sdA },
         user: { sam: sam.id, olivia: olivia.id, adam: adam.id, omar: omar.id, mia: mia.id, nora: nora.id, ben: ben.id },
         acme, beta, A1, A2, B1,
-        run_a1, run_b1, review_a1, artifact_a1, event_a1, custom_event_a1, daemon_a1, workspace_a1,
+        run_a1, run_b1, hug_a1, artifact_a1, event_a1, custom_event_a1, daemon_a1, workspace_a1,
         channel_a1, channel_acme, rule_a1, rule_acme, invite_acme, team_public, team_private,
         signup, track: (u: string) => { usernames.push(u); },
         cleanup,

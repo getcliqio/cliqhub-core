@@ -44,6 +44,7 @@ vi.mock('../../../src/models/migrations/hub_schema_migrations.js', () => ({
 }));
 
 vi.mock('../../../src/models/migrations/control_plane_schema_migrations.js', () => ({
+    migrate_hugs_before_sync: vi.fn(async () => undefined),
     run_core_api_schema_migrations: vi.fn(async () => undefined),
 }));
 

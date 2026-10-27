@@ -5,6 +5,7 @@
  * rules / empty channels and gives existing realms their channel and defaults.
  */
 import { vi, describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { Op } from 'sequelize';
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 
@@ -25,6 +26,7 @@ import { InAppNotificationService } from '../../src/services/in_app_notification
 import { EventSubmitService } from '../../src/services/events_service.js';
 import { ensure_personal_channel } from '../../src/services/per_user_channel.service.js';
 import { CliqHubDeliverer } from '../../src/notifications/deliverers/cliqhub_deliverer.js';
+import { NotificationFanOutService } from '../../src/notifications/fan_out.service.js';
 import {
 	add_realm_review_rule,
 	migrate_realm_members_channels,
@@ -38,6 +40,7 @@ import {
 	NotificationChannel,
 	NotificationRule,
 	OrgMember,
+	OrgRole,
 	Realm,
 	RealmMember,
 	Setting,
@@ -112,16 +115,22 @@ describe.skipIf(!has_postgres)('PLAN-channels E2: explicit channels', () => {
 		expect(await sees(AMY, 'realm-msg')).toBe(true);
 	});
 
-	it('in-app to an org channel reaches every org member, and nobody outside the org', async () => {
+	it('in-app to an org channel reaches the org members who may see the event: about a realm, only those with access to it', async () => {
 		const realm = await new_realm();
 		const org_channel = await NotificationService.create_channel({ org_id: realm.org_id, name: `org-inapp-${uid()}`, destinations: [{ type: 'cliqhub' }] });
-		// Sent for an event in the realm, it still goes org-wide (In-app is org-wide).
+		// Sent for an event in the realm, the org-wide row keeps the realm it is about.
 		await new CliqHubDeliverer().deliver({}, { event: 'run.failed', message: 'org-msg', realm_id: realm.id }, { channel_id: org_channel.id });
 		const row = await InAppNotification.findOne({ where: { message: 'org-msg' }, raw: true });
-		expect(row).toMatchObject({ realm_id: null, user_id: null, org_id: realm.org_id });
+		expect(row).toMatchObject({ realm_id: realm.id, user_id: null, org_id: realm.org_id, audience: 'org' });
 		await join(AMY, realm.org_id);
+		expect(await sees(AMY, 'org-msg')).toBe(false); // in the org, not in the realm
+		await RealmMember.create({ id: `${realm.id}:${AMY}`, realm_id: realm.id, member_type: 'user', member_id: AMY, role: 'member', created_at: Date.now() } as never);
 		expect(await sees(AMY, 'org-msg')).toBe(true);
 		expect(await sees(OUTSIDER, 'org-msg')).toBe(false);
+		// An org event (no realm) still goes to every org member.
+		await join(OUTSIDER, realm.org_id);
+		await new CliqHubDeliverer().deliver({}, { event: 'team.published', message: 'org-wide' }, { channel_id: org_channel.id });
+		expect(await sees(OUTSIDER, 'org-wide')).toBe(true);
 	});
 
 	it('in-app to a personal channel reaches only its owner', async () => {
@@ -146,6 +155,57 @@ describe.skipIf(!has_postgres)('PLAN-channels E2: explicit channels', () => {
 		const ev = await EventSubmitService.submit({ type: 'run.crashed', realm_id: realm.id, run_id: `r-${uid()}`, daemon_id: 'd1' });
 		expect(ev.notifications).toBe('skipped');
 		expect(await InAppNotification.count()).toBe(0);
+	});
+
+	describe('access filter: an event about a realm is absorbed only by people who may see it there', () => {
+		/** A custom org role holding `permissions` for `user_id`, and realm membership. */
+		async function member_with(user_id: string, realm: { id: string; org_id: string }, permissions: string[]) {
+			const role = await OrgRole.create({
+				id: randomUUID(), org_id: realm.org_id, slug: `r-${uid()}`.slice(0, 40), name: 'Custom', permissions, is_system: false, is_default: false, created_at: new Date(),
+			} as never);
+			await OrgMember.destroy({ where: { org_id: realm.org_id, user_id } as never });
+			await OrgMember.create({ org_id: realm.org_id, user_id, role: 'member', role_id: role.id, status: 'active' } as never);
+			await RealmMember.create({ id: `${realm.id}:${user_id}`, realm_id: realm.id, member_type: 'user', member_id: user_id, role: 'member', created_at: Date.now() } as never);
+			return role;
+		}
+
+		it("a realm notice is read per event: a member without runs.view doesn't see run events, but sees daemon events with daemons.view", async () => {
+			const realm = await new_realm();
+			await member_with(AMY, realm, ['realms.view', 'daemons.view']);
+			const channel = await NotificationService.ensure_realm_members_channel(realm.id);
+			await new CliqHubDeliverer().deliver({}, { event: 'run.failed', message: 'run-msg', realm_id: realm.id }, { channel_id: channel.id });
+			await new CliqHubDeliverer().deliver({}, { event: 'daemon.offline', message: 'daemon-msg', realm_id: realm.id }, { channel_id: channel.id });
+			expect(await sees(AMY, 'run-msg')).toBe(false);
+			expect(await sees(AMY, 'daemon-msg')).toBe(true);
+		});
+
+		it('a personal channel is not sent what its person may not see; access is read again when they read their inbox', async () => {
+			const realm = await new_realm();
+			const role = await member_with(AMY, realm, ['realms.view']);
+			const personal = await ensure_personal_channel(AMY, 'amy');
+			const event = (message: string) => ({ id: randomUUID(), type: 'run.failed', occurred_at: new Date().toISOString(), realm_id: realm.id, run_id: `r-${uid()}`, daemon_id: 'd1', message }) as never;
+			await NotificationFanOutService.deliver_to_channels([personal], event('not-sent'));
+			expect(await InAppNotification.count({ where: { message: 'not-sent' } })).toBe(0);
+			await OrgRole.update({ permissions: ['realms.view', 'runs.view'] } as never, { where: { id: role.id } });
+			await NotificationFanOutService.deliver_to_channels([personal], event('sent'));
+			expect(await sees(AMY, 'sent')).toBe(true);
+			// Access taken away: the row stays, but it is no longer shown.
+			await OrgRole.update({ permissions: ['realms.view'] } as never, { where: { id: role.id } });
+			expect(await sees(AMY, 'sent')).toBe(false);
+		});
+
+		it('a channel_ref to a person leaves them out when they may not see it; the realm still gets its notice', async () => {
+			const realm = await new_realm();
+			const role = await member_with(AMY, realm, ['realms.view']);
+			await ensure_personal_channel(AMY, 'e2amy');
+			const relay = await NotificationService.create_channel({ realm_id: realm.id, name: `relay-${uid()}`.slice(0, 40), destinations: [{ type: 'channel_ref', name: 'e2amy' }] });
+			const send = (message: string) => NotificationFanOutService.deliver_to_channels([relay.id], { id: randomUUID(), type: 'run.failed', occurred_at: new Date().toISOString(), realm_id: realm.id, run_id: `r-${uid()}`, daemon_id: 'd1', message } as never);
+			await send('via-ref');
+			expect(await InAppNotification.count({ where: { message: 'via-ref', user_id: AMY } })).toBe(0);
+			await OrgRole.update({ permissions: ['realms.view', 'runs.view'] } as never, { where: { id: role.id } });
+			await send('via-ref-ok');
+			expect(await InAppNotification.count({ where: { message: 'via-ref-ok', user_id: AMY } })).toBe(1);
+		});
 	});
 
 	describe('one-time migration', () => {

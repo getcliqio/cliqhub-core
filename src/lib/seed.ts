@@ -232,7 +232,7 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
           settings: { required: [{ key: 'url', description: 'Mesh server URL' }, { key: 'client_id', description: 'OAuth client ID' }, { key: 'client_secret', description: 'OAuth client secret' }] },
           inputs: { role: { type: 'string', required: false, description: 'Instructions for the agent' }, sources: { type: 'source_entry[]', required: false },
                     task: { type: 'string', required: true, source: 'runtime', description: 'Query for the mesh agent' } }, dockerfile: builtin_dockerfile },
-        { name: 'hug', agent_type: 'gate', description: 'HUG human-in-the-loop gate via CliqHub reviews', version: '1.0.0', capabilities: ['phase:gate'],
+        { name: 'hug', agent_type: 'gate', description: 'Hug gate: asks people to approve, reject or send back, through the Hug protocol', version: '1.0.0', capabilities: ['phase:gate'],
           settings: { required: [], optional: [{ key: 'server_url', description: 'Legacy standalone HUG server URL (unused when Hub-native)' }] },
           inputs: { role: { type: 'string', required: true, description: 'Instructions for the agent' }, review: { type: 'object', required: true } }, dockerfile: builtin_dockerfile },
         { name: 'team', agent_type: 'meta', description: 'Team phase agent — sub-team launcher', version: '1.0.0', capabilities: ['phase:standard'],
