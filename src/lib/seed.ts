@@ -7,7 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
+import { BUILTIN_TEAMS } from '@getcliqio/cliq-sdk';
 import { get_logger } from './log.js';
+import { get_sequelize } from './sequelize.js';
+import { attach_cliq_scope } from '../models/migrations/migrate_team_visibility.js';
 
 const log = get_logger('seed');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,7 +37,7 @@ export async function seed_all(): Promise<void> {
 async function seed_scopes(): Promise<void> {
     const { Scope } = await import('../models/index.js');
     await Scope.bulkCreate([
-        { id: '00000000-0000-0000-0000-000000000000', slug: 'cliq', display_name: 'Cliq', is_default: 1, owner_id: null, visibility: 'public', scope_type: 'platform' },
+        { id: '00000000-0000-0000-0000-000000000000', slug: 'cliq', display_name: 'Cliq', is_default: 1, owner_id: null },
     ], { ignoreDuplicates: true });
 }
 
@@ -233,8 +236,8 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
           settings: { required: [{ key: 'url', description: 'Mesh server URL' }, { key: 'client_id', description: 'OAuth client ID' }, { key: 'client_secret', description: 'OAuth client secret' }] },
           inputs: { role: { type: 'string', required: false, description: 'Instructions for the agent' }, sources: { type: 'source_entry[]', required: false },
                     task: { type: 'string', required: true, source: 'runtime', description: 'Query for the mesh agent' } }, dockerfile: builtin_dockerfile },
-        // 1.1.0: no `role` (the gate never read it) and no legacy `server_url` setting.
-        { name: 'hug', agent_type: 'gate', description: 'Hug gate: asks people to approve, reject or send back, through the Hug protocol', version: '1.1.0', capabilities: ['phase:gate'],
+        // 1.1.0: no `role` (the gate never read it) and no legacy `server_url` setting. 1.2.0: `review.inputs` may be `type: file`.
+        { name: 'hug', agent_type: 'gate', description: 'Hug gate: asks people to approve, reject or send back, through the Hug protocol', version: '1.2.0', capabilities: ['phase:gate'],
           settings: { required: [], optional: [] },
           inputs: { review: { type: 'object', required: true } }, dockerfile: builtin_dockerfile },
         { name: 'team', agent_type: 'meta', description: 'Team phase agent — sub-team launcher', version: '1.0.0', capabilities: ['phase:standard'],
@@ -368,114 +371,54 @@ async function seed_teams(): Promise<void> {
             slug: 'cliq',
             display_name: 'Cliq',
             owner_id,
-            visibility: 'public',
-            scope_type: 'org',
         },
     });
+    // @cliq belongs to the cliq org once there is one (PLAN-team-visibility §5.3).
+    await attach_cliq_scope(get_sequelize());
 
-    // The same sample cliqd seeds for a daemon (cliq daemon `runtime_bootstrap_service.ts`): keep
-    // the two identical. Its gate attaches the file it asks the reviewer to read. Earlier versions
-    // stay as they are, so a realm on one keeps it until it is moved.
-    const HELLO_WORLD_VERSION = '2.2.0';
-    const HELLO_WORLD_DESCRIPTION =
-        'Prints a greeting for the provided name, produces a review artifact, and waits for human approval.';
-    const manifest_yaml = [
-        'name: "@cliq/hello-world"',
-        `description: "${HELLO_WORLD_DESCRIPTION}"`,
-        `version: "${HELLO_WORLD_VERSION}"`,
-        'tags: ["hello", "human-review", "hug", "exec"]',
-        '',
-        'inputs:',
-        '  - name: name',
-        '    type: text',
-        '    description: "Who to greet"',
-        '    required: true',
-        '  - name: reviewers',
-        '    type: channel',
-        '    description: "Who should review this run"',
-        '    required: true',
-        '',
-        'phases:',
-        '  - name: greet',
-        '    type: standard',
-        '    agent: exec',
-        '    commands:',
-        '      - name: print-name',
-        '        run: echo "Hi {{inputs.name}}"',
-        '      - name: write-artifact',
-        "        run: printf 'Hi %s, this is cliq team running and producing this artifact for your review.\\n' \"{{inputs.name}}\" > review.txt",
-        '      - name: show-artifact',
-        '        run: cat review.txt',
-        '',
-        '  - name: human-review',
-        '    type: gate',
-        '    agent: hug',
-        '    depends_on: [greet]',
-        '    review:',
-        '      timeout: 60',
-        '      message: "Read the greeting in review.txt, then approve it or reject it."',
-        '      artifacts: [review.txt]',
-        '      reviewers:',
-        '        - policy: any',
-        '          channels:',
-        '            - "{{inputs.reviewers}}"',
-        '',
-        '  - name: done',
-        '    type: standard',
-        '    agent: exec',
-        '    depends_on: [human-review]',
-        '    commands:',
-        '      - name: complete',
-        '        run: echo "Approved for {{inputs.name}} — hello-world complete."',
-    ].join('\n');
-    const parsed = yaml.load(manifest_yaml) as { phases: unknown[]; inputs: Array<{ name: string; type: string; description: string; required: boolean }> };
-    const workflow_json = JSON.stringify({ phases: parsed.phases });
+    // The built-in teams (cliq-sdk `BUILTIN_TEAMS`: hello-world, hug-example) — the same ones cliqd
+    // installs on a new daemon, from one source. Each version is upserted; earlier versions stay as
+    // they are, so a realm on one keeps it until it is moved.
+    for (const builtin of BUILTIN_TEAMS) {
+        const label = `@${builtin.scope}/${builtin.name}`;
+        const parsed = yaml.load(builtin.manifest_yaml) as { phases: unknown[]; inputs?: unknown[] };
+        const [team, created] = await Team.findOrCreate({
+            where: { name: builtin.name, scope: builtin.scope },
+            defaults: {
+                name: builtin.name,
+                scope: builtin.scope,
+                description: builtin.description,
+                author_id: null,
+                license: 'MIT',
+                visibility: 'public',
+                listed: 1,
+                install_count: 0,
+            },
+        });
+        if (created) log.info(`seeded registry team ${label}`);
 
-    const [team, created] = await Team.findOrCreate({
-        where: { name: 'hello-world', scope: 'cliq' },
-        defaults: {
-            name: 'hello-world',
-            scope: 'cliq',
-            scope_type: 'org',
-            description: HELLO_WORLD_DESCRIPTION,
-            author_id: null,
-            license: 'MIT',
-            visibility: 'public',
-            listed: 1,
-            install_count: 0,
-        },
-    });
-
-    if (created) {
-        log.info('seeded registry team @cliq/hello-world');
-    }
-
-    /** Upsert the version row — update workflow_json if version already exists. */
-    const existing_ver = await TeamVersion.findOne({
-        where: { team_id: team.id, version: HELLO_WORLD_VERSION },
-    });
-
-    const version_data = {
-        team_id: team.id,
-        version: HELLO_WORLD_VERSION,
-        changelog: 'Built-in hello-world team.',
-        package_path: '',
-        workflow_json,
-        manifest_yaml,
-        readme: '# @cliq/hello-world\n\nA simple team that greets a user, produces a review artifact, and waits for human approval.',
-        capability_json: JSON.stringify({ inputs: parsed.inputs }),
-        agents_json: JSON.stringify({ exec: {}, hug: {} }),
-        roles_json: '[]',
-        cliq_version: null,
-        tools: '[]',
-    };
-
-    if (existing_ver) {
-        await existing_ver.update(version_data);
-        log.info(`updated registry version @cliq/hello-world@${HELLO_WORLD_VERSION}`);
-    } else {
-        await TeamVersion.create(version_data);
-        log.info(`seeded registry version @cliq/hello-world@${HELLO_WORLD_VERSION}`);
+        const version_data = {
+            team_id: team.id,
+            version: builtin.version,
+            changelog: `Built-in ${builtin.name} team.`,
+            package_path: '',
+            workflow_json: JSON.stringify({ phases: parsed.phases }),
+            manifest_yaml: builtin.manifest_yaml,
+            readme: builtin.readme,
+            capability_json: JSON.stringify({ inputs: parsed.inputs ?? [] }),
+            agents_json: JSON.stringify(Object.fromEntries(builtin.agents.map((a) => [a, {}]))),
+            roles_json: '[]',
+            cliq_version: null,
+            tools: '[]',
+        };
+        const existing_ver = await TeamVersion.findOne({ where: { team_id: team.id, version: builtin.version } });
+        if (existing_ver) {
+            await existing_ver.update(version_data);
+            log.info(`updated registry version ${label}@${builtin.version}`);
+        } else {
+            await TeamVersion.create(version_data);
+            log.info(`seeded registry version ${label}@${builtin.version}`);
+        }
     }
 }
 

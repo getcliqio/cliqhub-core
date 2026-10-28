@@ -36,7 +36,8 @@ export class ScopeService {
         return true;
     }
 
-    static async add(slug: string, display_name?: string | null, org_id?: string | null, scope_type?: string | null) {
+    /** Add a scope of `org_id`; every scope belongs to an org (PLAN-team-visibility §3.1). */
+    static async add(slug: string, display_name: string | null | undefined, org_id: string) {
         log.debug('add', { slug, org_id });
         const existing = await _scope_repo_cs.find_one_q({ where: { slug } });
         if (existing) return existing;
@@ -49,9 +50,7 @@ export class ScopeService {
             slug,
             display_name: display_name ?? '',
             owner_id: null,
-            org_id: org_id ?? null,
-            scope_type: scope_type ?? 'platform',
-            visibility: 'public',
+            org_id,
             is_default,
         });
     }

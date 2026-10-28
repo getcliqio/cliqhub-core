@@ -38,7 +38,7 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
 
     async function team_named(name: string): Promise<string> {
         const team = await Team.create({
-            id: randomUUID(), name, scope: scope_slug, scope_type: 'org', description: name,
+            id: randomUUID(), name, scope: scope_slug, description: name,
             author_id: author, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
         } as any);
         await TeamVersion.create({
@@ -59,7 +59,7 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
     beforeAll(async () => {
         process.env.CLIQ_BFF_LOG_LEVEL = 'error';
         await open_test_control_plane_store();
-        await Scope.create({ id: randomUUID(), slug: scope_slug, display_name: 'Unpublish', owner_id: author, org_id: null, visibility: 'public', scope_type: 'platform', is_default: 0, created_at: new Date() } as any);
+        await Scope.create({ id: randomUUID(), slug: scope_slug, display_name: 'Unpublish', owner_id: author, org_id: null, is_default: 0, created_at: new Date() } as any);
     });
     beforeEach(() => {
         uninstall.mockReset().mockResolvedValue({ daemons: [] });

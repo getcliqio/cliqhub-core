@@ -37,7 +37,7 @@ interface AuthDeps {
     org_member_repo: OrgMemberRepository;
 }
 
-const UNAUTHED: AuthContext = { user: null, org_slugs: [], org_ids: [], scopes: [] };
+const UNAUTHED: AuthContext = { user: null, org_slugs: [], org_ids: [], member_scopes: [], publish_orgs: [] };
 
 export function create_auth_middleware(deps: AuthDeps) {
     return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
@@ -143,28 +143,28 @@ async function build_auth_context(
     deps: AuthDeps,
     user: NonNullable<AuthContext['user']>,
 ): Promise<AuthContext> {
-    const [user_scopes, org_memberships, member_scopes, default_scopes] = await Promise.all([
-        deps.scope_repo.find_owned_by_user(user_id),
+    const [org_memberships, member_scopes] = await Promise.all([
         deps.org_member_repo.find_orgs_by_user(user_id),
         deps.scope_repo.find_member_scopes(user_id),
-        deps.scope_repo.find_default_scopes(),
     ]);
 
-    const org_ids = org_memberships.map(o => o.org_id);
-    const org_scopes = org_ids.length > 0
-        ? await deps.scope_repo.find_by_org_ids(org_ids)
-        : [];
-
-    const scope_map = new Map<string, typeof user_scopes[0]>();
-    for (const s of [...default_scopes, ...user_scopes, ...org_scopes, ...member_scopes]) {
-        scope_map.set(s.id, s);
-    }
+    // Scope members (PLAN-team-visibility §3.1): assigned ones, plus owners and admins of the
+    // scope's org. Org membership alone, or a default scope, makes nobody a member.
+    const admin_orgs = org_memberships
+        .filter(o => o.org_role && (o.org_role.is_system || o.org_role.slug === 'admin'))
+        .map(o => o.org_id);
+    const admin_scopes = admin_orgs.length > 0 ? await deps.scope_repo.find_by_org_ids(admin_orgs) : [];
+    const members = new Map<string, typeof member_scopes[0]>();
+    for (const s of [...member_scopes, ...admin_scopes]) members.set(s.id, s);
 
     return {
         user,
         org_slugs: org_memberships.map(o => o.slug),
         org_ids: org_memberships.map(o => o.org_id),
-        scopes: [...scope_map.values()],
+        member_scopes: [...members.values()],
+        publish_orgs: org_memberships
+            .filter(o => o.org_role && (o.org_role.is_system || o.org_role.permissions.includes('teams.publish')))
+            .map(o => o.org_id),
     };
 }
 

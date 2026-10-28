@@ -76,7 +76,7 @@ describe.skipIf(!has_postgres)('soft delete, reactivation and locks', () => {
         await seed_default_roles_for_org(org.id);
         const owner_role = await OrgRole.findOne({ where: { org_id: org.id, slug: 'owner' }, attributes: ['id'], raw: true });
         await OrgMember.create({ org_id: org.id, user_id: owner.id, role: 'admin', role_id: owner_role!.id } as never);
-        const scope = await Scope.create({ slug, display_name: slug, owner_id: owner.id, visibility: 'public', scope_type: 'org', org_id: org.id } as never);
+        const scope = await Scope.create({ slug, display_name: slug, owner_id: owner.id, org_id: org.id } as never);
         await ScopeMember.create({ scope_id: scope.id, user_id: owner.id } as never);
         await Org.update({ default_scope_id: scope.id } as never, { where: { id: org.id } });
         await OrgSeedService.seed_org(org.id, { account: false });

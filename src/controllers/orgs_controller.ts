@@ -241,14 +241,13 @@ export class OrgsController extends BaseController {
             org_id: body.org_id,
             slug: body.slug,
             display_name: body.display_name,
-            visibility: body.visibility,
         });
         log.info('scope_created', { slug: body.slug });
         this.ok(res, result);
     }
 
     /**
-     * POST /v1/orgs/update_scope — rename, change visibility, or transfer ownership of a scope.
+     * POST /v1/orgs/update_scope — rename, or transfer ownership of a scope.
      */
     async update_scope(req: Request, res: Response): Promise<void> {
         log.debug('update_scope', { user_id: req.auth?.user?.id });
@@ -256,13 +255,12 @@ export class OrgsController extends BaseController {
         if (!body.scope_id) {
             throw ApiError.unprocessable('scope_id is required to update a scope');
         }
-        if (body.display_name === undefined && body.visibility === undefined && body.owner_id === undefined) {
-            throw ApiError.unprocessable('At least one of display_name, visibility, or owner_id is required');
+        if (body.display_name === undefined && body.owner_id === undefined) {
+            throw ApiError.unprocessable('At least one of display_name or owner_id is required');
         }
         const result = await this._scopes_service.update(req.auth, {
             scope_id: body.scope_id,
             display_name: body.display_name,
-            visibility: body.visibility,
             owner_id: body.owner_id,
         });
         log.info('scope_updated', { scope_id: body.scope_id });

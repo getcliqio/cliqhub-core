@@ -98,7 +98,7 @@ export async function create_container(config: EnvConfig): Promise<Container> {
 
     // Orphaned scopes / scope-less orgs left by partial org creates and user deletes.
     const namespace = await repair_namespace_orphans(sequelize);
-    boot_log.info('namespace_repair', { removed: namespace.user_scopes_removed.length + namespace.org_scopes_removed.length, created: namespace.org_scopes_created.length, skipped: namespace.skipped.length });
+    boot_log.info('namespace_repair', { removed: namespace.scopes_removed.length, created: namespace.org_scopes_created.length, skipped: namespace.skipped.length });
 
     const user_repo = new UserRepository();
     const token_repo = new TokenRepository();

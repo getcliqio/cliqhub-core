@@ -97,13 +97,13 @@ describe.skipIf(!has_postgres)('forking a team', () => {
         expect(origin.body.data.forked_from).toBeNull();
     });
 
-    it('the catalog with_workflow returns phases, version and fork counts and the verified flag', async () => {
+    it('the catalog with_workflow returns phases, version and fork counts', async () => {
         const res = await post('/v1/teams/get', forker.token, { query: 'pipeline', with_workflow: true, limit: 100 });
         expect(res.status, JSON.stringify(res.body)).toBe(200);
         const item = (res.body.data.items as Array<Record<string, unknown>>).find((t) => t.id === source_id);
         expect(item).toMatchObject({
             phases: [{ name: 'build', type: null, agent: 'claude-code' }],
-            version_count: 1, fork_count: 1, verified: false, updated_at: expect.any(Number),
+            version_count: 1, fork_count: 1, updated_at: expect.any(Number),
         });
         const plain = await post('/v1/teams/get', forker.token, { query: 'pipeline', limit: 100 });
         expect((plain.body.data.items as Array<Record<string, unknown>>).find((t) => t.id === source_id)).not.toHaveProperty('phases');

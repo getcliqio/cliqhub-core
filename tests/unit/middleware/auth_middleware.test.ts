@@ -37,7 +37,6 @@ function make_deps() {
             create: vi.fn(), delete_by_id_and_user: vi.fn(), list_by_user_id: vi.fn(),
         },
         scope_repo: {
-            find_owned_by_user: vi.fn().mockResolvedValue([]),
             find_by_org_ids: vi.fn().mockResolvedValue([]),
             find_member_scopes: vi.fn().mockResolvedValue([]),
             find_default_scopes: vi.fn().mockResolvedValue([]),
@@ -133,20 +132,20 @@ describe('create_auth_middleware', () => {
         expect(req.auth.token_permissions).toBeUndefined();
     });
 
-    it('loads scopes into auth context for PAT', async () => {
+    it('loads member scopes into auth context for PAT', async () => {
         vi.mocked(verify_password).mockResolvedValueOnce(true);
         deps.token_repo.find_by_prefix.mockResolvedValueOnce({
             id: hub_legacy_uuid(10), type: 'user', user_id: hub_legacy_uuid(1), token_hash: 'hash', permissions: {},
         });
         deps.user_repo.find_profile_by_id.mockResolvedValueOnce(ALICE);
-        deps.scope_repo.find_owned_by_user.mockResolvedValueOnce([
-            { id: hub_legacy_uuid(1), slug: 'alice', scope_type: 'user' },
+        deps.scope_repo.find_member_scopes.mockResolvedValueOnce([
+            { id: hub_legacy_uuid(1), slug: 'alice' },
         ]);
         const mw = create_auth_middleware(deps as any);
         const req = make_req('Bearer cliq_tok_abcdef1234567890abcdef1234567890abcdef1234567890');
         const next = vi.fn();
         await mw(req, make_res(), next);
-        expect(req.auth.scopes).toHaveLength(1);
+        expect(req.auth.member_scopes).toHaveLength(1);
     });
 
     it('sets UNAUTHED for invalid API token hash', async () => {
@@ -308,88 +307,79 @@ describe('build_auth_context — scope population', () => {
         deps = make_deps();
     });
 
-    it('org scopes (find_by_org_ids) appear in auth.scopes when user is an org member', async () => {
+    it("an org member's org scopes are not member scopes (only owners' and admins' are)", async () => {
         stub_token();
         deps.org_member_repo.find_orgs_by_user.mockResolvedValueOnce([
-            { org_id: hub_legacy_uuid(2), slug: 'acme' },
-        ]);
-        deps.scope_repo.find_by_org_ids.mockResolvedValueOnce([
-            { id: hub_legacy_uuid(30), slug: 'acme', scope_type: 'org' },
+            { org_id: hub_legacy_uuid(2), slug: 'acme', org_role: { slug: 'member', is_system: false, permissions: [] } },
         ]);
         const mw = create_auth_middleware(deps as any);
         const req = make_req('Bearer cliq_tok_abcdef1234567890abcdef1234567890abcdef1234567890');
         await mw(req, make_res(), vi.fn());
-
-        const slug_list = (req.auth.scopes ?? []).map((s: { slug: string }) => s.slug);
-        expect(slug_list).toContain('acme');
+        expect(deps.scope_repo.find_by_org_ids).not.toHaveBeenCalled();
+        expect(req.auth.member_scopes).toEqual([]);
     });
 
-    it('member scopes (find_member_scopes) appear in auth.scopes', async () => {
+    it('a scope from several sources appears once in member_scopes', async () => {
+        const shared_scope = { id: hub_legacy_uuid(40), slug: 'shared', org_id: hub_legacy_uuid(2) };
         stub_token();
-        deps.scope_repo.find_member_scopes.mockResolvedValueOnce([
-            { id: hub_legacy_uuid(31), slug: 'partner-org', scope_type: 'org' },
+        deps.org_member_repo.find_orgs_by_user.mockResolvedValueOnce([
+            { org_id: hub_legacy_uuid(2), slug: 'acme', org_role: { slug: 'admin', is_system: false, permissions: [] } },
         ]);
-        const mw = create_auth_middleware(deps as any);
-        const req = make_req('Bearer cliq_tok_abcdef1234567890abcdef1234567890abcdef1234567890');
-        await mw(req, make_res(), vi.fn());
-
-        const slug_list = (req.auth.scopes ?? []).map((s: { slug: string }) => s.slug);
-        expect(slug_list).toContain('partner-org');
-    });
-
-    it('default scopes (find_default_scopes) appear in auth.scopes', async () => {
-        stub_token();
-        deps.scope_repo.find_default_scopes.mockResolvedValueOnce([
-            { id: hub_legacy_uuid(32), slug: 'cliq', scope_type: 'org' },
-        ]);
-        const mw = create_auth_middleware(deps as any);
-        const req = make_req('Bearer cliq_tok_abcdef1234567890abcdef1234567890abcdef1234567890');
-        await mw(req, make_res(), vi.fn());
-
-        const slug_list = (req.auth.scopes ?? []).map((s: { slug: string }) => s.slug);
-        expect(slug_list).toContain('cliq');
-    });
-
-    it('duplicate scope id across sources appears exactly once in auth.scopes', async () => {
-        const shared_scope = { id: hub_legacy_uuid(40), slug: 'shared', scope_type: 'org' };
-        stub_token();
-        // Same scope returned from both find_owned_by_user and find_member_scopes
-        deps.scope_repo.find_owned_by_user.mockResolvedValueOnce([shared_scope]);
         deps.scope_repo.find_member_scopes.mockResolvedValueOnce([shared_scope]);
+        deps.scope_repo.find_by_org_ids.mockResolvedValueOnce([shared_scope]);
         const mw = create_auth_middleware(deps as any);
         const req = make_req('Bearer cliq_tok_abcdef1234567890abcdef1234567890abcdef1234567890');
         await mw(req, make_res(), vi.fn());
-
-        const matches = (req.auth.scopes ?? []).filter((s: { id: string }) => s.id === hub_legacy_uuid(40));
-        expect(matches).toHaveLength(1);
+        expect(req.auth.member_scopes.filter((s: { id: string }) => s.id === hub_legacy_uuid(40))).toHaveLength(1);
     });
 
-    it('all four scope sources are merged into auth.scopes', async () => {
-        stub_token();
-        deps.scope_repo.find_owned_by_user.mockResolvedValueOnce([
-            { id: hub_legacy_uuid(51), slug: 'alice', scope_type: 'user' },
-        ]);
-        deps.org_member_repo.find_orgs_by_user.mockResolvedValueOnce([
-            { org_id: hub_legacy_uuid(2), slug: 'acme' },
-        ]);
-        deps.scope_repo.find_by_org_ids.mockResolvedValueOnce([
-            { id: hub_legacy_uuid(52), slug: 'acme', scope_type: 'org' },
-        ]);
-        deps.scope_repo.find_member_scopes.mockResolvedValueOnce([
-            { id: hub_legacy_uuid(53), slug: 'partner', scope_type: 'org' },
-        ]);
-        deps.scope_repo.find_default_scopes.mockResolvedValueOnce([
-            { id: hub_legacy_uuid(54), slug: 'cliq', scope_type: 'org' },
-        ]);
-        const mw = create_auth_middleware(deps as any);
-        const req = make_req('Bearer cliq_tok_abcdef1234567890abcdef1234567890abcdef1234567890');
-        await mw(req, make_res(), vi.fn());
+    describe('member_scopes and publish_orgs (PLAN-team-visibility §3.1, §3.3)', () => {
+        const role = (slug: string, permissions: string[] = [], is_system = false) => ({ slug, is_system, permissions });
 
-        const slugs = (req.auth.scopes ?? []).map((s: { slug: string }) => s.slug);
-        expect(slugs).toContain('alice');
-        expect(slugs).toContain('acme');
-        expect(slugs).toContain('partner');
-        expect(slugs).toContain('cliq');
-        expect(req.auth.scopes).toHaveLength(4);
+        it('scope members: assigned scopes plus every scope of orgs where the user is owner or admin', async () => {
+            stub_token();
+            deps.org_member_repo.find_orgs_by_user.mockResolvedValueOnce([
+                { org_id: hub_legacy_uuid(2), slug: 'acme', org_role: role('admin') },
+                { org_id: hub_legacy_uuid(3), slug: 'beta', org_role: role('member', ['teams.catalog.view']) },
+                { org_id: hub_legacy_uuid(4), slug: 'alice', org_role: role('owner', [], true) },
+            ]);
+            deps.scope_repo.find_by_org_ids.mockImplementationOnce(async (ids: string[]) => [
+                { id: hub_legacy_uuid(60), slug: 'acme', org_id: hub_legacy_uuid(2) },
+                { id: hub_legacy_uuid(61), slug: 'beta', org_id: hub_legacy_uuid(3) },
+                { id: hub_legacy_uuid(62), slug: 'alice', org_id: hub_legacy_uuid(4) },
+            ].filter((sc) => ids.includes(sc.org_id)));
+            deps.scope_repo.find_member_scopes.mockResolvedValueOnce([
+                { id: hub_legacy_uuid(63), slug: 'beta-finance', org_id: hub_legacy_uuid(3) },
+            ]);
+            const mw = create_auth_middleware(deps as any);
+            const req = make_req('Bearer cliq_tok_abcdef1234567890abcdef1234567890abcdef1234567890');
+            await mw(req, make_res(), vi.fn());
+
+            const slugs = req.auth.member_scopes.map((s: { slug: string }) => s.slug).sort();
+            // Not `beta`: a plain member of an org isn't a member of its scopes.
+            expect(slugs).toEqual(['acme', 'alice', 'beta-finance']);
+        });
+
+        it('a default scope (@cliq) makes nobody its member', async () => {
+            stub_token();
+            const mw = create_auth_middleware(deps as any);
+            const req = make_req('Bearer cliq_tok_abcdef1234567890abcdef1234567890abcdef1234567890');
+            await mw(req, make_res(), vi.fn());
+            expect(req.auth.member_scopes).toEqual([]);
+        });
+
+        it('publish orgs: roles with teams.publish, and owners', async () => {
+            stub_token();
+            deps.org_member_repo.find_orgs_by_user.mockResolvedValueOnce([
+                { org_id: hub_legacy_uuid(2), slug: 'acme', org_role: role('operator', ['teams.publish', 'teams.install']) },
+                { org_id: hub_legacy_uuid(3), slug: 'beta', org_role: role('member', ['teams.catalog.view']) },
+                { org_id: hub_legacy_uuid(4), slug: 'alice', org_role: role('owner', [], true) },
+                { org_id: hub_legacy_uuid(5), slug: 'norole', org_role: null },
+            ]);
+            const mw = create_auth_middleware(deps as any);
+            const req = make_req('Bearer cliq_tok_abcdef1234567890abcdef1234567890abcdef1234567890');
+            await mw(req, make_res(), vi.fn());
+            expect(req.auth.publish_orgs).toEqual([hub_legacy_uuid(2), hub_legacy_uuid(4)]);
+        });
     });
 });

@@ -71,34 +71,6 @@ describe.skipIf(!has_postgres)('AccessService', () => {
 		await expect(AccessService.assert_realm_access(charlie, daemon_id)).rejects.toBeInstanceOf(ApiError);
 	});
 
-	it('assert_scope_access checks membership', () => {
-		expect(() => AccessService.assert_scope_access(['s1'], 's1')).not.toThrow();
-		expect(() => AccessService.assert_scope_access(['s1'], 's2')).toThrow(ApiError);
-	});
-
-	it('assert_can_run_team_on_daemon needs both scope and realm', async () => {
-		await expect(AccessService.assert_can_run_team_on_daemon({
-			user_id: bob,
-			daemon_id,
-			scope_id: 'scope-a',
-			accessible_scope_ids: ['scope-a'],
-		})).resolves.toBeUndefined();
-
-		await expect(AccessService.assert_can_run_team_on_daemon({
-			user_id: bob,
-			daemon_id,
-			scope_id: 'scope-a',
-			accessible_scope_ids: [],
-		})).rejects.toBeInstanceOf(ApiError);
-
-		await expect(AccessService.assert_can_run_team_on_daemon({
-			user_id: charlie,
-			daemon_id,
-			scope_id: 'scope-a',
-			accessible_scope_ids: ['scope-a'],
-		})).rejects.toBeInstanceOf(ApiError);
-	});
-
 	it('assert_can_observe_run is realm-only when daemon assigned', async () => {
 		await expect(AccessService.assert_can_observe_run(bob, { daemon_id: null })).resolves.toBeUndefined();
 		await expect(AccessService.assert_can_observe_run(bob, { daemon_id })).resolves.toBeUndefined();

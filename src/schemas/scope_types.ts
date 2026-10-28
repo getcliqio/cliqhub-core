@@ -12,14 +12,10 @@ export const ScopeData = z.object({
         .describe('Unique scope slug (e.g. "acme" or "acme/tools")'),
     display_name: z.string().nullable()
         .describe('Human-readable name; null when not set'),
-    visibility: z.enum(['public', 'private'])
-        .describe('Whether the scope is publicly browsable'),
-    scope_type: z.enum(['user', 'org'])
-        .describe('"user" scopes are owned by a single user; "org" scopes are owned by an org'),
-    owner_id: z.string().uuid()
-        .describe('UUID of the owning user (user scopes) or org (org scopes)'),
+    owner_id: z.string().uuid().nullable()
+        .describe('UUID of the user who created it (null for a seeded scope)'),
     org_id: z.string().uuid().nullable()
-        .describe('Owning org UUID for org scopes; null for user scopes'),
+        .describe('The org the scope belongs to (PLAN-team-visibility §3.1)'),
     member_count: z.number().int().optional()
         .describe('Number of users with publish access (included on detail views)'),
     team_count: z.number().int().optional()

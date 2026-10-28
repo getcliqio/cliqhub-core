@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { Op } from 'sequelize';
 import { TeamsService, team_query_where } from '../../../src/services/teams_service.js';
-import { ALICE, BOB, UNAUTHED, SITE_ADMIN } from '../../helpers/fixtures.js';
+import { ALICE, BOB, ORG_ADMIN, UNAUTHED, SITE_ADMIN } from '../../helpers/fixtures.js';
 
 vi.mock('../../../src/lib/sequelize.js', () => ({
     get_sequelize: vi.fn().mockReturnValue({
@@ -35,6 +35,23 @@ vi.mock('../../../src/services/package_parser.js', async (importOriginal) => {
     };
 });
 
+/**
+ * Who holds teams.publish / teams.publish.delete in each scope's org (PLAN-team-visibility §3.3):
+ * Alice in `alice`, Bob in `bob`, the org admin in `acme`.
+ */
+const SCOPE_PUBLISHERS: Record<string, string> = {
+    'org-alice': hub_legacy_uuid(1), 'org-bob': hub_legacy_uuid(2), 'org-acme': hub_legacy_uuid(3),
+};
+vi.mock('../../../src/auth/permissions.js', () => ({
+    require_permission: vi.fn(async (org_id: string, user_id: string, permission: string) => {
+        if (SCOPE_PUBLISHERS[org_id] !== user_id) throw new Error(`Permission '${permission}' is required`);
+    }),
+}));
+
+vi.mock('../../../src/services/events_service.js', () => ({
+    EventSubmitService: { submit: vi.fn().mockResolvedValue({}) },
+}));
+
 const mock_team_find_by_pk = vi.fn();
 const mock_team_update = vi.fn();
 const mock_user_find_by_pk = vi.fn();
@@ -50,9 +67,13 @@ vi.mock('../../../src/models/index.js', () => ({
             escape: vi.fn().mockImplementation((v: string) => `'${v}'`),
         },
     },
+    // Every scope belongs to an org of the same name (`org-<slug>`); see SCOPE_PUBLISHERS.
     Scope: {
         findAll: vi.fn().mockResolvedValue([]),
-        findOne: vi.fn().mockResolvedValue(null),
+        findOne: vi.fn().mockImplementation(async (q: { where?: { slug?: string } }) => {
+            const slug = q?.where?.slug;
+            return slug ? { id: `s-${slug}`, slug, org_id: `org-${slug}`, owner_id: null } : null;
+        }),
     },
     OrgMember: {
         findOne: vi.fn().mockResolvedValue(null),
@@ -188,7 +209,7 @@ function make_audit_repo() {
 /* ─── Fixtures ────────────────────────────────────────────────── */
 
 const PUBLIC_TEAM = {
-    id: hub_legacy_uuid(1), name: 'my-team', scope: 'alice', scope_type: 'user',
+    id: hub_legacy_uuid(1), name: 'my-team', scope: 'alice',
     description: 'desc', author_id: hub_legacy_uuid(1),
     license: 'MIT', visibility: 'public' as const, listed: 1,
     created_at: '2025-01-01', updated_at: '2025-06-01', install_count: 10,
@@ -248,6 +269,16 @@ describe('TeamsService — get (list)', () => {
         expect(result.tag_map.get(hub_legacy_uuid(1))).toEqual(['ai']);
     });
 
+    it("private teams in the catalog: only the scopes the caller is a member of (PLAN-team-visibility §3.2)", async () => {
+        await service.get(ORG_ADMIN, {});
+        const where = team_repo.count_filtered.mock.calls[0]![0] as Record<symbol, Array<Record<symbol, Array<Record<string, unknown>>>>>;
+        const visibility = where[Op.and]![0]![Op.or]!;
+        const priv = visibility.find((c) => c.visibility === 'private') as { scope: Record<symbol, string[]> };
+        // ORG_ADMIN's personal scope isn't one they're a member of in this fixture; acme is.
+        expect(priv.scope[Op.in]).toEqual(['acme']);
+        expect(visibility).toContainEqual({ visibility: 'draft', author_id: ORG_ADMIN.user!.id });
+    });
+
     it('caps limit to 100', async () => {
         const result = await service.get(UNAUTHED, { limit: 999 });
         expect(result.limit).toBe(100);
@@ -301,7 +332,8 @@ describe('team_query_where (teams/get search)', () => {
 });
 
 /* ================================================================
-   get with mine: true  (replaces list_my_teams)
+   get with mine: true — my orgs' and member scopes' teams I can see, plus my drafts
+   (PLAN-team-visibility §3.2)
    ================================================================ */
 
 describe('TeamsService — get (mine: true)', () => {
@@ -309,12 +341,27 @@ describe('TeamsService — get (mine: true)', () => {
     let team_repo: ReturnType<typeof make_team_repo>;
     let tag_repo: ReturnType<typeof make_tag_repo>;
 
-    beforeEach(() => {
+    /** Acme's scopes: `acme` (ORG_ADMIN is a member) and `acme-ops` (not assigned). */
+    const ACME_SCOPES = [
+        { id: 's-acme', slug: 'acme', org_id: hub_legacy_uuid(1) },
+        { id: 's-ops', slug: 'acme-ops', org_id: hub_legacy_uuid(1) },
+    ];
+    const ROWS = [
+        { id: hub_legacy_uuid(1), name: 'pub', scope: 'acme', visibility: 'public', listed: 1 },
+        { id: hub_legacy_uuid(2), name: 'priv', scope: 'acme', visibility: 'private', listed: 1 },
+        { id: hub_legacy_uuid(3), name: 'ops-priv', scope: 'acme-ops', visibility: 'private', listed: 1 },
+        { id: hub_legacy_uuid(4), name: 'ops-pub', scope: 'acme-ops', visibility: 'public', listed: 0 },
+        { id: hub_legacy_uuid(5), name: 'someone-elses-draft', scope: 'acme', visibility: 'draft', listed: 0 },
+    ];
+
+    beforeEach(async () => {
         vi.clearAllMocks();
         const built = build_service();
         service = built.service;
         team_repo = built.team_repo;
         tag_repo = built.tag_repo;
+        const { Scope } = await import('../../../src/models/index.js');
+        vi.mocked(Scope.findAll).mockResolvedValue(ACME_SCOPES as never);
     });
 
     it('returns 401 when unauthenticated', async () => {
@@ -322,57 +369,33 @@ describe('TeamsService — get (mine: true)', () => {
             .rejects.toThrow('Authentication required');
     });
 
-    it('returns empty list when scope not accessible', async () => {
-        const result = await service.get(ALICE, { mine: true, scope: 'bob' });
-        expect(result.teams).toEqual([]);
-    });
-
-    it('returns teams for default scope (username)', async () => {
-        team_repo.list_by_scope_list.mockResolvedValueOnce([{ id: hub_legacy_uuid(1), name: 'my-team', scope: 'alice' }]);
+    it("my orgs' scopes: public teams and private ones of scopes I'm a member of; never others' drafts", async () => {
+        team_repo.list_by_scope_list.mockResolvedValueOnce(ROWS);
         tag_repo.find_by_team_ids.mockResolvedValueOnce([{ team_id: hub_legacy_uuid(1), tag: 'ai' }]);
-
-        const result = await service.get(ALICE, { mine: true });
-
-        expect(result.teams).toHaveLength(1);
+        const result = await service.get(ORG_ADMIN, { mine: true });
+        expect(team_repo.list_by_scope_list).toHaveBeenCalledWith(['acme', 'acme-ops']);
+        expect(result.teams.map((t: { name: string }) => t.name)).toEqual(['pub', 'priv', 'ops-pub']);
         expect(result.tag_map.get(hub_legacy_uuid(1))).toEqual(['ai']);
     });
-});
 
-/* ================================================================
-   get with mine: true, group_by_scope: true  (replaces list_all_my_teams)
-   ================================================================ */
-
-describe('TeamsService — get (mine + group_by_scope)', () => {
-    let service: TeamsService;
-    let team_repo: ReturnType<typeof make_team_repo>;
-    let tag_repo: ReturnType<typeof make_tag_repo>;
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-        const built = build_service();
-        service = built.service;
-        team_repo = built.team_repo;
-        tag_repo = built.tag_repo;
+    it('my own drafts are added, wherever they live', async () => {
+        team_repo.list_by_scope_list.mockResolvedValueOnce([]);
+        team_repo.find_all_q.mockResolvedValueOnce([{ id: hub_legacy_uuid(9), name: 'wip', scope: 'elsewhere', visibility: 'draft' }]);
+        const result = await service.get(ORG_ADMIN, { mine: true });
+        expect(result.teams.map((t: { name: string }) => t.name)).toEqual(['wip']);
     });
 
-    it('returns empty scopes when user has no scopes', async () => {
-        const no_scopes = { ...ALICE, scopes: [] as any[] };
-        const result = await service.get(no_scopes, { mine: true, group_by_scope: true });
-        expect(result.scopes).toEqual([]);
+    it("a scope's page ({ scope, mine }): that scope's teams I can see, member or not", async () => {
+        team_repo.list_by_scope_list.mockResolvedValueOnce(ROWS.filter((r) => r.scope === 'acme'));
+        const result = await service.get(BOB, { mine: true, scope: 'acme' });
+        expect(team_repo.list_by_scope_list).toHaveBeenCalledWith(['acme']);
+        expect(result.teams.map((t: { name: string }) => t.name)).toEqual(['pub']);
     });
 
-    it('returns teams grouped by scope', async () => {
-        team_repo.list_by_scope_list.mockResolvedValueOnce([
-            { id: hub_legacy_uuid(1), name: 'team-a', scope: 'alice' },
-        ]);
-        tag_repo.find_by_team_ids.mockResolvedValueOnce([{ team_id: hub_legacy_uuid(1), tag: 'ai' }]);
-
-        const result = await service.get(ALICE, { mine: true, group_by_scope: true });
-
-        expect(result.scopes).toHaveLength(1);
-        expect(result.scopes[0].slug).toBe('alice');
-        expect(result.scopes[0].teams).toHaveLength(1);
-        expect(result.tag_map.get(hub_legacy_uuid(1))).toEqual(['ai']);
+    it("a personal org's scope: its owner sees its private teams", async () => {
+        team_repo.list_by_scope_list.mockResolvedValueOnce([{ id: hub_legacy_uuid(6), name: 'mine', scope: 'alice', visibility: 'private', listed: 1 }]);
+        const result = await service.get(ALICE, { mine: true, scope: 'alice' });
+        expect(result.teams.map((t: { name: string }) => t.name)).toEqual(['mine']);
     });
 });
 
@@ -554,10 +577,52 @@ describe('TeamsService — publish', () => {
         })).rejects.toThrow('Team name must be');
     });
 
-    it('returns 403 when user lacks scope access', async () => {
+    it("returns 403 without teams.publish in the scope's org (e.g. a non-cliq user and @cliq)", async () => {
         await expect(service.publish(ALICE, {
             name: 'my-team', scope: 'bob', version: '1.0.0', data_base64: DATA_BASE64,
-        })).rejects.toThrow("You don't have access to scope");
+        })).rejects.toMatchObject({ status: 403, message: "Publishing to @bob needs 'teams.publish' in its org" });
+        await expect(service.publish(ALICE, {
+            name: 'my-team', scope: 'cliq', version: '1.0.0', data_base64: DATA_BASE64,
+        })).rejects.toMatchObject({ status: 403 });
+    });
+
+    it("anyone with teams.publish in the scope's org publishes a team someone else wrote", async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce({ ...PUBLIC_TEAM, author_id: hub_legacy_uuid(999) });
+        version_repo.find_by_team_and_version.mockResolvedValueOnce(null);
+        const result = await service.publish(ALICE, { name: 'my-team', scope: 'alice', version: '2.0.0', data_base64: DATA_BASE64 });
+        expect(result.version).toBe('2.0.0');
+    });
+
+    it('a new team is private unless published as public', async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
+        const result = await service.publish(ALICE, { name: 'new-team', scope: 'alice', version: '1.0.0', data_base64: DATA_BASE64 });
+        expect(result.visibility).toBe('private');
+        expect(team_repo.create.mock.calls[0]![5]).toBe('private');
+
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
+        const pub = await service.publish(ALICE, { name: 'new-team2', scope: 'alice', version: '1.0.0', data_base64: DATA_BASE64, visibility: 'public' });
+        expect(pub.visibility).toBe('public');
+    });
+
+    it('a republish without visibility keeps the current one, and no event is raised', async () => {
+        const { EventSubmitService } = await import('../../../src/services/events_service.js');
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
+        version_repo.find_by_team_and_version.mockResolvedValueOnce(null);
+        const result = await service.publish(ALICE, { name: 'my-team', scope: 'alice', version: '2.0.0', data_base64: DATA_BASE64 });
+        expect(result.visibility).toBe('public');
+        expect(team_repo.update.mock.calls[0]![3]).toBe('public');
+        expect(EventSubmitService.submit).not.toHaveBeenCalled();
+    });
+
+    it('changing a published team\'s visibility raises team.visibility_changed', async () => {
+        const { EventSubmitService } = await import('../../../src/services/events_service.js');
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
+        version_repo.find_by_team_and_version.mockResolvedValueOnce(null);
+        await service.publish(ALICE, { name: 'my-team', scope: 'alice', version: '2.0.0', data_base64: DATA_BASE64, visibility: 'private' });
+        expect(EventSubmitService.submit).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'team.visibility_changed', org_id: 'org-alice', team: 'alice/my-team',
+            payload: expect.objectContaining({ from: 'public', to: 'private' }),
+        }));
     });
 
     it('returns 403 when PAT grant lacks teams write', async () => {
@@ -733,10 +798,15 @@ describe('TeamsService — delete_team', () => {
             .rejects.toThrow('Team not found');
     });
 
-    it('returns 403 when not the author', async () => {
+    it("returns 403 without teams.publish.delete in the scope's org", async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
+        await expect(service.delete_team(BOB, { name: 'my-team', scope: 'alice' }))
+            .rejects.toMatchObject({ status: 403, message: "Publishing to @alice needs 'teams.publish.delete' in its org" });
+    });
+
+    it('the org deletes a team someone else wrote (with teams.publish.delete)', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce({ ...PUBLIC_TEAM, author_id: hub_legacy_uuid(999) });
-        await expect(service.delete_team(ALICE, { name: 'my-team', scope: 'alice' }))
-            .rejects.toThrow('You are not the author');
+        await expect(service.delete_team(ALICE, { name: 'my-team', scope: 'alice' })).resolves.toEqual({ deleted: true });
     });
 
     it('deletes team successfully', async () => {

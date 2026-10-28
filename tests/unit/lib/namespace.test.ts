@@ -13,10 +13,10 @@ describe('namespace messages (approved wording)', () => {
     it.each([
         [{ kind: 'org', slug: 'measureone', personal: false }, 'The name measureone is already taken.'],
         [{ kind: 'org', slug: 'measureone', personal: true, owner_username: 'measureone' }, 'The name measureone is already taken.'],
-        [{ kind: 'scope', slug: 'measureone', scope_type: 'user', owner_username: 'sapan' }, 'The name measureone is already taken.'],
-        [{ kind: 'scope', slug: 'measureone', scope_type: 'org', org_slug: 'acme' }, 'The name measureone is already taken.'],
-        [{ kind: 'scope', slug: 'measureone', scope_type: 'org', org_slug: null }, 'The name measureone is already taken.'],
-        [{ kind: 'scope', slug: 'measureone', scope_type: 'user', owner_username: null }, 'The name measureone is already taken.'],
+        [{ kind: 'scope', slug: 'measureone', owner_username: 'sapan' }, 'The name measureone is already taken.'],
+        [{ kind: 'scope', slug: 'measureone', org_slug: 'acme' }, 'The name measureone is already taken.'],
+        [{ kind: 'scope', slug: 'measureone', org_slug: null }, 'The name measureone is already taken.'],
+        [{ kind: 'scope', slug: 'measureone', owner_username: null }, 'The name measureone is already taken.'],
         [{ kind: 'user', slug: 'measureone' }, 'The name measureone is already taken.'],
     ] as const)('%o → %s', (holder, text) => {
         expect(namespace_message(holder)).toBe(text);
@@ -26,10 +26,10 @@ describe('namespace messages (approved wording)', () => {
 
 describe('namespace_holders / assert_namespace_free', () => {
     it('resolves the scope owner and org, and reports kinds in the order asked', async () => {
-        const r = repos({ scope: { id: 's', scope_type: 'org', org_id: 'o1', owner_id: 'u1' }, org_by_id: { slug: 'acme' }, owner: { username: 'sapan' }, user: { username: 'measureone' } });
+        const r = repos({ scope: { id: 's', org_id: 'o1', owner_id: 'u1' }, org_by_id: { slug: 'acme' }, owner: { username: 'sapan' }, user: { username: 'measureone' } });
         expect(await namespace_holders(r, '@MeasureOne', ['user', 'scope'])).toEqual([
             { kind: 'user', slug: 'measureone' },
-            { kind: 'scope', slug: 'measureone', id: 's', scope_type: 'org', org_slug: 'acme', owner_username: 'sapan', org_id: 'o1', owner_id: 'u1' },
+            { kind: 'scope', slug: 'measureone', id: 's', org_slug: 'acme', owner_username: 'sapan', org_id: 'o1', owner_id: 'u1' },
         ]);
         await expect(assert_namespace_free(r, 'measureone', ['scope'])).rejects.toMatchObject({ message: 'The name measureone is already taken.' });
         await expect(assert_namespace_free(repos(), 'free-name')).resolves.toBeUndefined();
@@ -96,7 +96,7 @@ describe('deleted names (409 deleted)', () => {
     it('the scope of a deleted org does not make the name live', async () => {
         const r = repos({
             org: { id: 'org-1', slug: 'acme', deleted_at: when, activated_at: when },
-            scope: { id: 's-1', scope_type: 'org', org_id: 'org-1', owner_id: null },
+            scope: { id: 's-1', org_id: 'org-1', owner_id: null },
             org_by_id: { slug: 'acme' },
         });
         await expect(assert_namespace_free(r, 'acme')).rejects.toMatchObject({ code: 'deleted', details: { kind: 'org', id: 'org-1' } });

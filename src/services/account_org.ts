@@ -63,14 +63,14 @@ export async function ensure_account_scope(
     let scope_id: string;
     if (!found) {
         scope_id = (await Scope.create(
-            { slug, display_name: display_name || slug, owner_id: user_id, visibility: 'public', scope_type: 'org', org_id } as never,
+            { slug, display_name: display_name || slug, owner_id: user_id, org_id } as never,
             { transaction: t },
         )).id;
     } else {
         if (String(found.owner_id) !== String(user_id)) return null;
         scope_id = String(found.id);
         if (String(found.org_id) !== String(org_id)) {
-            await Scope.update({ org_id, scope_type: 'org' }, { where: { id: scope_id }, transaction: t });
+            await Scope.update({ org_id }, { where: { id: scope_id }, transaction: t });
         }
     }
     await ScopeMember.findOrCreate({ where: { scope_id, user_id }, defaults: { scope_id, user_id } as never, transaction: t });

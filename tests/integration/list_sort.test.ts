@@ -225,7 +225,7 @@ describe.skipIf(!ready)('Core API 6 — list sorting (integration)', () => {
             for (const o of seeded) {
                 const org = await Org.create({ slug: o.slug, display_name: o.display_name, created_at: new Date(base + o.age * day) } as never);
                 for (let i = 0; i < o.members; i++) await OrgMember.create({ org_id: org.get('id'), user_id: users[i].get('id'), role: 'member' } as never);
-                for (let i = 0; i < o.scopes; i++) await Scope.create({ slug: `${o.slug}-s${i}`, org_id: org.get('id'), scope_type: 'org' } as never);
+                for (let i = 0; i < o.scopes; i++) await Scope.create({ slug: `${o.slug}-s${i}`, org_id: org.get('id') } as never);
             }
             all = await list({});
             expect(all).toHaveLength(seeded.length);
@@ -451,14 +451,14 @@ describe.skipIf(!ready)('Core API 6 — list sorting (integration)', () => {
     // ── orgs/get_scopes ─────────────────────────────────────────────────────
 
     describe('orgs/get_scopes', () => {
-        type Row = { id: string; slug: string; visibility: string; team_count?: number; created_at: string };
+        type Row = { id: string; slug: string; team_count?: number; created_at: string };
         let svc: InstanceType<typeof import('../../src/services/scopes_service.js').ScopesService>;
         let owner_id = '';
         const seeded = [
-            { s: 'b', vis: 'private', teams: 1, age: 2 },
-            { s: 'a', vis: 'public', teams: 0, age: 4 },
-            { s: 'd', vis: 'public', teams: 2, age: 1 },
-            { s: 'c', vis: 'private', teams: 0, age: 3 },
+            { s: 'b', teams: 1, age: 2 },
+            { s: 'a', teams: 0, age: 4 },
+            { s: 'd', teams: 2, age: 1 },
+            { s: 'c', teams: 0, age: 3 },
         ];
         let catalog: Row[] = [];
         let mine: Row[] = [];
@@ -473,11 +473,13 @@ describe.skipIf(!ready)('Core API 6 — list sorting (integration)', () => {
                 import('../../src/repositories/org_member_repository.js'), import('../../src/repositories/scope_member_repository.js'),
             ]);
             svc = new ScopesService(new r[0].ScopeRepository(), new r[1].TeamRepository(), new r[2].AuditRepository(), new r[3].OrgRepository(), new r[4].OrgMemberRepository(), new r[5].ScopeMemberRepository());
-            const { Scope, Team, User } = await import('../../src/models/index.js');
+            const { Scope, ScopeMember, Team, User } = await import('../../src/models/index.js');
             const owner = await User.create({ username: `${tag}sowner`, email: `${tag}sowner@t.io`, password_hash: 'x' } as never);
             owner_id = String(owner.get('id'));
             for (const s of seeded) {
-                await Scope.create({ slug: `${tag}s${s.s}`, owner_id, visibility: s.vis, scope_type: 'user', created_at: new Date(base + s.age * day) } as never);
+                // The owner is assigned to each, so they are "theirs" (PLAN-team-visibility §3.1).
+                const scope = await Scope.create({ slug: `${tag}s${s.s}`, owner_id, created_at: new Date(base + s.age * day) } as never);
+                await ScopeMember.create({ scope_id: scope.get('id'), user_id: owner_id } as never);
                 for (let i = 0; i < s.teams; i++) await Team.create({ name: `${tag}st${s.s}${i}`, scope: `${tag}s${s.s}` } as never);
             }
             catalog = await list_catalog({});
@@ -493,7 +495,6 @@ describe.skipIf(!ready)('Core API 6 — list sorting (integration)', () => {
 
         it.each([
             ['slug', (r: Row) => r.slug],
-            ['visibility', (r: Row) => r.visibility],
             ['team_count', (r: Row) => seeded.find((s) => `${tag}s${s.s}` === r.slug)!.teams],
             ['created_at', (r: Row) => new Date(r.created_at).getTime()],
         ] as const)('sort_by %s asc and desc for the catalog and a user\'s scopes (search + sort; ties by id)', async (key, value) => {
@@ -503,9 +504,9 @@ describe.skipIf(!ready)('Core API 6 — list sorting (integration)', () => {
             }
         });
 
-        it('equal values page stably (visibility has ties)', async () => {
-            const full = pluck(await list_catalog({ sort_by: 'visibility' }), 'id');
-            const paged = [...pluck(await list_catalog({ sort_by: 'visibility', limit: 2, offset: 0 }), 'id'), ...pluck(await list_catalog({ sort_by: 'visibility', limit: 2, offset: 2 }), 'id')];
+        it('equal values page stably (team_count has ties)', async () => {
+            const full = pluck(await list_catalog({ sort_by: 'team_count' }), 'id');
+            const paged = [...pluck(await list_catalog({ sort_by: 'team_count', limit: 2, offset: 0 }), 'id'), ...pluck(await list_catalog({ sort_by: 'team_count', limit: 2, offset: 2 }), 'id')];
             expect(paged).toEqual(full);
         });
     });

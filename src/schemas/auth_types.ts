@@ -89,8 +89,6 @@ export type ScopeVo = {
     id: string;
     slug: string;
     display_name: string | null;
-    visibility: 'public' | 'private';
-    scope_type: 'user' | 'org' | 'platform';
     owner_id: string | null;
     org_id: string | null;
 };
@@ -100,7 +98,13 @@ export type AuthContext = {
     org_slugs: string[];
     /** Hub org ids from live membership (not JWT claims alone). */
     org_ids: string[];
-    scopes: ScopeVo[];
+    /**
+     * Scopes the caller is a member of (PLAN-team-visibility §3.1): assigned in `scope_members`, plus
+     * every scope of an org where they are owner or admin. Decides who reads a private team.
+     */
+    member_scopes: ScopeVo[];
+    /** Org ids where the caller's role grants `teams.publish` (owners have every permission). */
+    publish_orgs: string[];
     token_permissions?: TokenPermissionsVo;
     /**
      * API capability scopes carried by the authenticating PAT

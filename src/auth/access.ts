@@ -6,12 +6,16 @@ export interface TeamAccess {
     scope: string | null;
 }
 
-export function can_view_team(auth: AuthContext, team: TeamAccess): boolean {
+/**
+ * Who sees a team (PLAN-team-visibility §3.2): public, everyone; private, the members of its scope
+ * (`auth.member_scopes`); draft, its author.
+ */
+export function can_view_team(auth: Pick<AuthContext, 'user' | 'member_scopes'>, team: TeamAccess): boolean {
     if (team.visibility === 'public') return true;
     if (!auth.user) return false;
-    if (team.author_id === auth.user.id) return true;
+    if (team.visibility === 'draft') return team.author_id === auth.user.id;
     if (!team.scope) return false;
-    return auth.scopes.some((s) => s.slug === team.scope);
+    return auth.member_scopes.some((s) => s.slug === team.scope);
 }
 
 /**

@@ -242,7 +242,7 @@ export class OrgsService {
         const scopes = await _scope_repo_os.find_all_q({
             where: { org_id: params.org_id },
             attributes: [
-                'id', 'slug', 'display_name', 'visibility',
+                'id', 'slug', 'display_name',
                 [literal('(SELECT count(*) FROM scope_members sm WHERE sm.scope_id = "Scope"."id")'), 'member_count'],
                 [literal('(SELECT count(*) FROM teams t WHERE t.scope = "Scope"."slug")'), 'team_count'],
             ],
@@ -448,7 +448,7 @@ export class OrgsService {
                 await OrgSeedService.seed_org(org_id, { account: false, transaction });
                 // Default org scope (registry namespace = org slug); the owner joins it on accept.
                 const scope = await _scope_repo_os.create_one({
-                    slug, display_name, owner_id, visibility: 'public', scope_type: 'org', org_id,
+                    slug, display_name, owner_id, org_id,
                 }, { transaction });
                 await OrgModel.update({ default_scope_id: scope.id } as never, { where: { id: org_id }, transaction });
             }
@@ -625,7 +625,7 @@ export class OrgsService {
 
     // ─── Scope management ───────────────────────────────────────────
 
-    async new_scope(auth: AuthContext, params: { org_id: string; slug: string; display_name?: string; visibility?: 'public' | 'private' }) {
+    async new_scope(auth: AuthContext, params: { org_id: string; slug: string; display_name?: string }) {
         log.debug('new_scope', { org_id: params.org_id, slug: params.slug });
         // Route policy: org.scopes.manage in org_id.
         const org = await this._org_repo.find_by_id(params.org_id);
@@ -646,8 +646,7 @@ export class OrgsService {
         }
 
         const display_name = params.display_name || slug;
-        const visibility = params.visibility || 'public';
-        const scope_id = await this._scope_repo.create(slug, display_name, auth.user!.id, visibility, 'org', undefined, params.org_id);
+        const scope_id = await this._scope_repo.create(slug, display_name, auth.user!.id, params.org_id);
 
         const admins = await this._org_member_repo.list_admins_by_org(params.org_id);
         for (const a of admins) {

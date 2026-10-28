@@ -109,7 +109,6 @@ describe('RealmTeamListService.sync_team', () => {
             'rlm_1',
             'user-1',
             { scope: 'acme', slug: 'claims' },
-            ['scope-1'],
             ['org-1'],
         );
 
@@ -117,7 +116,6 @@ describe('RealmTeamListService.sync_team', () => {
             team_id: 'acme/claims',
             realm_id: 'rlm_1',
             user_id: 'user-1',
-            scope_ids: ['scope-1'],
             org_ids: ['org-1'],
             force: true,
         });

@@ -66,14 +66,15 @@ export class AuthService {
         const org_ids = memberships.map((m) => m.org_id);
         const org_slugs = memberships.map((m) => m.slug);
 
-        const [owned, org_scopes, member_scopes] = await Promise.all([
-            this._scope_repo.find_owned_by_user(user.id),
-            org_ids.length > 0 ? this._scope_repo.find_by_org_ids(org_ids) : Promise.resolve([]),
-            this._scope_repo.find_member_scopes(user.id),
-        ]);
-        const scope_slugs = Array.from(
-            new Set([...owned, ...org_scopes, ...member_scopes].map((s) => s.slug)),
-        );
+        // Session scopes: the scopes the user can publish to — every scope of an org where their role
+        // grants teams.publish (PLAN-team-visibility §3.3).
+        const publish_orgs = memberships
+            .filter((m) => m.org_role && (m.org_role.is_system || m.org_role.permissions.includes('teams.publish')))
+            .map((m) => m.org_id);
+        const publish_scopes = publish_orgs.length > 0 ? await this._scope_repo.find_by_org_ids(publish_orgs) : [];
+        // Their personal scope first: the builder publishes to the first by default.
+        const scope_slugs = [...new Set(publish_scopes.map((s) => s.slug))]
+            .sort((a, b) => Number(b === user.username) - Number(a === user.username));
 
         let realm_ids: string[] = [];
         try {
@@ -87,7 +88,6 @@ export class AuthService {
         const subject: Grant_subject = {
             role: user.role,
             org_ids,
-            scope_slugs,
             realm_ids,
         };
         const permissions = default_grant_for_subject(subject);

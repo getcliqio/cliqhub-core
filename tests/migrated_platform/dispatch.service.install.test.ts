@@ -48,8 +48,6 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
             display_name: 'install-scope',
             owner_id: null,
             org_id: null,
-            visibility: 'public',
-            scope_type: 'platform',
             is_default: 0,
             created_at: new Date(),
         });
@@ -119,7 +117,6 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
             team_id,
             daemon_ids: [d1],
             user_id,
-            scope_ids: [scope_id],
             org_ids: [org_id],
         });
         expect(result.results).toHaveLength(1);
@@ -137,7 +134,6 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
             team_id,
             daemon_ids: [d1, d2],
             user_id,
-            scope_ids: [scope_id],
             org_ids: [org_id],
         });
         expect(result.results).toHaveLength(2);
@@ -150,7 +146,6 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
             team_id,
             realm_id,
             user_id,
-            scope_ids: [scope_id],
             org_ids: [org_id],
         });
         expect(result.results).toHaveLength(2);
@@ -162,7 +157,6 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
         await expect(DispatchService.install_team({
             team_id,
             user_id,
-            scope_ids: [scope_id],
             org_ids: [org_id],
         })).rejects.toThrow(/daemon_ids or realm_id/);
     });
@@ -173,26 +167,16 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
             daemon_ids: [d1],
             realm_id,
             user_id,
-            scope_ids: [scope_id],
             org_ids: [org_id],
         })).rejects.toThrow(/not both/);
     });
 
-    it('forbids install without scope', async () => {
-        await expect(DispatchService.install_team({
-            team_id,
-            daemon_ids: [d1],
-            user_id,
-            scope_ids: [],
-            org_ids: [org_id],
-        })).rejects.toBeInstanceOf(ApiError);
-    });
     /** A catalog team whose one phase is a Hug gate (PLAN-notifications-v2 B3). */
     async function publish_gate(review: Record<string, unknown> | undefined): Promise<string> {
         const scope = await Scope.findByPk(scope_id, { raw: true });
         const name = `gate-${uid()}`.slice(0, 40);
         const team = await Team.create({
-            id: randomUUID(), name, scope: scope!.slug, scope_type: 'org', description: 'gate',
+            id: randomUUID(), name, scope: scope!.slug, description: 'gate',
             author_id: user_id, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
         } as any);
         catalog_ids.push(team.id);
@@ -206,14 +190,14 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
 
     it('B3: a Hug gate with no reviewers can\'t be installed', async () => {
         const team = await publish_gate(undefined);
-        await expect(DispatchService.install_team({ team_id: team, daemon_ids: [d1], user_id, scope_ids: [scope_id], org_ids: [org_id] }))
+        await expect(DispatchService.install_team({ team_id: team, daemon_ids: [d1], user_id, org_ids: [org_id] }))
             .rejects.toMatchObject({ status: 422, message: expect.stringContaining('must declare review.reviewers') });
         expect(mock_enqueue).not.toHaveBeenCalled();
     });
 
     it('B3: a Hug gate with reviewers installs', async () => {
         const team = await publish_gate({ reviewers: [{ policy: 'any', channels: ['qa'] }] });
-        const result = await DispatchService.install_team({ team_id: team, daemon_ids: [d1], user_id, scope_ids: [scope_id], org_ids: [org_id] });
+        const result = await DispatchService.install_team({ team_id: team, daemon_ids: [d1], user_id, org_ids: [org_id] });
         expect(result.results[0].ok).toBe(true);
         expect(mock_enqueue).toHaveBeenCalledTimes(1);
     });

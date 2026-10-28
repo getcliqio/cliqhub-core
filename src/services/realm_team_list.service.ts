@@ -314,7 +314,6 @@ export class RealmTeamListService {
     static async apply(
         realm_id: string,
         user_id: string,
-        scope_ids?: string[],
         org_ids?: string[],
     ): Promise<ApplyTeamResult[]> {
         await RealmService.require_admin(realm_id, user_id);
@@ -336,7 +335,6 @@ export class RealmTeamListService {
                     ...(entry.version ? { version: entry.version } : {}),
                     realm_id,
                     user_id,
-                    scope_ids,
                     org_ids,
                 });
                 results.push({
@@ -374,7 +372,6 @@ export class RealmTeamListService {
         realm_id: string,
         user_id: string,
         entry: TeamListEntry,
-        scope_ids?: string[],
         org_ids?: string[],
     ): Promise<ApplyTeamResult> {
         // Callers authorized this: realms/add_team, right after add (route policy: operate + realms.teams.manage).
@@ -404,7 +401,6 @@ export class RealmTeamListService {
                 ...(listed.version ? { version: listed.version } : {}),
                 realm_id,
                 user_id,
-                scope_ids,
                 org_ids,
                 force: true,
                 ...(has_agent_settings ? { agent_settings } : {}),
@@ -440,7 +436,6 @@ export class RealmTeamListService {
         realm_id: string,
         daemon_id: string,
         user_id: string,
-        scope_ids?: string[],
         org_ids?: string[],
     ): Promise<void> {
         try {
@@ -468,7 +463,6 @@ export class RealmTeamListService {
                         ...(entry.version ? { version: entry.version } : {}),
                         daemon_ids: [daemon_id],
                         user_id,
-                        scope_ids,
                         org_ids,
                         ...(has_agent_settings ? { agent_settings } : {}),
                     });

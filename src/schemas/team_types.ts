@@ -67,9 +67,7 @@ export const TeamsGetInput = z.object({
     scope: z.string().optional()
         .describe('Filter to teams owned by this scope (publisher)'),
     mine: z.boolean().optional()
-        .describe('When true, return only teams authored by the caller'),
-    group_by_scope: z.boolean().optional()
-        .describe('When true, group results by scope instead of a flat list'),
+        .describe("When true, the teams of the caller's orgs and member scopes they can see, plus their drafts (with scope: that scope's)"),
     listed: z.boolean().optional()
         .describe('Filter by listed flag (public marketplace visibility)'),
     status: z.enum(['draft', 'published']).optional()
@@ -96,7 +94,7 @@ export const TeamsGetInput = z.object({
     offset: OffsetField,
     with_workflow: z.boolean().optional()
         .describe('Catalog mode: also return each team\'s latest workflow (phase name, type, agent), number of versions, '
-            + 'last update, fork count and whether its publisher is verified'),
+            + 'last update and fork count'),
 });
 export type TeamsGetInput = z.infer<typeof TeamsGetInput>;
 
@@ -224,7 +222,7 @@ export const TeamsPublishInput = z.object({
     tags: z.array(z.string()).optional()
         .describe('Tag slugs to attach'),
     visibility: z.enum(['public', 'private']).optional()
-        .describe('Visibility after publish; must be public or private (draft is rejected)'),
+        .describe('public (everyone; the marketplace when listed) or private (the scope\'s members). Default: private for a new team, the current visibility on a republish'),
     data_base64: z.string().optional()
         .describe('Base64-encoded team package zip (required for first publish without prior versions)'),
     agents: z.record(z.unknown()).optional()
@@ -398,8 +396,6 @@ export const TeamData = z.object({
         .describe('Latest version\'s workflow phases in order (catalog with_workflow)'),
     fork_count: z.number().int().optional()
         .describe('How many teams were forked from this one (catalog with_workflow)'),
-    verified: z.boolean().optional()
-        .describe('Published by a verified (platform) scope (catalog with_workflow)'),
     author_id: z.string().nullable().optional()
         .describe('UUID of the team author (site-admin catalog listing only)'),
     org_id: z.string().nullable().optional()
@@ -451,6 +447,7 @@ export const TeamMutationData = z.object({
     status: z.enum(['draft', 'published']).describe('Lifecycle status after the mutation'),
     version: z.string().nullable().describe('Version string after the mutation; null when no version was seeded'),
     listed: z.boolean().optional().describe('Listed flag (present after unpublish)'),
+    visibility: z.enum(['public', 'private']).optional().describe('teams/publish: the visibility after publishing'),
     draft_saved_at: z.string().nullable().optional()
         .describe('teams/update: when the working copy was saved (save_as draft), or null after a version was minted'),
     uninstalled_from: z.array(z.object({ realm_id: z.string(), realm_slug: z.string() })).optional()
@@ -526,7 +523,6 @@ export type TeamVo = {
     id: string;
     name: string;
     scope: string | null;
-    scope_type: 'user' | 'org' | null;
     description: string;
     author_id: string | null;
     license: string;

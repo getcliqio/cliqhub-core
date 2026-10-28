@@ -31,6 +31,7 @@ import { get_logger } from '../lib/log.js';
 import { ApiError } from '../lib/api_error.js';
 import { ApiError as LegacyApiError } from '../errors/api_error.js';
 import { DispatchService } from '../services/dispatch.service.js';
+import { OrgTeamsService } from '../services/org_teams.service.js';
 import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
 
 const _dt_repo_tc = new DaemonTeamRepository();
@@ -532,6 +533,7 @@ export class TeamsController extends BaseController {
         log.debug('install', { user_id: req.auth?.user?.id, team_id: req.body?.team_id });
         const body = this.parse_body(TeamsInstallInput, req);
         const auth = this.auth_from(req);
+        await OrgTeamsService.assert_can_install(auth, body.team_id, body.realm_id);
         const result = await DispatchService.install_via_queue({
             team_id: body.team_id,
             daemon_ids: body.daemon_ids,

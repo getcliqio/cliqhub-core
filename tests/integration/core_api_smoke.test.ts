@@ -68,7 +68,7 @@ function mock_hub_user(): void {
     stub_pat_auth(repos, ALICE, { once: false });
     repos.user_repo.find_profile_by_id.mockResolvedValue(ALICE);
     repos.scope_repo.find_owned_by_user.mockResolvedValue([
-        { id: hub_legacy_uuid(1), slug: 'cliq', display_name: 'Cliq', visibility: 'public', scope_type: 'user', owner_id: hub_legacy_uuid(1), org_id: null },
+        { id: hub_legacy_uuid(1), slug: 'cliq', display_name: 'Cliq', owner_id: hub_legacy_uuid(1), org_id: null },
     ]);
     repos.org_member_repo.find_orgs_by_user.mockResolvedValue([]);
     repos.scope_repo.find_member_scopes.mockResolvedValue([]);

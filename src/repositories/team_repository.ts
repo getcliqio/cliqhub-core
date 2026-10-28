@@ -83,13 +83,13 @@ export class TeamRepository extends BaseRepository<Team> {
     }
 
     async create(
-        name: string, scope: string | null, scope_type: string | null,
+        name: string, scope: string | null,
         description: string, author_id: string,
         license: string, visibility: string, transaction?: Transaction,
         listed: number = 1,
     ): Promise<string> {
         const team = await Team.create(
-            { name, scope, scope_type, description, author_id, license, visibility, listed },
+            { name, scope, description, author_id, license, visibility, listed },
             { transaction },
         );
         return team.id;

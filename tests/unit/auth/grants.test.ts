@@ -12,7 +12,6 @@ describe('grants', () => {
         const grant = default_grant_for_subject({
             role: 'admin',
             org_ids: ['1'],
-            scope_slugs: ['acme'],
             realm_ids: ['r1'],
         });
         expect(grant.domains.orgs).toBe('*');
@@ -26,7 +25,6 @@ describe('grants', () => {
         const grant = default_grant_for_subject({
             role: 'user',
             org_ids: ['42'],
-            scope_slugs: ['acme'],
             realm_ids: ['realm-1'],
         });
         expect(grant.domains.orgs).toEqual(['42']);
@@ -56,7 +54,6 @@ describe('grants', () => {
         const fallback = default_grant_for_subject({
             role: 'user',
             org_ids: ['1', '2'],
-            scope_slugs: ['a'],
             realm_ids: [],
         });
         const grant = normalize_grant({ org_ids: ['1'], access: 'full' }, fallback);
@@ -69,7 +66,6 @@ describe('grants', () => {
         const fallback = default_grant_for_subject({
             role: 'user',
             org_ids: ['1'],
-            scope_slugs: ['a'],
             realm_ids: ['r'],
         });
         const grant = normalize_grant(
@@ -87,7 +83,6 @@ describe('grants', () => {
         const subject = {
             role: 'user' as const,
             org_ids: ['7'],
-            scope_slugs: ['only'],
             realm_ids: ['r'],
         };
         const clamped = clamp_grant_to_subject(

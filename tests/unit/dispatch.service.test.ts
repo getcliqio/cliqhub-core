@@ -84,8 +84,6 @@ vi.mock('../../src/services/run.service.js', () => ({
 
 vi.mock('../../src/services/access.service.js', () => ({
     AccessService: {
-        assert_scope_access: vi.fn(),
-        assert_can_run_team_on_daemon: vi.fn(async () => undefined),
         assert_can_observe_daemon: vi.fn(async () => undefined),
         list_daemon_ids_for_user: vi.fn(async () => ['daemon-1']),
         assert_realm_access: vi.fn(async () => undefined),
@@ -199,7 +197,6 @@ function make_dispatch_input(overrides: Record<string, unknown> = {}) {
         team_id: 'team-1',
         daemon_id: 'daemon-1',
         user_id: 'user-1',
-        scope_ids: ['scope-1'],
         run_context: {
             inputs: {},
             id: undefined,
@@ -604,7 +601,6 @@ describe('DispatchService.install_team', () => {
                 team_id: '999',
                 user_id: 'user-1',
                 daemon_ids: ['daemon-1'],
-                scope_ids: ['scope-1'],
             }),
         ).rejects.toThrow(/not found/i);
     });
@@ -614,7 +610,6 @@ describe('DispatchService.install_team', () => {
             team_id: hub_legacy_uuid(1), // catalog team UUID
             user_id: 'user-1',
             daemon_ids: ['daemon-1'],
-            scope_ids: ['scope-1'],
         });
 
         expect(result.team_id).toBe('team-1');
@@ -636,7 +631,6 @@ describe('DispatchService.install_team', () => {
             team_id: hub_legacy_uuid(1),
             user_id: 'user-1',
             daemon_ids: ['daemon-1'],
-            scope_ids: ['scope-1'],
             force: true,
         });
 
@@ -694,7 +688,6 @@ describe('DispatchService.dispatch_claimed_run', () => {
     it('resolves scope/slug to the claiming daemon team row', async () => {
         const updated = await DispatchService.dispatch_claimed_run(claimed_item as any, {
             user_id: 'user-1',
-            scope_ids: ['scope-cliq'],
         });
 
         expect(DaemonTeam.findOne).toHaveBeenCalled();
@@ -722,7 +715,7 @@ describe('DispatchService.dispatch_claimed_run', () => {
                     workspace_path: '/Users/me/proj',
                 },
             } as any,
-            { user_id: 'user-1', scope_ids: ['scope-cliq'] },
+            { user_id: 'user-1' },
         );
 
         expect(Workspace.create).not.toHaveBeenCalled();

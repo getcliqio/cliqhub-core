@@ -15,8 +15,6 @@ export interface AuthScope {
     id: string;
     slug: string;
     display_name: string | null;
-    visibility: 'public' | 'private';
-    scope_type: 'user' | 'org';
     owner_id: string;
     org_id: string | null;
 }
@@ -26,6 +24,10 @@ export interface AuthContext {
     org_slugs: string[];
     org_ids: string[];
     scopes: AuthScope[];
+    /** Scopes the user is a member of (PLAN-team-visibility §3.1). */
+    member_scopes: AuthScope[];
+    /** Orgs where the user's role grants `teams.publish`. */
+    publish_orgs: string[];
     auth_via?: 'jwt' | 'pat' | 'daemon_token';
     token_permissions?: {
         domains?: {
@@ -40,7 +42,7 @@ export interface AuthContext {
 
 const ALICE_SCOPE: AuthScope = {
     id: hub_legacy_uuid(1), slug: 'alice', display_name: null,
-    visibility: 'public', scope_type: 'user', owner_id: hub_legacy_uuid(1), org_id: null,
+    owner_id: hub_legacy_uuid(1), org_id: null,
 };
 
 export const ALICE: AuthContext = {
@@ -53,11 +55,13 @@ export const ALICE: AuthContext = {
     org_slugs: [],
     org_ids: [],
     scopes: [ALICE_SCOPE],
+    member_scopes: [ALICE_SCOPE],
+    publish_orgs: [],
 };
 
 const BOB_SCOPE: AuthScope = {
     id: hub_legacy_uuid(2), slug: 'bob', display_name: null,
-    visibility: 'public', scope_type: 'user', owner_id: hub_legacy_uuid(2), org_id: null,
+    owner_id: hub_legacy_uuid(2), org_id: null,
 };
 
 export const BOB: AuthContext = {
@@ -70,6 +74,8 @@ export const BOB: AuthContext = {
     org_slugs: [],
     org_ids: [],
     scopes: [BOB_SCOPE],
+    member_scopes: [BOB_SCOPE],
+    publish_orgs: [],
 };
 
 export const SITE_ADMIN: AuthContext = {
@@ -83,13 +89,15 @@ export const SITE_ADMIN: AuthContext = {
     org_ids: [],
     scopes: [{
         id: hub_legacy_uuid(99), slug: 'admin', display_name: null,
-        visibility: 'public', scope_type: 'user', owner_id: hub_legacy_uuid(99), org_id: null,
+        owner_id: hub_legacy_uuid(99), org_id: null,
     }],
+    member_scopes: [],
+    publish_orgs: [],
 };
 
 const ACME_SCOPE: AuthScope = {
     id: hub_legacy_uuid(10), slug: 'acme', display_name: 'Acme',
-    visibility: 'public', scope_type: 'org', owner_id: hub_legacy_uuid(3), org_id: hub_legacy_uuid(1),
+    owner_id: hub_legacy_uuid(3), org_id: hub_legacy_uuid(1),
 };
 
 export const ORG_ADMIN: AuthContext = {
@@ -102,9 +110,11 @@ export const ORG_ADMIN: AuthContext = {
     org_slugs: ['acme'],
     org_ids: [hub_legacy_uuid(1)],
     scopes: [
-        { id: hub_legacy_uuid(3), slug: 'orgadmin', display_name: null, visibility: 'public', scope_type: 'user', owner_id: hub_legacy_uuid(3), org_id: null },
+        { id: hub_legacy_uuid(3), slug: 'orgadmin', display_name: null, owner_id: hub_legacy_uuid(3), org_id: null },
         ACME_SCOPE,
     ],
+    member_scopes: [ACME_SCOPE],
+    publish_orgs: [hub_legacy_uuid(1)],
 };
 
 export const UNAUTHED: AuthContext = {
@@ -112,4 +122,6 @@ export const UNAUTHED: AuthContext = {
     org_slugs: [],
     org_ids: [],
     scopes: [],
+    member_scopes: [],
+    publish_orgs: [],
 };

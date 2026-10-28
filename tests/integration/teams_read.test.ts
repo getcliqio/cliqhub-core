@@ -9,7 +9,7 @@ import { create_test_app } from '../helpers/test_container.js';
 const { app, repos } = create_test_app();
 
 const PUBLIC_TEAM = {
-    id: hub_legacy_uuid(1), name: 'my-team', scope: 'alice', scope_type: 'user',
+    id: hub_legacy_uuid(1), name: 'my-team', scope: 'alice',
     description: 'A test team', author_id: hub_legacy_uuid(1),
     license: 'MIT', visibility: 'public', listed: 1,
     created_at: '2025-01-01', updated_at: '2025-06-01', install_count: 10,

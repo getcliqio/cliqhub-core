@@ -1,7 +1,7 @@
 /**
- * An org's team library (see OrgTeamsService).
+ * An org's Teams list (see OrgTeamsService).
  *
- *   POST /v1/orgs/get_teams    — teams in the org, with the realms that have each
+ *   POST /v1/orgs/get_teams    — the org's Teams list (own, @cliq, added), with the realms that have each
  *   POST /v1/orgs/add_team     — add a team to the org
  *   POST /v1/orgs/remove_team  — remove a team no realm of the org has
  */
@@ -28,7 +28,7 @@ export class OrgTeamsController extends BaseController {
     async get_teams(req: Request, res: Response): Promise<void> {
         this.auth(req);
         const body = this.parse_body(OrgsGetTeamsInput, req);
-        this.ok(res, { items: await this._svc.list(body.org_id) });
+        this.ok(res, { items: await this._svc.list(req.auth!, body.org_id) });
     }
 
     /** @param res - `{ ok: true, data: { team_id, scope, name, added } }` */

@@ -4,9 +4,9 @@ import { BaseModel } from './base_model.js';
 /**
  * Scope membership join table — grants a user access to a scope.
  *
- * Composite PK of `(scope_id, user_id)`. No surrogate key. Membership gives
- * the user read/write access to teams published under that scope, subject to
- * the scope's visibility setting.
+ * Composite PK of `(scope_id, user_id)`. No surrogate key. Membership lets the
+ * user read the scope's private teams (PLAN-team-visibility §3.1); publishing
+ * comes from `teams.publish` in the scope's org, not from membership.
  */
 export class ScopeMember extends BaseModel {
     declare scope_id: string;

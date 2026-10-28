@@ -135,7 +135,7 @@ describe.skipIf(!has_postgres)('password links (users/new, reset_password, chang
             expect((await NotificationRule.findAll({ where: { org_id: org.id }, raw: true })).map((r) => r.system_key)).toEqual(['org.default.run.failed']);
             // Its scope, as signup makes it: named after the username, linked to the account org, its default.
             const scope = (await Scope.findOne({ where: { slug: username }, raw: true }))!;
-            expect(scope).toMatchObject({ owner_id: user.id, org_id: org.id, scope_type: 'org', visibility: 'public' });
+            expect(scope).toMatchObject({ owner_id: user.id, org_id: org.id });
             expect(await ScopeMember.count({ where: { scope_id: scope.id, user_id: user.id } })).toBe(1);
             expect((await Org.findByPk(org.id, { raw: true }))!.default_scope_id).toBe(scope.id);
 

@@ -95,7 +95,6 @@ export interface DispatchRunInput {
     notify_channels?: string[];
     org_ids?: string[];
     user_id: string;
-    scope_ids?: string[];
     /**
      * Realm the caller intends to run against. Snapshotted on the
      * team_runs row so the run stays visible to that realm even if the
@@ -146,7 +145,6 @@ export interface InstallTeamInput {
     daemon_ids?: string[];
     realm_id?: string;
     user_id: string;
-    scope_ids?: string[];
     org_ids?: string[];
     /** Per-agent settings to push to daemons during install. */
     agent_settings?: Record<string, Record<string, string>>;
@@ -195,10 +193,6 @@ export class DispatchService {
 
         const team = await _dt_repo.find_by_id(input.team_id);
         const manifest_yaml = input.manifest_yaml ?? team?.manifest;
-
-        if (team) {
-            AccessService.assert_scope_access(input.scope_ids ?? [], team.scope_id);
-        }
 
         // ── Validate required inputs against the registry team's declared inputs ──
         // Prevents runs from being dispatched only to stall immediately on
@@ -599,8 +593,6 @@ export class DispatchService {
         const team = await _dt_repo.find_by_id(input.team_id);
         if (!team) throw ApiError.not_found(`Team '${input.team_id}' not found`);
 
-        AccessService.assert_scope_access(input.scope_ids ?? [], team.scope_id);
-
         const scope = await _scope_repo.find_by_id(team.scope_id);
         if (!scope) throw ApiError.not_found(`Scope for team '${input.team_id}' not found`);
 
@@ -678,7 +670,6 @@ export class DispatchService {
         payload?: Record<string, unknown>;
         priority?: number;
         user_id: string;
-        scope_ids?: string[];
         org_ids?: string[];
     }): Promise<{ item: Queue_item_dto }> {
         if (!input.user_id) throw ApiError.forbidden('Not authenticated');
@@ -747,7 +738,6 @@ export class DispatchService {
                 ...(input.version ? { version: input.version } : {}),
             },
             user_id: input.user_id,
-            scope_ids: input.scope_ids,
             org_ids: input.org_ids,
         });
 
@@ -853,7 +843,7 @@ export class DispatchService {
     private static async _enqueue_install(
         item: Queue_item_dto,
         payload: Record<string, unknown>,
-        input: { user_id: string; scope_ids?: string[]; org_ids?: string[] },
+        input: { user_id: string; org_ids?: string[] },
     ): Promise<{ item: Queue_item_dto }> {
         const team_id = typeof payload.team_id === 'string' ? payload.team_id.trim() : '';
         if (!team_id) {
@@ -877,7 +867,6 @@ export class DispatchService {
             const install = await DispatchService.install_team({
                 team_id,
                 user_id: input.user_id,
-                scope_ids: input.scope_ids,
                 org_ids: input.org_ids,
                 agent_settings,
                 ...(force ? { force: true } : {}),
@@ -1000,7 +989,6 @@ export class DispatchService {
         item: Queue_item_dto,
         input: {
             user_id: string;
-            scope_ids?: string[];
             org_ids?: string[];
         },
     ): Promise<{ item: Queue_item_dto }> {
@@ -1147,7 +1135,6 @@ export class DispatchService {
         item: Queue_item_dto,
         input: {
             user_id: string;
-            scope_ids?: string[];
             org_ids?: string[];
         },
     ): Promise<Queue_item_dto> {
@@ -1221,7 +1208,6 @@ export class DispatchService {
             execution_type: payload.execution_type === 'docker' ? 'docker' : 'local',
             notify_channels: is_string_list(payload.notify_channels) ? payload.notify_channels : undefined,
             user_id: input.user_id,
-            scope_ids: input.scope_ids,
             org_ids: input.org_ids,
             realm_id: item.realm_id,
             queue_item_id: item.id,

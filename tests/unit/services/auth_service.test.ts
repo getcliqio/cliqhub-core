@@ -32,7 +32,6 @@ function make_user_repo() {
 
 function make_scope_repo() {
     return {
-        find_owned_by_user: vi.fn().mockResolvedValue([]),
         find_by_org_ids: vi.fn().mockResolvedValue([]),
         find_member_scopes: vi.fn().mockResolvedValue([]),
         find_default_scopes: vi.fn().mockResolvedValue([]),
@@ -99,17 +98,21 @@ describe('AuthService', () => {
         it('creates cliq_tok_ with session: name and default grant', async () => {
             user_repo.find_profile_by_id.mockResolvedValueOnce(ALICE.user);
             org_member_repo.find_orgs_by_user.mockResolvedValueOnce([
-                { org_id: hub_legacy_uuid(10), slug: 'alice', role: 'admin' },
+                { org_id: hub_legacy_uuid(10), slug: 'alice', role: 'admin', org_role: { slug: 'owner', is_system: true, permissions: [] } },
+                { org_id: hub_legacy_uuid(11), slug: 'beta', role: 'member', org_role: { slug: 'member', is_system: false, permissions: ['teams.catalog.view'] } },
             ]);
-            scope_repo.find_owned_by_user.mockResolvedValueOnce([
-                { id: hub_legacy_uuid(1), slug: 'alice' },
-            ]);
+            // Session scopes are the scopes the user can publish to (PLAN-team-visibility §3.3): not beta's.
+            scope_repo.find_by_org_ids.mockImplementationOnce(async (ids: string[]) => {
+                expect(ids).toEqual([hub_legacy_uuid(10)]);
+                return [{ id: hub_legacy_uuid(1), slug: 'alice' }];
+            });
 
             const result = await service.mint_session_pat(hub_legacy_uuid(1));
 
             expect(result.token).toMatch(/^cliq_tok_/);
             expect(result.scopes).toContain('alice');
-            expect(result.org_ids).toEqual([hub_legacy_uuid(10)]);
+            expect(result.scopes).toEqual(['alice']);
+            expect(result.org_ids).toEqual([hub_legacy_uuid(10), hub_legacy_uuid(11)]);
             expect(token_repo.create).toHaveBeenCalledWith(
                 expect.objectContaining({
                     type: 'user',

@@ -632,7 +632,7 @@ describe('OrgsService — new_scope', () => {
         const result = await service.new_scope(ORG_ADMIN, { org_id: hub_legacy_uuid(1), slug: 'acme-dev' });
 
         expect(result).toEqual({ id: hub_legacy_uuid(10), slug: 'acme-dev' });
-        expect(scope_repo.create).toHaveBeenCalledWith('acme-dev', 'acme-dev', hub_legacy_uuid(3), 'public', 'org', undefined, hub_legacy_uuid(1));
+        expect(scope_repo.create).toHaveBeenCalledWith('acme-dev', 'acme-dev', hub_legacy_uuid(3), hub_legacy_uuid(1));
         expect(scope_member_repo.create_on_conflict_ignore).toHaveBeenCalledTimes(2);
     });
 

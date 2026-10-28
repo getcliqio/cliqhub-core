@@ -89,7 +89,7 @@ const ALICE_USER = {
 };
 
 const PUBLIC_TEAM = {
-    id: hub_legacy_uuid(1), name: 'my-team', scope: 'alice', scope_type: 'user',
+    id: hub_legacy_uuid(1), name: 'my-team', scope: 'alice',
     description: 'test', author_id: hub_legacy_uuid(1),
     license: 'MIT', visibility: 'public', listed: 1,
     created_at: '2025-01-01', updated_at: '2025-06-01', install_count: 10,
@@ -102,9 +102,12 @@ function auth_header(_payload?: { user_id: string; username: string; role: strin
 function mock_auth_jwt(user = ALICE_USER) {
     stub_pat_auth(repos, user);
     repos.scope_repo.find_owned_by_user.mockReset();
-    repos.scope_repo.find_owned_by_user.mockResolvedValueOnce([
-        { id: hub_legacy_uuid(1), slug: user.username, visibility: 'public', scope_type: 'user', owner_id: user.id, org_id: null },
-    ]);
+    const own = { id: hub_legacy_uuid(1), slug: user.username, owner_id: user.id, org_id: null };
+    repos.scope_repo.find_owned_by_user.mockResolvedValueOnce([own]);
+    // The caller's own (org-less) scope: its owner publishes (PLAN-team-visibility §3.3); any other is
+    // an org's scope where the caller holds no role.
+    repos.scope_repo.find_by_slug.mockImplementation(async (slug: string) =>
+        (slug === user.username ? own : { id: 'x', slug, owner_id: null, org_id: hub_legacy_uuid(500) }));
 }
 
 const VALID_PUBLISH_BODY = {
@@ -381,7 +384,7 @@ describe('POST /v1/teams/get (mine=true)', () => {
         mock_auth_jwt();
         repos.team_repo.list_by_scope_list.mockResolvedValueOnce([
             { id: hub_legacy_uuid(1), name: 'my-team', scope: 'alice', description: 'test',
-              author: 'alice', latest_version: '1.0.0', install_count: 5 },
+              author: 'alice', latest_version: '1.0.0', install_count: 5, visibility: 'public' },
         ]);
         repos.tag_repo.find_by_team_ids.mockResolvedValueOnce([{ team_id: hub_legacy_uuid(1), tag: 'ai' }]);
 
@@ -391,20 +394,5 @@ describe('POST /v1/teams/get (mine=true)', () => {
             .send({ mine: true, scope: 'alice' });
         expect(res.status).toBe(200);
         expect(res.body.data.items).toHaveLength(1);
-    });
-
-    it('returns grouped scopes when group_by_scope is true', async () => {
-        mock_auth_jwt();
-        repos.team_repo.list_by_scope_list.mockResolvedValueOnce([
-            { id: hub_legacy_uuid(1), name: 'my-team', scope: 'alice', description: 'test' },
-        ]);
-        repos.tag_repo.find_by_team_ids.mockResolvedValueOnce([]);
-
-        const res = await request(app)
-            .post('/v1/teams/get')
-            .set('Authorization', auth_header())
-            .send({ mine: true, group_by_scope: true });
-        expect(res.status).toBe(200);
-        expect(res.body.data.items).toBeDefined();
     });
 });

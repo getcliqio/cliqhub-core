@@ -282,8 +282,7 @@ describe.skipIf(!has_postgres)('users/delete (live Postgres)', () => {
         const second = await repair_namespace_orphans(sq);
         const ours = (r: typeof first) => JSON.stringify(r).includes(stamp);
         expect(ours(first)).toBe(false);
-        expect(second.user_scopes_removed).toEqual([]);
-        expect(second.org_scopes_removed).toEqual([]);
+        expect(second.scopes_removed).toEqual([]);
         expect(second.org_scopes_created).toEqual([]);
     });
 });

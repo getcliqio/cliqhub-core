@@ -228,7 +228,7 @@ describe('POST /v1/orgs/get_by_id', () => {
             { user_id: hub_legacy_uuid(1), username: 'alice', display_name: 'alice', role: 'admin' },
         ]);
         (Scope.findAll as any).mockResolvedValueOnce([
-            { id: hub_legacy_uuid(10), slug: 'acme', display_name: 'Acme', visibility: 'public', member_count: 1, team_count: 0 },
+            { id: hub_legacy_uuid(10), slug: 'acme', display_name: 'Acme', member_count: 1, team_count: 0 },
         ]);
         const res = await request(app).post('/v1/orgs/get_by_id')
             .set('Authorization', user_auth_header()).send({ org_id: hub_legacy_uuid(1) });

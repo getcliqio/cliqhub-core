@@ -78,12 +78,12 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
         scope_id = randomUUID();
         await Scope.create({
             id: scope_id, slug: scope_slug, display_name: 'Coverage', owner_id: null, org_id: null,
-            visibility: 'public', scope_type: 'platform', is_default: 0, created_at: new Date(),
+            is_default: 0, created_at: new Date(),
         });
 
         const publish = async (name: string, listed: number) => {
             const team = await Team.create({
-                id: randomUUID(), name, scope: scope_slug, scope_type: 'org', description: `${name} team`,
+                id: randomUUID(), name, scope: scope_slug, description: `${name} team`,
                 author_id: user_id, license: 'MIT', visibility: 'public', listed, install_count: 0,
             } as any);
             await TeamVersion.create({
@@ -166,7 +166,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
     it('install by catalog UUID resolves the catalog team (no daemon had it)', async () => {
         mock_enqueue.mockClear();
         const result = await DispatchService.install_team({
-            team_id: beta_id, daemon_ids: [d2], user_id, scope_ids: [scope_id], org_ids: [],
+            team_id: beta_id, daemon_ids: [d2], user_id, org_ids: [],
         });
         expect(result.results).toEqual([expect.objectContaining({ daemon_id: d2, ok: true })]);
         expect(mock_enqueue).toHaveBeenCalledWith(
@@ -179,7 +179,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
     it('install by a daemon_teams id still works (fallback path)', async () => {
         mock_enqueue.mockClear();
         const result = await DispatchService.install_team({
-            team_id: alpha_dt_id, daemon_ids: [d2], user_id, scope_ids: [scope_id], org_ids: [],
+            team_id: alpha_dt_id, daemon_ids: [d2], user_id, org_ids: [],
         });
         expect(result.results[0].ok).toBe(true);
     });

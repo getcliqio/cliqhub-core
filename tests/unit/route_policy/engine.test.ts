@@ -45,7 +45,7 @@ const RECORDS: Record<string, RecordScope> = {
     'channel:ch-acme': { realm_id: null, org_id: 'acme' },
     'channel:ch-mia': { realm_ids: [], owner_user_id: 'mia' },
     'team:t-public': { team: { visibility: 'public', author_id: 'x', scope: 'cliq' } },
-    'team:t-private': { team: { visibility: 'private', author_id: 'mia', scope: null } },
+    'team:t-private': { team: { visibility: 'private', author_id: 'omar', scope: 'acme-labs' } },
 };
 
 const store: AccessStore = {
@@ -61,13 +61,15 @@ const store: AccessStore = {
 type Who = 'anon' | 'sam' | 'sam_daemon' | 'daemon_a1' | 'daemon_b1' | string;
 
 function auth(who: Who): AuthContext | undefined {
-    const base = { org_slugs: [], org_ids: [], scopes: [] } as unknown as AuthContext;
+    const base = { org_slugs: [], org_ids: [], member_scopes: [], publish_orgs: [] } as unknown as AuthContext;
     if (who === 'anon') return undefined;
     if (who === 'sam') return { ...base, user: { id: 'sam', role: 'admin' }, auth_via: 'pat' } as AuthContext;
     if (who === 'sam_daemon') return { ...base, user: { id: 'sam', role: 'admin' }, auth_via: 'daemon_token', realm_id: 'A1' } as AuthContext;
     if (who === 'daemon_a1') return { ...base, user: { id: 'omar', role: 'user' }, auth_via: 'daemon_token', realm_id: 'A1' } as AuthContext;
     if (who === 'daemon_b1') return { ...base, user: { id: 'ben', role: 'user' }, auth_via: 'daemon_token', realm_id: 'B1' } as AuthContext;
-    return { ...base, user: { id: who, role: 'user' }, auth_via: 'pat' } as AuthContext;
+    // Mia is assigned to the acme-labs scope (PLAN-team-visibility §3.1).
+    const member_scopes = who === 'mia' ? [{ slug: 'acme-labs' }] : [];
+    return { ...base, member_scopes, user: { id: who, role: 'user' }, auth_via: 'pat' } as AuthContext;
 }
 
 async function check(key: string, who: Who, body: Record<string, unknown> = {}, pat = true, query_in?: Record<string, unknown>) {
@@ -285,6 +287,7 @@ describe('teams', () => {
     it('public team readable without a token; private hidden', async () => {
         expect(await status('POST /v1/teams/get_by_id', 'anon', { team_id: 't-public' })).toBe(200);
         expect(await status('POST /v1/teams/get_by_id', 'anon', { team_id: 't-private' })).toBe(404);
+        // Its scope's members read it; its author alone (Omar, not assigned) doesn't (PLAN-team-visibility §3.2).
         expect(await status('POST /v1/teams/get_phases', 'mia', { team_id: 't-private' })).toBe(200);
         expect(await status('POST /v1/teams/get_phases', 'omar', { team_id: 't-private' })).toBe(404);
     });

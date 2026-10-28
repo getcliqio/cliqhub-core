@@ -51,7 +51,6 @@ import {
 type Realm_user = {
     user_id: string;
     email: string;
-    scope_ids?: string[];
     org_ids?: string[];
 };
 
@@ -83,7 +82,6 @@ export class RealmController extends BaseController {
         return {
             user_id: req.auth.user.id,
             email: req.auth.user.email ?? '',
-            scope_ids: req.auth.scopes.map(s => s.id),
             org_ids: req.auth.org_ids,
         };
     }
@@ -365,7 +363,6 @@ export class RealmController extends BaseController {
             body.realm_id,
             user.user_id,
             entry,
-            user.scope_ids,
             user.org_ids,
         );
 

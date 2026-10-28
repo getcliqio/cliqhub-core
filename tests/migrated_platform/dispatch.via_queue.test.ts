@@ -50,8 +50,6 @@ describe.skipIf(!has_postgres)('DispatchService install/uninstall via queue (Sli
             display_name: 'slice4-scope',
             owner_id: null,
             org_id: null,
-            visibility: 'public',
-            scope_type: 'platform',
             is_default: 0,
             created_at: new Date(),
         });
@@ -134,7 +132,6 @@ describe.skipIf(!has_postgres)('DispatchService install/uninstall via queue (Sli
             team_id,
             realm_id,
             user_id,
-            scope_ids: [scope_id],
             org_ids: [org_id],
         });
 
@@ -155,7 +152,6 @@ describe.skipIf(!has_postgres)('DispatchService install/uninstall via queue (Sli
             team_id,
             daemon_ids: [d1],
             user_id,
-            scope_ids: [scope_id],
             org_ids: [org_id],
         });
 

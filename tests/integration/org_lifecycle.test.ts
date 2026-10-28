@@ -169,13 +169,13 @@ describe.skipIf(!ready)('org lifecycle and the shared name space (integration)',
         expect(res.body).toMatchObject({ error: `The name ${tag}-held is already taken.`, details: { kind: 'org', personal: false } });
 
         // An org's scope whose org is gone (org_id cleared, as a raw org delete leaves it).
-        await M.Scope.create({ slug: `${tag}-orph`, owner_id: ROOT_ID, scope_type: 'org', org_id: null } as never);
+        await M.Scope.create({ slug: `${tag}-orph`, owner_id: ROOT_ID, org_id: null } as never);
         res = await post({ slug: `${tag}-orph`, ...ROOT_OWNER });
-        expect(res.body).toMatchObject({ error: `The name ${tag}-orph is already taken.`, details: { kind: 'scope', scope_type: 'org', org_slug: null } });
+        expect(res.body).toMatchObject({ error: `The name ${tag}-orph is already taken.`, details: { kind: 'scope', org_slug: null } });
 
-        await M.Scope.create({ slug: `${tag}-sc`, owner_id: ROOT_ID, scope_type: 'user' } as never);
+        await M.Scope.create({ slug: `${tag}-sc`, owner_id: ROOT_ID } as never);
         res = await post({ slug: `${tag}-sc`, ...ROOT_OWNER });
-        expect(res.body).toMatchObject({ error: `The name ${tag}-sc is already taken.`, details: { kind: 'scope', scope_type: 'user', owner_username: 'root919' } });
+        expect(res.body).toMatchObject({ error: `The name ${tag}-sc is already taken.`, details: { kind: 'scope', owner_username: 'root919' } });
 
         // A username alone (its scope and personal org were removed).
         await M.User.create({ username: `${tag}-uonly`, email: `${tag}-uonly@t.io`, password_hash: 'x' } as never);
@@ -243,14 +243,14 @@ describe.skipIf(!ready)('org lifecycle and the shared name space (integration)',
         const { repair_namespace_orphans } = await import('../../src/models/migrations/migrate_namespace_orphans.js');
         const { get_sequelize } = await import('../../src/db/sequelize.js');
         const s = (x: string) => `${tag}-r${x}`;
-        // Orphans: a user scope with no owner, an org scope whose org was deleted.
+        // Orphans: a scope with no org, and a scope whose org was deleted.
         // scopes.owner_id may CASCADE on user delete, so the ownerless scope is made directly.
-        await M.Scope.create({ slug: s('gu'), owner_id: null, scope_type: 'user' } as never);
+        await M.Scope.create({ slug: s('gu'), owner_id: null } as never);
         const gone_org = await M.Org.create({ slug: s('go') } as never);
-        await M.Scope.create({ slug: s('go'), owner_id: ROOT_ID, scope_type: 'org', org_id: gone_org.get('id') } as never);
+        await M.Scope.create({ slug: s('go'), owner_id: ROOT_ID, org_id: gone_org.get('id') } as never);
         await gone_org.destroy();
         // An orphan that still has a team is kept.
-        await M.Scope.create({ slug: s('gt'), owner_id: null, scope_type: 'user' } as never);
+        await M.Scope.create({ slug: s('gt'), owner_id: null } as never);
         await M.Team.create({ name: s('team'), scope: s('gt') } as never);
         // A non-personal org that lost its scope (the old partial create) gets it back.
         const bare = await M.Org.create({ slug: s('bare'), display_name: 'Bare' } as never);
@@ -262,8 +262,8 @@ describe.skipIf(!ready)('org lifecycle and the shared name space (integration)',
         const valid_before = await M.Scope.count({ where: { slug: [person, s('ok')] } });
 
         const first = await repair_namespace_orphans(get_sequelize());
-        expect(first.user_scopes_removed).toContain(s('gu'));
-        expect(first.org_scopes_removed).toContain(s('go'));
+        expect(first.scopes_removed).toContain(s('gu'));
+        expect(first.scopes_removed).toContain(s('go'));
         expect(first.org_scopes_created).toContain(s('bare'));
         expect(first.skipped).toContainEqual({ slug: s('gt'), reason: expect.stringContaining('1 team') });
         expect(await M.Scope.count({ where: { slug: [s('gu'), s('go')] } })).toBe(0);
@@ -277,8 +277,12 @@ describe.skipIf(!ready)('org lifecycle and the shared name space (integration)',
         expect(first.org_scopes_created).not.toContain(person);
 
         const second = await repair_namespace_orphans(get_sequelize());
-        expect(second.user_scopes_removed.filter((x) => x.startsWith(tag))).toEqual([]);
-        expect(second.org_scopes_removed.filter((x) => x.startsWith(tag))).toEqual([]);
+        expect(second.scopes_removed.filter((x) => x.startsWith(tag))).toEqual([]);
         expect(second.org_scopes_created.filter((x) => x.startsWith(tag))).toEqual([]);
+
+        // The kept orphan (it has a team) would otherwise hold back migrations that require every scope
+        // to have an org (migrate_team_visibility).
+        await M.Team.destroy({ where: { name: s('team') } });
+        await M.Scope.destroy({ where: { slug: s('gt') } });
     });
 });

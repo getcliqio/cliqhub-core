@@ -52,7 +52,7 @@ describe.skipIf(!has_postgres)('account scopes', () => {
 	const state = async (a: { user_id: string; username: string; org_id: string }) => {
 		const scope = await Scope.findOne({ where: { slug: a.username }, raw: true });
 		return {
-			scope: scope ? { owner_id: scope.owner_id, org_id: scope.org_id, scope_type: scope.scope_type } : null,
+			scope: scope ? { owner_id: scope.owner_id, org_id: scope.org_id } : null,
 			member: scope ? await ScopeMember.count({ where: { scope_id: scope.id, user_id: a.user_id } }) : 0,
 			is_default: scope ? (await Org.findByPk(a.org_id, { raw: true }))!.default_scope_id === scope.id : false,
 		};
@@ -61,14 +61,14 @@ describe.skipIf(!has_postgres)('account scopes', () => {
 	it('the migration gives a scope-less account its scope and links an unlinked one; once', async () => {
 		const missing = await account();
 		const unlinked = await account();
-		await Scope.create({ slug: unlinked.username, display_name: unlinked.username, owner_id: unlinked.user_id, visibility: 'public', scope_type: 'user' } as never);
+		await Scope.create({ slug: unlinked.username, display_name: unlinked.username, owner_id: unlinked.user_id } as never);
 
 		await Setting.destroy({ where: { key: ACCOUNT_SCOPES_MIGRATION_KEY } });
 		await migrate_account_scopes(Org.sequelize!);
 		await migrate_account_scopes(Org.sequelize!); // once
 
 		for (const a of [missing, unlinked]) {
-			expect(await state(a)).toEqual({ scope: { owner_id: a.user_id, org_id: a.org_id, scope_type: 'org' }, member: 1, is_default: true });
+			expect(await state(a)).toEqual({ scope: { owner_id: a.user_id, org_id: a.org_id }, member: 1, is_default: true });
 		}
 		expect(await Scope.count({ where: { slug: [missing.username, unlinked.username] } })).toBe(2);
 		expect(await Setting.findByPk(ACCOUNT_SCOPES_MIGRATION_KEY)).toBeTruthy();
@@ -77,12 +77,12 @@ describe.skipIf(!has_postgres)('account scopes', () => {
 	it('a scope of that name someone else owns is left alone', async () => {
 		const a = await account();
 		const other = await account();
-		await Scope.create({ slug: a.username, display_name: 'theirs', owner_id: other.user_id, visibility: 'public', scope_type: 'user' } as never);
+		await Scope.create({ slug: a.username, display_name: 'theirs', owner_id: other.user_id } as never);
 
 		await expect(Org.sequelize!.transaction((t) => ensure_account_scope(a.user_id, a.username, a.username, a.org_id, t))).resolves.toBeNull();
 		await Setting.destroy({ where: { key: ACCOUNT_SCOPES_MIGRATION_KEY } });
 		await migrate_account_scopes(Org.sequelize!);
 
-		expect(await state(a)).toEqual({ scope: { owner_id: other.user_id, org_id: null, scope_type: 'user' }, member: 0, is_default: false });
+		expect(await state(a)).toEqual({ scope: { owner_id: other.user_id, org_id: null }, member: 0, is_default: false });
 	});
 });

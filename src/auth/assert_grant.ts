@@ -34,7 +34,6 @@ export function resolve_effective_grant(auth: AuthContext): Token_grant {
     const subject = {
         role: auth.user.role,
         org_ids: auth.org_ids ?? [],
-        scope_slugs: (auth.scopes ?? []).map((s) => s.slug),
         realm_ids: [] as string[],
     };
     const fallback = default_grant_for_subject(subject);

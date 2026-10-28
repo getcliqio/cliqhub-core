@@ -124,7 +124,7 @@ export type OrgRoleInput = z.infer<typeof OrgRoleInput>;
 /**
  * Unified create/update/delete for org-owned scopes — branch on scope_id presence.
  * create: scope_id absent; slug required.
- * update: scope_id required; at least one of display_name / visibility / owner_id required.
+ * update: scope_id required; at least one of display_name / owner_id required.
  * delete: scope_id required; org_id required; no other fields needed.
  */
 export const OrgScopeInput = z.object({
@@ -136,8 +136,8 @@ export const OrgScopeInput = z.object({
         .describe('URL-safe scope slug; required on create, immutable after creation'),
     display_name: z.string().optional()
         .describe('Human-readable scope name'),
-    visibility: z.enum(['public', 'private']).optional()
-        .describe('Whether the scope is publicly browsable'),
+    visibility: z.undefined({ message: 'Scopes no longer have a visibility; each team has its own (PLAN-team-visibility §3.1)' }).optional()
+        .describe('Removed: scopes no longer have a visibility'),
     owner_id: z.string().uuid().optional()
         .describe('Transfer ownership to this user UUID; update only'),
 });
@@ -176,7 +176,7 @@ export const OrgsGetScopesInput = z.object({
         .describe('Substring match on slug or display_name'),
     limit: LimitField,
     offset: OffsetField,
-    sort_by: sort_by_field(['slug', 'visibility', 'team_count', 'created_at'],
+    sort_by: sort_by_field(['slug', 'team_count', 'created_at'],
         'a user\'s scopes by slug; the full catalog newest first'),
     sort_dir: SortDirField,
 });

@@ -414,9 +414,9 @@ function with_record(d: Decision, kind: RecordKind, id: string): Decision {
 async function decide_team(store: AccessStore, req: RequestLike, id: string | undefined): Promise<Decision> {
     if (!id) return req.auth?.user ? allow({}, 'team id missing; handler validates') : deny(401, 'no_token');
     const scope_ = await store.record('team', id, req);
-    const auth = req.auth ?? ({ scopes: [], org_ids: [], org_slugs: [] } as unknown as AuthContext);
+    const auth = req.auth ?? ({ member_scopes: [], publish_orgs: [], org_ids: [], org_slugs: [] } as unknown as AuthContext);
     if (!scope_?.team) return deny(404, 'not_found_or_hidden', { record: { kind: 'team', id } });
-    if (is_site_admin(auth) || can_view_team({ ...auth, scopes: auth.scopes ?? [] }, scope_.team)) {
+    if (is_site_admin(auth) || can_view_team({ ...auth, member_scopes: auth.member_scopes ?? [] }, scope_.team)) {
         return allow({ record: { kind: 'team', id }, level: 'view' });
     }
     return deny(404, 'not_found_or_hidden', { record: { kind: 'team', id } });

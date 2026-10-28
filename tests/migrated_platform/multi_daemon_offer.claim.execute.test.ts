@@ -181,7 +181,6 @@ describe.skipIf(!has_postgres)('multi-daemon offer + claim + execute (Slice 3)',
             realm_id,
             kind: 'run',
             user_id,
-            scope_ids: [scope_id],
             payload: {
                 workspace_id,
                 team_id,

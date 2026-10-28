@@ -11,8 +11,7 @@ const set_default_schema = z.object({ slug: z.string() });
 const add_schema = z.object({
     slug: z.string(),
     name: z.string().optional(),
-    org_id: z.string().optional(),
-    scope_type: z.string().optional(),
+    org_id: z.string().uuid().describe('The org the scope belongs to (required: every scope is an org\'s)'),
 });
 
 const remove_schema = z.object({ slug: z.string() });
@@ -55,7 +54,7 @@ export class ScopeController {
         try {
             const data = add_schema.parse(req.body);
             log.debug('add', { slug: data.slug });
-            const scope = await ScopeService.add(data.slug, data.name, data.org_id, data.scope_type);
+            const scope = await ScopeService.add(data.slug, data.name, data.org_id);
             log.info('scope_added', { slug: data.slug });
             res.json({ ok: true, scope });
         } catch (err) { next(err); }

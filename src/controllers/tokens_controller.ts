@@ -57,7 +57,6 @@ export class TokensController extends BaseController {
     private async _subject_for(req: Request): Promise<Grant_subject> {
         const user = this._require_auth(req);
         const org_ids = req.auth.org_ids ?? [];
-        const scope_slugs = (req.auth.scopes ?? []).map((s) => s.slug);
         let realm_ids: string[] = [];
         try {
             const { realms } = await RealmService.list_for_user(String(user.id));
@@ -69,7 +68,6 @@ export class TokensController extends BaseController {
         return {
             role: user.role,
             org_ids,
-            scope_slugs,
             realm_ids,
         };
     }

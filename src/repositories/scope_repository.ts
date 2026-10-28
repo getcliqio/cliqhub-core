@@ -2,7 +2,7 @@ import { Scope, ScopeMember, User } from '../models/index.js';
 import { Op, literal, type Transaction, type WhereOptions } from 'sequelize';
 import { BaseRepository } from './base_repository.js';
 
-const SCOPE_ATTRS = ['id', 'slug', 'display_name', 'visibility', 'scope_type', 'owner_id', 'org_id'] as const;
+const SCOPE_ATTRS = ['id', 'slug', 'display_name', 'owner_id', 'org_id'] as const;
 
 export class ScopeRepository extends BaseRepository<Scope> {
     protected readonly model = Scope;
@@ -15,7 +15,7 @@ export class ScopeRepository extends BaseRepository<Scope> {
         return Scope.findAll({
             where,
             attributes: [
-                'id', 'slug', 'display_name', 'owner_id', 'org_id', 'visibility', 'scope_type', 'created_at',
+                'id', 'slug', 'display_name', 'owner_id', 'org_id', 'created_at',
                 [literal('(SELECT count(*) FROM teams t WHERE t.scope = "Scope"."slug")'), 'team_count'],
                 [literal('(SELECT o.slug FROM orgs o WHERE o.id = "Scope"."org_id")'), 'org_slug'],
             ],
@@ -27,14 +27,6 @@ export class ScopeRepository extends BaseRepository<Scope> {
             nest: true,
         });
     }
-    async find_owned_by_user(user_id: string) {
-        return Scope.findAll({
-            where: { owner_id: user_id, scope_type: 'user' },
-            attributes: [...SCOPE_ATTRS],
-            raw: true,
-        });
-    }
-
     async find_by_org_ids(org_ids: string[]) {
         if (org_ids.length === 0) return [];
         return Scope.findAll({
@@ -53,13 +45,13 @@ export class ScopeRepository extends BaseRepository<Scope> {
         if (members.length === 0) return [];
         const scope_ids = members.map(m => m.scope_id);
         return Scope.findAll({
-            where: { id: { [Op.in]: scope_ids }, scope_type: 'org' },
+            where: { id: { [Op.in]: scope_ids } },
             attributes: [...SCOPE_ATTRS],
             raw: true,
         });
     }
 
-    /** Return all system-default scopes (every authenticated user can access these). */
+    /** The default scopes (`@cliq`): their public teams are on every org's Teams list (PLAN-team-visibility §3.6). */
     async find_default_scopes() {
         return Scope.findAll({
             where: { is_default: 1 },
@@ -68,9 +60,9 @@ export class ScopeRepository extends BaseRepository<Scope> {
         });
     }
 
-    /** The scope holding `slug` (with type and owners, for namespace conflict messages). */
+    /** The scope holding `slug` (with its org and owner, for publishing and namespace conflict messages). */
     async find_by_slug(slug: string) {
-        return Scope.findOne({ where: { slug }, attributes: ['id', 'slug', 'scope_type', 'org_id', 'owner_id'], raw: true });
+        return Scope.findOne({ where: { slug }, attributes: ['id', 'slug', 'org_id', 'owner_id'], raw: true });
     }
 
     async find_by_slug_with_transaction(slug: string, transaction: Transaction) {
@@ -81,15 +73,11 @@ export class ScopeRepository extends BaseRepository<Scope> {
         return Scope.destroy({ where: { id } });
     }
 
+    /** Create a scope of `org_id` (every scope belongs to an org, PLAN-team-visibility §3.1). */
     async create(
-        slug: string, display_name: string, owner_id: string,
-        visibility: string, scope_type: string, transaction?: Transaction,
-        org_id?: string,
+        slug: string, display_name: string, owner_id: string, org_id: string, transaction?: Transaction,
     ): Promise<string> {
-        const scope = await Scope.create(
-            { slug, display_name, owner_id, visibility, scope_type, ...(org_id != null ? { org_id } : {}) },
-            { transaction },
-        );
+        const scope = await Scope.create({ slug, display_name, owner_id, org_id }, { transaction });
         return scope.id;
     }
 }

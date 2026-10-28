@@ -7,6 +7,7 @@ import { get_logger } from '../../lib/log.js';
 import { QueryTypes, type Sequelize } from 'sequelize';
 import yaml from 'js-yaml';
 import { SemVer } from '../../lib/semver.js';
+import { migrate_team_visibility } from './migrate_team_visibility.js';
 
 const _mig_log = get_logger('migrations');
 
@@ -36,7 +37,6 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."daemon_config" ADD PRIMARY KEY ("daemon_id", "key")`);
 
     await run(`ALTER TABLE cliq."scopes" ADD COLUMN IF NOT EXISTS "org_id" TEXT`);
-    await run(`ALTER TABLE cliq."scopes" ADD COLUMN IF NOT EXISTS "scope_type" TEXT`);
 
     await run(`DROP TABLE IF EXISTS cliq."bundles"`);
 
@@ -1175,20 +1175,10 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
 
     // Seed the platform scope into the registry scopes table.
     await run(`
-        INSERT INTO cliq."scopes" ("id", "slug", "display_name", "owner_id", "visibility", "scope_type", "is_default", "created_at")
+        INSERT INTO cliq."scopes" ("id", "slug", "display_name", "owner_id", "is_default", "created_at")
         VALUES
-            (gen_random_uuid(), 'cliq', 'Cliq', NULL, 'public', 'platform', 1, NOW())
+            (gen_random_uuid(), 'cliq', 'Cliq', NULL, 1, NOW())
         ON CONFLICT ("slug") DO UPDATE SET "is_default" = EXCLUDED."is_default"
-    `);
-
-    // 'measureone' is no longer a platform scope; free the name unless something already lives in it.
-    await run(`
-        DELETE FROM cliq."scopes" s
-        WHERE s."slug" = 'measureone' AND s."scope_type" = 'platform'
-          AND s."org_id" IS NULL AND s."owner_id" IS NULL
-          AND NOT EXISTS (SELECT 1 FROM cliq."teams" t WHERE t."scope" = s."slug")
-          AND NOT EXISTS (SELECT 1 FROM cliq."scope_members" sm WHERE sm."scope_id" = s."id")
-          AND NOT EXISTS (SELECT 1 FROM cliq."daemon_teams" dt WHERE dt."scope_id"::text = s."id"::text)
     `);
 
     // Migrate daemon_teams.scope_id from old cliq.scopes fixed UUIDs to registry scope UUIDs.
@@ -1309,6 +1299,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_run_started_by(sq);
     await migrate_person_settings_seed(sq);
     await migrate_hugs(sq);
+    await migrate_team_visibility(sq);
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */
@@ -1900,8 +1891,8 @@ export async function migrate_account_scopes(sq: Sequelize): Promise<void> {
             let scope_id: string;
             if (!found) {
                 const [row] = await sq.query(
-                    `INSERT INTO cliq."scopes" ("id", "slug", "display_name", "owner_id", "org_id", "visibility", "scope_type", "created_at", "is_default")
-                     VALUES (gen_random_uuid(), :slug, :display_name, :user_id, :org_id, 'public', 'org', NOW(), 0) RETURNING "id"`,
+                    `INSERT INTO cliq."scopes" ("id", "slug", "display_name", "owner_id", "org_id", "created_at", "is_default")
+                     VALUES (gen_random_uuid(), :slug, :display_name, :user_id, :org_id, NOW(), 0) RETURNING "id"`,
                     { replacements: { slug: a.slug, display_name: a.display_name, user_id: a.user_id, org_id: a.org_id }, type: QueryTypes.SELECT },
                 ) as Array<{ id: string }>;
                 scope_id = row.id;
@@ -1912,7 +1903,7 @@ export async function migrate_account_scopes(sq: Sequelize): Promise<void> {
             } else {
                 scope_id = found.id;
                 if (String(found.org_id) !== String(a.org_id)) {
-                    await sq.query(`UPDATE cliq."scopes" SET "org_id" = :org_id, "scope_type" = 'org' WHERE "id" = :scope_id`,
+                    await sq.query(`UPDATE cliq."scopes" SET "org_id" = :org_id WHERE "id" = :scope_id`,
                         { replacements: { org_id: a.org_id, scope_id } });
                     linked++;
                 }

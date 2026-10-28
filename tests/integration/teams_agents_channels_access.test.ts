@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { postgres_reachable } from '../migrated_platform/helpers/control_plane_store.js';
 import { open_live_hub_app, close_live_hub_app } from '../migrated_platform/helpers/live_hub_app.js';
 import { seed_authz, type Seed } from '../helpers/authz_seed.js';
-import { Team } from '../../src/models/index.js';
+import { Org, Scope, Team } from '../../src/models/index.js';
 
 const has_postgres = await postgres_reachable();
 
@@ -39,13 +39,25 @@ describe.skipIf(!has_postgres)('teams, agents and channels access (Core API 5)',
     }, 300_000);
 
     describe('S14 — private team workflow and versions', () => {
-        it('get_versions / get_phases of a private team: author yes; anonymous and others 404', async () => {
-            const name = `azpriv${s.stamp}`;
-            expect((await post('/v1/teams/get_versions', null, { name })).status).toBe(404);
-            expect((await post('/v1/teams/get_versions', s.token.ben, { name })).status).toBe(404);
-            expect((await post('/v1/teams/get_versions', s.token.mia, { name })).status).toBe(200);
-            expect((await post('/v1/teams/get_phases', null, { team_id: s.team_private })).status).toBe(404);
-            expect((await post('/v1/teams/get_phases', s.token.ben, { team_id: s.team_private })).status).toBe(404);
+        it('get_versions / get_phases of a private team: its scope\'s members yes; anonymous, others and the author alone 404', async () => {
+            // Acme's scope: Olivia owns the org, so she is a member of its scopes; Omar is an
+            // operator there, not assigned to the scope; Mia wrote the team (PLAN-team-visibility §3.2).
+            const org = await Org.findByPk(s.acme, { attributes: ['default_scope_id'], raw: true }) as { default_scope_id: string } | null;
+            const scope = (await Scope.findByPk(org!.default_scope_id, { attributes: ['slug'], raw: true }))!.slug as string;
+            const id = randomUUID();
+            const name = `azprivs${s.stamp}`;
+            await Team.create({ id, name, scope, visibility: 'private', listed: 0, author_id: s.user.mia } as never);
+            try {
+                expect((await post('/v1/teams/get_versions', null, { name, scope })).status).toBe(404);
+                expect((await post('/v1/teams/get_versions', s.token.ben, { name, scope })).status).toBe(404);
+                expect((await post('/v1/teams/get_versions', s.token.omar, { name, scope })).status).toBe(404);
+                expect((await post('/v1/teams/get_versions', s.token.mia, { name, scope })).status).toBe(404);
+                expect((await post('/v1/teams/get_versions', s.token.olivia, { name, scope })).status).toBe(200);
+                expect((await post('/v1/teams/get_phases', null, { team_id: id })).status).toBe(404);
+                expect((await post('/v1/teams/get_phases', s.token.ben, { team_id: id })).status).toBe(404);
+            } finally {
+                await Team.destroy({ where: { id } });
+            }
         });
 
         it('get_by_id without signing in: listed public teams only (decision 6)', async () => {

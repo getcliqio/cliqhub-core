@@ -8,16 +8,13 @@
  * holding the name ("A scope with that slug already exists").
  *
  * This repair, all in one transaction and idempotent:
- *   1. deletes orphaned scopes that hold a name for nobody:
- *        - `user` scopes whose user no longer exists (and that belong to no org),
- *        - `org` scopes whose org no longer exists;
- *      never one that still has teams (those are reported in `skipped`), never a
- *      reserved or default scope, and never a `platform` scope;
+ *   1. deletes orphaned scopes that hold a name for nobody: every scope belongs to
+ *      an org (PLAN-team-visibility §3.1), so a scope with no org, or whose org no
+ *      longer exists, is an orphan; never one that still has teams (those are
+ *      reported in `skipped`), never a reserved or default scope;
  *   2. gives every non-personal org that has no scope its scope back
  *      (slug = org slug, owned by an org owner/admin), when that name is free.
- *      Personal orgs (a user has the same name) are left as they are: users
- *      created by an admin legitimately have a user scope and a personal org
- *      without an org scope.
+ *      Personal orgs (a user has the same name) are left as they are.
  *
  * Nothing else is touched. The result lists every slug changed or skipped.
  */
@@ -30,43 +27,37 @@ const log = get_logger('migrate_namespace_orphans');
 
 /** What the repair did (slugs), and what it left alone and why. */
 export interface RepairNamespaceResult {
-    user_scopes_removed: string[];
-    org_scopes_removed: string[];
+    scopes_removed: string[];
     org_scopes_created: string[];
     skipped: Array<{ slug: string; reason: string }>;
 }
 
 /** Runs the repair described in the module header. Safe to run on every boot. */
 export async function repair_namespace_orphans(sequelize: Sequelize): Promise<RepairNamespaceResult> {
-    const result: RepairNamespaceResult = { user_scopes_removed: [], org_scopes_removed: [], org_scopes_created: [], skipped: [] };
+    const result: RepairNamespaceResult = { scopes_removed: [], org_scopes_created: [], skipped: [] };
     const reserved = [...RESERVED_SLUGS];
 
     await sequelize.transaction(async (transaction) => {
         // 1. Orphaned scopes.
-        const orphans = await sequelize.query<{ id: string; slug: string; scope_type: string; teams: number }>(`
-            SELECT s.id, s.slug, s.scope_type,
+        const orphans = await sequelize.query<{ id: string; slug: string; teams: number }>(`
+            SELECT s.id, s.slug,
                    (SELECT count(*)::int FROM cliq.teams t WHERE t.scope = s.slug) AS teams
               FROM cliq.scopes s
              WHERE s.is_default = 0
                AND s.slug NOT IN (:reserved)
-               AND (
-                    (s.scope_type = 'user' AND s.org_id IS NULL
-                        AND (s.owner_id IS NULL OR NOT EXISTS (SELECT 1 FROM cliq.users u WHERE u.id = s.owner_id)))
-                 OR (s.scope_type = 'org'
-                        AND (s.org_id IS NULL OR NOT EXISTS (SELECT 1 FROM cliq.orgs o WHERE o.id = s.org_id)))
-               )
+               AND (s.org_id IS NULL OR NOT EXISTS (SELECT 1 FROM cliq.orgs o WHERE o.id = s.org_id))
              ORDER BY s.slug`,
             { replacements: { reserved }, type: QueryTypes.SELECT, transaction },
         );
         const removable = orphans.filter((s) => {
-            if (s.teams > 0) result.skipped.push({ slug: s.slug, reason: `orphaned ${s.scope_type} scope still has ${s.teams} team(s)` });
+            if (s.teams > 0) result.skipped.push({ slug: s.slug, reason: `orphaned scope still has ${s.teams} team(s)` });
             return s.teams === 0;
         });
         if (removable.length) {
             const ids = removable.map((s) => s.id);
             await sequelize.query('DELETE FROM cliq.scope_members WHERE scope_id IN (:ids)', { replacements: { ids }, transaction });
             await sequelize.query('DELETE FROM cliq.scopes WHERE id IN (:ids)', { replacements: { ids }, transaction });
-            for (const s of removable) (s.scope_type === 'user' ? result.user_scopes_removed : result.org_scopes_removed).push(s.slug);
+            for (const s of removable) result.scopes_removed.push(s.slug);
         }
 
         // 2. Non-personal orgs without any scope.
@@ -88,8 +79,8 @@ export async function repair_namespace_orphans(sequelize: Sequelize): Promise<Re
             if (org.taken) { result.skipped.push({ slug: org.slug, reason: 'org has no scope and its name is held by another scope' }); continue; }
             if (!org.owner_id) { result.skipped.push({ slug: org.slug, reason: 'org has no scope and no members to own one' }); continue; }
             const [rows] = await sequelize.query(`
-                INSERT INTO cliq.scopes (id, slug, display_name, owner_id, org_id, visibility, scope_type, created_at, is_default)
-                VALUES (gen_random_uuid(), :slug, :display_name, :owner_id, :org_id, 'public', 'org', NOW(), 0)
+                INSERT INTO cliq.scopes (id, slug, display_name, owner_id, org_id, created_at, is_default)
+                VALUES (gen_random_uuid(), :slug, :display_name, :owner_id, :org_id, NOW(), 0)
                 RETURNING id`,
                 { replacements: { slug: org.slug, display_name: org.display_name || org.slug, owner_id: org.owner_id, org_id: org.id }, transaction },
             ) as [Array<{ id: string }>, unknown];
@@ -109,7 +100,7 @@ export async function repair_namespace_orphans(sequelize: Sequelize): Promise<Re
         }
     });
 
-    if (result.user_scopes_removed.length || result.org_scopes_removed.length || result.org_scopes_created.length || result.skipped.length) {
+    if (result.scopes_removed.length || result.org_scopes_created.length || result.skipped.length) {
         log.info('namespace_repaired', { ...result });
     }
     return result;

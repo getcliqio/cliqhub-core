@@ -1,5 +1,5 @@
 /**
- * Hub AuthZ helpers — realm (machines) + scope (packages).
+ * Hub AuthZ helpers — realm (machines). Who may see a team is `auth/access.ts`.
  * Identity comes from the caller JWT; membership is looked up in DB.
  */
 
@@ -18,27 +18,6 @@ export class AccessService {
 	static async assert_realm_access(user_id: string, daemon_id: string): Promise<void> {
 		log.debug('assert_realm_access', { user_id, daemon_id });
 		await RealmService.assert_user_can_access_daemon(user_id, daemon_id);
-	}
-
-	/** Scope ACL — caller's accessible scope_ids must include target. */
-	static assert_scope_access(accessible_scope_ids: string[], scope_id: string): void {
-		log.debug('assert_scope_access', { scope_id });
-		if (accessible_scope_ids.includes(scope_id)) return;
-		throw ApiError.forbidden(`Scope '${scope_id}' is not accessible to this user`);
-	}
-
-	/**
-	 * Start/install/view team on a daemon: need realm ∩ scope.
-	 */
-	static async assert_can_run_team_on_daemon(input: {
-		user_id: string;
-		daemon_id: string;
-		scope_id: string;
-		accessible_scope_ids: string[];
-	}): Promise<void> {
-		log.debug('assert_can_run_team_on_daemon', { user_id: input.user_id, daemon_id: input.daemon_id, scope_id: input.scope_id });
-		AccessService.assert_scope_access(input.accessible_scope_ids, input.scope_id);
-		await AccessService.assert_realm_access(input.user_id, input.daemon_id);
 	}
 
 	/** Runs / logs / status on a daemon — realm only. */

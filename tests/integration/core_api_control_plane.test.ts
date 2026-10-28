@@ -60,8 +60,6 @@ function mock_hub_user(): void {
             id: hub_legacy_uuid(1),
             slug: 'cliq',
             display_name: 'Cliq',
-            visibility: 'public',
-            scope_type: 'user',
             owner_id: hub_legacy_uuid(1),
             org_id: null,
         },

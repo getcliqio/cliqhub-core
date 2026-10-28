@@ -299,7 +299,6 @@ export class RunController extends BaseController {
         const body = this.parse_body(RunsEnqueueInput, req);
         const user_id = req.auth?.user?.id ?? '';
         const org_ids = req.auth?.org_ids ?? [];
-        const scope_ids = req.auth?.scopes?.map(s => s.id) ?? [];
         await validate_run_start_options({ realm_id: body.realm_id, notify_channels: body.notify_channels });
 
         if (body.daemon_id) {
@@ -323,7 +322,6 @@ export class RunController extends BaseController {
                 notify_channels: body.notify_channels,
                 org_ids,
                 user_id,
-                scope_ids,
             });
             const data: RunDispatchData = {
                 run_id: result.run_id,
@@ -367,7 +365,6 @@ export class RunController extends BaseController {
             payload,
             priority: body.priority,
             user_id,
-            scope_ids,
             org_ids,
         });
         const data: RunEnqueueData = { item: result.item as QueueItemData };

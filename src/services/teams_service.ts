@@ -1,12 +1,13 @@
 import { ApiError } from '../errors/api_error.js';
 import { can_read_team, can_view_team } from '../auth/access.js';
 import { assert_access, assert_admin_access } from '../auth/assert_grant.js';
+import { require_permission } from '../auth/permissions.js';
 
 import yaml from 'js-yaml';
 import { extract_package, to_package_zip, dependencies_problems, normalize_tags, compute_next_version, workflow_from_team_yml, enrich_required_inputs } from './package_parser.js';
 import type { ParsedTeamYml } from './package_parser.js';
 import { SemVer } from '../lib/semver.js';
-import { SLUG_PATTERN, RESERVED_SCOPES } from '../config/env.js';
+import { SLUG_PATTERN } from '../config/env.js';
 import type { TeamRepository } from '../repositories/team_repository.js';
 import type { TeamVersionRepository } from '../repositories/team_version_repository.js';
 import type { TagRepository } from '../repositories/tag_repository.js';
@@ -23,7 +24,6 @@ import type { NormalizedWorkflow } from './package_parser.js';
 import { RealmTeamListService } from '../services/realm_team_list.service.js';
 import { get_sequelize } from '../lib/sequelize.js';
 import { ScopeRepository as ScopeRepoClass } from '../repositories/scope_repository.js';
-import { OrgMemberRepository as OrgMemberRepoClass } from '../repositories/org_member_repository.js';
 
 import { get_logger } from '../lib/log.js';
 import { escape_like } from '../lib/search.js';
@@ -35,7 +35,6 @@ import { TeamVersionRepository as TeamVersionRepoClass } from '../repositories/t
 const log = get_logger('svc.teams');
 
 const _scope_repo_ts = new ScopeRepoClass();
-const _org_member_repo_ts = new OrgMemberRepoClass();
 
 function team_status(visibility: string): 'draft' | 'published' {
     return visibility === 'draft' ? 'draft' : 'published';
@@ -146,7 +145,8 @@ function build_visibility_where(auth: AuthContext): WhereOptions {
     if (!auth.user) {
         return { visibility: 'public', listed: 1 };
     }
-    const scope_slugs = auth.scopes.map((s) => s.slug);
+    // Private teams: the scopes the caller is a member of (PLAN-team-visibility §3.2).
+    const scope_slugs = auth.member_scopes.map((s) => s.slug);
     if (scope_slugs.length === 0) {
         return {
             [Op.or]: [
@@ -208,7 +208,7 @@ export class TeamsService {
 
     async get(auth: AuthContext, params: {
         query?: string; tag?: string; scope?: string;
-        mine?: boolean; group_by_scope?: boolean; listed?: boolean;
+        mine?: boolean; listed?: boolean;
         status?: 'draft' | 'published';
         limit?: number; offset?: number;
         /** Catalog / site-admin modes only (the controller rejects it elsewhere). */
@@ -251,62 +251,29 @@ export class TeamsService {
         return { teams: rows, tag_map, total, limit, offset };
     }
 
+    /**
+     * "Mine" (PLAN-team-visibility §3.2): the published teams of my orgs' scopes and of the scopes I'm a
+     * member of, each one I can see (public, or private in a scope I'm a member of), plus my drafts.
+     * With `scope`, that one scope's teams I can see (a scope's page), plus my drafts there.
+     */
     private async _get_mine(auth: AuthContext, params: {
-        scope?: string; group_by_scope?: boolean; query?: string;
+        scope?: string; query?: string;
         tag?: string; limit?: number; offset?: number;
         status?: 'draft' | 'published';
     }) {
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
 
-        if (params.group_by_scope) {
-            // Include both the user's own scopes and all public scopes
-            // so that teams like @cliq/hello-world are always visible.
-            const public_scopes = await _scope_repo_ts.find_all_q({ where: { visibility: 'public', scope_type: 'org' }, attributes: ['id', 'slug', 'display_name', 'visibility', 'scope_type'], raw: true });
-
-            const scope_map = new Map<string, typeof auth.scopes[0]>();
-            for (const s of auth.scopes) scope_map.set(s.slug, s);
-            for (const s of public_scopes) {
-                if (!scope_map.has(s.slug)) scope_map.set(s.slug, s as any);
-            }
-
-            const all_scopes = [...scope_map.values()];
-            if (all_scopes.length === 0) return { scopes: [] };
-
-            const scope_slugs = all_scopes.map((s) => s.slug);
-            let rows = await this._team_repo.list_by_scope_list(scope_slugs);
-            if (params.status === 'draft') {
-                rows = rows.filter((t: any) => t.visibility === 'draft');
-            } else if (params.status === 'published') {
-                rows = rows.filter((t: any) => t.visibility !== 'draft');
-            }
-            const tag_map = await this._build_tag_map(rows);
-            const query = params.query?.trim().toLowerCase();
-
-            const grouped = all_scopes.map((s) => {
-                let teams = rows.filter((t: any) => t.scope === s.slug);
-                if (query) {
-                    teams = teams.filter((t: any) =>
-                        String(t.name).toLowerCase().includes(query)
-                        || String(t.description || '').toLowerCase().includes(query),
-                    );
-                }
-                return {
-                    slug: s.slug,
-                    display_name: s.display_name,
-                    scope_type: s.scope_type,
-                    visibility: s.visibility,
-                    teams,
-                };
-            }).filter((g) => g.teams.length > 0);
-            return { scopes: grouped, tag_map };
+        const members = new Set(auth.member_scopes.map((s) => s.slug));
+        let scope_slugs: string[];
+        if (params.scope) {
+            scope_slugs = [params.scope];
+        } else {
+            const org_scopes = auth.org_ids.length > 0 ? await _scope_repo_ts.find_by_org_ids(auth.org_ids) : [];
+            scope_slugs = [...new Set([...org_scopes.map((s) => s.slug), ...members])];
         }
-
-        // Flat mine list — include all scopes the user can see.
-        const scope_slugs = auth.scopes.map((s) => s.slug);
-        let rows = scope_slugs.length
-            ? await this._team_repo.list_by_scope_list(scope_slugs)
-            : [];
-        // Also include author drafts that may live outside listed scopes.
+        // Drafts come only from the author query below, so others' drafts never show.
+        let rows = (await this._team_repo.list_by_scope_list(scope_slugs))
+            .filter((t: any) => t.visibility === 'public' || (t.visibility === 'private' && members.has(t.scope)));
         if (params.status === 'draft' || !params.status) {
             const author_drafts = await this._team_repo.find_all_q({
                 where: { author_id: auth.user.id, visibility: 'draft' },
@@ -318,7 +285,7 @@ export class TeamsService {
             });
             const seen = new Set(rows.map((r: any) => r.id));
             for (const d of author_drafts) {
-                if (!seen.has(d.id)) rows.push(d as any);
+                if (!seen.has(d.id) && (!params.scope || d.scope === params.scope)) rows.push(d as any);
             }
         }
         if (params.status === 'draft') {
@@ -580,9 +547,7 @@ export class TeamsService {
         if (!SLUG_PATTERN.test(params.name)) {
             throw new ApiError('invalid_params', 'Team name must be lowercase letters, numbers, and hyphens, starting with a letter', 422);
         }
-        if (!auth.scopes.some((s) => s.slug === params.scope)) {
-            throw new ApiError('forbidden', `You don't have access to scope '@${params.scope}'`, 403);
-        }
+        const scope_row = await this._assert_can_publish(auth, params.scope);
 
         const existing = await this._team_repo.find_by_name_and_scope(params.name, params.scope);
         if (existing) throw new ApiError('conflict', `Team @${params.scope}/${params.name} already exists`, 409);
@@ -594,15 +559,12 @@ export class TeamsService {
             ?? (origin ? with_manifest_name(origin.manifest_yaml, params.name) : null);
         // A fork of the origin's own team.yml keeps its role briefs too (a manifest sent with the fork wins).
         const roles_json = !sent_manifest && origin ? origin.roles_json : null;
-        const scope_record = auth.scopes.find((s) => s.slug === params.scope);
-        const scope_type = scope_record?.scope_type || null;
-
         let team_id = '';
         let version: string | undefined;
 
         await get_sequelize().transaction(async (t) => {
             team_id = await this._team_repo.create(
-                params.name, params.scope, scope_type, description,
+                params.name, params.scope, description,
                 auth.user!.id, 'MIT', 'draft', t, 0,
             );
 
@@ -816,9 +778,6 @@ export class TeamsService {
         if (params.team_id) {
             team = await this._team_repo.find_by_id(params.team_id);
             if (!team) throw new ApiError('not_found', 'Team not found', 404);
-            if (team.author_id !== auth.user.id && auth.user.role !== 'admin') {
-                throw new ApiError('forbidden', 'You are not the author of this team', 403);
-            }
         }
 
         const name = params.name || team?.name;
@@ -826,18 +785,16 @@ export class TeamsService {
         if (!SLUG_PATTERN.test(name)) throw new ApiError('invalid_params', 'Team name must be lowercase letters, numbers, and hyphens, starting with a letter', 422);
 
         const scope = params.scope !== undefined ? (params.scope || null) : (team ? team.scope : null);
-        if (scope && !auth.scopes.some((s) => s.slug === scope) && auth.user.role !== 'admin') {
-            throw new ApiError('forbidden', `You don't have access to scope '@${scope}'`, 403);
-        }
+        // `teams.publish` in the scope's org, for a new team or anyone's (PLAN-team-visibility §3.3).
+        const scope_row = await this._assert_can_publish(auth, scope);
+        if (team && team.scope !== scope) await this._assert_can_publish(auth, team.scope);
 
-        if (!team) {
-            team = await this._team_repo.find_by_name_and_scope(name, scope);
-            if (team && team.author_id !== auth.user.id && auth.user.role !== 'admin') {
-                throw new ApiError('forbidden', 'You are not the author of this team', 403);
-            }
-        }
+        if (!team) team = await this._team_repo.find_by_name_and_scope(name, scope);
 
-        const visibility = params.visibility || 'public';
+        // New teams are private unless published as public; a republish keeps the team's visibility.
+        const visibility: 'public' | 'private' = params.visibility
+            ?? (team && team.visibility !== 'draft' ? team.visibility as 'public' | 'private' : 'private');
+        const visibility_was = team && team.visibility !== 'draft' ? team.visibility : null;
 
         // Status-only republish: flip draft → published without a new package.
         if (!params.data_base64) {
@@ -865,6 +822,7 @@ export class TeamsService {
                     visibility,
                 );
             }
+            await this._visibility_changed(auth, scope_row, team.scope, team.name, visibility_was, visibility);
             return {
                 id: team.id,
                 name: team.name,
@@ -872,6 +830,7 @@ export class TeamsService {
                 version: latest,
                 status: 'published' as const,
                 listed: true,
+                visibility,
             };
         }
 
@@ -951,10 +910,8 @@ export class TeamsService {
                 if ((team as { draft_manifest?: string | null }).draft_manifest) await this._team_repo.clear_draft(team.id, t);
                 effective_team_id = team.id;
             } else {
-                const scope_record = scope ? auth.scopes.find((s) => s.slug === scope) : null;
-                const scope_type = scope_record?.scope_type || null;
                 effective_team_id = await this._team_repo.create(
-                    name, scope, scope_type, description, auth.user!.id, license, visibility, t, 1,
+                    name, scope, description, auth.user!.id, license, visibility, t, 1,
                 );
             }
 
@@ -972,6 +929,7 @@ export class TeamsService {
             }
             published_team_id = effective_team_id;
         });
+        await this._visibility_changed(auth, scope_row, scope, name, visibility_was, visibility);
 
         return {
             id: published_team_id,
@@ -980,6 +938,7 @@ export class TeamsService {
             version: resolved_version,
             status: 'published' as const,
             listed: true,
+            visibility,
         };
     }
 
@@ -1026,9 +985,8 @@ export class TeamsService {
             const scope = params.scope || null;
             team = await this._team_repo.find_by_name_and_scope(params.name, scope);
             if (!team) throw new ApiError('not_found', 'Team not found', 404);
-            if (team.author_id !== auth.user.id && auth.user.role !== 'admin') {
-                throw new ApiError('forbidden', 'You are not the author of this team', 403);
-            }
+            // Deleting a published team deletes its published versions (PLAN-team-visibility §3.3).
+            await this._assert_can_publish(auth, team.scope, team.visibility === 'draft' ? 'teams.publish' : 'teams.publish.delete');
         }
 
         const versions = await this._version_repo.list_packages_by_team(team.id);
@@ -1065,7 +1023,7 @@ export class TeamsService {
         const scope = params.scope || null;
         const team = await this._team_repo.find_by_name_and_scope(params.name, scope);
         if (!team) throw new ApiError('not_found', 'Team not found', 404);
-        if (team.author_id !== auth.user.id && auth.user.role !== 'admin') throw new ApiError('forbidden', 'You are not the author of this team', 403);
+        await this._assert_can_publish(auth, team.scope, 'teams.publish.delete');
 
         const ver = await this._version_repo.find_id_and_package(team.id, params.version);
         if (!ver) throw new ApiError('not_found', `Version ${params.version} not found`, 404);
@@ -1088,7 +1046,7 @@ export class TeamsService {
 
         const team = await this._team_repo.find_by_name_and_scope(params.name, params.scope);
         if (!team) throw new ApiError('not_found', 'Team not found', 404);
-        if (team.author_id !== auth.user.id && auth.user.role !== 'admin') throw new ApiError('forbidden', 'You are not the author of this team', 403);
+        await this._assert_can_publish(auth, team.scope);
 
         const existing = await this._team_repo.find_by_name_and_scope(new_name, params.scope);
         if (existing) throw new ApiError('conflict', `Team @${params.scope}/${new_name} already exists`, 409);
@@ -1147,19 +1105,66 @@ export class TeamsService {
         if (params.team_id) {
             team = await this._team_repo.find_by_id(params.team_id);
             if (!team) throw new ApiError('not_found', 'Team not found', 404);
-            if (team.author_id !== auth.user!.id && auth.user!.role !== 'admin') {
-                throw new ApiError('forbidden', 'You are not the author of this team', 403);
-            }
-            return team;
+        } else {
+            if (!params.name) throw new ApiError('invalid_params', 'name is required', 422);
+            team = await this._team_repo.find_by_name_and_scope(params.name, params.scope || null);
+            if (!team) throw new ApiError('not_found', 'Team not found', 404);
         }
-        if (!params.name) throw new ApiError('invalid_params', 'name is required', 422);
-        const scope = params.scope || null;
-        team = await this._team_repo.find_by_name_and_scope(params.name, scope);
-        if (!team) throw new ApiError('not_found', 'Team not found', 404);
-        if (team.author_id !== auth.user!.id && auth.user!.role !== 'admin') {
-            throw new ApiError('forbidden', 'You are not the author of this team', 403);
-        }
+        await this._assert_can_publish(auth, team.scope);
         return team;
+    }
+
+    /**
+     * Who may write a team in `scope` (PLAN-team-visibility §3.3): `permission` (default
+     * `teams.publish`) in the scope's org, whoever wrote the team; site admins always. A scope
+     * with no org (a legacy personal scope) is its owner's.
+     *
+     * @returns the scope row (its org decides who publishes)
+     * @throws ApiError 403 without the permission; 404 for an unknown scope
+     */
+    private async _assert_can_publish(auth: AuthContext, scope: string | null, permission = 'teams.publish') {
+        const row = scope ? await (this._scope_repo ?? _scope_repo_ts).find_by_slug(scope) : null;
+        if (auth.user!.role === 'admin') return row;
+        if (!row) throw new ApiError(scope ? 'not_found' : 'forbidden', scope ? `Scope '@${scope}' not found` : 'A team needs a scope', scope ? 404 : 403);
+        if (!row.org_id) {
+            if (row.owner_id === auth.user!.id) return row;
+            throw new ApiError('forbidden', `You can't publish to @${scope}`, 403);
+        }
+        if (!(await this._has_permission(auth, row.org_id, permission))) {
+            throw new ApiError('forbidden', `Publishing to @${scope} needs '${permission}' in its org`, 403, { scope, permission });
+        }
+        return row;
+    }
+
+    /** Whether the caller's role in `org_id` grants `permission` (owners have all). */
+    private async _has_permission(auth: AuthContext, org_id: string, permission: string): Promise<boolean> {
+        try {
+            await require_permission(org_id, auth.user!.id, permission);
+            return true;
+        } catch {
+            // require_permission throws for a non-member or a role without the permission: both mean no.
+            return false;
+        }
+    }
+
+    /** Raise `team.visibility_changed` when a publish changed a published team's visibility. */
+    private async _visibility_changed(
+        auth: AuthContext, scope_row: { org_id?: string | null } | null, scope: string | null, name: string,
+        from: string | null, to: string,
+    ): Promise<void> {
+        if (!from || from === to) return;
+        try {
+            const { EventSubmitService } = await import('./events_service.js');
+            await EventSubmitService.submit({
+                type: 'team.visibility_changed',
+                ...(scope_row?.org_id ? { org_id: scope_row.org_id } : {}),
+                team: scope ? `${scope}/${name}` : name,
+                title: `@${scope}/${name} is now ${to}`,
+                payload: { from, to, actor_id: auth.user!.id },
+            });
+        } catch (err) {
+            log.warn('team_visibility_event_failed', { scope, name, error: err instanceof Error ? err.message : String(err) });
+        }
     }
 
     /** Seed a draft version row from raw manifest YAML/JSON (no zip package). */
@@ -1195,10 +1200,10 @@ export class TeamsService {
     /**
      * Compute the caller's permissions for a team.
      *
-     * Permission hierarchy:
+     * Permissions (PLAN-team-visibility §3.3):
      *   - Site admin → full access
-     *   - Org admin (scope owned by an org the user admins) → full access
-     *   - Author (user authored the team) → edit + toggle listing
+     *   - `teams.publish` in the scope's org → edit + toggle listing
+     *   - `teams.publish.delete` there → delete
      *   - Everyone else → read only
      */
     private async _resolve_team_permissions(
@@ -1214,48 +1219,34 @@ export class TeamsService {
             return { can_edit: true, can_delete: true, can_toggle_listing: true };
         }
 
-        const is_author = team.author_id != null && auth.user.id === team.author_id;
-
-        // Check if the user is an admin of the org that owns this scope.
-        let is_org_admin = false;
-        if (team.scope) {
-            const scope_row = await _scope_repo_ts.find_one_q({ where: { slug: team.scope }, attributes: ['org_id'], raw: true });
-            if (scope_row?.org_id) {
-                const membership = await _org_member_repo_ts.find_one_q({ where: { org_id: scope_row.org_id, user_id: auth.user.id, status: 'active', deleted_at: null }, attributes: ['role'],
-                    raw: true,
-                });
-                if (membership?.role === 'admin' || membership?.role === 'owner') {
-                    is_org_admin = true;
-                }
-            }
+        // The same rule the writes enforce (PLAN-team-visibility §3.3): the permission in the scope's org.
+        const scope_row = team.scope ? await (this._scope_repo ?? _scope_repo_ts).find_by_slug(team.scope) : null;
+        if (!scope_row) return { can_edit: false, can_delete: false, can_toggle_listing: false };
+        if (!scope_row.org_id) {
+            const own = scope_row.owner_id === auth.user.id;
+            return { can_edit: own, can_delete: own, can_toggle_listing: own };
         }
-
-        if (is_org_admin) {
-            return { can_edit: true, can_delete: true, can_toggle_listing: true };
-        }
-
-        if (is_author) {
-            return { can_edit: true, can_delete: false, can_toggle_listing: true };
-        }
-
-        return { can_edit: false, can_delete: false, can_toggle_listing: false };
+        const [publish, del] = await Promise.all([
+            this._has_permission(auth, scope_row.org_id, 'teams.publish'),
+            this._has_permission(auth, scope_row.org_id, 'teams.publish.delete'),
+        ]);
+        return { can_edit: publish, can_delete: del, can_toggle_listing: publish };
     }
 
     /**
      * Marketplace details for a page of catalog teams: the latest version's
-     * phases, version count, last update, fork count and whether the
-     * publisher scope is verified (a platform scope). One query per kind of
+     * phases, version count, last update and fork count. One query per kind of
      * detail, not per team.
      */
     async catalog_details(rows: Array<{ id: string; latest_version: string | null; scope: string | null }>): Promise<Map<string, {
         phases: Array<{ name: string; type: string | null; agent: string | null }>;
-        version_count: number; updated_at?: number; fork_count: number; verified: boolean;
+        version_count: number; updated_at?: number; fork_count: number;
     }>> {
-        const out = new Map<string, { phases: Array<{ name: string; type: string | null; agent: string | null }>; version_count: number; updated_at?: number; fork_count: number; verified: boolean }>();
+        const out = new Map<string, { phases: Array<{ name: string; type: string | null; agent: string | null }>; version_count: number; updated_at?: number; fork_count: number }>();
         const ids = rows.map((r) => r.id).filter(Boolean);
         if (ids.length === 0) return out;
         const sequelize = get_sequelize();
-        const [versions, teams, forks, platform] = await Promise.all([
+        const [versions, teams, forks] = await Promise.all([
             sequelize.query<{ team_id: string; version: string; workflow_json: string | null }>(
                 'SELECT "team_id", "version", "workflow_json" FROM cliq."team_versions" WHERE "team_id" IN (:ids)',
                 { replacements: { ids }, type: QueryTypes.SELECT },
@@ -1268,12 +1259,7 @@ export class TeamsService {
                 'SELECT "forked_from_team_id", COUNT(*) AS n FROM cliq."teams" WHERE "forked_from_team_id" IN (:ids) GROUP BY 1',
                 { replacements: { ids }, type: QueryTypes.SELECT },
             ),
-            sequelize.query<{ slug: string }>(
-                `SELECT "slug" FROM cliq."scopes" WHERE "scope_type" = 'platform'`,
-                { type: QueryTypes.SELECT },
-            ),
         ]);
-        const verified_scopes = new Set(platform.map((p) => p.slug));
         const updated = new Map(teams.map((t) => [String(t.id), t.updated_at ? new Date(t.updated_at).getTime() : undefined]));
         const fork_counts = new Map(forks.map((f) => [String(f.forked_from_team_id), Number(f.n)]));
         for (const row of rows) {
@@ -1293,7 +1279,6 @@ export class TeamsService {
                 version_count: mine.length,
                 ...(updated.get(row.id) !== undefined ? { updated_at: updated.get(row.id) } : {}),
                 fork_count: fork_counts.get(row.id) ?? 0,
-                verified: Boolean(row.scope && verified_scopes.has(row.scope)),
             });
         }
         return out;

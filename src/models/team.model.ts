@@ -14,7 +14,6 @@ export class Team extends BaseModel {
     declare id: string;
     declare name: string;
     declare scope: string | null;
-    declare scope_type: 'user' | 'org' | null;
     declare description: string;
     declare author_id: string | null;
     declare license: string;
@@ -39,7 +38,6 @@ export class Team extends BaseModel {
             id: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
             name: { type: DataTypes.TEXT, allowNull: false },
             scope: { type: DataTypes.TEXT, allowNull: true },
-            scope_type: { type: DataTypes.TEXT, allowNull: true },
             description: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
             author_id: { type: DataTypes.UUID, allowNull: true },
             license: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'MIT' },

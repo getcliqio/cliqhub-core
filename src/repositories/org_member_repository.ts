@@ -27,17 +27,30 @@ const ACTIVE = { status: 'active', deleted_at: null } as const;
 
 export class OrgMemberRepository extends BaseRepository<OrgMember> {
     protected readonly model = OrgMember;
+    /**
+     * The user's active memberships, each with its org role (`org_role`: slug, whether it is the
+     * owner's system role, and its permissions) for access checks that don't query per request.
+     */
     async find_orgs_by_user(user_id: string) {
         return OrgMember.findAll({
             where: { user_id, ...ACTIVE },
-            include: [{ model: Org, attributes: ['slug'], where: { deleted_at: null } }],
+            include: [
+                { model: Org, attributes: ['slug'], where: { deleted_at: null } },
+                { model: OrgRole, as: 'org_role', attributes: ['slug', 'is_system', 'permissions'], required: false },
+            ],
             raw: true,
             nest: true,
-        }).then(rows => rows.map(r => ({
-            slug: (r as any).org?.slug ?? '',
-            role: r.role,
-            org_id: r.org_id,
-        })));
+        }).then(rows => rows.map(r => {
+            const role = (r as any).org_role as { slug: string | null; is_system: boolean | null; permissions: string[] | null } | undefined;
+            return {
+                slug: (r as any).org?.slug ?? '',
+                role: r.role,
+                org_id: r.org_id,
+                org_role: role?.slug
+                    ? { slug: role.slug, is_system: Boolean(role.is_system), permissions: role.permissions ?? [] }
+                    : null,
+            };
+        }));
     }
 
     async find_by_org_and_user(org_id: string, user_id: string) {

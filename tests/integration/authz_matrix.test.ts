@@ -45,7 +45,8 @@ const ACME_MEMBER = '1YYYYYY4333';
 const ACME_ADMIN_PERM = '1YYY3334333';
 const ACME_OPERATOR_PERM = '1YYYY334333'; // a perm the org's operators have too
 const ACME_OWNER_ONLY = '1YY33334333';
-const TEAM_PRIVATE = '4Y444Y44444';
+// A private team: its scope's members only (PLAN-team-visibility §3.2); authorship alone (mia) isn't membership.
+const TEAM_PRIVATE = '4Y444444444';
 const DAEMON_SELF = '1YYYYYYYYYY'; // users allowed while ALLOW_PAT_DAEMON_WRITES is on
 const DAEMON_ONLY = '13333333YYY'; // daemon lifecycle: daemon tokens only
 const NO_REALM: Body = () => ({ realm_id: undefined }); // org branch of a realm-or-org route

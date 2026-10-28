@@ -47,8 +47,8 @@ describe.skipIf(!has_postgres)('ScopeService.list', () => {
     it('returns scopes with default first, then alpha', async () => {
         const slug_a = `a-${uid()}`;
         const slug_b = `b-${uid()}`;
-        await ScopeService.add(slug_b);
-        await ScopeService.add(slug_a);
+        await ScopeService.add(slug_b, null, test_org_id);
+        await ScopeService.add(slug_a, null, test_org_id);
 
         const result = await ScopeService.list();
         expect(result[0].slug).toBe(slug_b);
@@ -59,7 +59,7 @@ describe.skipIf(!has_postgres)('ScopeService.list', () => {
 describe.skipIf(!has_postgres)('ScopeService.add', () => {
     it('creates a new scope', async () => {
         const slug = uid();
-        const scope = await ScopeService.add(slug, 'My Scope');
+        const scope = await ScopeService.add(slug, 'My Scope', test_org_id);
 
         expect(scope.slug).toBe(slug);
         expect(scope.display_name).toBe('My Scope');
@@ -68,31 +68,30 @@ describe.skipIf(!has_postgres)('ScopeService.add', () => {
 
     it('first scope becomes default', async () => {
         const slug = uid();
-        const scope = await ScopeService.add(slug);
+        const scope = await ScopeService.add(slug, null, test_org_id);
         expect(scope.is_default).toBeTruthy();
     });
 
     it('returns existing scope if slug already exists', async () => {
         const slug = uid();
-        const first = await ScopeService.add(slug, 'first');
-        const second = await ScopeService.add(slug, 'second');
+        const first = await ScopeService.add(slug, 'first', test_org_id);
+        const second = await ScopeService.add(slug, 'second', test_org_id);
 
         expect(first.id).toBe(second.id);
         expect(second.display_name).toBe('first');
     });
 
     it('second scope is not default', async () => {
-        await ScopeService.add(uid());
-        const second = await ScopeService.add(uid());
+        await ScopeService.add(uid(), null, test_org_id);
+        const second = await ScopeService.add(uid(), null, test_org_id);
         expect(second.is_default).toBeFalsy();
     });
 
-    it('creates scope with org_id and scope_type', async () => {
+    it('creates a scope of the org given', async () => {
         const slug = uid();
         const org = test_org_id;
-        const scope = await ScopeService.add(slug, 'Org Scope', org, 'org');
+        const scope = await ScopeService.add(slug, 'Org Scope', org);
         expect(scope.org_id).toBe(org);
-        expect(scope.scope_type).toBe('org');
     });
 });
 
@@ -104,7 +103,7 @@ describe.skipIf(!has_postgres)('ScopeService.get_default', () => {
 
     it('returns the default scope', async () => {
         const slug = uid();
-        await ScopeService.add(slug);
+        await ScopeService.add(slug, null, test_org_id);
 
         const def = await ScopeService.get_default();
         expect(def).not.toBeNull();
@@ -116,8 +115,8 @@ describe.skipIf(!has_postgres)('ScopeService.set_default', () => {
     it('changes the default scope', async () => {
         const slug_1 = uid();
         const slug_2 = uid();
-        await ScopeService.add(slug_1);
-        await ScopeService.add(slug_2);
+        await ScopeService.add(slug_1, null, test_org_id);
+        await ScopeService.add(slug_2, null, test_org_id);
 
         const changed = await ScopeService.set_default(slug_2);
         expect(changed).toBe(true);
@@ -135,7 +134,7 @@ describe.skipIf(!has_postgres)('ScopeService.set_default', () => {
 describe.skipIf(!has_postgres)('ScopeService.remove', () => {
     it('removes existing scope', async () => {
         const slug = uid();
-        await ScopeService.add(slug);
+        await ScopeService.add(slug, null, test_org_id);
 
         const removed = await ScopeService.remove(slug);
         expect(removed).toBe(true);
@@ -153,7 +152,7 @@ describe.skipIf(!has_postgres)('ScopeService.remove', () => {
 describe.skipIf(!has_postgres)('ScopeService.resolve', () => {
     it('resolves by slug', async () => {
         const slug = uid();
-        await ScopeService.add(slug, 'Resolve Me');
+        await ScopeService.add(slug, 'Resolve Me', test_org_id);
 
         const scope = await ScopeService.resolve(slug);
         expect(scope.slug).toBe(slug);
@@ -161,7 +160,7 @@ describe.skipIf(!has_postgres)('ScopeService.resolve', () => {
 
     it('resolves by @slug', async () => {
         const slug = uid();
-        await ScopeService.add(slug);
+        await ScopeService.add(slug, null, test_org_id);
 
         const scope = await ScopeService.resolve(`@${slug}`);
         expect(scope.slug).toBe(slug);
@@ -169,7 +168,7 @@ describe.skipIf(!has_postgres)('ScopeService.resolve', () => {
 
     it('resolves by id', async () => {
         const slug = uid();
-        const created = await ScopeService.add(slug);
+        const created = await ScopeService.add(slug, null, test_org_id);
 
         const scope = await ScopeService.resolve(created.id);
         expect(scope.id).toBe(created.id);
@@ -188,7 +187,7 @@ describe.skipIf(!has_postgres)('ScopeService.list_by_org_ids', () => {
     it('returns scopes matching org_ids', async () => {
         const org = test_org_id;
         const slug = uid();
-        await ScopeService.add(slug, 'Org Scope', org, 'org');
+        await ScopeService.add(slug, 'Org Scope', org);
 
         const result = await ScopeService.list_by_org_ids([org]);
         expect(result.some((s) => s.slug === slug)).toBe(true);
@@ -198,7 +197,7 @@ describe.skipIf(!has_postgres)('ScopeService.list_by_org_ids', () => {
 describe.skipIf(!has_postgres)('ScopeService.find_by_id / find_by_slug', () => {
     it('find_by_id returns scope', async () => {
         const slug = uid();
-        const scope = await ScopeService.add(slug);
+        const scope = await ScopeService.add(slug, null, test_org_id);
 
         const found = await ScopeService.find_by_id(scope.id);
         expect(found).not.toBeNull();
@@ -212,7 +211,7 @@ describe.skipIf(!has_postgres)('ScopeService.find_by_id / find_by_slug', () => {
 
     it('find_by_slug returns scope', async () => {
         const slug = uid();
-        await ScopeService.add(slug);
+        await ScopeService.add(slug, null, test_org_id);
 
         const found = await ScopeService.find_by_slug(slug);
         expect(found).not.toBeNull();

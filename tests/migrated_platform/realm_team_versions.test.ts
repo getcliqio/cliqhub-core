@@ -44,11 +44,11 @@ describe.skipIf(!has_postgres)('the realm owns each team\'s version', () => {
         scope_id = randomUUID();
         await Scope.create({
             id: scope_id, slug: scope_slug, display_name: 'Versions', owner_id: null, org_id: null,
-            visibility: 'public', scope_type: 'platform', is_default: 0, created_at: new Date(),
+            is_default: 0, created_at: new Date(),
         });
         const publish = async (name: string, versions: string[]) => {
             const team = await Team.create({
-                id: randomUUID(), name, scope: scope_slug, scope_type: 'org', description: name,
+                id: randomUUID(), name, scope: scope_slug, description: name,
                 author_id: user_id, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
             } as never);
             team_ids.push(team.id);

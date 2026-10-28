@@ -30,11 +30,9 @@ export interface NamespaceHolder {
     slug: string;
     /** The holder row's id (org, scope or user). */
     id?: string;
-    /** scope: `user` or `org`. */
-    scope_type?: string;
     /** scope: the owning org's slug (null when the org is gone or unset). */
     org_slug?: string | null;
-    /** scope: the owning user (user scopes); org: the user of a personal org. */
+    /** scope: the user who created it; org: the user of a personal org. */
     owner_username?: string | null;
     /** org: a personal org (a user has the same name). */
     personal?: boolean;
@@ -60,7 +58,7 @@ export interface NamespaceRepos {
         find_by_id(id: string): Promise<{ slug: string } | null>;
     };
     scope_repo: {
-        find_by_slug(slug: string): Promise<{ id: string; scope_type?: string | null; org_id?: string | null; owner_id?: string | null } | null>;
+        find_by_slug(slug: string): Promise<{ id: string; org_id?: string | null; owner_id?: string | null } | null>;
     };
     user_repo: {
         find_by_username(username: string): Promise<({ id?: string; username: string } & SoftDeleteFields) | null>;
@@ -127,7 +125,7 @@ export async function namespace_holders(repos: NamespaceRepos, name: string, kin
                 const org = scope.org_id ? await repos.org_repo.find_by_id(scope.org_id) : null;
                 const owner = scope.owner_id ? await repos.user_repo.find_profile_by_id(scope.owner_id) : null;
                 out.push({
-                    kind, slug, id: String(scope.id), scope_type: scope.scope_type ?? undefined,
+                    kind, slug, id: String(scope.id),
                     org_slug: org?.slug ?? null, owner_username: owner?.username ?? null,
                     org_id: scope.org_id ?? null, owner_id: scope.owner_id ?? null,
                 });

@@ -48,8 +48,8 @@ describe.skipIf(!has_postgres)('hub schema cleanup (boot)', () => {
         const sq = get_sequelize();
         const slug = uid();
         await sq.query(
-            `INSERT INTO cliq.scopes (id, slug, display_name, visibility, scope_type, created_at)
-             VALUES (:id, :slug, :slug, 'public', 'user', NOW())`,
+            `INSERT INTO cliq.scopes (id, slug, display_name, created_at)
+             VALUES (:id, :slug, :slug, NOW())`,
             { replacements: { id: randomUUID(), slug } },
         );
         // Production lost the inbound FKs; without them nothing blocks a DROP of the registry.
@@ -95,8 +95,8 @@ describe.skipIf(!has_postgres)('hub schema cleanup (boot)', () => {
         const org_id = org.get('id') as string;
         const scope_id = randomUUID();
         await sq.query(
-            `INSERT INTO cliq.scopes (id, slug, display_name, org_id, visibility, scope_type, created_at)
-             VALUES (:scope_id, :slug, :slug, :org_id, 'public', 'org', NOW())`,
+            `INSERT INTO cliq.scopes (id, slug, display_name, org_id, created_at)
+             VALUES (:scope_id, :slug, :slug, :org_id, NOW())`,
             { replacements: { scope_id, slug: uid(), org_id } },
         );
         const inbound = async () => sq.query<{ tbl: string; con: string; def: string }>(

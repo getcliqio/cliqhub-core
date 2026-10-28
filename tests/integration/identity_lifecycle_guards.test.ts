@@ -189,7 +189,7 @@ describe.skipIf(!has_postgres)('identity lifecycle guards', () => {
             const username = accepted.body.data.user.username as string;
             const account = (await Org.findOne({ where: { slug: username }, raw: true }))!;
             const scope = (await Scope.findOne({ where: { slug: username }, raw: true }))!;
-            expect(scope).toMatchObject({ owner_id: user.id, org_id: account.id, scope_type: 'org' });
+            expect(scope).toMatchObject({ owner_id: user.id, org_id: account.id });
             expect(await ScopeMember.count({ where: { scope_id: scope.id, user_id: user.id } })).toBe(1);
             expect(account.default_scope_id).toBe(scope.id);
         });

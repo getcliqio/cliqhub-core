@@ -86,7 +86,6 @@ function member_access(): Grant_access {
 export interface Grant_subject {
     role: 'user' | 'admin';
     org_ids: string[];
-    scope_slugs: string[];
     realm_ids: string[];
 }
 

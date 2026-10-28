@@ -26,8 +26,6 @@ beforeAll(async () => {
         display_name: 'Test Scope',
         owner_id: null,
         org_id: null,
-        visibility: 'public',
-        scope_type: 'platform',
         is_default: 0,
         created_at: new Date(),
     });
