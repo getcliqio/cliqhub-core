@@ -1,6 +1,7 @@
 import { org_standing, visible_realm_ids } from '../auth/route_policy/visible.js';
 import { default_daemon_grant, type Token_grant } from '../auth/grants.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import type { InputFieldSpec } from '../lib/input_field_spec.js';
 import { Op, QueryTypes, fn, col, literal, type WhereOptions } from 'sequelize';
 
 import { ApiError } from '../lib/api_error.js';
@@ -1879,6 +1880,13 @@ export class RealmService {
             last_run_at: number | null;
             /** Agent names referenced by this team's workflow that are not registered in the org. */
             missing_agents: string[];
+            /** What the team is for, from the catalog; null for CLI-installed teams. */
+            description: string | null;
+            /** team.yml `use_when` / `not_for` of the realm's version (else the latest); empty for CLI-installed teams. */
+            use_when: string[];
+            not_for: string[];
+            /** The inputs a run must be given (required, no default), from the same version. */
+            required_inputs: Array<{ name: string; description: string | null }>;
         }>;
         total: number;
         online_daemon_count: number;
@@ -2012,14 +2020,18 @@ export class RealmService {
         // gives each Hub-published row its catalog team id, which is what
         // `/v1/teams/install` takes — also for teams no daemon has yet.
         const registry_id_by_key = new Map<string, string>();
+        const description_by_key = new Map<string, string>();
         if (agg.size > 0) {
             const pairs = [...agg.values()].map((r) => ({ scope: r.scope, name: r.slug }));
             const registry_rows = await _team_repo.find_all_q({
                 where: { [Op.or]: pairs },
-                attributes: ['id', 'scope', 'name'],
+                attributes: ['id', 'scope', 'name', 'description'],
                 raw: true,
-            }) as unknown as Array<{ id: string; scope: string; name: string }>;
-            for (const r of registry_rows) registry_id_by_key.set(`${r.scope}/${r.name}`, r.id);
+            }) as unknown as Array<{ id: string; scope: string; name: string; description: string }>;
+            for (const r of registry_rows) {
+                registry_id_by_key.set(`${r.scope}/${r.name}`, r.id);
+                if (r.description) description_by_key.set(`${r.scope}/${r.name}`, r.description);
+            }
         }
         const published_set = new Set(registry_id_by_key.keys());
 
@@ -2048,13 +2060,15 @@ export class RealmService {
             }
         }
 
-        // ── Missing agent detection ────────────────────────────────
+        // ── Missing agent detection, and what each team is for ─────
         // For each team, extract agent names from the latest published
-        // workflow and check against the org's agent_catalog.
+        // workflow and check against the org's agent_catalog. The same
+        // versions give use_when / not_for / required inputs (realm's version).
         const missing_agents_map = new Map<string, string[]>();
+        const capability_map = new Map<string, TeamCapabilitySummary>();
         try {
             const org_id = realm?.org_id;
-            if (org_id && published_set.size > 0) {
+            if (published_set.size > 0) {
                 // Catalog ids of the published teams (looked up above).
                 const registry_id_to_key = new Map<string, string>();
                 const registry_ids: string[] = [];
@@ -2067,7 +2081,7 @@ export class RealmService {
                 if (registry_ids.length > 0) {
                     const all_versions = await _tv_repo.find_all_q({
                         where: { team_id: { [Op.in]: registry_ids } },
-                        attributes: ['team_id', 'version', 'workflow_json'],
+                        attributes: ['team_id', 'version', 'workflow_json', 'capability_json'],
                         raw: true,
                     });
 
@@ -2099,10 +2113,15 @@ export class RealmService {
                         }
                         const key = registry_id_to_key.get(team_id);
                         if (key) team_agents.set(key, names);
+                        if (key) {
+                            const pinned = realm_versions.get(key);
+                            const shown = (pinned && versions.find((v) => v.version === pinned)) || target;
+                            capability_map.set(key, capability_summary(shown.capability_json));
+                        }
                     }
 
-                    // One bulk query: which of these agent names are registered?
-                    if (all_agent_names.size > 0) {
+                    // One bulk query: which of these agent names are registered in the org?
+                    if (org_id && all_agent_names.size > 0) {
                         const registered_rows = await _agent_catalog_repo.find_all_q({
                             where: {
                                 name: { [Op.in]: [...all_agent_names] },
@@ -2123,7 +2142,7 @@ export class RealmService {
             }
         } catch (err) {
             log.debug('agent_coverage_check_failed', { error: err instanceof Error ? err.message : String(err) });
-            // Best-effort — missing agent detection should never block coverage.
+            // Best-effort — missing agents and use_when should never block coverage.
         }
 
         // Materialise coverage rows.
@@ -2155,12 +2174,14 @@ export class RealmService {
                 in_team_list: team_list_set.has(key),
                 last_run_at,
                 missing_agents: missing_agents_map.get(key) ?? [],
+                description: description_by_key.get(key) ?? null,
+                ...(capability_map.get(key) ?? { use_when: [], not_for: [], required_inputs: [] }),
             };
         });
 
-        // Query filter (substring, case-insensitive over label).
+        // Query filter (substring, case-insensitive over the name, what it is for and when to use it).
         const q = (params.query ?? '').trim().toLowerCase();
-        if (q) rows = rows.filter((r) => r.label.toLowerCase().includes(q));
+        if (q) rows = rows.filter((r) => [r.label, r.description ?? '', ...r.use_when].join('\n').toLowerCase().includes(q));
 
         // Origin filter.
         if (params.origin) rows = rows.filter((r) => r.origin === params.origin);
@@ -2205,4 +2226,30 @@ export class RealmService {
 
 function _coverage_label(installed: number, online: number): string {
     return `${installed}/${online}`;
+}
+
+/** What a realm's Teams list shows about when to use a team. */
+interface TeamCapabilitySummary {
+    use_when: string[];
+    not_for: string[];
+    required_inputs: Array<{ name: string; description: string | null }>;
+}
+
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string' && s.trim() !== '') : []);
+
+/**
+ * A team version's stored `capability_json` ({ inputs, use_when, not_for }, written at publish)
+ * as the Teams list shows it: required inputs are the ones a run must be given (no default).
+ */
+export function capability_summary(capability_json: string | null | undefined): TeamCapabilitySummary {
+    let raw: { inputs?: unknown; use_when?: unknown; not_for?: unknown } | null = null;
+    try { raw = capability_json ? JSON.parse(capability_json) : null; } catch { raw = null; }
+    const inputs = Array.isArray(raw?.inputs) ? (raw.inputs as InputFieldSpec[]) : [];
+    return {
+        use_when: strings(raw?.use_when),
+        not_for: strings(raw?.not_for),
+        required_inputs: inputs
+            .filter((i) => i && typeof i.name === 'string' && i.required !== false && i.default === undefined)
+            .map((i) => ({ name: i.name, description: i.description ?? i.help ?? null })),
+    };
 }

@@ -81,26 +81,38 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
             is_default: 0, created_at: new Date(),
         });
 
-        const publish = async (name: string, listed: number) => {
+        const publish = async (name: string, listed: number, versions: Record<string, unknown> = { '1.0.0': {} }) => {
             const team = await Team.create({
                 id: randomUUID(), name, scope: scope_slug, description: `${name} team`,
                 author_id: user_id, license: 'MIT', visibility: 'public', listed, install_count: 0,
             } as any);
-            await TeamVersion.create({
-                id: randomUUID(), team_id: team.id, version: '1.0.0', changelog: '', package_path: '/tmp/x.zip',
-                workflow_json: JSON.stringify({ phases: [] }), manifest_yaml: '', readme: '',
-                capability_json: '{}', agents_json: '{}', roles_json: '[]', tools: '[]', published_at: new Date(),
-            } as any);
+            for (const [version, capability] of Object.entries(versions)) {
+                await TeamVersion.create({
+                    id: randomUUID(), team_id: team.id, version, changelog: '', package_path: '/tmp/x.zip',
+                    workflow_json: JSON.stringify({ phases: [] }), manifest_yaml: '', readme: '',
+                    capability_json: JSON.stringify(capability), agents_json: '{}', roles_json: '[]', tools: '[]', published_at: new Date(),
+                } as any);
+            }
             return team.id;
         };
-        alpha_id = await publish('alpha', 1);
+        alpha_id = await publish('alpha', 1, {
+            '1.0.0': {
+                use_when: ['You have failed item IDs'], not_for: ['Finding failed documents'],
+                inputs: [
+                    { name: 'item_ids', required: true, description: 'The documents' },
+                    { name: 'mode', required: false },
+                    { name: 'work_root', required: true, default: 'parser-work' },
+                ],
+            },
+            '1.1.0': { use_when: ['Newer text the realm does not run yet'], not_for: [], inputs: [] },
+        });
         beta_id = await publish('beta', 0);
 
         const realm = await RealmService.create(user_id, uid().slice(0, 40), 'Coverage Realm');
         realm_id = realm.id;
         await Realm.update(
             { team_list: [
-                { scope: scope_slug, slug: 'alpha' },
+                { scope: scope_slug, slug: 'alpha', version: '1.0.0' },
                 { scope: scope_slug, slug: 'beta' },
                 { scope: scope_slug, slug: 'gamma' },
             ] } as any,
@@ -154,6 +166,24 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
         expect(by.gamma).toMatchObject({ scope: scope_slug, origin: 'cli', team_id: null, sample_team_id: null });
     });
 
+    it('rows say when to use a team: the realm version\'s use_when / not_for, required inputs, description', async () => {
+        const { rows } = await RealmService.list_team_coverage({ realm_id }, user_id);
+        const by = Object.fromEntries(rows.map((r) => [r.slug, r]));
+        expect(by.alpha).toMatchObject({
+            description: 'alpha team',
+            use_when: ['You have failed item IDs'],
+            not_for: ['Finding failed documents'],
+            required_inputs: [{ name: 'item_ids', description: 'The documents' }],
+        });
+        // Never published: nothing known about it.
+        expect(by.gamma).toMatchObject({ description: null, use_when: [], not_for: [], required_inputs: [] });
+    });
+
+    it('search matches what a team is for, not only its name', async () => {
+        const { rows } = await RealmService.list_team_coverage({ realm_id, query: 'failed item' }, user_id);
+        expect(rows.map((r) => r.slug)).toEqual(['alpha']);
+    });
+
     it('teams/get realm mode: rows carry scope and the catalog id', async () => {
         const data = await call('get', { realm_id });
         const by = Object.fromEntries(data.items.map((t: any) => [t.slug, t]));
@@ -188,8 +218,9 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
         const listed = await call('get', { scope: scope_slug, listed: true }, 'admin');
         expect(listed.total).toBe(1);
         expect(listed.items[0]).toMatchObject({
-            id: alpha_id, name: 'alpha', scope: scope_slug, listed: true, version_count: 1,
-            latest_version: '1.0.0', author_id: user_id,
+            // alpha has 1.0.0 (the realm's) and 1.1.0 (see the use_when test).
+            id: alpha_id, name: 'alpha', scope: scope_slug, listed: true, version_count: 2,
+            latest_version: '1.1.0', author_id: user_id,
         });
 
         const unlisted = await call('get', { scope: scope_slug, listed: false }, 'admin');

@@ -434,6 +434,12 @@ export const TeamData = z.object({
         .describe('Display label for the team (realm coverage context)'),
     sample_team_id: z.string().nullable().optional()
         .describe('UUID of a representative team row (realm coverage context)'),
+    use_when: z.array(z.string()).optional()
+        .describe('Realm mode: team.yml use_when of the realm\'s version (else the latest); empty for CLI-installed teams'),
+    not_for: z.array(z.string()).optional()
+        .describe('Realm mode: team.yml not_for of the same version'),
+    required_inputs: z.array(z.object({ name: z.string(), description: z.string().nullable() })).optional()
+        .describe('Realm mode: the inputs a run must be given (required, no default), from the same version'),
 });
 export type TeamData = z.infer<typeof TeamData>;
 

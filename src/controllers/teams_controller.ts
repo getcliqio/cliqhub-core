@@ -212,6 +212,10 @@ export class TeamsController extends BaseController {
                 missing_agents: r.missing_agents,
                 last_run_at: r.last_run_at,
                 sample_team_id: r.sample_team_id,
+                ...(r.description ? { description: r.description } : {}),
+                use_when: r.use_when,
+                not_for: r.not_for,
+                required_inputs: r.required_inputs,
             }));
             this.ok(res, { items, total: result.total, offset, limit });
             return;
