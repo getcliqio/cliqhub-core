@@ -22,6 +22,8 @@ export class TeamVersion extends BaseModel {
     declare cliq_version: string | null;
     declare tools: string;
     declare published_at: Date | null;
+    /** When a draft's files last changed (upload / remove); picks a team's open draft. */
+    declare saved_at: Date | null;
 
     static register(sequelize: Sequelize): void {
         TeamVersion.init({
@@ -41,6 +43,7 @@ export class TeamVersion extends BaseModel {
             cliq_version: { type: DataTypes.TEXT, allowNull: true },
             tools: { type: DataTypes.TEXT, allowNull: false, defaultValue: '[]' },
             published_at: { type: DataTypes.DATE, allowNull: true, defaultValue: DataTypes.NOW },
+            saved_at: { type: DataTypes.DATE, allowNull: true },
         }, {
             sequelize, tableName: 'team_versions', schema: 'cliq',
             indexes: [{ unique: true, fields: ['team_id', 'version'] }],

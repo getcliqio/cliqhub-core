@@ -1148,6 +1148,7 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "status" TEXT NOT NULL DEFAULT 'published'`);
     await run(`ALTER TABLE cliq."team_versions" ALTER COLUMN "version" DROP NOT NULL`);
     await run(`ALTER TABLE cliq."team_versions" ALTER COLUMN "published_at" DROP NOT NULL`);
+    await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "saved_at" TIMESTAMPTZ`);
     // team_files: which files a version has and where their bytes are (the content stays in storage).
     await run(`
         CREATE TABLE IF NOT EXISTS cliq."team_files" (

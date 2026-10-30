@@ -159,10 +159,6 @@ export const TeamsCreateInput = z.object({
         version: z.string().optional().describe('Version to fork from; omit for the latest'),
     }).optional()
         .describe('Start the new team as a copy of this team version (its manifest unless `manifest` is given); the new team records where it came from'),
-    manifest: z.union([z.string(), z.record(z.unknown())]).optional()
-        .describe('Team manifest as YAML string or parsed object; seeds version 0.1.0 when provided'),
-    team_json: z.string().optional()
-        .describe('SPA builder canvas JSON string (alternative to manifest)'),
 });
 export type TeamsCreateInput = z.infer<typeof TeamsCreateInput>;
 
@@ -180,18 +176,10 @@ export const TeamsUpdateInput = z.object({
         .describe('Team UUID — mutually exclusive with name as the lookup key'),
     description: z.string().optional()
         .describe('Updated human-readable summary'),
-    manifest: z.union([z.string(), z.record(z.unknown())]).optional()
-        .describe('Updated manifest as YAML string or parsed object; triggers a new patch version'),
-    team_json: z.string().optional()
-        .describe('Updated SPA builder canvas JSON string'),
-    bump: z.enum(['minor', 'major']).optional()
-        .describe('Bump magnitude when updating manifest; omit for patch (default)'),
-    save_as: z.enum(['draft', 'version', 'discard']).optional()
-        .describe("'draft': keep the manifest as the team's working copy without minting a version; "
-            + "'version' (default): mint the next version from the manifest, or from the working copy when no manifest is sent, and clear the working copy; "
-            + "'discard': drop the working copy (no version, nothing else changes)"),
-    changelog: z.string().max(2000).optional()
-        .describe('What changed in the version being minted'),
+    save_as: z.enum(['discard']).optional()
+        .describe("'discard': delete the draft named by version_id and its files' rows (files change only through teams/files/upload; a draft becomes a version only through teams/publish)"),
+    version_id: z.string().uuid().optional()
+        .describe('The draft to discard'),
 }).refine(
     (d) => Boolean(d.name) || Boolean(d.team_id),
     { message: 'Provide exactly one of team_id or name' },
@@ -643,5 +631,6 @@ export type TeamsFilesRemoveInput = z.infer<typeof TeamsFilesRemoveInput>;
 export const TeamsFilesGetInput = z.object({
     team_id: z.string().uuid().describe('The team'),
     version_id: z.string().uuid().describe('A draft or published version of it'),
+    content: z.boolean().optional().describe("Include each file's text (checked against its sha256)"),
 });
 export type TeamsFilesGetInput = z.infer<typeof TeamsFilesGetInput>;

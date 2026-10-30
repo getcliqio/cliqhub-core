@@ -54,20 +54,6 @@ export function with_manifest_name(manifest_yaml: string, name: string): string 
     return line.test(manifest_yaml) ? manifest_yaml.replace(line, `name: ${name}`) : `name: ${name}\n${manifest_yaml}`;
 }
 
-/** Normalize optional manifest (YAML string, JSON object, or team_json string). */
-function resolve_manifest_yaml(params: {
-    manifest?: string | Record<string, unknown>;
-    team_json?: string;
-}): string | null {
-    if (params.team_json) return params.team_json;
-    if (params.manifest == null) return null;
-    if (typeof params.manifest === 'string') return params.manifest;
-    try {
-        return yaml.dump(params.manifest);
-    } catch {
-        return JSON.stringify(params.manifest);
-    }
-}
 
 /**
  * Refuse a team whose phases carry lines cliq would silently ignore (cliq-sdk `lint_team`, shared with cliqd): a line
@@ -263,37 +249,48 @@ export class TeamsService {
         const twice = paths.filter((p, i) => paths.indexOf(p) !== i);
         if (twice.length) throw new ApiError('invalid_params', `Sent twice: ${[...new Set(twice)].join(', ')}`, 422, { paths: twice });
 
-        let draft_id = params.version_id;
-        let kept: TeamFileRow[] = [];
-        if (draft_id) {
-            const draft = await this._version_repo.find_draft(draft_id);
+        if (params.version_id) {
+            const draft = await this._version_repo.find_draft(params.version_id);
             if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (a published version can\'t change)', 404);
-            kept = (await this._file_repo.list_by_version(draft_id)).filter((r) => !paths.includes(r.path));
         }
-        const total = kept.reduce((n, r) => n + r.size, 0) + params.files.reduce((n, f) => n + f.data.length, 0);
+        const out = await this._store_files(team.id, params.version_id, params.files);
+        log.info('team_files_uploaded', { team_id: team.id, version_id: out.version_id, files: out.files.length });
+        return out;
+    }
+
+    /**
+     * Store files into a draft (a new one when `draft_id` is absent): the draft stays within 10 MB / 1000 files,
+     * each file gets an id and its bytes go to storage first, then all rows are written in one transaction,
+     * replacing paths the draft has, and the draft is marked saved.
+     */
+    private async _store_files(team_id: string, draft_id: string | undefined, files: Array<{ path: string; content_type: string; data: Buffer }>) {
+        const paths = files.map((f) => f.path);
+        const kept = draft_id ? (await this._file_repo.list_by_version(draft_id)).filter((r) => !paths.includes(r.path)) : [];
+        const total = kept.reduce((n, r) => n + r.size, 0) + files.reduce((n, f) => n + f.data.length, 0);
         if (total > MAX_BUNDLE_UNPACKED) throw new ApiError('invalid_package', `A team's files total more than ${MAX_BUNDLE_UNPACKED / 1024 / 1024} MB`, 422);
-        if (kept.length + params.files.length > MAX_BUNDLE_FILES) throw new ApiError('invalid_package', `A team has more than ${MAX_BUNDLE_FILES} files`, 422);
+        if (kept.length + files.length > MAX_BUNDLE_FILES) throw new ApiError('invalid_package', `A team has more than ${MAX_BUNDLE_FILES} files`, 422);
         if (!this._storage) throw new ApiError('internal', 'No storage configured', 500);
 
         // Bytes first, under new ids: a row only ever points at bytes that exist.
         const rows: TeamFileRow[] = [];
-        for (const f of params.files) {
+        for (const f of files) {
             const id = randomUUID();
-            const storage_key = team_file_key(team.id, id);
+            const storage_key = team_file_key(team_id, id);
             await this._storage.write(storage_key, f.data, f.content_type);
             rows.push({
-                id, team_id: team.id, version_id: '', path: f.path, name: f.path.split('/').pop()!,
+                id, team_id, version_id: '', path: f.path, name: f.path.split('/').pop()!,
                 size: f.data.length, sha256: createHash('sha256').update(f.data).digest('hex'),
                 content_type: f.content_type, storage_key,
             });
         }
+        let version_id = draft_id;
         await get_sequelize().transaction(async (t) => {
-            if (!draft_id) draft_id = await this._version_repo.create_draft(team.id, t);
-            for (const r of rows) r.version_id = draft_id;
-            await this._file_repo.replace_paths(draft_id, rows, t);
+            if (!version_id) version_id = await this._version_repo.create_draft(team_id, t);
+            for (const r of rows) r.version_id = version_id;
+            if (rows.length) await this._file_repo.replace_paths(version_id, rows, t);
+            await this._version_repo.touch_draft(version_id, t);
         });
-        log.info('team_files_uploaded', { team_id: team.id, version_id: draft_id, files: rows.length });
-        return { version_id: draft_id!, files: rows.map((r) => ({ id: r.id, path: r.path, size: r.size, sha256: r.sha256 })) };
+        return { version_id: version_id!, files: rows.map((r) => ({ id: r.id, path: r.path, size: r.size, sha256: r.sha256 })) };
     }
 
     /** Take paths out of a draft (their bytes stay for the cleanup). */
@@ -303,14 +300,16 @@ export class TeamsService {
         const team = await this._resolve_team_for_write(auth, { team_id: params.team_id });
         const draft = await this._version_repo.find_draft(params.version_id);
         if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (a published version can\'t change)', 404);
-        return { removed: await this._file_repo.delete_paths(params.version_id, params.paths) };
+        const removed = await this._file_repo.delete_paths(params.version_id, params.paths);
+        await this._version_repo.touch_draft(params.version_id);
+        return { removed };
     }
 
     /**
      * A version's files (path, size, sha256, id). A published version: anyone who can see the team; a draft:
      * only someone who can edit it.
      */
-    async get_files(auth: AuthContext, params: { team_id: string; version_id: string }) {
+    async get_files(auth: AuthContext, params: { team_id: string; version_id: string; content?: boolean }) {
         const team = await this._team_repo.find_by_id(params.team_id);
         if (!team || !can_view_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
         const draft = await this._version_repo.find_draft(params.version_id);
@@ -322,7 +321,15 @@ export class TeamsService {
             if (!published || published.team_id !== team.id) throw new ApiError('not_found', 'Version not found', 404);
         }
         const rows = await this._file_repo.list_by_version(params.version_id);
-        return { version_id: params.version_id, files: rows.map((r) => ({ id: r.id, path: r.path, size: r.size, sha256: r.sha256, content_type: r.content_type })) };
+        // With content: each file's text, checked against its sha256 (the builder rebuilds its canvas from these).
+        const texts = params.content ? await this._read_version_files(params.version_id) : null;
+        return {
+            version_id: params.version_id,
+            files: rows.map((r) => ({
+                id: r.id, path: r.path, size: r.size, sha256: r.sha256, content_type: r.content_type,
+                ...(texts ? { content: texts[r.path] } : {}),
+            })),
+        };
     }
 
     // ─── Unified list (replaces list, search, list_mine, list_all_mine, admin_list_teams) ───
@@ -518,11 +525,9 @@ export class TeamsService {
         const permissions = await this._resolve_team_permissions(auth, team);
         const forked_from = await this._fork_summary(auth, team);
         const fork_count = await this._team_repo.count_forks(team.id);
-        const working = team as { draft_manifest?: string | null; draft_description?: string | null; draft_saved_at?: Date | null };
-        // Only people who can edit the team see its unversioned working copy.
-        const draft = permissions.can_edit && working.draft_manifest
-            ? { manifest: working.draft_manifest, description: working.draft_description ?? null, saved_at: working.draft_saved_at ?? null }
-            : null;
+        // Only people who can edit the team see its open draft (the builder reopens it from its files).
+        const open_draft = permissions.can_edit ? await this._version_repo.find_open_draft(team.id) : null;
+        const draft = open_draft ? { version_id: open_draft.id, saved_at: open_draft.saved_at } : null;
 
         /**
          * Prefer version-specific manifest_yaml (from team_versions) when
@@ -654,13 +659,13 @@ export class TeamsService {
     // ─── Write methods ──────────────────────────────────────────────
 
     /**
-     * Create a team as draft (`visibility: draft`, `listed: 0`).
-     * Seeds version `0.1.0` when a manifest is provided.
+     * Create a team (`visibility: draft`, `listed: 0`) with its first draft (PLAN-team-bundle §2.6): seeded with a
+     * `team.yml` (its name, description, no phases) and a `README.md`; a fork's draft starts from the origin
+     * version's files, with `team.yml` named for the fork.
      */
     async create(auth: AuthContext, params: {
         name: string; scope: string; description?: string;
         forked_from?: { team_id: string; version?: string };
-        manifest?: string | Record<string, unknown>; team_json?: string;
     }) {
         log.debug('create', { name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -668,126 +673,68 @@ export class TeamsService {
         if (!SLUG_PATTERN.test(params.name)) {
             throw new ApiError('invalid_params', 'Team name must be lowercase letters, numbers, and hyphens, starting with a letter', 422);
         }
-        const scope_row = await this._assert_can_publish(auth, params.scope);
+        await this._assert_can_publish(auth, params.scope);
 
         const existing = await this._team_repo.find_by_name_and_scope(params.name, params.scope);
         if (existing) throw new ApiError('conflict', `Team @${params.scope}/${params.name} already exists`, 409);
 
         const origin = params.forked_from ? await this._fork_origin(auth, params.forked_from) : null;
         const description = params.description || origin?.description || '';
-        const sent_manifest = resolve_manifest_yaml(params);
-        const manifest_yaml = sent_manifest
-            ?? (origin ? with_manifest_name(origin.manifest_yaml, params.name) : null);
-        // A fork of the origin's own team.yml keeps its role briefs too (a manifest sent with the fork wins).
-        const roles_json = !sent_manifest && origin ? origin.roles_json : null;
+        const label = `@${params.scope}/${params.name}`;
+        const seed: Record<string, string> = origin
+            ? { ...(await this._origin_files(origin)), [TEAM_YML]: with_manifest_name(origin.manifest_yaml, JSON.stringify(label)) }
+            : { [TEAM_YML]: `name: ${JSON.stringify(label)}\ndescription: ${JSON.stringify(description)}\nphases: []\n`, 'README.md': `# ${label}\n\n${description}\n` };
+
         let team_id = '';
-        let version: string | undefined;
-
         await get_sequelize().transaction(async (t) => {
-            team_id = await this._team_repo.create(
-                params.name, params.scope, description,
-                auth.user!.id, 'MIT', 'draft', t, 0,
-            );
-
-            if (manifest_yaml) {
-                version = '0.1.0';
-                await this._seed_version_from_manifest(team_id, version, manifest_yaml, description, t, roles_json);
-            }
+            team_id = await this._team_repo.create(params.name, params.scope, description, auth.user!.id, 'MIT', 'draft', t, 0);
             if (origin) await this._team_repo.set_fork_origin(team_id, origin.team_id, origin.version, t);
         });
+        const draft = await this._store_files(team_id, undefined, Object.entries(seed).map(([path, text]) => ({
+            path, content_type: path.endsWith('.md') ? 'text/markdown' : 'text/yaml', data: Buffer.from(text, 'utf8'),
+        })));
 
-        log.info('team_created', { team_id, name: params.name, scope: params.scope, forked_from: origin ? `${origin.team_id}@${origin.version}` : null });
-        return {
-            id: team_id,
-            name: params.name,
-            scope: params.scope,
-            status: 'draft' as const,
-            version: version ?? null,
-        };
+        log.info('team_created', { team_id, name: params.name, scope: params.scope, version_id: draft.version_id, forked_from: origin ? `${origin.team_id}@${origin.version}` : null });
+        return { id: team_id, name: params.name, scope: params.scope, status: 'draft' as const, version: null, version_id: draft.version_id };
     }
 
     /**
-     * Edits a team. Versions are never changed: with `save_as: 'draft'` the
-     * manifest is kept as the team's working copy; otherwise (`'version'`, the
-     * default) the next version is minted — patch unless `bump` says minor or
-     * major — from the manifest sent, or from the working copy when none is
-     * sent, and the working copy is cleared.
-     *
-     * @throws ApiError 422 when saving a draft without a manifest.
+     * The origin version's files for a fork: its `team_files` (read and checked), or — for a version published before
+     * team_files (S1.5 gives those rows) — its stored team.yml and role briefs.
+     */
+    private async _origin_files(origin: { version_id: string; manifest_yaml: string; roles_json: string | null }): Promise<Record<string, string>> {
+        const files = await this._read_version_files(origin.version_id);
+        if (Object.keys(files).length) return files;
+        const out: Record<string, string> = { [TEAM_YML]: origin.manifest_yaml };
+        for (const r of (JSON.parse(origin.roles_json || '[]') as Array<{ name: string; content_md: string }>)) out[`roles/${r.name}.md`] = r.content_md;
+        return out;
+    }
+
+    /**
+     * A team's settings (its description), or `save_as: 'discard'` with a `version_id`: delete that draft and its
+     * files' rows. Files change only through `teams/files/upload` / `remove`, and a draft becomes a version only
+     * through `teams/publish` (PLAN-team-bundle §2.6).
      */
     async update(auth: AuthContext, params: {
         name?: string; scope?: string; team_id?: string;
         description?: string;
-        manifest?: string | Record<string, unknown>; team_json?: string;
-        bump?: 'minor' | 'major';
-        save_as?: 'draft' | 'version' | 'discard';
-        changelog?: string;
+        save_as?: 'discard';
+        version_id?: string;
     }) {
         log.debug('update', { team_id: params.team_id, name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
 
         const team = await this._resolve_team_for_write(auth, params);
-        const sent_manifest = resolve_manifest_yaml(params);
-
         if (params.save_as === 'discard') {
-            await this._team_repo.clear_draft(team.id);
-            return {
-                id: team.id,
-                name: team.name,
-                scope: team.scope,
-                status: team_status(team.visibility),
-                version: null,
-                draft_saved_at: null,
-            };
+            if (!params.version_id) throw new ApiError('invalid_params', 'version_id (the draft to discard) is required', 422, { field: 'version_id' });
+            const draft = await this._version_repo.find_draft(params.version_id);
+            if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found', 404);
+            await this._version_repo.delete_draft(params.version_id);
+        } else if (params.description !== undefined) {
+            await this._team_repo.update_description(team.id, params.description);
         }
-
-        if (params.save_as === 'draft') {
-            if (!sent_manifest) throw new ApiError('invalid_params', 'A draft needs a manifest', 422, { field: 'manifest' });
-            await this._team_repo.save_draft(team.id, sent_manifest, params.description ?? null);
-            return {
-                id: team.id,
-                name: team.name,
-                scope: team.scope,
-                status: team_status(team.visibility),
-                version: null,
-                draft_saved_at: new Date().toISOString(),
-            };
-        }
-
-        const working = team as { draft_manifest?: string | null; draft_description?: string | null };
-        const manifest_yaml = sent_manifest ?? working.draft_manifest ?? null;
-        const new_description = params.description ?? (sent_manifest ? undefined : working.draft_description ?? undefined);
-        const description = new_description !== undefined ? new_description : team.description;
-
-        let resolved_version: string | null = null;
-
-        await get_sequelize().transaction(async (t) => {
-            if (new_description !== undefined) {
-                await this._team_repo.update_description(team.id, description, t);
-            }
-
-            if (manifest_yaml) {
-                const latest = await this._version_repo.find_latest_version(team.id);
-                const bump = params.bump || 'patch';
-                resolved_version = compute_next_version(latest, bump);
-                // First manifest on a create-without-manifest team → seed 0.1.0
-                if (!latest) resolved_version = '0.1.0';
-                await this._seed_version_from_manifest(
-                    team.id, resolved_version, manifest_yaml, params.changelog ?? description, t,
-                );
-                if (working.draft_manifest) await this._team_repo.clear_draft(team.id, t);
-            }
-        });
-
-        return {
-            id: team.id,
-            name: team.name,
-            scope: team.scope,
-            status: team_status(team.visibility),
-            version: resolved_version,
-            draft_saved_at: null,
-        };
+        return { id: team.id, name: team.name, scope: team.scope, status: team_status(team.visibility), version: null };
     }
 
     /** Return a draft team to draft status (visibility draft, listed 0). Versions kept. */
@@ -1019,8 +966,6 @@ export class TeamsService {
             // Must use the same transaction: a second connection UPDATE on the
             // locked team row deadlocks until the statement timeout → 500.
             await this._team_repo.update_listed(team.id, 1, t);
-            // The published version supersedes the builder's old working copy (until S1.3c moves it to drafts).
-            if ((team as { draft_manifest?: string | null }).draft_manifest) await this._team_repo.clear_draft(team.id, t);
 
             const flipped = await this._version_repo.publish_draft(draft.id, {
                 version: resolved_version!, changelog: params.changelog || '', cliq_version, tools, workflow_json,
@@ -1195,7 +1140,7 @@ export class TeamsService {
      * @throws ApiError 404 when the team or version is not found; 409 when the team has no version yet.
      */
     private async _fork_origin(auth: AuthContext, ref: { team_id: string; version?: string }): Promise<{
-        team_id: string; version: string; manifest_yaml: string; description: string;
+        team_id: string; version: string; version_id: string; manifest_yaml: string; description: string;
         /** The version's role briefs (`roles_json`), copied into the fork. */
         roles_json: string | null;
     }> {
@@ -1207,7 +1152,7 @@ export class TeamsService {
         const manifest_yaml = (detail as { manifest_yaml?: string | null } | null)?.manifest_yaml;
         if (!detail || !manifest_yaml) throw new ApiError('not_found', `Version ${version} not found`, 404);
         const roles_json = (detail as { roles_json?: string | null }).roles_json ?? null;
-        return { team_id: source.id, version, manifest_yaml, description: source.description, roles_json };
+        return { team_id: source.id, version, version_id: detail.id, manifest_yaml, description: source.description, roles_json };
     }
 
     /**
@@ -1320,35 +1265,6 @@ export class TeamsService {
         return files;
     }
 
-    /** Seed a draft version row from raw manifest YAML/JSON (no zip package). */
-    private async _seed_version_from_manifest(
-        team_id: string,
-        version: string,
-        manifest_yaml: string,
-        description: string,
-        transaction?: import('sequelize').Transaction,
-        /** Role briefs to keep (a fork copies its origin's); none otherwise. */
-        roles_json: string | null = null,
-    ): Promise<void> {
-        const team_yml = parse_manifest_yaml(manifest_yaml);
-        const workflow = workflow_from_team_yml(team_yml);
-        const workflow_json = JSON.stringify(workflow);
-        const enriched_inputs = enrich_required_inputs(team_yml?.inputs, workflow);
-        const capability_json = JSON.stringify({
-            inputs: enriched_inputs,
-            use_when: team_yml?.use_when,
-            not_for: team_yml?.not_for,
-        });
-        const agents_json = JSON.stringify(team_yml?.agents || {});
-        const tools = JSON.stringify(team_yml?.tools || []);
-        const pkg_path = `draft://${team_id}/${version}`;
-
-        await this._version_repo.create(
-            team_id, version, description || '', pkg_path,
-            team_yml?.cliq_version || null, tools, workflow_json, manifest_yaml,
-            '', capability_json, agents_json, roles_json ?? '[]', transaction,
-        );
-    }
 
     /**
      * Compute the caller's permissions for a team.

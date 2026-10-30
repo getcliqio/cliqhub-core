@@ -152,7 +152,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     /** A new draft version of a team (no number, no date yet): its id. */
     async create_draft(team_id: string, transaction?: Transaction): Promise<string> {
         const row = await TeamVersion.create(
-            { team_id, status: 'draft', version: null, published_at: null, package_path: '', changelog: '' } as never,
+            { team_id, status: 'draft', version: null, published_at: null, saved_at: new Date(), package_path: '', changelog: '' } as never,
             { transaction },
         );
         return row.id;
@@ -174,6 +174,26 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
             { where: { id, status: 'draft' }, transaction },
         );
         return n === 1;
+    }
+
+    /** Mark a draft as just saved (its files changed). */
+    async touch_draft(id: string, transaction?: Transaction): Promise<void> {
+        await TeamVersion.update({ saved_at: new Date() } as never, { where: { id, status: 'draft' }, transaction });
+    }
+
+    /** A team's open draft: the most recently saved one, or null. */
+    async find_open_draft(team_id: string): Promise<{ id: string; saved_at: Date | null } | null> {
+        return TeamVersion.findOne({
+            where: { team_id, status: 'draft' },
+            attributes: ['id', 'saved_at'],
+            order: [['saved_at', 'DESC NULLS LAST']],
+            raw: true,
+        });
+    }
+
+    /** Delete a draft (its team_files rows go with it); false when it isn't a draft. */
+    async delete_draft(id: string, transaction?: Transaction): Promise<boolean> {
+        return (await TeamVersion.destroy({ where: { id, status: 'draft' }, transaction })) === 1;
     }
 
     /** A draft version by id, or null (a published version is not a draft). */

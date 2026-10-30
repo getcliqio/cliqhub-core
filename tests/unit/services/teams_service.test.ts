@@ -170,6 +170,12 @@ function make_version_repo() {
         create: vi.fn().mockResolvedValue(NEW_VERSION_ID),
         update_package_path: vi.fn().mockResolvedValue(undefined),
         find_package_by_id: vi.fn(),
+        create_draft: vi.fn().mockResolvedValue('0d0d0d0d-1111-4222-8333-555555555555'),
+        find_draft: vi.fn().mockResolvedValue(null),
+        find_open_draft: vi.fn().mockResolvedValue(null),
+        touch_draft: vi.fn().mockResolvedValue(undefined),
+        delete_draft: vi.fn().mockResolvedValue(true),
+        publish_draft: vi.fn().mockResolvedValue(true),
         delete_by_id: vi.fn().mockResolvedValue(undefined),
         find_package_by_version: vi.fn(),
         find_latest_package: vi.fn(),
@@ -436,6 +442,86 @@ describe('TeamsService — get (mine: true)', () => {
 /* ================================================================
    get_by_id  (single team detail — was: get)
    ================================================================ */
+
+describe('TeamsService — create, update, the open draft (S1.3c)', () => {
+    let service: TeamsService;
+    let team_repo: ReturnType<typeof make_team_repo>;
+    let version_repo: ReturnType<typeof make_version_repo>;
+    let storage: ReturnType<typeof make_storage>;
+    let files: ReturnType<typeof make_file_repo>;
+    const DRAFT = '0d0d0d0d-1111-4222-8333-555555555555';
+    const written = new Map<string, Buffer>();
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        written.clear();
+        storage = make_storage();
+        storage.write.mockImplementation(async (k: string, d: Buffer) => { written.set(k, d); });
+        storage.read.mockImplementation(async (k: string) => written.get(k) ?? null);
+        files = make_file_repo();
+        const built = build_service({ storage, file_repo: files });
+        service = built.service;
+        team_repo = built.team_repo;
+        version_repo = built.version_repo;
+        team_repo.find_by_name_and_scope.mockResolvedValue(null);
+    });
+
+    const text_of = (path: string) => written.get(files.rows.find((r) => r.path === path)!.storage_key as string)!.toString();
+
+    it('create makes the team and its first draft, seeded with team.yml and README.md', async () => {
+        const out = await service.create(ALICE, { name: 'loan-review', scope: 'alice', description: 'Reviews loans' });
+        expect(out).toMatchObject({ id: NEW_TEAM_ID, status: 'draft', version: null, version_id: DRAFT });
+        expect(team_repo.create.mock.calls[0]![5]).toBe('draft');
+        expect(files.rows.map((r) => r.path).sort()).toEqual(['README.md', 'team.yml']);
+        expect(text_of('team.yml')).toBe('name: "@alice/loan-review"\ndescription: "Reviews loans"\nphases: []\n');
+        expect(text_of('README.md')).toBe('# @alice/loan-review\n\nReviews loans\n');
+        expect(version_repo.touch_draft).toHaveBeenCalledWith(DRAFT, expect.anything());
+    });
+
+    it("a fork's draft starts from the origin version's files, named for the fork", async () => {
+        const ORIGIN_VERSION = '0a0a0a0a-1111-4222-8333-444444444444';
+        team_repo.find_by_id.mockResolvedValueOnce(PUBLIC_TEAM);
+        version_repo.find_latest_version.mockResolvedValueOnce('1.0.0');
+        version_repo.find_detail_by_team_and_version.mockResolvedValueOnce({ id: ORIGIN_VERSION, manifest_yaml: 'name: "@alice/my-team"\nphases: []\n', roles_json: '[{"name":"dev","content_md":"# Dev"}]' });
+        await service.create(ALICE, { name: 'my-fork', scope: 'alice', forked_from: { team_id: PUBLIC_TEAM.id } });
+        expect(files.rows.map((r) => r.path).sort()).toEqual(['roles/dev.md', 'team.yml']);
+        expect(text_of('team.yml')).toContain('name: "@alice/my-fork"');
+        expect(text_of('roles/dev.md')).toBe('# Dev');
+        expect(team_repo.set_fork_origin).toHaveBeenCalledWith(NEW_TEAM_ID, PUBLIC_TEAM.id, '1.0.0', expect.anything());
+    });
+
+    it('a name that exists is refused before anything is stored', async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
+        await expect(service.create(ALICE, { name: 'my-team', scope: 'alice' })).rejects.toMatchObject({ status: 409 });
+        expect(storage.write).not.toHaveBeenCalled();
+    });
+
+    it("update: discard deletes the named draft; a published version or another team's draft is not found", async () => {
+        team_repo.find_by_id.mockResolvedValue(PUBLIC_TEAM);
+        version_repo.find_draft.mockResolvedValueOnce({ id: DRAFT, team_id: PUBLIC_TEAM.id });
+        await service.update(ALICE, { team_id: PUBLIC_TEAM.id, save_as: 'discard', version_id: DRAFT });
+        expect(version_repo.delete_draft).toHaveBeenCalledWith(DRAFT);
+        version_repo.find_draft.mockResolvedValueOnce(null);
+        await expect(service.update(ALICE, { team_id: PUBLIC_TEAM.id, save_as: 'discard', version_id: DRAFT })).rejects.toMatchObject({ status: 404 });
+        await expect(service.update(ALICE, { team_id: PUBLIC_TEAM.id, save_as: 'discard' })).rejects.toMatchObject({ status: 422 });
+    });
+
+    it('update changes the description', async () => {
+        team_repo.find_by_id.mockResolvedValue(PUBLIC_TEAM);
+        await service.update(ALICE, { team_id: PUBLIC_TEAM.id, description: 'New words' });
+        expect(team_repo.update_description).toHaveBeenCalledWith(PUBLIC_TEAM.id, 'New words');
+    });
+
+    it('files/get with content returns each file\'s text, checked against its sha256', async () => {
+        await service.create(ALICE, { name: 'loan-review', scope: 'alice', description: 'x' });
+        team_repo.find_by_id.mockResolvedValue({ ...PUBLIC_TEAM, id: NEW_TEAM_ID });
+        version_repo.find_draft.mockResolvedValue({ id: DRAFT, team_id: NEW_TEAM_ID });
+        const listed = await service.get_files(ALICE, { team_id: NEW_TEAM_ID, version_id: DRAFT, content: true });
+        expect(Object.fromEntries(listed.files.map((f) => [f.path, f.content]))).toEqual({
+            'README.md': '# @alice/loan-review\n\nx\n', 'team.yml': 'name: "@alice/loan-review"\ndescription: "x"\nphases: []\n',
+        });
+    });
+});
 
 describe('TeamsService — get_by_id', () => {
     let service: TeamsService;
