@@ -97,7 +97,7 @@ export class AgentWorkflow {
                 `SELECT t.scope, t.name, v.version, v.workflow_json
                  FROM cliq.teams t
                  INNER JOIN cliq.team_versions v ON v.team_id = t.id
-                 WHERE v.workflow_json IS NOT NULL AND v.workflow_json <> ''`,
+                 WHERE v.status = 'published' AND v.workflow_json IS NOT NULL AND v.workflow_json <> ''`,
                 { type: QueryTypes.SELECT },
             ) as typeof rows;
         } catch {
@@ -313,7 +313,7 @@ export class AgentWorkflow {
         const versions = await sq.query<{ team_id: string; version: string; workflow_json: string }>(
             `SELECT v.team_id, v.version, v.workflow_json
              FROM cliq.team_versions v
-             WHERE v.team_id IN (:team_ids) AND v.workflow_json IS NOT NULL AND v.workflow_json <> ''`,
+             WHERE v.team_id IN (:team_ids) AND v.status = 'published' AND v.workflow_json IS NOT NULL AND v.workflow_json <> ''`,
             { type: QueryTypes.SELECT, replacements: { team_ids } },
         );
 

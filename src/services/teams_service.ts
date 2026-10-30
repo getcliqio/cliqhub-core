@@ -1317,7 +1317,7 @@ export class TeamsService {
         const sequelize = get_sequelize();
         const [versions, teams, forks] = await Promise.all([
             sequelize.query<{ team_id: string; version: string; workflow_json: string | null }>(
-                'SELECT "team_id", "version", "workflow_json" FROM cliq."team_versions" WHERE "team_id" IN (:ids)',
+                'SELECT "team_id", "version", "workflow_json" FROM cliq."team_versions" WHERE "team_id" IN (:ids) AND "status" = \'published\'',
                 { replacements: { ids }, type: QueryTypes.SELECT },
             ),
             sequelize.query<{ id: string; updated_at: Date | string | null }>(

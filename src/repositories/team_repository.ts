@@ -10,7 +10,7 @@ import { BaseRepository } from './base_repository.js';
 // for the TS-side equivalent used by the repositories/services layer.
 const LATEST_VERSION_SUBQUERY = `(
     SELECT version FROM team_versions
-    WHERE team_id = "Team"."id"
+    WHERE team_id = "Team"."id" AND status = 'published'
     ORDER BY
         string_to_array(regexp_replace(version, '-.*$', ''), '.')::int[] DESC,
         CASE WHEN version LIKE '%-%' THEN 0 ELSE 1 END DESC
@@ -55,7 +55,7 @@ export class TeamRepository extends BaseRepository<Team> {
                 'id', 'name', 'scope', 'description', 'author_id', 'install_count', 'visibility', 'listed',
                 'created_at', 'updated_at',
                 [literal(LATEST_VERSION_SUBQUERY), 'latest_version'],
-                [literal('(SELECT count(*)::int FROM team_versions tv WHERE tv.team_id = "Team"."id")'), 'version_count'],
+                [literal('(SELECT count(*)::int FROM team_versions tv WHERE tv.team_id = "Team"."id" AND tv.status = \'published\')'), 'version_count'],
                 [literal('(SELECT s.org_id FROM scopes s WHERE s.slug = "Team"."scope")'), 'org_id'],
                 [literal('(SELECT o.slug FROM scopes s JOIN orgs o ON o.id = s.org_id WHERE s.slug = "Team"."scope")'), 'org_slug'],
             ],
