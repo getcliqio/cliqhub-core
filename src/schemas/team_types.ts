@@ -212,9 +212,7 @@ export const TeamsPublishInput = z.object({
     visibility: z.enum(['public', 'private']).optional()
         .describe('public (everyone; the marketplace when listed) or private (the scope\'s members). Default: private for a new team, the current visibility on a republish'),
     version_id: z.string().uuid().optional()
-        .describe('The draft to publish (its files uploaded with teams/files/upload); omit to only list the team again'),
-    agents: z.record(z.unknown()).optional()
-        .describe('Agent binding overrides for this version'),
+        .describe('The draft to publish (its files uploaded with teams/files/upload; agents come from its team.yml); omit to only list the team again'),
 }).refine(
     (d) => Boolean(d.name) || Boolean(d.team_id),
     { message: 'Provide exactly one of team_id or name' },

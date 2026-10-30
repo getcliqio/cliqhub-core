@@ -1,9 +1,10 @@
 /**
  * A team's file bytes in storage (PLAN-team-bundle §2.2): each file under a new id at
- * `teams/<team_id>/files/<file_id>`, never overwritten, with the row that records it. Used by
- * uploads and by the startup backfill (S1.4a).
+ * `teams/<team_id>/files/<file_id>`, never overwritten, with the row that records it. Written by
+ * uploads and the startup backfill (S1.4a); read by publish, the zip and every content read (S1.4b).
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { ApiError } from '../errors/api_error.js';
 import type { TeamFileRow } from '../repositories/team_file_repository.js';
 import { team_file_key, type PackageStorage } from '../storage/package_storage.js';
 
@@ -40,4 +41,30 @@ export async function write_team_file_objects(storage: PackageStorage, team_id: 
         });
     }
     return rows;
+}
+
+/** Decodes UTF-8 and throws on bytes that aren't (a team's files are text). */
+const STRICT_UTF8 = new TextDecoder('utf-8', { fatal: true });
+
+/**
+ * A version's files as text, by path, each checked against its recorded sha256.
+ *
+ * @param storage - Package storage.
+ * @param rows - The version's file rows.
+ * @throws ApiError 500 when bytes are missing or don't match; 422 when a file isn't UTF-8.
+ */
+export async function read_team_files(storage: PackageStorage, rows: TeamFileRow[]): Promise<Record<string, string>> {
+    const files: Record<string, string> = {};
+    for (const row of rows) {
+        const data = await storage.read(row.storage_key);
+        if (!data || createHash('sha256').update(data).digest('hex') !== row.sha256) {
+            throw new ApiError('internal', `${row.path}: stored bytes are missing or don't match their record`, 500);
+        }
+        try {
+            files[row.path] = STRICT_UTF8.decode(data);
+        } catch {
+            throw new ApiError('invalid_package', `${row.path} isn't text (team.yml, roles and dependencies.yml are UTF-8)`, 422, { paths: [row.path] });
+        }
+    }
+    return files;
 }

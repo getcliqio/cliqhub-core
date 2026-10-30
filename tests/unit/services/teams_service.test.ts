@@ -466,7 +466,7 @@ describe('TeamsService — create, update, the open draft (S1.3c)', () => {
         team_repo.find_by_name_and_scope.mockResolvedValue(null);
     });
 
-    const text_of = (path: string) => written.get(files.rows.find((r) => r.path === path)!.storage_key as string)!.toString();
+    const text_of = (path: string) => written.get([...files.rows].reverse().find((r) => r.path === path)!.storage_key as string)!.toString();
 
     it('create makes the team and its first draft, seeded with team.yml and README.md', async () => {
         const out = await service.create(ALICE, { name: 'loan-review', scope: 'alice', description: 'Reviews loans' });
@@ -482,9 +482,17 @@ describe('TeamsService — create, update, the open draft (S1.3c)', () => {
         const ORIGIN_VERSION = '0a0a0a0a-1111-4222-8333-444444444444';
         team_repo.find_by_id.mockResolvedValueOnce(PUBLIC_TEAM);
         version_repo.find_latest_version.mockResolvedValueOnce('1.0.0');
-        version_repo.find_detail_by_team_and_version.mockResolvedValueOnce({ id: ORIGIN_VERSION, manifest_yaml: 'name: "@alice/my-team"\nphases: []\n', roles_json: '[{"name":"dev","content_md":"# Dev"}]' });
+        version_repo.find_by_team_and_version.mockResolvedValueOnce({ id: ORIGIN_VERSION });
+        // the origin version's files (PLAN-team-bundle S1.4b: a fork copies files, not columns)
+        const origin = { 'team.yml': 'name: "@alice/my-team"\nphases: []\n', 'roles/dev.md': '# Dev', 'README.md': '# my-team' };
+        for (const [p, text] of Object.entries(origin)) {
+            const key = `teams/${PUBLIC_TEAM.id}/files/${p}`;
+            written.set(key, Buffer.from(text));
+            files.rows.push({ id: p, version_id: ORIGIN_VERSION, path: p, storage_key: key, size: text.length, sha256: createHash('sha256').update(text).digest('hex') });
+        }
         await service.create(ALICE, { name: 'my-fork', scope: 'alice', forked_from: { team_id: PUBLIC_TEAM.id } });
-        expect(files.rows.map((r) => r.path).sort()).toEqual(['roles/dev.md', 'team.yml']);
+        const fork_rows = files.rows.filter((r) => r.version_id !== ORIGIN_VERSION);
+        expect(fork_rows.map((r) => r.path).sort()).toEqual(['README.md', 'roles/dev.md', 'team.yml']);
         expect(text_of('team.yml')).toContain('name: "@alice/my-fork"');
         expect(text_of('roles/dev.md')).toBe('# Dev');
         expect(team_repo.set_fork_origin).toHaveBeenCalledWith(NEW_TEAM_ID, PUBLIC_TEAM.id, '1.0.0', expect.anything());

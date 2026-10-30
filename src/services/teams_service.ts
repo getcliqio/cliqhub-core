@@ -4,7 +4,7 @@ import { assert_access, assert_admin_access } from '../auth/assert_grant.js';
 import { require_permission } from '../auth/permissions.js';
 
 import yaml from 'js-yaml';
-import { dependencies_problems, normalize_tags, compute_next_version, workflow_from_team_yml, enrich_required_inputs } from './package_parser.js';
+import { dependencies_problems, derive_version_content, normalize_tags, compute_next_version, parse_team_yml_text } from './package_parser.js';
 import type { ParsedTeamYml } from './package_parser.js';
 import { SemVer } from '../lib/semver.js';
 import { SLUG_PATTERN } from '../config/env.js';
@@ -17,8 +17,8 @@ import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { PackageStorage } from '../storage/package_storage.js';
 import { stored_key, version_zip_key } from '../storage/package_storage.js';
 import { TeamFileRepository } from '../repositories/team_file_repository.js';
-import { write_team_file_objects } from './team_file_objects.js';
-import { createHash } from 'node:crypto';
+import { read_team_files, write_team_file_objects } from './team_file_objects.js';
+import { latest_version_content, version_content, version_contents } from './version_content.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 import type { TeamCatalogSortKey, TeamListItemVO, TeamRoleVO } from '../schemas/team_types.js';
 import { Op, QueryTypes, col, fn, literal, type WhereOptions } from 'sequelize';
@@ -34,9 +34,6 @@ import { is_bundle_path, lint_team, MAX_BUNDLE_FILES, MAX_BUNDLE_UNPACKED, pack_
 import { AgentCatalog } from '../models/agent_catalog.model.js';
 import { Team } from '../models/team.model.js';
 import { TeamVersionRepository as TeamVersionRepoClass } from '../repositories/team_version_repository.js';
-
-/** Decodes UTF-8 and throws on bytes that aren't text. */
-const STRICT_UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 const log = get_logger('svc.teams');
 
@@ -103,15 +100,14 @@ export async function assert_team_lints(team_yml: ParsedTeamYml | Record<string,
  */
 async function sub_team_inputs(team: Record<string, unknown>): Promise<Map<string, TeamInputDef[]>> {
     const out = new Map<string, TeamInputDef[]>();
-    const versions = new TeamVersionRepoClass();
     for (const p of Array.isArray(team['phases']) ? team['phases'] : []) {
         const phase = p as { type?: unknown; team?: unknown } | null;
         if (phase?.type !== 'team' || typeof phase.team !== 'string' || out.has(phase.team)) continue;
         const ref = /^@?([^/\s@]+)\/([^/\s@]+)$/.exec(phase.team);
         if (!ref) continue;
         const row = await Team.findOne({ where: { scope: ref[1], name: ref[2] }, attributes: ['id'], raw: true });
-        const detail = row ? await versions.find_latest_detail(row.id) : null;
-        const manifest = detail?.manifest_yaml ? parse_manifest_yaml(detail.manifest_yaml) as { inputs?: unknown } | null : null;
+        const content = row ? await latest_version_content(row.id) : null;
+        const manifest = content?.team_yml as { inputs?: unknown } | null | undefined;
         if (!manifest) continue;
         const decls = (Array.isArray(manifest.inputs) ? manifest.inputs : [])
             .filter((i): i is { name: string; required?: boolean; default?: unknown } => !!i && typeof (i as { name?: unknown }).name === 'string')
@@ -136,7 +132,7 @@ async function check_team_files(files: Record<string, string>) {
     const binary = Object.keys(files).filter((p) => files[p].includes('\u0000')).sort();
     if (binary.length) throw new ApiError('invalid_package', `Not text: ${binary.join(', ')} (a team's files are UTF-8 text)`, 422, { paths: binary });
     const manifest_yaml = files[TEAM_YML] ?? '';
-    const team_yml = manifest_yaml ? parse_manifest_yaml(manifest_yaml) : null;
+    const team_yml = manifest_yaml ? parse_team_yml_text(manifest_yaml) : null;
     if (!team_yml) throw new ApiError('invalid_package', 'Package must contain a valid team.yml', 422);
     // Role briefs are the .md files directly in roles/ (a nested folder is not a role).
     const roles = Object.keys(files)
@@ -148,18 +144,6 @@ async function check_team_files(files: Record<string, string>) {
     if (dep_problems.length) throw new ApiError('invalid_package', dep_problems.join('; '), 422, { field: 'dependencies.yml', problems: dep_problems });
     await assert_team_lints(team_yml, roles);
     return { team_yml, manifest_yaml, roles, readme: files['README.md'] ?? '', dependencies_yml };
-}
-
-function parse_manifest_yaml(manifest_yaml: string): ParsedTeamYml | null {
-    try {
-        const parsed = yaml.load(manifest_yaml);
-        if (parsed && typeof parsed === 'object') return parsed as ParsedTeamYml;
-    } catch { /* ignore */ }
-    try {
-        const parsed = JSON.parse(manifest_yaml);
-        if (parsed && typeof parsed === 'object') return parsed as ParsedTeamYml;
-    } catch { /* ignore */ }
-    return null;
 }
 
 function build_visibility_where(auth: AuthContext): WhereOptions {
@@ -481,35 +465,10 @@ export class TeamsService {
             throw new ApiError('not_found', `Version ${params.version} not found`, 404);
         }
 
-        let roles: TeamRoleVO[] = [];
-        let workflow: { phases: unknown[]; support?: unknown[] } = { phases: [] };
-        let agents: unknown = {};
-        let readme = ''; let cliq_version: string | null = null;
-        let tools: string[] = []; let inputs: unknown[] | undefined;
-        let use_when: string[] | undefined; let not_for: string[] | undefined;
-        let version_manifest_yaml = '';
-        let dependencies = '';
-
-        if (target_version) {
-            const ver_row = await this._version_repo.find_detail_by_team_and_version(team.id, target_version);
-            if (ver_row) {
-                try {
-                    const parsed = JSON.parse(ver_row.workflow_json) as { phases?: unknown[]; support?: unknown[] };
-                    workflow = {
-                        phases: Array.isArray(parsed.phases) ? parsed.phases : [],
-                        ...(Array.isArray(parsed.support) && parsed.support.length ? { support: parsed.support } : {}),
-                    };
-                } catch { /* default */ }
-                try { agents = JSON.parse(ver_row.agents_json || '{}'); } catch { /* default */ }
-                readme = ver_row.readme || '';
-                cliq_version = ver_row.cliq_version || null;
-                try { tools = JSON.parse(ver_row.tools); } catch { /* default */ }
-                try { const raw = JSON.parse(ver_row.capability_json); if (raw) { inputs = raw.inputs; use_when = raw.use_when; not_for = raw.not_for; } } catch { /* default */ }
-                try { roles = JSON.parse(ver_row.roles_json || '[]'); } catch { /* default */ }
-                version_manifest_yaml = ver_row.manifest_yaml || '';
-                dependencies = (ver_row as { dependencies_yaml?: string }).dependencies_yaml || '';
-            }
-        }
+        // What the version's files say (PLAN-team-bundle S1.4b).
+        const ver_row = target_version ? await this._version_repo.find_by_team_and_version(team.id, target_version) : null;
+        const content = ver_row ? await version_content(ver_row.id) : null;
+        const roles: TeamRoleVO[] = content?.roles ?? [];
 
         // Compute caller permissions for this team.
         const permissions = await this._resolve_team_permissions(auth, team);
@@ -519,15 +478,7 @@ export class TeamsService {
         const open_draft = permissions.can_edit ? await this._version_repo.find_open_draft(team.id) : null;
         const draft = open_draft ? { version_id: open_draft.id, saved_at: open_draft.saved_at } : null;
 
-        /**
-         * Prefer version-specific manifest_yaml (from team_versions) when
-         * viewing a published version. Fall back to the teams-table
-         * raw manifest for the current installed version.
-         */
-        const team_row_manifest = (team as unknown as Record<string, unknown>).manifest;
-        const raw_manifest = version_manifest_yaml
-            || (typeof team_row_manifest === 'string' ? team_row_manifest : null)
-            || null;
+        const raw_manifest = content?.manifest_yaml || null;
 
         return {
             id: team.id,
@@ -538,12 +489,17 @@ export class TeamsService {
             latest_version: latest_ver?.version || '0.0.0',
             install_count: team.install_count, tags: tags.map((t) => t.tag),
             created_at: team.created_at, updated_at: team.updated_at,
-            versions, roles, workflow, agents, readme, cliq_version, tools,
-            inputs, use_when, not_for,
+            /** The version shown (its files: `teams/files/get`); null when the team has none. */
+            version_id: ver_row?.id ?? null,
+            versions, roles,
+            workflow: content?.workflow ?? { phases: [] },
+            agents: content?.agents ?? {},
+            readme: content?.readme ?? '', cliq_version: content?.cliq_version ?? null, tools: content?.tools ?? [],
+            inputs: content?.inputs, use_when: content?.use_when, not_for: content?.not_for,
             listed: team.listed !== 0,
             raw_manifest,
             /** dependencies.yml of this version ('' when the team has none). */
-            dependencies,
+            dependencies: content?.dependencies_yml ?? '',
             /** SPA builder compat — same payload as former drafts.team_json. */
             team_json: raw_manifest,
             forked_from,
@@ -589,27 +545,16 @@ export class TeamsService {
         // Same visibility as get_by_id (S14): workflow and prompts of private teams leaked here.
         if (!team || !can_read_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
 
-        let version_row: {
-            id: string;
-            version: string;
-            workflow_json: string;
-            manifest_yaml: string;
-        } | null = null;
-
+        let version_row: { id: string; version: string } | null = null;
         if (params.version_id) {
             const row = await this._version_repo.find_by_id(params.version_id);
             if (!row || row.team_id !== params.team_id) {
                 throw new ApiError('not_found', 'Team version not found', 404);
             }
-            version_row = {
-                id: row.id,
-                version: row.version,
-                workflow_json: row.workflow_json ?? '{}',
-                manifest_yaml: row.manifest_yaml ?? '',
-            };
+            version_row = { id: row.id, version: row.version };
         } else {
-            const latest = await this._version_repo.find_latest_detail(params.team_id);
-            if (!latest) {
+            version_row = await this._version_repo.find_latest_ref(params.team_id);
+            if (!version_row) {
                 return {
                     team_id: params.team_id,
                     version_id: null,
@@ -617,26 +562,9 @@ export class TeamsService {
                     phases: [] as Array<Record<string, unknown>>,
                 };
             }
-            version_row = {
-                id: latest.id,
-                version: latest.version,
-                workflow_json: latest.workflow_json ?? '{}',
-                manifest_yaml: latest.manifest_yaml ?? '',
-            };
         }
-
-        let phases: unknown[] = [];
-        try {
-            const parsed = JSON.parse(version_row.workflow_json) as { phases?: unknown };
-            if (Array.isArray(parsed.phases)) phases = parsed.phases;
-        } catch { /* fall through */ }
-
-        if (phases.length === 0 && version_row.manifest_yaml) {
-            try {
-                const doc = yaml.load(version_row.manifest_yaml) as { phases?: unknown } | null;
-                if (doc && Array.isArray(doc.phases)) phases = doc.phases;
-            } catch { /* empty */ }
-        }
+        // The version's team.yml phases (PLAN-team-bundle S1.4b).
+        const phases: unknown[] = (await version_content(version_row.id))?.workflow.phases ?? [];
 
         return {
             team_id: params.team_id,
@@ -672,7 +600,7 @@ export class TeamsService {
         const description = params.description || origin?.description || '';
         const label = `@${params.scope}/${params.name}`;
         const seed: Record<string, string> = origin
-            ? { ...(await this._origin_files(origin)), [TEAM_YML]: with_manifest_name(origin.manifest_yaml, JSON.stringify(label)) }
+            ? { ...origin.files, [TEAM_YML]: with_manifest_name(origin.files[TEAM_YML] ?? '', JSON.stringify(label)) }
             : { [TEAM_YML]: `name: ${JSON.stringify(label)}\ndescription: ${JSON.stringify(description)}\nphases: []\n`, 'README.md': `# ${label}\n\n${description}\n` };
 
         let team_id = '';
@@ -692,14 +620,6 @@ export class TeamsService {
      * The origin version's files for a fork: its `team_files` (read and checked), or — for a version published before
      * team_files (S1.5 gives those rows) — its stored team.yml and role briefs.
      */
-    private async _origin_files(origin: { version_id: string; manifest_yaml: string; roles_json: string | null }): Promise<Record<string, string>> {
-        const files = await this._read_version_files(origin.version_id);
-        if (Object.keys(files).length) return files;
-        const out: Record<string, string> = { [TEAM_YML]: origin.manifest_yaml };
-        for (const r of (JSON.parse(origin.roles_json || '[]') as Array<{ name: string; content_md: string }>)) out[`roles/${r.name}.md`] = r.content_md;
-        return out;
-    }
-
     /**
      * A team's settings (its description), or `save_as: 'discard'` with a `version_id`: delete that draft and its
      * files' rows. Files change only through `teams/files/upload` / `remove`, and a draft becomes a version only
@@ -826,7 +746,7 @@ export class TeamsService {
         version?: string; bump?: 'patch' | 'minor' | 'major';
         changelog?: string; description?: string; license?: string;
         tags?: string[]; visibility?: 'public' | 'private';
-        version_id?: string; agents?: Record<string, unknown>;
+        version_id?: string;
     }) {
         log.debug('publish', { team_id: params.team_id, name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -862,8 +782,8 @@ export class TeamsService {
             if (params.tags && params.tags.length > 20) throw new ApiError('invalid_params', 'Maximum 20 tags allowed', 422);
             // Publishing (or re-listing) the latest version: its team.yml gets the same check as a new package.
             const row = await this._version_repo.find_by_team_and_version(team.id, latest);
-            const briefs = row?.roles_json ? (JSON.parse(row.roles_json) as Array<{ name: string }>) : [];
-            await assert_team_lints(row?.manifest_yaml ? parse_manifest_yaml(row.manifest_yaml) : null, briefs);
+            const content = row ? await version_content(row.id) : null;
+            await assert_team_lints(content?.team_yml ?? null, content?.roles ?? []);
             await this._team_repo.update_visibility_and_listed(team.id, visibility, 1);
             if (params.tags) {
                 const status_tags = normalize_tags(params.tags);
@@ -907,23 +827,24 @@ export class TeamsService {
         const draft = await this._version_repo.find_draft(params.version_id);
         if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (upload the files first: teams/files/upload)', 404);
         const files = await this._read_version_files(draft.id);
-        const { team_yml, manifest_yaml, roles, readme, dependencies_yml } = await check_team_files(files);
+        const { team_yml } = await check_team_files(files);
+        // The same derivation every read uses (PLAN-team-bundle S1.4b); the columns are filled until S1.5 drops them.
+        const content = derive_version_content(files);
+        const { manifest_yaml, roles, readme, dependencies_yml, workflow } = content;
 
         if (!tags && team_yml.tags) tags = normalize_tags(team_yml.tags);
 
         const description = params.description || team_yml.description || '';
         const license = params.license || 'MIT';
-        const workflow = workflow_from_team_yml(team_yml);
         const workflow_json = JSON.stringify(workflow);
 
         /** Validate HUG gate phases have mandatory review.reviewers. */
         validate_hug_reviewer_groups(workflow);
 
-        const enriched_inputs = enrich_required_inputs(team_yml.inputs, workflow);
-        const capability_json = JSON.stringify({ inputs: enriched_inputs, use_when: team_yml.use_when, not_for: team_yml.not_for });
-        const agents_json = JSON.stringify(params.agents || team_yml.agents || {});
-        const cliq_version = team_yml.cliq_version || null;
-        const tools = JSON.stringify(team_yml.tools || []);
+        const capability_json = JSON.stringify({ inputs: content.inputs, use_when: team_yml.use_when, not_for: team_yml.not_for });
+        const agents_json = JSON.stringify(content.agents);
+        const cliq_version = content.cliq_version;
+        const tools = JSON.stringify(content.tools);
         const sorted_roles = [...roles].sort((a, b) => a.name.localeCompare(b.name));
         const roles_json = JSON.stringify(sorted_roles.map((r) => ({ name: r.name, content_md: r.content_md })));
 
@@ -1130,19 +1051,18 @@ export class TeamsService {
      * @throws ApiError 404 when the team or version is not found; 409 when the team has no version yet.
      */
     private async _fork_origin(auth: AuthContext, ref: { team_id: string; version?: string }): Promise<{
-        team_id: string; version: string; version_id: string; manifest_yaml: string; description: string;
-        /** The version's role briefs (`roles_json`), copied into the fork. */
-        roles_json: string | null;
+        team_id: string; version: string; version_id: string; description: string;
+        /** The version's files, copied into the fork's draft. */
+        files: Record<string, string>;
     }> {
         const source = await this._team_repo.find_by_id(ref.team_id);
         if (!source || !can_read_team(auth, source)) throw new ApiError('not_found', 'Team to fork not found', 404);
         const version = ref.version ?? await this._version_repo.find_latest_version(source.id);
         if (!version) throw new ApiError('conflict', `@${source.scope}/${source.name} has no version to fork yet`, 409);
-        const detail = await this._version_repo.find_detail_by_team_and_version(source.id, version);
-        const manifest_yaml = (detail as { manifest_yaml?: string | null } | null)?.manifest_yaml;
-        if (!detail || !manifest_yaml) throw new ApiError('not_found', `Version ${version} not found`, 404);
-        const roles_json = (detail as { roles_json?: string | null }).roles_json ?? null;
-        return { team_id: source.id, version, version_id: detail.id, manifest_yaml, description: source.description, roles_json };
+        const row = await this._version_repo.find_by_team_and_version(source.id, version);
+        const files = row ? await this._read_version_files(row.id) : {};
+        if (!row || !files[TEAM_YML]) throw new ApiError('not_found', `Version ${version} not found`, 404);
+        return { team_id: source.id, version, version_id: row.id, description: source.description, files };
     }
 
     /**
@@ -1240,19 +1160,7 @@ export class TeamsService {
      */
     private async _read_version_files(version_id: string): Promise<Record<string, string>> {
         if (!this._storage) throw new ApiError('internal', 'No storage configured', 500);
-        const files: Record<string, string> = {};
-        for (const row of await this._file_repo.list_by_version(version_id)) {
-            const data = await this._storage.read(row.storage_key);
-            if (!data || createHash('sha256').update(data).digest('hex') !== row.sha256) {
-                throw new ApiError('internal', `${row.path}: stored bytes are missing or don't match their record`, 500);
-            }
-            try {
-                files[row.path] = STRICT_UTF8.decode(data);
-            } catch {
-                throw new ApiError('invalid_package', `${row.path} isn't text (team.yml, roles and dependencies.yml are UTF-8)`, 422, { paths: [row.path] });
-            }
-        }
-        return files;
+        return read_team_files(this._storage, await this._file_repo.list_by_version(version_id));
     }
 
 
@@ -1306,8 +1214,8 @@ export class TeamsService {
         if (ids.length === 0) return out;
         const sequelize = get_sequelize();
         const [versions, teams, forks] = await Promise.all([
-            sequelize.query<{ team_id: string; version: string; workflow_json: string | null }>(
-                'SELECT "team_id", "version", "workflow_json" FROM cliq."team_versions" WHERE "team_id" IN (:ids) AND "status" = \'published\'',
+            sequelize.query<{ team_id: string; id: string; version: string }>(
+                'SELECT "team_id", "id", "version" FROM cliq."team_versions" WHERE "team_id" IN (:ids) AND "status" = \'published\'',
                 { replacements: { ids }, type: QueryTypes.SELECT },
             ),
             sequelize.query<{ id: string; updated_at: Date | string | null }>(
@@ -1320,19 +1228,19 @@ export class TeamsService {
             ),
         ]);
         const updated = new Map(teams.map((t) => [String(t.id), t.updated_at ? new Date(t.updated_at).getTime() : undefined]));
+        // The latest version's phases, from its files (PLAN-team-bundle S1.4b; cached by version).
+        const latest_ids = rows.map((row) => versions.find((v) => String(v.team_id) === row.id && v.version === row.latest_version)?.id).filter((id): id is string => Boolean(id));
+        const contents = await version_contents(latest_ids.map(String));
         const fork_counts = new Map(forks.map((f) => [String(f.forked_from_team_id), Number(f.n)]));
         for (const row of rows) {
             const mine = versions.filter((v) => String(v.team_id) === row.id);
             const latest = mine.find((v) => v.version === row.latest_version);
-            let phases: Array<{ name: string; type: string | null; agent: string | null }> = [];
-            try {
-                const wf = JSON.parse(latest?.workflow_json ?? '{}') as { phases?: Array<Record<string, unknown>> };
-                phases = (wf.phases ?? []).map((p) => ({
-                    name: String(p.name ?? ''),
-                    type: typeof p.type === 'string' ? p.type : null,
-                    agent: typeof p.agent === 'string' ? p.agent : null,
-                }));
-            } catch { /* no workflow: no phases */ }
+            const workflow_phases = (latest ? contents.get(String(latest.id))?.workflow.phases : undefined) ?? [];
+            const phases = (workflow_phases as Array<Record<string, unknown>>).map((p) => ({
+                name: String(p?.name ?? ''),
+                type: typeof p?.type === 'string' ? p.type : null,
+                agent: typeof p?.agent === 'string' ? p.agent : null,
+            }));
             out.set(row.id, {
                 phases,
                 version_count: mine.length,

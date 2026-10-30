@@ -44,6 +44,27 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
         return SemVer.max(numbered(rows).map((r) => r.version));
     }
 
+    /** A team's latest published version (highest semver): its id and number, or null. */
+    async find_latest_ref(team_id: string): Promise<{ id: string; version: string } | null> {
+        const rows = numbered(await TeamVersion.findAll({ where: { team_id, ...PUBLISHED }, attributes: ['id', 'version'], raw: true }));
+        const latest = SemVer.max(rows.map((r) => r.version));
+        return latest ? rows.find((r) => r.version === latest) ?? null : null;
+    }
+
+    /** Each team's latest published version (highest semver): team id → its id and number. */
+    async find_latest_refs(team_ids: string[]): Promise<Map<string, { id: string; version: string }>> {
+        const out = new Map<string, { id: string; version: string }>();
+        if (!team_ids.length) return out;
+        const rows = numbered(await TeamVersion.findAll({ where: { team_id: team_ids, ...PUBLISHED }, attributes: ['id', 'team_id', 'version'], raw: true }));
+        for (const team_id of team_ids) {
+            const mine = rows.filter((r) => r.team_id === team_id);
+            const latest = SemVer.max(mine.map((r) => r.version));
+            const row = latest ? mine.find((r) => r.version === latest) : undefined;
+            if (row) out.set(team_id, { id: row.id, version: row.version });
+        }
+        return out;
+    }
+
     async find_detail_by_team_and_version(team_id: string, version: string) {
         const row = await TeamVersion.findOne({
             where: { team_id, version, ...PUBLISHED },

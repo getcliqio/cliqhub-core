@@ -216,3 +216,66 @@ export function compute_next_version(current: string | null, bump: 'patch' | 'mi
     if (bump === 'minor') return `${maj}.${min + 1}.0`;
     return `${maj}.${min}.${pat + 1}`;
 }
+
+/** team.yml text as an object (YAML, or JSON), or null when it doesn't parse to one. */
+export function parse_team_yml_text(text: string): ParsedTeamYml | null {
+    try {
+        const parsed = yaml.load(text);
+        if (parsed && typeof parsed === 'object') return parsed as ParsedTeamYml;
+    } catch { /* not YAML */ }
+    try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object') return parsed as ParsedTeamYml;
+    } catch { /* not JSON */ }
+    return null;
+}
+
+/** What a version's files say (PLAN-team-bundle S1.4b): everything CliqHub shows or checks about it. */
+export interface VersionContentFields {
+    /** team.yml text ('' when missing). */
+    manifest_yaml: string;
+    team_yml: ParsedTeamYml | null;
+    /** roles/<name>.md, by name. */
+    roles: Array<{ name: string; content_md: string }>;
+    readme: string;
+    /** dependencies.yml text ('' when none). */
+    dependencies_yml: string;
+    workflow: NormalizedWorkflow;
+    /** Declared inputs plus any a command uses without declaring (required). */
+    inputs: InputFieldSpec[];
+    use_when?: string[];
+    not_for?: string[];
+    agents: Record<string, unknown>;
+    tools: string[];
+    cliq_version: string | null;
+}
+
+/**
+ * Derive a version's content from its files: the one derivation publish and every read use, so what is shown
+ * is what the files say. Lenient: a team.yml that doesn't parse gives no phases (publish checks files first).
+ *
+ * @param files - The version's files by path.
+ */
+export function derive_version_content(files: Record<string, string>): VersionContentFields {
+    const manifest_yaml = files[TEAM_YML] ?? '';
+    const team_yml = manifest_yaml ? parse_team_yml_text(manifest_yaml) : null;
+    // Role briefs are the .md files directly in roles/ (a nested folder is not a role).
+    const roles = Object.keys(files)
+        .filter((p) => p.startsWith('roles/') && p.endsWith('.md') && !p.slice('roles/'.length).includes('/'))
+        .sort()
+        .map((p) => ({ name: p.slice('roles/'.length, -'.md'.length), content_md: files[p] }));
+    const workflow = workflow_from_team_yml(team_yml);
+    const agents = team_yml?.agents && typeof team_yml.agents === 'object' && !Array.isArray(team_yml.agents) ? team_yml.agents : {};
+    return {
+        manifest_yaml, team_yml, roles,
+        readme: files['README.md'] ?? '',
+        dependencies_yml: files['dependencies.yml'] ?? '',
+        workflow,
+        inputs: enrich_required_inputs(team_yml?.inputs, workflow),
+        ...(Array.isArray(team_yml?.use_when) ? { use_when: team_yml.use_when } : {}),
+        ...(Array.isArray(team_yml?.not_for) ? { not_for: team_yml.not_for } : {}),
+        agents,
+        tools: Array.isArray(team_yml?.tools) ? team_yml.tools : [],
+        cliq_version: team_yml?.cliq_version || null,
+    };
+}

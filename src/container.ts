@@ -30,6 +30,7 @@ import { InvitationsController } from './controllers/invitations_controller.js';
 import { BuilderService } from './services/builder_service.js';
 import { HostedLlmAdapter } from './services/llm/hosted_adapter.js';
 import { create_package_storage, type PackageStorage } from './storage/package_storage.js';
+import { init_version_content } from './services/version_content.js';
 import { AuditRepository } from './repositories/audit_repository.js';
 import { SettingsRepository } from './repositories/settings_repository.js';
 import { SettingsService } from './services/settings_service.js';
@@ -128,6 +129,8 @@ export async function create_container(config: EnvConfig): Promise<Container> {
         s3_access_key_id: config.s3_access_key_id,
         s3_secret_access_key: config.s3_secret_access_key,
     });
+    // Team version content is read from the version's files in this storage (PLAN-team-bundle S1.4b).
+    init_version_content(storage);
 
     const audit_repo = new AuditRepository();
     const settings_repo = new SettingsRepository();
