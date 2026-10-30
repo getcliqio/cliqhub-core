@@ -4,7 +4,7 @@ import { assert_access, assert_admin_access } from '../auth/assert_grant.js';
 import { require_permission } from '../auth/permissions.js';
 
 import yaml from 'js-yaml';
-import { extract_package, to_package_zip, dependencies_problems, normalize_tags, compute_next_version, workflow_from_team_yml, enrich_required_inputs } from './package_parser.js';
+import { dependencies_problems, normalize_tags, compute_next_version, workflow_from_team_yml, enrich_required_inputs } from './package_parser.js';
 import type { ParsedTeamYml } from './package_parser.js';
 import { SemVer } from '../lib/semver.js';
 import { SLUG_PATTERN } from '../config/env.js';
@@ -15,7 +15,7 @@ import type { DownloadLogRepository } from '../repositories/download_log_reposit
 import type { ScopeRepository } from '../repositories/scope_repository.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { PackageStorage } from '../storage/package_storage.js';
-import { stored_key, version_zip_key } from '../storage/package_storage.js';
+import { stored_key, team_draft_prefix, version_zip_key } from '../storage/package_storage.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 import type { TeamCatalogSortKey, TeamListItemVO, TeamRoleVO } from '../schemas/team_types.js';
 import { Op, QueryTypes, col, fn, literal, type WhereOptions } from 'sequelize';
@@ -27,7 +27,7 @@ import { ScopeRepository as ScopeRepoClass } from '../repositories/scope_reposit
 
 import { get_logger } from '../lib/log.js';
 import { escape_like } from '../lib/search.js';
-import { lint_team, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
+import { lint_team, MAX_BUNDLE_UNPACKED, pack_bundle, TEAM_YML, unknown_paths, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
 import { AgentCatalog } from '../models/agent_catalog.model.js';
 import { Team } from '../models/team.model.js';
 import { TeamVersionRepository as TeamVersionRepoClass } from '../repositories/team_version_repository.js';
@@ -127,6 +127,32 @@ async function sub_team_inputs(team: Record<string, unknown>): Promise<Map<strin
         out.set(phase.team, decls);
     }
     return out;
+}
+
+/**
+ * Check a team's files before anything is stored: team files only, at most 10 MB, a team.yml that parses,
+ * a valid dependencies.yml, and the lint. Returns what the version row is filled from.
+ *
+ * @throws ApiError 422 `invalid_package` / `invalid_team`.
+ */
+async function check_team_files(files: Record<string, string>) {
+    const total = Object.values(files).reduce((n, text) => n + Buffer.byteLength(text, 'utf8'), 0);
+    if (total > MAX_BUNDLE_UNPACKED) throw new ApiError('invalid_package', `Team files total more than ${MAX_BUNDLE_UNPACKED / 1024 / 1024} MB`, 422);
+    const unknown = unknown_paths({ files });
+    if (unknown.length) throw new ApiError('invalid_package', `Not part of a team: ${unknown.join(', ')} (team.yml, roles/, dependencies.yml, README.md)`, 422, { paths: unknown });
+    const manifest_yaml = files[TEAM_YML] ?? '';
+    const team_yml = manifest_yaml ? parse_manifest_yaml(manifest_yaml) : null;
+    if (!team_yml) throw new ApiError('invalid_package', 'Package must contain a valid team.yml', 422);
+    // Role briefs are the .md files directly in roles/ (a nested folder is not a role).
+    const roles = Object.keys(files)
+        .filter((p) => p.startsWith('roles/') && p.endsWith('.md') && !p.slice('roles/'.length).includes('/'))
+        .sort()
+        .map((p) => ({ name: p.slice('roles/'.length, -'.md'.length), content_md: files[p] }));
+    const dependencies_yml = files['dependencies.yml'] ?? '';
+    const dep_problems = dependencies_problems(dependencies_yml);
+    if (dep_problems.length) throw new ApiError('invalid_package', dep_problems.join('; '), 422, { field: 'dependencies.yml', problems: dep_problems });
+    await assert_team_lints(team_yml, roles);
+    return { team_yml, manifest_yaml, roles, readme: files['README.md'] ?? '', dependencies_yml };
 }
 
 function parse_manifest_yaml(manifest_yaml: string): ParsedTeamYml | null {
@@ -768,7 +794,7 @@ export class TeamsService {
         version?: string; bump?: 'patch' | 'minor' | 'major';
         changelog?: string; description?: string; license?: string;
         tags?: string[]; visibility?: 'public' | 'private';
-        data_base64?: string; agents?: Record<string, unknown>;
+        files?: Record<string, string>; agents?: Record<string, unknown>;
     }) {
         log.debug('publish', { team_id: params.team_id, name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -796,11 +822,11 @@ export class TeamsService {
             ?? (team && team.visibility !== 'draft' ? team.visibility as 'public' | 'private' : 'private');
         const visibility_was = team && team.visibility !== 'draft' ? team.visibility : null;
 
-        // Status-only republish: flip draft → published without a new package.
-        if (!params.data_base64) {
-            if (!team) throw new ApiError('invalid_params', 'data_base64 is required for new teams', 422);
+        // Status-only republish: flip draft → published without new files.
+        if (!params.files) {
+            if (!team) throw new ApiError('invalid_params', 'files are required for new teams', 422);
             const latest = await this._version_repo.find_latest_version(team.id);
-            if (!latest) throw new ApiError('invalid_params', 'data_base64 is required when the team has no versions', 422);
+            if (!latest) throw new ApiError('invalid_params', 'files are required when the team has no versions', 422);
             if (params.tags && params.tags.length > 20) throw new ApiError('invalid_params', 'Maximum 20 tags allowed', 422);
             // Publishing (or re-listing) the latest version: its team.yml gets the same check as a new package.
             const row = await this._version_repo.find_by_team_and_version(team.id, latest);
@@ -844,14 +870,8 @@ export class TeamsService {
         let tags = params.tags ? normalize_tags(params.tags) : undefined;
         if (params.tags && params.tags.length > 20) throw new ApiError('invalid_params', 'Maximum 20 tags allowed', 422);
 
-        const zip_buffer = Buffer.from(params.data_base64, 'base64');
-        if (zip_buffer.length > 10 * 1024 * 1024) throw new ApiError('invalid_params', 'Package too large (max 10MB)', 422);
-
-        const { team_yml, manifest_yaml, roles, readme, dependencies_yml = '' } = await extract_package(zip_buffer);
-        if (!team_yml) throw new ApiError('invalid_package', 'Package must contain a valid team.yml', 422);
-        const dep_problems = dependencies_problems(dependencies_yml);
-        if (dep_problems.length) throw new ApiError('invalid_package', dep_problems.join('; '), 422, { field: 'dependencies.yml', problems: dep_problems });
-        await assert_team_lints(team_yml, roles);
+        const files = params.files;
+        const { team_yml, manifest_yaml, roles, readme, dependencies_yml } = await check_team_files(files);
 
         if (!tags && team_yml.tags) tags = normalize_tags(team_yml.tags);
 
@@ -892,8 +912,6 @@ export class TeamsService {
             }
         }
 
-        // Stored as a zip whatever was sent (daemons unzip it), at teams/<team_id>/versions/<version_id>.zip.
-        const zip = await to_package_zip(zip_buffer, { manifest_yaml, roles, readme, dependencies_yml });
 
         let published_team_id = '';
         await get_sequelize().transaction(async (t) => {
@@ -918,11 +936,9 @@ export class TeamsService {
                 cliq_version, tools, workflow_json, manifest_yaml,
                 readme, capability_json, agents_json, roles_json, t, dependencies_yml,
             );
-            // Keyed by ids, so teams with the same name in different scopes never share a zip (P24). Written
-            // inside the transaction: if storage fails, the version isn't created.
-            const zip_key = version_zip_key(effective_team_id, version_id);
-            if (this._storage) await this._storage.write(zip_key, zip);
-            await this._version_repo.update_package_path(version_id, zip_key, t);
+            // The files become the team's draft folder, and the version is that folder bundled (§2.6). Inside the
+            // transaction: if storage fails, the version isn't created.
+            await this._bundle_draft(effective_team_id, version_id, files, t);
 
             if (tags) {
                 await this._tag_repo.delete_by_team_id(effective_team_id, t);
@@ -965,7 +981,8 @@ export class TeamsService {
         }
         if (!ver) throw new ApiError('not_found', 'No versions published', 404);
 
-        const data = this._storage ? await this._storage.read(stored_key(ver.package_path)) : null;
+        const key = stored_key(ver.package_path);
+        const data = this._storage && key ? await this._storage.read(key) : null;
         if (!data) throw new ApiError('internal', `Package archive missing for v${ver.version}. It may need to be republished.`, 500);
 
         if (this._download_log_repo) {
@@ -1006,7 +1023,10 @@ export class TeamsService {
         });
 
         if (this._storage) {
-            for (const v of versions) await this._storage.delete(stored_key(v.package_path));
+            for (const v of versions) {
+                const key = stored_key(v.package_path);
+                if (key) await this._storage.delete(key);
+            }
         }
 
         // Cascade: remove from all realm team_lists and purge from cliq.teams
@@ -1037,7 +1057,8 @@ export class TeamsService {
         if (!ver) throw new ApiError('not_found', `Version ${params.version} not found`, 404);
 
         await this._version_repo.delete_by_id(ver.id);
-        if (this._storage && ver.package_path) await this._storage.delete(stored_key(ver.package_path));
+        const key = stored_key(ver.package_path ?? '');
+        if (this._storage && key) await this._storage.delete(key);
         return { deleted: true, version: params.version };
     }
 
@@ -1170,6 +1191,22 @@ export class TeamsService {
         } catch (err) {
             log.warn('team_visibility_event_failed', { scope, name, error: err instanceof Error ? err.message : String(err) });
         }
+    }
+
+    /**
+     * The one way a version's zip is made (PLAN-team-bundle §2.6): write the team's files into its draft
+     * folder (`teams/<team_id>/draft/`), read that folder back, zip it to
+     * `teams/<team_id>/versions/<version_id>.zip`, and point the version row at it.
+     */
+    private async _bundle_draft(team_id: string, version_id: string, files: Record<string, string>, transaction: import('sequelize').Transaction): Promise<void> {
+        const zip_key = version_zip_key(team_id, version_id);
+        if (this._storage) {
+            const draft = team_draft_prefix(team_id);
+            await this._storage.write_files(draft, files);
+            const zip = await pack_bundle({ files: await this._storage.read_files(draft) });
+            await this._storage.write(zip_key, zip);
+        }
+        await this._version_repo.update_package_path(version_id, zip_key, transaction);
     }
 
     /** Seed a draft version row from raw manifest YAML/JSON (no zip package). */

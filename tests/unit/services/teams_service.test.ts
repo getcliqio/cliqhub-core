@@ -3,6 +3,7 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { Op } from 'sequelize';
 import { TeamsService, team_query_where } from '../../../src/services/teams_service.js';
 import { ALICE, BOB, ORG_ADMIN, UNAUTHED, SITE_ADMIN } from '../../helpers/fixtures.js';
+import { unpack_bundle } from '@getcliqio/cliq-sdk';
 
 vi.mock('../../../src/lib/sequelize.js', () => ({
     get_sequelize: vi.fn().mockReturnValue({
@@ -25,11 +26,6 @@ vi.mock('../../../src/services/package_parser.js', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../../src/services/package_parser.js')>();
     return {
         ...actual,
-        extract_package: vi.fn().mockResolvedValue({
-            team_yml: { phases: [], description: 'test', tools: [], tags: ['ai'] },
-            roles: [{ name: 'dev', content_md: '# Dev' }],
-            readme: '# README',
-        }),
         normalize_tags: vi.fn().mockImplementation((tags: string[]) => tags),
         compute_next_version: vi.fn().mockReturnValue('1.0.1'),
     };
@@ -197,10 +193,14 @@ function make_download_log_repo() {
 }
 
 function make_storage() {
+    // Folders in memory, so a draft reads back what was written.
+    const folders = new Map<string, Record<string, string>>();
     return {
         write: vi.fn().mockResolvedValue(undefined),
         read: vi.fn().mockResolvedValue(Buffer.from('zip-data')),
         delete: vi.fn().mockResolvedValue(undefined),
+        write_files: vi.fn(async (prefix: string, files: Record<string, string>) => { folders.set(prefix, { ...files }); }),
+        read_files: vi.fn(async (prefix: string) => ({ ...(folders.get(prefix) ?? {}) })),
     };
 }
 
@@ -223,7 +223,12 @@ const PUBLIC_TEAM = {
 
 const PRIVATE_TEAM = { ...PUBLIC_TEAM, visibility: 'private' as const, author_id: hub_legacy_uuid(99), scope: 'other' };
 
-const DATA_BASE64 = Buffer.from('test').toString('base64');
+/** A team's files as a publish sends them (S1.3a: publish takes files only). */
+const FILES = {
+    'team.yml': 'name: t\ndescription: test\ntags: [ai]\nphases: []\n',
+    'roles/dev.md': '# Dev',
+    'README.md': '# README',
+};
 
 /* ─── Helper to build service with all repos ─────────────────── */
 
@@ -573,40 +578,40 @@ describe('TeamsService — publish', () => {
 
     it('returns 401 when unauthenticated', async () => {
         await expect(service.publish(UNAUTHED, {
-            name: 'my-team', scope: 'alice', version: '1.0.0', data_base64: DATA_BASE64,
+            name: 'my-team', scope: 'alice', version: '1.0.0', files: FILES,
         })).rejects.toThrow('Authentication required');
     });
 
     it('returns 422 for invalid team name', async () => {
         await expect(service.publish(ALICE, {
-            name: 'INVALID_NAME!', scope: 'alice', version: '1.0.0', data_base64: DATA_BASE64,
+            name: 'INVALID_NAME!', scope: 'alice', version: '1.0.0', files: FILES,
         })).rejects.toThrow('Team name must be');
     });
 
     it("returns 403 without teams.publish in the scope's org (e.g. a non-cliq user and @cliq)", async () => {
         await expect(service.publish(ALICE, {
-            name: 'my-team', scope: 'bob', version: '1.0.0', data_base64: DATA_BASE64,
+            name: 'my-team', scope: 'bob', version: '1.0.0', files: FILES,
         })).rejects.toMatchObject({ status: 403, message: "Publishing to @bob needs 'teams.publish' in its org" });
         await expect(service.publish(ALICE, {
-            name: 'my-team', scope: 'cliq', version: '1.0.0', data_base64: DATA_BASE64,
+            name: 'my-team', scope: 'cliq', version: '1.0.0', files: FILES,
         })).rejects.toMatchObject({ status: 403 });
     });
 
     it("anyone with teams.publish in the scope's org publishes a team someone else wrote", async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce({ ...PUBLIC_TEAM, author_id: hub_legacy_uuid(999) });
         version_repo.find_by_team_and_version.mockResolvedValueOnce(null);
-        const result = await service.publish(ALICE, { name: 'my-team', scope: 'alice', version: '2.0.0', data_base64: DATA_BASE64 });
+        const result = await service.publish(ALICE, { name: 'my-team', scope: 'alice', version: '2.0.0', files: FILES });
         expect(result.version).toBe('2.0.0');
     });
 
     it('a new team is private unless published as public', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
-        const result = await service.publish(ALICE, { name: 'new-team', scope: 'alice', version: '1.0.0', data_base64: DATA_BASE64 });
+        const result = await service.publish(ALICE, { name: 'new-team', scope: 'alice', version: '1.0.0', files: FILES });
         expect(result.visibility).toBe('private');
         expect(team_repo.create.mock.calls[0]![5]).toBe('private');
 
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
-        const pub = await service.publish(ALICE, { name: 'new-team2', scope: 'alice', version: '1.0.0', data_base64: DATA_BASE64, visibility: 'public' });
+        const pub = await service.publish(ALICE, { name: 'new-team2', scope: 'alice', version: '1.0.0', files: FILES, visibility: 'public' });
         expect(pub.visibility).toBe('public');
     });
 
@@ -614,7 +619,7 @@ describe('TeamsService — publish', () => {
         const { EventSubmitService } = await import('../../../src/services/events_service.js');
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
         version_repo.find_by_team_and_version.mockResolvedValueOnce(null);
-        const result = await service.publish(ALICE, { name: 'my-team', scope: 'alice', version: '2.0.0', data_base64: DATA_BASE64 });
+        const result = await service.publish(ALICE, { name: 'my-team', scope: 'alice', version: '2.0.0', files: FILES });
         expect(result.visibility).toBe('public');
         expect(team_repo.update.mock.calls[0]![3]).toBe('public');
         expect(EventSubmitService.submit).not.toHaveBeenCalled();
@@ -624,7 +629,7 @@ describe('TeamsService — publish', () => {
         const { EventSubmitService } = await import('../../../src/services/events_service.js');
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
         version_repo.find_by_team_and_version.mockResolvedValueOnce(null);
-        await service.publish(ALICE, { name: 'my-team', scope: 'alice', version: '2.0.0', data_base64: DATA_BASE64, visibility: 'private' });
+        await service.publish(ALICE, { name: 'my-team', scope: 'alice', version: '2.0.0', files: FILES, visibility: 'private' });
         expect(EventSubmitService.submit).toHaveBeenCalledWith(expect.objectContaining({
             type: 'team.visibility_changed', org_id: 'org-alice', team: 'alice/my-team',
             payload: expect.objectContaining({ from: 'public', to: 'private' }),
@@ -640,7 +645,7 @@ describe('TeamsService — publish', () => {
             },
         };
         await expect(service.publish(read_only, {
-            name: 'my-team', scope: 'alice', version: '1.0.0', data_base64: DATA_BASE64,
+            name: 'my-team', scope: 'alice', version: '1.0.0', files: FILES,
         })).rejects.toThrow('Missing teams:write');
     });
 
@@ -649,7 +654,7 @@ describe('TeamsService — publish', () => {
         version_repo.find_by_team_and_version.mockResolvedValueOnce({ id: hub_legacy_uuid(5), version: '1.0.0' });
 
         await expect(service.publish(ALICE, {
-            name: 'my-team', scope: 'alice', version: '1.0.0', data_base64: DATA_BASE64,
+            name: 'my-team', scope: 'alice', version: '1.0.0', files: FILES,
         })).rejects.toThrow('Version 1.0.0 already exists');
     });
 
@@ -659,7 +664,7 @@ describe('TeamsService — publish', () => {
             .mockResolvedValueOnce({ id: hub_legacy_uuid(1) });
 
         const result = await service.publish(ALICE, {
-            name: 'new-team', scope: 'alice', bump: 'patch', data_base64: DATA_BASE64,
+            name: 'new-team', scope: 'alice', bump: 'patch', files: FILES,
         });
 
         expect(result.name).toBe('new-team');
@@ -675,15 +680,29 @@ describe('TeamsService — publish', () => {
     });
 
     it('a package with a broken dependencies.yml is refused before anything is stored', async () => {
-        const parser = await import('../../../src/services/package_parser.js');
-        vi.mocked(parser.extract_package).mockResolvedValueOnce({
-            team_yml: { phases: [], description: 'test', tools: [], tags: [] } as never,
-            manifest_yaml: 'name: t\n', roles: [], readme: '', dependencies_yml: '- name: jq\n',
-        });
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
-        await expect(service.publish(ALICE, { name: 'dep-team', scope: 'alice', bump: 'patch', data_base64: DATA_BASE64 }))
+        await expect(service.publish(ALICE, { name: 'dep-team', scope: 'alice', bump: 'patch', files: { ...FILES, 'dependencies.yml': '- name: jq\n' } }))
             .rejects.toMatchObject({ status: 422, details: { field: 'dependencies.yml', problems: ['dependency `jq` has no `install` command'] } });
         expect(storage.write).not.toHaveBeenCalled();
+        expect(storage.write_files).not.toHaveBeenCalled();
+    });
+
+    it('files that are not part of a team, no team.yml, or more than 10 MB are refused before anything is stored (S1.3a)', async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValue(null);
+        const publish = (files: Record<string, string>) => service.publish(ALICE, { name: 'bad', scope: 'alice', bump: 'patch', files });
+        await expect(publish({ ...FILES, 'Dockerfile': 'FROM x' })).rejects.toMatchObject({ status: 422, details: { paths: ['Dockerfile'] } });
+        await expect(publish({ 'README.md': '# x' })).rejects.toThrow('valid team.yml');
+        await expect(publish({ ...FILES, 'README.md': 'x'.repeat(10 * 1024 * 1024 + 1) })).rejects.toThrow('more than 10 MB');
+        expect(storage.write_files).not.toHaveBeenCalled();
+    });
+
+    it('the files become the draft folder, and the zip is that folder (S1.3a)', async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
+        version_repo.find_by_team_and_version.mockResolvedValueOnce(null);
+        await service.publish(ALICE, { name: 'new-team', scope: 'alice', bump: 'patch', files: FILES });
+        expect(storage.write_files).toHaveBeenCalledWith(`teams/${NEW_TEAM_ID}/draft/`, FILES);
+        const zip = storage.write.mock.calls[0][1] as Buffer;
+        expect((await unpack_bundle(zip)).files).toEqual(FILES);
     });
 
     it('updates existing team with explicit version', async () => {
@@ -691,7 +710,7 @@ describe('TeamsService — publish', () => {
         version_repo.find_by_team_and_version.mockResolvedValueOnce(null);
 
         const result = await service.publish(ALICE, {
-            name: 'my-team', scope: 'alice', version: '2.0.0', data_base64: DATA_BASE64,
+            name: 'my-team', scope: 'alice', version: '2.0.0', files: FILES,
         });
 
         expect(result.version).toBe('2.0.0');
@@ -714,7 +733,7 @@ describe('TeamsService — publish', () => {
         version_repo.find_latest_version.mockResolvedValueOnce('1.1.2');
 
         await expect(service.publish(ALICE, {
-            name: 'my-team', scope: 'alice', version: '1.1.0', data_base64: DATA_BASE64,
+            name: 'my-team', scope: 'alice', version: '1.1.0', files: FILES,
         })).rejects.toThrow(/older than the current latest \(1\.1\.2\)/);
     });
 
@@ -724,7 +743,7 @@ describe('TeamsService — publish', () => {
         version_repo.find_latest_version.mockResolvedValueOnce('1.1.2');
 
         const result = await service.publish(ALICE, {
-            name: 'my-team', scope: 'alice', version: '2.0.0', data_base64: DATA_BASE64,
+            name: 'my-team', scope: 'alice', version: '2.0.0', files: FILES,
         });
         expect(result.version).toBe('2.0.0');
     });
@@ -762,7 +781,7 @@ describe('TeamsService — download', () => {
 
     it('returns 500 when package data missing', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
-        version_repo.find_latest_package.mockResolvedValueOnce({ version: '1.0.0', package_path: '/pkg' });
+        version_repo.find_latest_package.mockResolvedValueOnce({ id: NEW_VERSION_ID, version: '1.0.0', package_path: `teams/${NEW_TEAM_ID}/versions/${NEW_VERSION_ID}.zip` });
         storage.read.mockResolvedValueOnce(null);
 
         await expect(service.download(ALICE, { name: 'my-team', scope: 'alice' }))
@@ -771,7 +790,7 @@ describe('TeamsService — download', () => {
 
     it('returns data successfully for latest version', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
-        version_repo.find_latest_package.mockResolvedValueOnce({ version: '1.0.0', package_path: '/pkg' });
+        version_repo.find_latest_package.mockResolvedValueOnce({ id: NEW_VERSION_ID, version: '1.0.0', package_path: `teams/${NEW_TEAM_ID}/versions/${NEW_VERSION_ID}.zip` });
 
         const result = await service.download(ALICE, { name: 'my-team', scope: 'alice' });
 
@@ -780,15 +799,16 @@ describe('TeamsService — download', () => {
         expect(download_log_repo.create).toHaveBeenCalled();
     });
 
-    it('reads the stored key: an id key as it is, an old name key by its file name (S1.2)', async () => {
+    it('reads the version id key; a version without one has no zip (S1.2)', async () => {
         const id_key = `teams/${NEW_TEAM_ID}/versions/${NEW_VERSION_ID}.zip`;
         team_repo.find_by_name_and_scope.mockResolvedValue(PUBLIC_TEAM);
         version_repo.find_latest_package.mockResolvedValueOnce({ id: NEW_VERSION_ID, version: '1.0.0', package_path: id_key });
         await service.download(ALICE, { name: 'my-team', scope: 'alice' });
         expect(storage.read).toHaveBeenLastCalledWith(id_key);
-        version_repo.find_latest_package.mockResolvedValueOnce({ id: NEW_VERSION_ID, version: '1.0.0', package_path: '/data/packages/my-team-1.0.0.zip' });
-        await service.download(ALICE, { name: 'my-team', scope: 'alice' });
-        expect(storage.read).toHaveBeenLastCalledWith('my-team-1.0.0.zip');
+        storage.read.mockClear();
+        version_repo.find_latest_package.mockResolvedValueOnce({ id: NEW_VERSION_ID, version: '1.0.0', package_path: 'draft://x/1.0.0' });
+        await expect(service.download(ALICE, { name: 'my-team', scope: 'alice' })).rejects.toThrow('Package archive missing');
+        expect(storage.read).not.toHaveBeenCalled();
     });
 
     it('downloads by version_id and answers with it (S1.2)', async () => {
@@ -847,7 +867,7 @@ describe('TeamsService — delete_team', () => {
     it('deletes team successfully', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
         version_repo.list_packages_by_team.mockResolvedValueOnce([
-            { package_path: '/tmp/packages/my-team-1.0.0.zip' },
+            { package_path: `teams/${NEW_TEAM_ID}/versions/${NEW_VERSION_ID}.zip` },
         ]);
 
         const result = await service.delete_team(ALICE, { name: 'my-team', scope: 'alice' });
@@ -887,7 +907,7 @@ describe('TeamsService — delete_version', () => {
 
     it('deletes version successfully', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
-        version_repo.find_id_and_package.mockResolvedValueOnce({ id: hub_legacy_uuid(5), package_path: '/tmp/pkg.zip' });
+        version_repo.find_id_and_package.mockResolvedValueOnce({ id: hub_legacy_uuid(5), package_path: `teams/${NEW_TEAM_ID}/versions/${NEW_VERSION_ID}.zip` });
 
         const result = await service.delete_version(ALICE, { name: 'my-team', scope: 'alice', version: '1.0.0' });
 

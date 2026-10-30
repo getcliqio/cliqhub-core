@@ -223,8 +223,8 @@ export const TeamsPublishInput = z.object({
         .describe('Tag slugs to attach'),
     visibility: z.enum(['public', 'private']).optional()
         .describe('public (everyone; the marketplace when listed) or private (the scope\'s members). Default: private for a new team, the current visibility on a republish'),
-    data_base64: z.string().optional()
-        .describe('Base64-encoded team package zip (required for first publish without prior versions)'),
+    files: z.record(z.string()).optional()
+        .describe("The team's files by path (team.yml, roles/<name>.md, README.md, dependencies.yml); they become the team's draft folder and the new version is that folder, zipped by Core"),
     agents: z.record(z.unknown()).optional()
         .describe('Agent binding overrides for this version'),
 }).refine(

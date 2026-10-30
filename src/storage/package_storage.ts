@@ -52,13 +52,11 @@ export function version_zip_key(team_id: string, version_id: string): string {
 }
 
 /**
- * The storage key a version row points at. New versions store their key (`teams/<team_id>/versions/<id>.zip`);
- * versions published before S1.2 stored `<name>-<version>.zip` or a local path ending in it, whose key is the
- * file name.
+ * The storage key a version row points at: `teams/<team_id>/versions/<version_id>.zip`. The startup move
+ * (S1.2) put every existing zip there; anything else (a version that never had a zip) has none.
  */
-export function stored_key(package_path: string): string {
-    if (package_path.startsWith('teams/')) return package_path;
-    return package_path.split('/').pop() || package_path;
+export function stored_key(package_path: string): string | null {
+    return package_path.startsWith('teams/') ? package_path : null;
 }
 
 /** A key or relative path that stays inside its folder (no `..`, no leading `/`, no backslash). */

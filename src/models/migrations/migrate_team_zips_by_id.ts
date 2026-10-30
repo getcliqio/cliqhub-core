@@ -11,7 +11,12 @@
 import { get_logger } from '../../lib/log.js';
 import type { SettingsRepository } from '../../repositories/settings_repository.js';
 import type { TeamVersionRepository } from '../../repositories/team_version_repository.js';
-import { stored_key, version_zip_key, type PackageStorage } from '../../storage/package_storage.js';
+import { version_zip_key, type PackageStorage } from '../../storage/package_storage.js';
+
+/** Where a zip sat before S1.2: `<name>-<version>.zip`, stored as that key or a local path ending in it. */
+function old_key(package_path: string): string {
+    return package_path.split('/').pop() || package_path;
+}
 
 const log = get_logger('db.migrate');
 
@@ -45,7 +50,7 @@ export async function migrate_team_zips_by_id(deps: {
     for (const v of await deps.versions.list_all_packages()) {
         if (v.package_path.startsWith('teams/')) continue;
         const data = v.package_path && !v.package_path.startsWith('draft://')
-            ? await deps.storage.read(stored_key(v.package_path))
+            ? await deps.storage.read(old_key(v.package_path))
             : null;
         if (!data) {
             missing.push(`${v.team_id}@${v.version}`);
