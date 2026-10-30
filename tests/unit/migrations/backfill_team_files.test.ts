@@ -12,7 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../src/lib/sequelize.js', () => ({ get_sequelize: () => ({ transaction: (fn: (t: unknown) => unknown) => fn({}) }) }));
 
-import { backfill_team_files, files_from_columns } from '../../../src/models/migrations/backfill_team_files.js';
+import yaml from 'js-yaml';
+import { backfill_team_files, files_from_columns, team_yml_from_derived } from '../../../src/models/migrations/backfill_team_files.js';
+import { workflow_from_team_yml } from '../../../src/services/package_parser.js';
 import type { TeamFileRow } from '../../../src/repositories/team_file_repository.js';
 import { create_package_storage, version_zip_key } from '../../../src/storage/package_storage.js';
 
@@ -23,7 +25,24 @@ const V_EMPTY = 'eeeeeeee-5555-4555-8555-555555555555';
 const V_BAD = 'ffffffff-6666-4666-8666-666666666666';
 
 type Version = Awaited<ReturnType<Parameters<typeof backfill_team_files>[0]['versions']['list_published_without_files']>>[number];
-const blank = { manifest_yaml: '', readme: '', dependencies_yaml: '', roles_json: '[]' };
+const blank = {
+    manifest_yaml: '', readme: '', dependencies_yaml: '', roles_json: '[]', workflow_json: '{"phases":[]}', capability_json: '{}', agents_json: '{}',
+    team_scope: 'cliq', team_name: 'leaf', team_description: null,
+};
+/** @cliq/hello-world 2.0.0 as stored before team.yml was kept: phases, inputs, agents, README; no manifest. */
+const HELLO_2_0 = {
+    ...blank, team_name: 'hello-world', team_description: 'Say hello, then a person reviews it',
+    readme: '# hello-world',
+    workflow_json: JSON.stringify({ phases: [
+        { name: 'greet', type: 'standard', agent: 'exec', commands: [{ name: 'print-name', run: 'echo "Hi {{inputs.name}}"' }] },
+        { name: 'human-review', type: 'gate', agent: 'hug', depends_on: ['greet'], review: { reviewers: ['{{inputs.reviewers}}'] } },
+    ] }),
+    capability_json: JSON.stringify({ inputs: [
+        { name: 'name', type: 'text', description: 'Who to greet', required: true },
+        { name: 'reviewers', type: 'channel', description: 'Who should review this run', required: true },
+    ] }),
+    agents_json: JSON.stringify({ exec: {}, hug: {} }),
+};
 
 let dir: string;
 let versions: Version[];
@@ -103,5 +122,20 @@ describe('backfill_team_files', () => {
         expect(files_from_columns(blank)).toEqual({});
         expect(files_from_columns({ ...blank, manifest_yaml: 'x: 1', roles_json: JSON.stringify([{ name: '../evil', content_md: 'x' }, { name: 'a/b', content_md: 'x' }]) }))
             .toEqual({ 'team.yml': 'x: 1' });
+    });
+
+    it('a version stored without team.yml gets one rebuilt from its phases, inputs and agents (round trip)', () => {
+        const v = { ...HELLO_2_0, id: V_EMPTY, team_id: TEAM, version: '2.0.0', package_path: '' };
+        const files = files_from_columns(v);
+        expect(Object.keys(files).sort()).toEqual(['README.md', 'team.yml']);
+        const doc = yaml.load(files['team.yml']) as Record<string, unknown>;
+        expect(doc).toMatchObject({ name: '@cliq/hello-world', version: '2.0.0', description: 'Say hello, then a person reviews it', agents: { exec: {}, hug: {} } });
+        // parsed the way publish parses team.yml, it gives back the stored phases and inputs
+        expect(workflow_from_team_yml(doc)).toEqual(JSON.parse(HELLO_2_0.workflow_json));
+        expect({ inputs: doc.inputs }).toEqual(JSON.parse(HELLO_2_0.capability_json));
+    });
+
+    it('nothing is rebuilt without phases', () => {
+        expect(team_yml_from_derived({ ...blank, version: '1.0.0' })).toBeNull();
     });
 });

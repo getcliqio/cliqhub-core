@@ -156,13 +156,21 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     async list_published_without_files(): Promise<Array<{
         id: string; team_id: string; version: string; package_path: string;
         manifest_yaml: string | null; readme: string | null; dependencies_yaml: string | null; roles_json: string | null;
+        workflow_json: string | null; capability_json: string | null; agents_json: string | null;
+        team_scope: string | null; team_name: string; team_description: string | null;
     }>> {
         const rows = await TeamVersion.findAll({
             where: {
                 ...PUBLISHED,
                 [Op.and]: [literal('NOT EXISTS (SELECT 1 FROM cliq.team_files f WHERE f.version_id = "TeamVersion"."id")')],
             },
-            attributes: ['id', 'team_id', 'version', 'package_path', 'manifest_yaml', 'readme', 'dependencies_yaml', 'roles_json'],
+            attributes: [
+                'id', 'team_id', 'version', 'package_path', 'manifest_yaml', 'readme', 'dependencies_yaml', 'roles_json',
+                'workflow_json', 'capability_json', 'agents_json',
+                [literal('(SELECT t.scope FROM cliq.teams t WHERE t.id = "TeamVersion"."team_id")'), 'team_scope'],
+                [literal('(SELECT t.name FROM cliq.teams t WHERE t.id = "TeamVersion"."team_id")'), 'team_name'],
+                [literal('(SELECT t.description FROM cliq.teams t WHERE t.id = "TeamVersion"."team_id")'), 'team_description'],
+            ],
             raw: true,
         });
         return numbered(rows as never[]);

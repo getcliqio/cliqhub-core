@@ -6,13 +6,16 @@
  * - With a zip (on its id key since S1.2): the zip's team files, as they are. Paths that aren't part of a team
  *   (anything but team.yml, README.md, dependencies.yml and roles/<name>.md) are left out and logged.
  * - Without one: the version's columns: team.yml from `manifest_yaml`, README.md, dependencies.yml and each role
- *   in `roles_json` as roles/<name>.md.
+ *   in `roles_json` as roles/<name>.md. A version stored before team.yml was kept (no `manifest_yaml`, e.g. the
+ *   built-in `@cliq/hello-world` 2.0.0) gets a team.yml rebuilt from what publish derived from it: its phases
+ *   (`workflow_json`), inputs / use_when / not_for (`capability_json`) and agents (`agents_json`).
  *
  * A version that gets nothing (no zip and no manifest) is listed and left alone. Once a version has rows it is
  * never visited again, so a pass after the first finds nothing to do. A failure on one version doesn't stop the
  * others.
  */
 import { is_bundle_path, TEAM_YML, unpack_bundle } from '@getcliqio/cliq-sdk';
+import yaml from 'js-yaml';
 import { get_logger } from '../../lib/log.js';
 import { get_sequelize } from '../../lib/sequelize.js';
 import type { TeamFileRepository } from '../../repositories/team_file_repository.js';
@@ -36,10 +39,43 @@ export interface TeamFilesBackfillResult {
     failed: string[];
 }
 
-/** A version's files from its columns: team.yml, README.md, dependencies.yml and its roles. */
-export function files_from_columns(v: Pick<Version, 'manifest_yaml' | 'readme' | 'dependencies_yaml' | 'roles_json'>): Record<string, string> {
-    if (!v.manifest_yaml?.trim()) return {};
-    const files: Record<string, string> = { [TEAM_YML]: v.manifest_yaml };
+/** Parse a JSON column, or null. */
+function json_of(text: string | null | undefined): Record<string, unknown> | null {
+    try {
+        const v = text ? JSON.parse(text) : null;
+        return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * team.yml for a version stored without one: rebuilt from the phases, inputs and agents publish derived from it.
+ * Null when there are no phases to rebuild from.
+ */
+export function team_yml_from_derived(v: Pick<Version, 'version' | 'workflow_json' | 'capability_json' | 'agents_json' | 'team_scope' | 'team_name' | 'team_description'>): string | null {
+    const workflow = json_of(v.workflow_json);
+    const phases = Array.isArray(workflow?.phases) ? workflow.phases : [];
+    if (!phases.length) return null;
+    const capability = json_of(v.capability_json) ?? {};
+    const agents = json_of(v.agents_json);
+    const doc: Record<string, unknown> = { name: v.team_scope ? `@${v.team_scope}/${v.team_name}` : v.team_name, version: v.version };
+    if (v.team_description) doc.description = v.team_description;
+    for (const key of ['inputs', 'use_when', 'not_for'] as const) {
+        if (Array.isArray(capability[key]) && (capability[key] as unknown[]).length) doc[key] = capability[key];
+    }
+    if (agents && Object.keys(agents).length) doc.agents = agents;
+    doc.phases = phases;
+    if (Array.isArray(workflow?.support) && workflow.support.length) doc.support = workflow.support;
+    return yaml.dump(doc, { lineWidth: -1, noRefs: true });
+}
+
+/** A version's files from its columns: team.yml (stored, or rebuilt), README.md, dependencies.yml and its roles. */
+export function files_from_columns(v: Pick<Version, 'manifest_yaml' | 'readme' | 'dependencies_yaml' | 'roles_json'> & Partial<Version>): Record<string, string> {
+    const team_yml = v.manifest_yaml?.trim() ? v.manifest_yaml
+        : v.version ? team_yml_from_derived(v as Version) : null;
+    if (!team_yml) return {};
+    const files: Record<string, string> = { [TEAM_YML]: team_yml };
     if (v.readme?.trim()) files['README.md'] = v.readme;
     if (v.dependencies_yaml?.trim()) files['dependencies.yml'] = v.dependencies_yaml;
     let roles: Array<{ name?: unknown; content_md?: unknown }> = [];
