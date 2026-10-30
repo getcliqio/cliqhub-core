@@ -89,7 +89,7 @@ async function skill_from_team_entry(entry: TeamListEntry): Promise<A2a_skill | 
     if (!hub_team) return null;
 
     const latest = await _tv_repo_ac.find_one_q({
-        where: { team_id: hub_team.id },
+        where: { team_id: hub_team.id, status: 'published' },
         order: [['published_at', 'DESC']],
     });
     if (!latest) return null;

@@ -1766,7 +1766,7 @@ export class DispatchService {
         if (!hub_team) return;
 
         const latest_ver = await _team_version_repo.find_one(
-            { team_id: hub_team.id } as any,
+            { team_id: hub_team.id, status: 'published' } as any,
             { order: [['published_at', 'DESC']], attributes: ['capability_json'] },
         );
         if (!latest_ver?.capability_json) return;
@@ -1988,7 +1988,7 @@ export class DispatchService {
             if (!hub_team) continue;
 
             const latest_version = await _team_version_repo.find_one(
-                { team_id: hub_team.id } as any,
+                { team_id: hub_team.id, status: 'published' } as any,
                 { order: [['published_at', 'DESC']], attributes: ['workflow_json'] },
             );
             if (!latest_version?.workflow_json) continue;

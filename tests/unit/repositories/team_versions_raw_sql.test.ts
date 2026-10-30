@@ -31,7 +31,7 @@ function raw_reads(text: string): string[] {
     return reads;
 }
 
-describe('raw SQL on team_versions', () => {
+describe('reads of team_versions see published versions', () => {
     it('every read filters on status', () => {
         const unfiltered = sources(SRC).flatMap((file) =>
             raw_reads(readFileSync(file, 'utf8'))
@@ -43,5 +43,17 @@ describe('raw SQL on team_versions', () => {
     it('finds the reads it guards (the check is not vacuous)', () => {
         const all = sources(SRC).flatMap((file) => raw_reads(readFileSync(file, 'utf8')));
         expect(all.length).toBeGreaterThanOrEqual(5);
+    });
+
+    it('model reads of the newest version (by published_at) filter on status too', () => {
+        // A draft has no published_at; in `published_at DESC` it sorts first and would be taken as the latest.
+        const unfiltered = sources(SRC).flatMap((file) => {
+            const text = readFileSync(file, 'utf8');
+            return [...text.matchAll(/\[\['published_at', 'DESC'\]\]/g)]
+                .map((m) => text.slice(Math.max(0, m.index - 250), m.index))
+                .filter((before) => /team_version|tv_repo|TeamVersion/i.test(before) && !/status: 'published'/.test(before))
+                .map((before) => `${relative(SRC, file)}: …${before.slice(-120).replace(/\s+/g, ' ')}`);
+        });
+        expect(unfiltered).toEqual([]);
     });
 });

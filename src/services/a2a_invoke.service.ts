@@ -158,7 +158,7 @@ export class A2aInvokeService {
         if (!hub_team) throw ApiError.not_found(`Team '${skill_id}' not found`);
 
         const latest = await _tv_repo_a2ai.find_one_q({
-            where: { team_id: hub_team.id },
+            where: { team_id: hub_team.id, status: 'published' },
             order: [['published_at', 'DESC']],
         });
         if (!latest) throw ApiError.not_found(`Team '${skill_id}' has no published version`);
