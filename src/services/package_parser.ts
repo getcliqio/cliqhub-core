@@ -1,5 +1,5 @@
+import { is_zip, MAX_BUNDLE_PACKED, pack_bundle, TEAM_YML, unpack_bundle } from '@getcliqio/cliq-sdk';
 import yaml from 'js-yaml';
-import JSZip from 'jszip';
 
 import type { InputFieldSpec } from '../lib/input_field_spec.js';
 import { InputFieldSpecUtil } from '../lib/input_field_spec.js';
@@ -55,15 +55,13 @@ export interface PackageContent {
     dependencies_yml: string;
 }
 
-const MAX_PACKAGE_SIZE = 10 * 1024 * 1024;
-const MAX_EXTRACTED = 50 * 1024 * 1024;
 
 export async function extract_package(data_buffer: Buffer): Promise<PackageContent> {
-    if (data_buffer.length > MAX_PACKAGE_SIZE) {
+    if (data_buffer.length > MAX_BUNDLE_PACKED) {
         throw new Error('Package too large (max 10MB)');
     }
 
-    if (data_buffer[0] === 0x50 && data_buffer[1] === 0x4B) {
+    if (is_zip(data_buffer)) {
         return extract_zip_package(data_buffer);
     }
     return extract_json_package(data_buffer);
@@ -99,13 +97,12 @@ function extract_json_package(data_buffer: Buffer): PackageContent {
  * `unzip`. A zip is kept as sent; a JSON package (the builder's) is rebuilt as a zip from its content.
  */
 export async function to_package_zip(data_buffer: Buffer, content: Pick<PackageContent, 'manifest_yaml' | 'roles' | 'readme'> & { dependencies_yml?: string }): Promise<Buffer> {
-    if (data_buffer[0] === 0x50 && data_buffer[1] === 0x4B) return data_buffer;
-    const zip = new JSZip();
-    zip.file('team.yml', content.manifest_yaml ?? '');
-    for (const role of content.roles) zip.file(`roles/${role.name}.md`, role.content_md);
-    if (content.readme) zip.file('README.md', content.readme);
-    if (content.dependencies_yml) zip.file('dependencies.yml', content.dependencies_yml);
-    return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    if (is_zip(data_buffer)) return data_buffer;
+    const files: Record<string, string> = { [TEAM_YML]: content.manifest_yaml ?? '' };
+    for (const role of content.roles) files[`roles/${role.name}.md`] = role.content_md;
+    if (content.readme) files['README.md'] = content.readme;
+    if (content.dependencies_yml) files['dependencies.yml'] = content.dependencies_yml;
+    return pack_bundle({ files });
 }
 
 /**
@@ -137,53 +134,15 @@ export function dependencies_problems(text: string): string[] {
 }
 
 async function extract_zip_package(zip_buffer: Buffer): Promise<PackageContent> {
-    const zip = await JSZip.loadAsync(zip_buffer);
-
-    const all_paths = Object.keys(zip.files);
-    const top_dirs = new Set(all_paths.map(p => p.split('/')[0]));
-    let prefix = '';
-    if (top_dirs.size === 1) {
-        const candidate = [...top_dirs][0] + '/';
-        const has_nested = all_paths.some(p => p.startsWith(candidate) && p !== candidate);
-        if (has_nested) prefix = candidate;
-    }
-
-    let bytes_read = 0;
-
-    async function read_text(rel_path: string): Promise<string | null> {
-        const entry = zip.file(prefix + rel_path);
-        if (!entry) return null;
-        const content = await entry.async('string');
-        bytes_read += Buffer.byteLength(content, 'utf8');
-        if (bytes_read > MAX_EXTRACTED) throw new Error('Package extracts to more than 50MB');
-        return content;
-    }
-
-    let team_yml: ParsedTeamYml | null = null;
-    const yml_text = await read_text('team.yml');
-    const manifest_yaml = yml_text ?? '';
-    if (yml_text) {
-        team_yml = yaml.load(yml_text) as ParsedTeamYml;
-    }
-
-    const roles: { name: string; content_md: string }[] = [];
-    const roles_prefix = prefix + 'roles/';
-    const role_entries = Object.keys(zip.files)
-        .filter(p => p.startsWith(roles_prefix) && p.endsWith('.md') && !zip.files[p].dir)
-        .sort();
-
-    for (const role_path of role_entries) {
-        const filename = role_path.slice(roles_prefix.length);
-        if (filename.includes('/')) continue;
-        const content = await zip.file(role_path)!.async('string');
-        bytes_read += Buffer.byteLength(content, 'utf8');
-        if (bytes_read > MAX_EXTRACTED) throw new Error('Package extracts to more than 50MB');
-        roles.push({ name: filename.replace(/\.md$/, ''), content_md: content });
-    }
-
-    const readme = await read_text('README.md') ?? '';
-    const dependencies_yml = await read_text('dependencies.yml') ?? '';
-    return { team_yml, manifest_yaml, roles, readme, dependencies_yml };
+    const { files } = await unpack_bundle(zip_buffer);
+    const manifest_yaml = files[TEAM_YML] ?? '';
+    const team_yml = manifest_yaml ? yaml.load(manifest_yaml) as ParsedTeamYml : null;
+    // Role briefs are the .md files directly in roles/ (a nested folder is not a role).
+    const roles = Object.keys(files)
+        .filter((p) => p.startsWith('roles/') && p.endsWith('.md') && !p.slice('roles/'.length).includes('/'))
+        .sort()
+        .map((p) => ({ name: p.slice('roles/'.length, -'.md'.length), content_md: files[p] }));
+    return { team_yml, manifest_yaml, roles, readme: files['README.md'] ?? '', dependencies_yml: files['dependencies.yml'] ?? '' };
 }
 
 /**
