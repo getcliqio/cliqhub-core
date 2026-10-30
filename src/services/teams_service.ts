@@ -15,7 +15,7 @@ import type { DownloadLogRepository } from '../repositories/download_log_reposit
 import type { ScopeRepository } from '../repositories/scope_repository.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { PackageStorage } from '../storage/package_storage.js';
-import { stored_key, team_draft_prefix, team_file_key, version_zip_key } from '../storage/package_storage.js';
+import { stored_key, team_file_key, version_zip_key } from '../storage/package_storage.js';
 import { TeamFileRepository, type TeamFileRow } from '../repositories/team_file_repository.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { AuthContext } from '../schemas/auth_types.js';
@@ -33,6 +33,9 @@ import { is_bundle_path, lint_team, MAX_BUNDLE_FILES, MAX_BUNDLE_UNPACKED, pack_
 import { AgentCatalog } from '../models/agent_catalog.model.js';
 import { Team } from '../models/team.model.js';
 import { TeamVersionRepository as TeamVersionRepoClass } from '../repositories/team_version_repository.js';
+
+/** Decodes UTF-8 and throws on bytes that aren't text. */
+const STRICT_UTF8 = new TextDecoder('utf-8', { fatal: true });
 
 const log = get_logger('svc.teams');
 
@@ -886,7 +889,7 @@ export class TeamsService {
         version?: string; bump?: 'patch' | 'minor' | 'major';
         changelog?: string; description?: string; license?: string;
         tags?: string[]; visibility?: 'public' | 'private';
-        files?: Record<string, string>; agents?: Record<string, unknown>;
+        version_id?: string; agents?: Record<string, unknown>;
     }) {
         log.debug('publish', { team_id: params.team_id, name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -914,8 +917,8 @@ export class TeamsService {
             ?? (team && team.visibility !== 'draft' ? team.visibility as 'public' | 'private' : 'private');
         const visibility_was = team && team.visibility !== 'draft' ? team.visibility : null;
 
-        // Status-only republish: flip draft → published without new files.
-        if (!params.files) {
+        // Status-only republish: list the team again without a new version.
+        if (!params.version_id) {
             if (!team) throw new ApiError('invalid_params', 'files are required for new teams', 422);
             const latest = await this._version_repo.find_latest_version(team.id);
             if (!latest) throw new ApiError('invalid_params', 'files are required when the team has no versions', 422);
@@ -962,7 +965,11 @@ export class TeamsService {
         let tags = params.tags ? normalize_tags(params.tags) : undefined;
         if (params.tags && params.tags.length > 20) throw new ApiError('invalid_params', 'Maximum 20 tags allowed', 422);
 
-        const files = params.files;
+        // The draft to publish (PLAN-team-bundle §2.6): its files are read from storage and checked; nothing is copied.
+        if (!team) throw new ApiError('not_found', 'Team not found', 404);
+        const draft = await this._version_repo.find_draft(params.version_id);
+        if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (upload the files first: teams/files/upload)', 404);
+        const files = await this._read_version_files(draft.id);
         const { team_yml, manifest_yaml, roles, readme, dependencies_yml } = await check_team_files(files);
 
         if (!tags && team_yml.tags) tags = normalize_tags(team_yml.tags);
@@ -1005,32 +1012,21 @@ export class TeamsService {
         }
 
 
-        let published_team_id = '';
+        const published_team_id = team.id;
         await get_sequelize().transaction(async (t) => {
-            let effective_team_id: string;
+            const effective_team_id = team.id;
+            await this._team_repo.update(team.id, description, license, visibility, t);
+            // Must use the same transaction: a second connection UPDATE on the
+            // locked team row deadlocks until the statement timeout → 500.
+            await this._team_repo.update_listed(team.id, 1, t);
+            // The published version supersedes the builder's old working copy (until S1.3c moves it to drafts).
+            if ((team as { draft_manifest?: string | null }).draft_manifest) await this._team_repo.clear_draft(team.id, t);
 
-            if (team) {
-                await this._team_repo.update(team.id, description, license, visibility, t);
-                // Must use the same transaction: a second connection UPDATE on the
-                // locked team row deadlocks until the statement timeout → 500.
-                await this._team_repo.update_listed(team.id, 1, t);
-                // The published package supersedes any unversioned working copy.
-                if ((team as { draft_manifest?: string | null }).draft_manifest) await this._team_repo.clear_draft(team.id, t);
-                effective_team_id = team.id;
-            } else {
-                effective_team_id = await this._team_repo.create(
-                    name, scope, description, auth.user!.id, license, visibility, t, 1,
-                );
-            }
-
-            const version_id = await this._version_repo.create(
-                effective_team_id, resolved_version!, params.changelog || '', 'pending',
-                cliq_version, tools, workflow_json, manifest_yaml,
-                readme, capability_json, agents_json, roles_json, t, dependencies_yml,
-            );
-            // The files become the team's draft folder, and the version is that folder bundled (§2.6). Inside the
-            // transaction: if storage fails, the version isn't created.
-            await this._bundle_draft(effective_team_id, version_id, files, t);
+            const flipped = await this._version_repo.publish_draft(draft.id, {
+                version: resolved_version!, changelog: params.changelog || '', cliq_version, tools, workflow_json,
+                manifest_yaml, readme, capability_json, agents_json, roles_json, dependencies_yaml: dependencies_yml,
+            }, t);
+            if (!flipped) throw new ApiError('conflict', 'That draft was published or discarded meanwhile', 409);
 
             if (tags) {
                 await this._tag_repo.delete_by_team_id(effective_team_id, t);
@@ -1038,7 +1034,6 @@ export class TeamsService {
                     await this._tag_repo.create(effective_team_id, tag, t);
                 }
             }
-            published_team_id = effective_team_id;
         });
         await this._visibility_changed(auth, scope_row, scope, name, visibility_was, visibility);
 
@@ -1051,6 +1046,25 @@ export class TeamsService {
             listed: true,
             visibility,
         };
+    }
+
+    /**
+     * A published version's zip: the cached one if it's there, else built from the version's `team_files`, stored at
+     * `teams/<team_id>/versions/<version_id>.zip`, and pointed at (PLAN-team-bundle §2.6). Null when the version has
+     * neither (it never had files).
+     */
+    private async _version_zip(team_id: string, version_id: string, package_path: string): Promise<Buffer | null> {
+        if (!this._storage) return null;
+        const cached_key = stored_key(package_path);
+        const cached = cached_key ? await this._storage.read(cached_key) : null;
+        if (cached) return cached;
+        const files = await this._read_version_files(version_id);
+        if (Object.keys(files).length === 0) return null;
+        const zip = await pack_bundle({ files });
+        const key = version_zip_key(team_id, version_id);
+        await this._storage.write(key, zip);
+        await this._version_repo.update_package_path(version_id, key);
+        return zip;
     }
 
     async download(auth: AuthContext, params: { name?: string; scope?: string; version?: string; version_id?: string }) {
@@ -1073,8 +1087,7 @@ export class TeamsService {
         }
         if (!ver) throw new ApiError('not_found', 'No versions published', 404);
 
-        const key = stored_key(ver.package_path);
-        const data = this._storage && key ? await this._storage.read(key) : null;
+        const data = await this._version_zip(team.id, ver.id, ver.package_path);
         if (!data) throw new ApiError('internal', `Package archive missing for v${ver.version}. It may need to be republished.`, 500);
 
         if (this._download_log_repo) {
@@ -1286,19 +1299,25 @@ export class TeamsService {
     }
 
     /**
-     * The one way a version's zip is made (PLAN-team-bundle §2.6): write the team's files into its draft
-     * folder (`teams/<team_id>/draft/`), read that folder back, zip it to
-     * `teams/<team_id>/versions/<version_id>.zip`, and point the version row at it.
+     * A version's files from storage, each checked against its row's sha256 and decoded as UTF-8 text.
+     *
+     * @throws ApiError 500 when bytes are missing or don't match their row; 422 when a file isn't text.
      */
-    private async _bundle_draft(team_id: string, version_id: string, files: Record<string, string>, transaction: import('sequelize').Transaction): Promise<void> {
-        const zip_key = version_zip_key(team_id, version_id);
-        if (this._storage) {
-            const draft = team_draft_prefix(team_id);
-            await this._storage.write_files(draft, files);
-            const zip = await pack_bundle({ files: await this._storage.read_files(draft) });
-            await this._storage.write(zip_key, zip);
+    private async _read_version_files(version_id: string): Promise<Record<string, string>> {
+        if (!this._storage) throw new ApiError('internal', 'No storage configured', 500);
+        const files: Record<string, string> = {};
+        for (const row of await this._file_repo.list_by_version(version_id)) {
+            const data = await this._storage.read(row.storage_key);
+            if (!data || createHash('sha256').update(data).digest('hex') !== row.sha256) {
+                throw new ApiError('internal', `${row.path}: stored bytes are missing or don't match their record`, 500);
+            }
+            try {
+                files[row.path] = STRICT_UTF8.decode(data);
+            } catch {
+                throw new ApiError('invalid_package', `${row.path} isn't text (team.yml, roles and dependencies.yml are UTF-8)`, 422, { paths: [row.path] });
+            }
         }
-        await this._version_repo.update_package_path(version_id, zip_key, transaction);
+        return files;
     }
 
     /** Seed a draft version row from raw manifest YAML/JSON (no zip package). */

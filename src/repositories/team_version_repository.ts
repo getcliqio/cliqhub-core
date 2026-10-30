@@ -158,6 +158,24 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
         return row.id;
     }
 
+    /**
+     * Publish a draft: set its number and date, flip it to published, and fill the columns derived from its
+     * files (read from them until S1.4). Nothing is created or copied.
+     *
+     * @returns false when the row isn't a draft (already published, or gone).
+     */
+    async publish_draft(id: string, fields: {
+        version: string; changelog: string; cliq_version: string | null; tools: string; workflow_json: string;
+        manifest_yaml: string; readme: string; capability_json: string; agents_json: string; roles_json: string;
+        dependencies_yaml: string;
+    }, transaction: Transaction): Promise<boolean> {
+        const [n] = await TeamVersion.update(
+            { ...fields, status: 'published', published_at: new Date() } as never,
+            { where: { id, status: 'draft' }, transaction },
+        );
+        return n === 1;
+    }
+
     /** A draft version by id, or null (a published version is not a draft). */
     async find_draft(id: string): Promise<{ id: string; team_id: string } | null> {
         return TeamVersion.findOne({ where: { id, status: 'draft' }, attributes: ['id', 'team_id'], raw: true });

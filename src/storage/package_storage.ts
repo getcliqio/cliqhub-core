@@ -25,8 +25,8 @@ export function package_path(packages_path: string, team_name: string, version: 
 }
 
 /* A team in storage is a folder keyed by its id (PLAN-team-bundle §2.2):
- *   teams/<team_id>/draft/<path>               the working copy, editable files
- *   teams/<team_id>/versions/<version_id>.zip  a published version, fixed */
+ *   teams/<team_id>/files/<file_id>            one uploaded file's bytes (its row is in cliq.team_files)
+ *   teams/<team_id>/versions/<version_id>.zip  a published version's zip, built on first download */
 
 const ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -38,11 +38,6 @@ function assert_id(kind: string, id: string): void {
 export function team_prefix(team_id: string): string {
     assert_id('team', team_id);
     return `teams/${team_id}/`;
-}
-
-/** `teams/<team_id>/draft/` — the team's working copy. */
-export function team_draft_prefix(team_id: string): string {
-    return `${team_prefix(team_id)}draft/`;
 }
 
 /** `teams/<team_id>/files/<file_id>` — one uploaded file's bytes, named by its id (never overwritten). */
@@ -227,33 +222,12 @@ export function create_package_storage(cfg: StorageConfig) {
         return keys.sort();
     }
 
-    /** The files under `prefix`, by path relative to it. */
-    async function read_files(prefix: string): Promise<Record<string, string>> {
-        const files: Record<string, string> = {};
-        for (const key of await list(prefix)) {
-            const data = await read(key);
-            if (data) files[key.slice(prefix.length)] = data.toString('utf8');
-        }
-        return files;
-    }
-
-    /** Make `prefix` hold exactly these files: write each, then remove any other file under it. */
-    async function write_files(prefix: string, files: Record<string, string>): Promise<void> {
-        for (const [rel, text] of Object.entries(files)) {
-            assert_safe_key(rel);
-            await write(prefix + rel, Buffer.from(text, 'utf8'), 'text/plain; charset=utf-8');
-        }
-        for (const key of await list(prefix)) {
-            if (!(key.slice(prefix.length) in files)) await del(key);
-        }
-    }
-
     /** Remove every file under `prefix`. */
     async function delete_prefix(prefix: string): Promise<void> {
         for (const key of await list(prefix)) await del(key);
     }
 
-    return { write, read, delete: del, list, read_files, write_files, delete_prefix };
+    return { write, read, delete: del, list, delete_prefix };
 }
 
 export type PackageStorage = ReturnType<typeof create_package_storage>;
