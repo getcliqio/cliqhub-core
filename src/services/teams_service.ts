@@ -15,9 +15,10 @@ import type { DownloadLogRepository } from '../repositories/download_log_reposit
 import type { ScopeRepository } from '../repositories/scope_repository.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { PackageStorage } from '../storage/package_storage.js';
-import { stored_key, team_file_key, version_zip_key } from '../storage/package_storage.js';
-import { TeamFileRepository, type TeamFileRow } from '../repositories/team_file_repository.js';
-import { createHash, randomUUID } from 'node:crypto';
+import { stored_key, version_zip_key } from '../storage/package_storage.js';
+import { TeamFileRepository } from '../repositories/team_file_repository.js';
+import { write_team_file_objects } from './team_file_objects.js';
+import { createHash } from 'node:crypto';
 import type { AuthContext } from '../schemas/auth_types.js';
 import type { TeamCatalogSortKey, TeamListItemVO, TeamRoleVO } from '../schemas/team_types.js';
 import { Op, QueryTypes, col, fn, literal, type WhereOptions } from 'sequelize';
@@ -271,18 +272,7 @@ export class TeamsService {
         if (kept.length + files.length > MAX_BUNDLE_FILES) throw new ApiError('invalid_package', `A team has more than ${MAX_BUNDLE_FILES} files`, 422);
         if (!this._storage) throw new ApiError('internal', 'No storage configured', 500);
 
-        // Bytes first, under new ids: a row only ever points at bytes that exist.
-        const rows: TeamFileRow[] = [];
-        for (const f of files) {
-            const id = randomUUID();
-            const storage_key = team_file_key(team_id, id);
-            await this._storage.write(storage_key, f.data, f.content_type);
-            rows.push({
-                id, team_id, version_id: '', path: f.path, name: f.path.split('/').pop()!,
-                size: f.data.length, sha256: createHash('sha256').update(f.data).digest('hex'),
-                content_type: f.content_type, storage_key,
-            });
-        }
+        const rows = await write_team_file_objects(this._storage, team_id, files);
         let version_id = draft_id;
         await get_sequelize().transaction(async (t) => {
             if (!version_id) version_id = await this._version_repo.create_draft(team_id, t);

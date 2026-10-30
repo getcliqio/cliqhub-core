@@ -377,8 +377,9 @@ async function seed_teams(): Promise<void> {
     await attach_cliq_scope(get_sequelize());
 
     // The built-in teams (cliq-sdk `BUILTIN_TEAMS`: hello-world, hug-example) — the same ones cliqd
-    // installs on a new daemon, from one source. Each version is upserted; earlier versions stay as
-    // they are, so a realm on one keeps it until it is moved.
+    // installs on a new daemon, from one source. A version is added when it is missing and never
+    // changed after (a version is fixed; new content ships as a new version). Its files come from the
+    // startup backfill, which runs right after (PLAN-team-bundle S1.4a).
     for (const builtin of BUILTIN_TEAMS) {
         const label = `@${builtin.scope}/${builtin.name}`;
         const parsed = yaml.load(builtin.manifest_yaml) as { phases: unknown[]; inputs?: unknown[] };
@@ -412,10 +413,7 @@ async function seed_teams(): Promise<void> {
             tools: '[]',
         };
         const existing_ver = await TeamVersion.findOne({ where: { team_id: team.id, version: builtin.version } });
-        if (existing_ver) {
-            await existing_ver.update(version_data);
-            log.info(`updated registry version ${label}@${builtin.version}`);
-        } else {
+        if (!existing_ver) {
             await TeamVersion.create(version_data);
             log.info(`seeded registry version ${label}@${builtin.version}`);
         }

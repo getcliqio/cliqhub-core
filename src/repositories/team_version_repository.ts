@@ -1,5 +1,5 @@
 import { TeamVersion } from '../models/index.js';
-import type { Transaction } from 'sequelize';
+import { Op, literal, type Transaction } from 'sequelize';
 import { SemVer } from '../lib/semver.js';
 import { BaseRepository } from './base_repository.js';
 
@@ -147,6 +147,25 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     /** Every version's id, team and stored package (the one-time move to id keys, S1.2). */
     async list_all_packages() {
         return TeamVersion.findAll({ attributes: ['id', 'team_id', 'version', 'package_path'], raw: true });
+    }
+
+    /**
+     * Published versions with no `team_files` rows (made before S1.3b, or seeded): what the startup backfill
+     * (PLAN-team-bundle S1.4a) gives files, from the zip or, without one, from these columns.
+     */
+    async list_published_without_files(): Promise<Array<{
+        id: string; team_id: string; version: string; package_path: string;
+        manifest_yaml: string | null; readme: string | null; dependencies_yaml: string | null; roles_json: string | null;
+    }>> {
+        const rows = await TeamVersion.findAll({
+            where: {
+                ...PUBLISHED,
+                [Op.and]: [literal('NOT EXISTS (SELECT 1 FROM cliq.team_files f WHERE f.version_id = "TeamVersion"."id")')],
+            },
+            attributes: ['id', 'team_id', 'version', 'package_path', 'manifest_yaml', 'readme', 'dependencies_yaml', 'roles_json'],
+            raw: true,
+        });
+        return numbered(rows as never[]);
     }
 
     /** A new draft version of a team (no number, no date yet): its id. */
