@@ -4,6 +4,7 @@
     "private": true,
     "type": "module",
     "scripts": {
+        "dev:link": "npm link @getcliqio/cliq-sdk",
         "build": "tsc && npm run copy-data",
         "copy-data": "mkdir -p dist/data src/data && find src/data -maxdepth 1 -name \"*.json\" -exec cp {} dist/data/ \\; || true",
         "start": "node dist/server.js",
