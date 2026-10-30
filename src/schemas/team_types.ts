@@ -158,7 +158,7 @@ export const TeamsCreateInput = z.object({
         team_id: z.string().uuid().describe('Team to fork'),
         version: z.string().optional().describe('Version to fork from; omit for the latest'),
     }).optional()
-        .describe('Start the new team as a copy of this team version (its manifest unless `manifest` is given); the new team records where it came from'),
+        .describe("Start the new team's draft as a copy of this team version's files (team.yml renamed); the new team records where it came from"),
 });
 export type TeamsCreateInput = z.infer<typeof TeamsCreateInput>;
 
