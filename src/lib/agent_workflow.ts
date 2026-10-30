@@ -17,6 +17,7 @@ import { QueryTypes, type Sequelize } from 'sequelize';
 import { get_sequelize } from '../db/sequelize.js';
 import { AgentCatalog } from '../models/agent_catalog.model.js';
 import { SemVer } from './semver.js';
+import { version_contents } from '../services/version_content.js';
 
 export type Team_agent_ref = {
     scope: string;
@@ -77,7 +78,8 @@ export class AgentWorkflow {
     /**
      * Find all teams that reference `agent_name` in any published version.
      *
-     * Queries `cliq.teams` joined with `cliq.team_versions`. Returns at most
+     * Queries `cliq.teams` joined with `cliq.team_versions`; each version's phases come from its files
+     * (PLAN-team-bundle S1.4b, cached by version). Returns at most
      * one entry per team (scope/name pair). Falls back to an empty array on
      * any DB error so callers can treat "unknown" the same as "none".
      *
@@ -89,17 +91,20 @@ export class AgentWorkflow {
         let rows: Array<{
             scope: string;
             name: string;
+            id: string;
             version: string | null;
-            workflow_json: string;
         }>;
+        let workflows: Map<string, string>;
         try {
             rows = await sq.query(
-                `SELECT t.scope, t.name, v.version, v.workflow_json
+                `SELECT t.scope, t.name, v.id, v.version
                  FROM cliq.teams t
                  INNER JOIN cliq.team_versions v ON v.team_id = t.id
-                 WHERE v.status = 'published' AND v.workflow_json IS NOT NULL AND v.workflow_json <> ''`,
+                 WHERE v.status = 'published'`,
                 { type: QueryTypes.SELECT },
             ) as typeof rows;
+            const contents = await version_contents(rows.map((r) => r.id));
+            workflows = new Map([...contents].map(([id, c]) => [id, JSON.stringify(c.workflow)]));
         } catch {
             return [];
         }
@@ -107,7 +112,9 @@ export class AgentWorkflow {
         const seen = new Set<string>();
         const hits: Team_agent_ref[] = [];
         for (const row of rows) {
-            const agents = AgentWorkflow.extract_agents(row.workflow_json);
+            const workflow_json = workflows.get(row.id);
+            if (!workflow_json) continue;
+            const agents = AgentWorkflow.extract_agents(workflow_json);
             if (!agents.has(agent_name)) continue;
             const key = `${row.scope}/${row.name}`;
             if (seen.has(key)) continue;
@@ -310,12 +317,21 @@ export class AgentWorkflow {
         if (teams.length === 0) return new Map();
 
         const team_ids = teams.map((t) => t.id);
-        const versions = await sq.query<{ team_id: string; version: string; workflow_json: string }>(
-            `SELECT v.team_id, v.version, v.workflow_json
+        const all = await sq.query<{ team_id: string; id: string; version: string }>(
+            `SELECT v.team_id, v.id, v.version
              FROM cliq.team_versions v
-             WHERE v.team_id IN (:team_ids) AND v.status = 'published' AND v.workflow_json IS NOT NULL AND v.workflow_json <> ''`,
+             WHERE v.team_id IN (:team_ids) AND v.status = 'published'`,
             { type: QueryTypes.SELECT, replacements: { team_ids } },
         );
+        // Usage counts each team's latest version: read just those from their files (PLAN-team-bundle S1.4b).
+        const latest = team_ids.map((team_id) => {
+            const mine = all.filter((v) => v.team_id === team_id);
+            const top = SemVer.max(mine.map((v) => v.version));
+            return mine.find((v) => v.version === top);
+        }).filter((v): v is { team_id: string; id: string; version: string } => Boolean(v));
+        const contents = await version_contents(latest.map((v) => v.id));
+        const versions = latest.filter((v) => contents.has(v.id))
+            .map((v) => ({ team_id: v.team_id, version: v.version, workflow_json: JSON.stringify(contents.get(v.id)!.workflow) }));
 
         return AgentWorkflow.build_usage(teams, versions, realms, (vs) => SemVer.max(vs) ?? vs[0] ?? '');
     }

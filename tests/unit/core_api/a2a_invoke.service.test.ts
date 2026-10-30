@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 
+// Version content is read from files (PLAN-team-bundle S1.4b).
+vi.mock('../../../src/services/version_content.js', () => ({
+    version_content: vi.fn(async () => null),
+    latest_version_content: vi.fn(async () => null),
+    version_contents: vi.fn(async () => new Map()),
+}));
 vi.mock('../../../src/models/index.js', () => ({
     Realm: { findByPk: vi.fn() },
     Run: { findByPk: vi.fn() },
@@ -49,7 +55,8 @@ vi.mock('../../../src/lib/api_error.js', () => ({
 
 import { A2aInvokeService } from '../../../src/services/a2a_invoke.service.js';
 import { Realm, Run, RealmMember } from '../../../src/models/index.js';
-import { Team as HubTeam, TeamVersion } from '../../../src/models/index.js';
+import { Team as HubTeam } from '../../../src/models/index.js';
+import { latest_version_content } from '../../../src/services/version_content.js';
 import { RealmA2aService } from '../../../src/services/realm_a2a.service.js';
 import { DispatchService } from '../../../src/services/dispatch.service.js';
 import { QueueService } from '../../../src/services/queue.service.js';
@@ -67,10 +74,8 @@ describe('A2aInvokeService', () => {
             team_list: [{ scope: 'cliq', slug: 'hello-world' }],
         } as any);
         vi.mocked(HubTeam.findOne).mockResolvedValue({ id: hub_legacy_uuid(10), name: 'hello-world' } as any);
-        vi.mocked(TeamVersion.findOne).mockResolvedValue({
-            capability_json: JSON.stringify({
-                inputs: [{ name: 'message', required: true }],
-            }),
+        vi.mocked(latest_version_content).mockResolvedValue({
+            version_id: 'v1', version: '1.0.0', inputs: [{ name: 'message', required: true }],
         } as any);
     });
 

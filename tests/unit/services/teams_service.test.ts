@@ -6,6 +6,15 @@ import { TeamsService, team_query_where } from '../../../src/services/teams_serv
 import { ALICE, BOB, ORG_ADMIN, UNAUTHED, SITE_ADMIN } from '../../helpers/fixtures.js';
 import { unpack_bundle } from '@getcliqio/cliq-sdk';
 
+// Version content is read from files (PLAN-team-bundle S1.4b); tests give it per case.
+vi.mock('../../../src/services/version_content.js', () => ({
+    version_content: vi.fn(async () => null),
+    latest_version_content: vi.fn(async () => null),
+    version_contents: vi.fn(async () => new Map()),
+}));
+import { version_content } from '../../../src/services/version_content.js';
+import { derive_version_content } from '../../../src/services/package_parser.js';
+
 vi.mock('../../../src/lib/sequelize.js', () => ({
     get_sequelize: vi.fn().mockReturnValue({
         transaction: vi.fn().mockImplementation(async (fn: any) => fn({})),
@@ -165,7 +174,7 @@ function make_version_repo() {
     return {
         find_by_team_and_version: vi.fn(),
         find_latest_version: vi.fn(),
-        find_detail_by_team_and_version: vi.fn(),
+        find_latest_ref: vi.fn().mockResolvedValue(null),
         list_by_team_id: vi.fn().mockResolvedValue([]),
         create: vi.fn().mockResolvedValue(NEW_VERSION_ID),
         update_package_path: vi.fn().mockResolvedValue(undefined),
@@ -550,14 +559,24 @@ describe('TeamsService — get_by_id', () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
         version_repo.list_by_team_id.mockResolvedValueOnce([{ version: '1.0.0', changelog: '', published_at: '2025-01-01' }]);
         tag_repo.find_by_team_id.mockResolvedValueOnce([{ tag: 'ai' }]);
-        version_repo.find_detail_by_team_and_version.mockResolvedValueOnce({
-            id: hub_legacy_uuid(5), workflow_json: '{"phases":[]}', agents_json: '{}',
-            readme: 'hello', cliq_version: '0.5', tools: '[]', capability_json: '{}',
+        version_repo.find_by_team_and_version.mockResolvedValueOnce({ id: hub_legacy_uuid(5) });
+        // what the version's files say (PLAN-team-bundle S1.4b)
+        const team_yml = 'name: "@alice/my-team"\ncliq_version: "0.5"\ninputs:\n  - name: note\n    required: false\nagents:\n  exec: {}\nphases:\n  - name: say\n    agent: exec\n';
+        vi.mocked(version_content).mockResolvedValueOnce({
+            version_id: hub_legacy_uuid(5),
+            ...derive_version_content({ 'team.yml': team_yml, 'README.md': 'hello', 'roles/say.md': 'Say it.', 'dependencies.yml': '- name: jq\n' }),
         });
 
         const result = await service.get_by_id(ALICE, { name: 'my-team', scope: 'alice' });
         expect(result.name).toBe('my-team');
         expect(result.tags).toEqual(['ai']);
+        expect(vi.mocked(version_content)).toHaveBeenCalledWith(hub_legacy_uuid(5));
+        expect(result).toMatchObject({
+            version_id: hub_legacy_uuid(5), raw_manifest: team_yml, team_json: team_yml, readme: 'hello', cliq_version: '0.5',
+            agents: { exec: {} }, roles: [{ name: 'say', content_md: 'Say it.' }], dependencies: '- name: jq\n',
+            workflow: { phases: [{ name: 'say', agent: 'exec' }] },
+            inputs: [expect.objectContaining({ name: 'note', required: false })],
+        });
     });
 
     it('returns not_found for missing team', async () => {
@@ -578,6 +597,7 @@ describe('TeamsService — get_by_id', () => {
         const result = await service.get_by_id(ALICE, { name: 'my-team', scope: 'alice' });
         expect(result.latest_version).toBe('0.0.0');
         expect(result.workflow).toEqual({ phases: [] });
+        expect(result.version_id).toBeNull();
     });
 });
 
@@ -606,13 +626,11 @@ describe('TeamsService — get_by_id with version', () => {
             { version: '1.0.0', changelog: 'v1', published_at: '2025-01-01' },
         ]);
         tag_repo.find_by_team_id.mockResolvedValueOnce([]);
-        version_repo.find_detail_by_team_and_version.mockResolvedValueOnce({
-            id: hub_legacy_uuid(5), workflow_json: '{"phases":[]}', agents_json: '{}',
-            readme: 'hello', cliq_version: null, tools: '[]', capability_json: '{}',
-            roles_json: '[]', manifest_yaml: '',
-        });
+        version_repo.find_by_team_and_version.mockResolvedValueOnce({ id: hub_legacy_uuid(5) });
 
         const result = await service.get_by_id(ALICE, { name: 'my-team', scope: 'alice', version: '1.0.0' });
+        expect(version_repo.find_by_team_and_version).toHaveBeenCalledWith(PUBLIC_TEAM.id, '1.0.0');
+        expect(result.version_id).toBe(hub_legacy_uuid(5));
         expect(result.name).toBe('my-team');
         expect(result.latest_version).toBe('1.0.0');
     });

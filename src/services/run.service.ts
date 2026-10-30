@@ -808,26 +808,20 @@ export class RunService {
             const { TeamVersionRepository } = await import(
                 '../repositories/team_version_repository.js'
             );
+            const { version_content } = await import('./version_content.js');
             const repo = new TeamVersionRepository();
-            if (version_id?.trim()) {
-                const row = await repo.find_by_id(version_id.trim());
-                if (!row || row.team_id !== team_id) return null;
-                return {
-                    id: row.id,
-                    version: row.version,
-                    workflow_json: row.workflow_json ?? '{}',
-                    manifest_yaml: row.manifest_yaml ?? '',
-                };
-            }
-            const latest = await repo.find_latest_detail(team_id);
-            if (!latest) return null;
+            const ref = version_id?.trim()
+                ? await repo.find_by_id(version_id.trim()).then((row) => (row && row.team_id === team_id ? { id: row.id, version: row.version } : null))
+                : await repo.find_latest_ref(team_id);
+            if (!ref) return null;
+            // What the version's files say (PLAN-team-bundle S1.4b).
+            const content = await version_content(ref.id);
+            if (!content) return null;
             return {
-                id: latest.id,
-                version: (latest as { version?: string }).version
-                    ?? (await repo.find_latest_version(team_id))
-                    ?? '0.0.0',
-                workflow_json: latest.workflow_json ?? '{}',
-                manifest_yaml: latest.manifest_yaml ?? '',
+                id: ref.id,
+                version: ref.version,
+                workflow_json: JSON.stringify(content.workflow),
+                manifest_yaml: content.manifest_yaml,
             };
         } catch (err) {
             log.debug('run_lookup_failed', { error: err instanceof Error ? err.message : String(err) });

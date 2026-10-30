@@ -3,13 +3,12 @@ import { RealmRepository } from '../repositories/realm_repository.js';
 import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
 import { RunRepository } from '../repositories/run_repository.js';
 import { TeamRepository } from '../repositories/team_repository.js';
-import { TeamVersionRepository } from '../repositories/team_version_repository.js';
+import { latest_version_content } from './version_content.js';
 
 const _realm_repo_a2ai = new RealmRepository();
 const _realm_member_repo_a2ai = new RealmMemberRepository();
 const _run_repo_a2ai = new RunRepository();
 const _team_repo_a2ai = new TeamRepository();
-const _tv_repo_a2ai = new TeamVersionRepository();
 import { ApiError } from '../lib/api_error.js';
 import { RealmA2aService } from './realm_a2a.service.js';
 import { DispatchService } from './dispatch.service.js';
@@ -157,14 +156,12 @@ export class A2aInvokeService {
         const hub_team = await _team_repo_a2ai.find_one_q({ where: { scope, name: slug } });
         if (!hub_team) throw ApiError.not_found(`Team '${skill_id}' not found`);
 
-        const latest = await _tv_repo_a2ai.find_one_q({
-            where: { team_id: hub_team.id, status: 'published' },
-            order: [['published_at', 'DESC']],
-        });
+        // The latest version's inputs, from its files (PLAN-team-bundle S1.4b).
+        const latest = await latest_version_content(hub_team.id);
         if (!latest) throw ApiError.not_found(`Team '${skill_id}' has no published version`);
 
         const inputs = input.inputs ?? {};
-        validate_inputs(parse_inputs_schema(latest.capability_json), inputs);
+        validate_inputs(parse_inputs_schema(JSON.stringify({ inputs: latest.inputs })), inputs);
 
         const owner_user_id = String(realm.owner_user_id);
         const { item } = await DispatchService.enqueue({

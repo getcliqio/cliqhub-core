@@ -43,6 +43,7 @@ import { NotificationService } from './notification.service.js';
 import { RealmDispatchKeyService } from './realm_dispatch_key.service.js';
 import { EventSubmitService } from './events_service.js';
 import { escape_like } from '../lib/search.js';
+import { version_contents } from './version_content.js';
 const _api_token_repo = new ApiTokenRepository();
 const _user_repo = new UserRepository();
 const _agent_catalog_repo = new AgentCatalogRepository();
@@ -2081,7 +2082,7 @@ export class RealmService {
                 if (registry_ids.length > 0) {
                     const all_versions = await _tv_repo.find_all_q({
                         where: { team_id: { [Op.in]: registry_ids }, status: 'published' },
-                        attributes: ['team_id', 'version', 'workflow_json', 'capability_json'],
+                        attributes: ['team_id', 'id', 'version'],
                         raw: true,
                     });
 
@@ -2092,6 +2093,23 @@ export class RealmService {
                         if (!arr) { arr = []; by_team.set(v.team_id, arr); }
                         arr.push(v);
                     }
+
+                    // Each team's latest and pinned versions' content, from their files (PLAN-team-bundle S1.4b).
+                    const wanted: string[] = [];
+                    for (const [team_id, versions] of by_team) {
+                        const latest_ver = SemVer.max(versions.map((v) => v.version).filter((v): v is string => v !== null));
+                        const latest_row = versions.find((v) => v.version === latest_ver) ?? versions[0];
+                        if (latest_row) wanted.push(latest_row.id);
+                        const pinned = realm_versions.get(registry_id_to_key.get(team_id) ?? '');
+                        const pinned_row = pinned ? versions.find((v) => v.version === pinned) : undefined;
+                        if (pinned_row) wanted.push(pinned_row.id);
+                    }
+                    const contents = await version_contents(wanted);
+                    const workflow_of = (id: string) => JSON.stringify(contents.get(id)?.workflow ?? { phases: [] });
+                    const capability_of = (id: string) => {
+                        const c = contents.get(id);
+                        return c ? JSON.stringify({ inputs: c.inputs, use_when: c.use_when, not_for: c.not_for }) : null;
+                    };
 
                     // Collect all unique agent names across all teams.
                     const all_agent_names = new Set<string>();
@@ -2104,7 +2122,7 @@ export class RealmService {
                             : versions[0];
                         if (!target) continue;
 
-                        const refs = AgentWorkflow.extract_agents(target.workflow_json);
+                        const refs = AgentWorkflow.extract_agents(workflow_of(target.id));
                         const names = new Set<string>();
                         for (const ref of refs) {
                             const name = AgentWorkflow.parse_ref(ref).name;
@@ -2116,7 +2134,7 @@ export class RealmService {
                         if (key) {
                             const pinned = realm_versions.get(key);
                             const shown = (pinned && versions.find((v) => v.version === pinned)) || target;
-                            capability_map.set(key, capability_summary(shown.capability_json));
+                            capability_map.set(key, capability_summary(capability_of(shown.id)));
                         }
                     }
 

@@ -7,6 +7,13 @@ vi.mock('../../../src/models/index.js', () => ({
     TeamVersion: { findOne: vi.fn() },
 }));
 
+// Version content is read from files (PLAN-team-bundle S1.4b).
+vi.mock('../../../src/services/version_content.js', () => ({
+    version_content: vi.fn(async () => null),
+    latest_version_content: vi.fn(async () => null),
+    version_contents: vi.fn(async () => new Map()),
+}));
+
 vi.mock('../../../src/services/realm_a2a.service.js', () => ({
     RealmA2aService: {
         is_enabled: vi.fn(),
@@ -21,8 +28,9 @@ vi.mock('../../../src/lib/api_error.js', () => ({
 
 import { AgentCardService } from '../../../src/services/agent_card.service.js';
 import { Realm } from '../../../src/models/index.js';
-import { Team as HubTeam, TeamVersion } from '../../../src/models/index.js';
+import { Team as HubTeam } from '../../../src/models/index.js';
 import { RealmA2aService } from '../../../src/services/realm_a2a.service.js';
+import { latest_version_content } from '../../../src/services/version_content.js';
 
 describe('AgentCardService', () => {
     beforeEach(() => {
@@ -51,11 +59,10 @@ describe('AgentCardService', () => {
             } as any)
             .mockResolvedValueOnce(null as any);
 
-        vi.mocked(TeamVersion.findOne).mockResolvedValue({
-            capability_json: JSON.stringify({
-                inputs: [{ name: 'message', type: 'string' }],
-                use_when: ['greeting'],
-            }),
+        vi.mocked(latest_version_content).mockResolvedValue({
+            version_id: 'v1', version: '1.0.0',
+            inputs: [{ name: 'message', type: 'string' }],
+            use_when: ['greeting'],
         } as any);
 
         const card = await AgentCardService.build_for_slug('acme');

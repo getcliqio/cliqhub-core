@@ -1,10 +1,9 @@
 import { RealmRepository } from '../repositories/realm_repository.js';
 import { TeamRepository } from '../repositories/team_repository.js';
-import { TeamVersionRepository } from '../repositories/team_version_repository.js';
+import { latest_version_content } from './version_content.js';
 
 const _realm_repo_ac = new RealmRepository();
 const _team_repo_ac = new TeamRepository();
-const _tv_repo_ac = new TeamVersionRepository();
 import { ApiError } from '../lib/api_error.js';
 import { RealmA2aService } from './realm_a2a.service.js';
 import type { TeamListEntry } from '../models/realm.model.js';
@@ -88,13 +87,11 @@ async function skill_from_team_entry(entry: TeamListEntry): Promise<A2a_skill | 
     });
     if (!hub_team) return null;
 
-    const latest = await _tv_repo_ac.find_one_q({
-        where: { team_id: hub_team.id, status: 'published' },
-        order: [['published_at', 'DESC']],
-    });
+    // The latest version's inputs, from its files (PLAN-team-bundle S1.4b).
+    const latest = await latest_version_content(hub_team.id);
     if (!latest) return null;
 
-    const capability = parse_capability(latest.capability_json);
+    const capability = parse_capability(JSON.stringify({ inputs: latest.inputs, use_when: latest.use_when, not_for: latest.not_for }));
     const team_id = skill_id_for_team(entry.scope, entry.slug);
     const description =
         hub_team.description?.trim()

@@ -10,7 +10,6 @@
  * request/response semantics (design task 4.15 — future outbox+ack).
  */
 
-import type { NormalizedWorkflow } from './package_parser.js';
 import { randomUUID } from 'node:crypto';
 import { Op, QueryTypes } from 'sequelize';
 
@@ -55,6 +54,7 @@ const _team_version_repo = new TeamVersionRepository();
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import { CustomEventService } from './custom_event.service.js';
+import { latest_version_content, version_content } from './version_content.js';
 import { SemVer } from '../lib/semver.js';
 import { assert_run_channels } from './run_start_options.js';
 
@@ -527,10 +527,12 @@ export class DispatchService {
             const { team: hub_team } = resolved;
             const latest_version = target_version;
 
+            // What the version's files say (PLAN-team-bundle S1.4b).
+            const content = await version_content(latest_version.id);
+            if (!content) throw ApiError.not_found(`Version ${latest_version.version} of '${input.team_id}' has no files`);
             /** A Hug gate without reviewers can't be installed (versions published before the publish check). */
             const { validate_hug_reviewer_groups } = await import('./teams_service.js');
-            const yaml = (await import('js-yaml')).default;
-            validate_hug_reviewer_groups((yaml.load(latest_version.workflow_json || '{}') ?? {}) as NormalizedWorkflow);
+            validate_hug_reviewer_groups(content.workflow);
             const scope_slug = hub_team.scope ?? '';
 
             const targets = await DispatchService._resolve_install_targets({
@@ -541,7 +543,7 @@ export class DispatchService {
                 throw ApiError.not_found('No daemon for install');
             }
 
-            const manifest = latest_version.workflow_json;
+            const manifest = JSON.stringify(content.workflow);
             const results: InstallDaemonResult[] = [];
             let last_team_id = '';
 
@@ -1765,21 +1767,10 @@ export class DispatchService {
         );
         if (!hub_team) return;
 
-        const latest_ver = await _team_version_repo.find_one(
-            { team_id: hub_team.id, status: 'published' } as any,
-            { order: [['published_at', 'DESC']], attributes: ['capability_json'] },
-        );
-        if (!latest_ver?.capability_json) return;
-
-        let capability: { inputs?: Array<{ name: string; type?: string; required?: boolean }> };
-        try {
-            capability = JSON.parse(latest_ver.capability_json);
-        } catch {
-            return;
-        }
-
-        const inputs = capability.inputs;
-        if (!Array.isArray(inputs)) return;
+        // The latest version's inputs, from its files (PLAN-team-bundle S1.4b).
+        const latest = await latest_version_content(hub_team.id);
+        if (!latest) return;
+        const inputs = latest.inputs as Array<{ name: string; type?: string; required?: boolean }>;
 
         /**
          * Coerce channel inputs: callers may send a plain string
@@ -1987,20 +1978,12 @@ export class DispatchService {
             );
             if (!hub_team) continue;
 
-            const latest_version = await _team_version_repo.find_one(
-                { team_id: hub_team.id, status: 'published' } as any,
-                { order: [['published_at', 'DESC']], attributes: ['workflow_json'] },
-            );
-            if (!latest_version?.workflow_json) continue;
-
-            try {
-                const parsed = JSON.parse(latest_version.workflow_json);
-                if (!Array.isArray(parsed?.phases)) continue;
-                for (const phase of parsed.phases) {
-                    if (phase.type === 'team') continue;
-                    if (phase.agent) still_needed.add(phase.agent);
-                }
-            } catch { /* skip unparseable */ }
+            // The latest version's phases, from its files (PLAN-team-bundle S1.4b).
+            const latest = await latest_version_content(hub_team.id);
+            for (const phase of (latest?.workflow.phases ?? []) as Array<{ type?: string; agent?: string }>) {
+                if (phase?.type === 'team') continue;
+                if (phase?.agent) still_needed.add(phase.agent);
+            }
         }
 
         for (const agent_name of configured_agents) {

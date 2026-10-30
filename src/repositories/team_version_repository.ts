@@ -21,16 +21,10 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     async find_by_id(id: string) {
         const row = await TeamVersion.findOne({
             where: { id, ...PUBLISHED },
-            attributes: ['id', 'team_id', 'version', 'workflow_json', 'manifest_yaml'],
+            attributes: ['id', 'team_id', 'version'],
             raw: true,
         });
         return row ? numbered([row])[0] ?? null : null;
-    }
-
-    async find_latest_detail(team_id: string) {
-        const version = await this.find_latest_version(team_id);
-        if (!version) return null;
-        return this.find_detail_by_team_and_version(team_id, version);
     }
 
     // "Latest" = highest semver, NOT most recently published — publishing an older
@@ -63,15 +57,6 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
             if (row) out.set(team_id, { id: row.id, version: row.version });
         }
         return out;
-    }
-
-    async find_detail_by_team_and_version(team_id: string, version: string) {
-        const row = await TeamVersion.findOne({
-            where: { team_id, version, ...PUBLISHED },
-            attributes: ['id', 'version', 'workflow_json', 'manifest_yaml', 'agents_json', 'readme', 'cliq_version', 'tools', 'capability_json', 'roles_json', 'dependencies_yaml'],
-            raw: true,
-        });
-        return row ? numbered([row])[0] ?? null : null;
     }
 
     async list_by_team_id(team_id: string) {

@@ -1,4 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+// Version content is read from files (PLAN-team-bundle S1.4b).
+vi.mock('../../../src/services/version_content.js', () => ({
+    version_content: vi.fn(async () => null),
+    latest_version_content: vi.fn(async () => null),
+    version_contents: vi.fn(async () => new Map()),
+}));
+import { version_contents } from '../../../src/services/version_content.js';
+import { derive_version_content } from '../../../src/services/package_parser.js';
 import { build_agent_usage } from '../../../src/lib/agent_workflow.js';
 import { is_secret_key, mask_secret, mask_settings } from '../../../src/lib/agent_secrets.js';
 import { resolve_agent_settings } from '../../../src/lib/agent_settings.js';
@@ -54,8 +62,14 @@ describe('find_org_agent_usage (queries)', () => {
             if (sql.includes('FROM cliq.realms')) return [{ id: 'r1', team_list: [{ scope: 'other', slug: 'shared' }] }];
             if (sql.includes('FROM cliq.scopes')) return [{ slug: 'acme' }];
             if (sql.includes('FROM cliq.teams')) return [{ id: 't1', scope: 'acme', name: 'triage' }, { id: 't2', scope: 'other', name: 'shared' }];
-            return [{ team_id: 't1', version: '1.0.0', workflow_json: wf('jira') }, { team_id: 't2', version: '2.0.0', workflow_json: wf('jira', 'git') }];
+            return [{ team_id: 't1', id: 'v1', version: '1.0.0' }, { team_id: 't2', id: 'v2', version: '2.0.0' }];
         } };
+        // each team's latest version, from its files (PLAN-team-bundle S1.4b)
+        const yml = (...agents: string[]) => `name: x\nphases:\n${agents.map((a, i) => `  - name: p${i}\n    agent: ${a}\n`).join('')}`;
+        vi.mocked(version_contents).mockResolvedValueOnce(new Map([
+            ['v1', { version_id: 'v1', ...derive_version_content({ 'team.yml': yml('jira') }) }],
+            ['v2', { version_id: 'v2', ...derive_version_content({ 'team.yml': yml('jira', 'git') }) }],
+        ]));
         const u = await find_org_agent_usage('org-1', sq as never);
         expect(calls[0].sql).toMatch(/org_id = :org_id AND deleted = false/);
         expect(calls[0].rep).toEqual({ org_id: 'org-1' });

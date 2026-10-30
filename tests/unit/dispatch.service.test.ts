@@ -12,6 +12,12 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 
 // ── Mocks — must appear before importing the module under test ──────
 
+// Version content is read from files (PLAN-team-bundle S1.4b).
+vi.mock('../../src/services/version_content.js', () => ({
+    version_content: vi.fn(async () => null),
+    latest_version_content: vi.fn(async () => null),
+    version_contents: vi.fn(async () => new Map()),
+}));
 vi.mock('../../src/models/index.js', () => ({
     Workspace: { findByPk: vi.fn(), findOne: vi.fn(), create: vi.fn() },
     Run: { findByPk: vi.fn() },
@@ -145,6 +151,8 @@ vi.mock('../../src/services/hugs.service.js', () => ({
 }));
 
 import { Workspace, Run, DaemonTeam, Daemon, Scope, Team, TeamVersion } from '../../src/models/index.js';
+import { version_content } from '../../src/services/version_content.js';
+import { derive_version_content } from '../../src/services/package_parser.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
 import { AccessService } from '../../src/services/access.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
@@ -253,10 +261,11 @@ beforeEach(() => {
     // Semver-aware latest lookup now uses findAll — return same fixture
     // so the "highest version" pick lands on this row.
     vi.mocked(TeamVersion.findAll).mockResolvedValue([{
-        team_id: hub_legacy_uuid(1),
+        id: 'v-1', team_id: hub_legacy_uuid(1),
         version: '1.0.0',
-        workflow_json: 'name: my-team\nversion: "1.0.0"\nphases: []\n',
     }] as any);
+    // The version's content, from its files (PLAN-team-bundle S1.4b).
+    vi.mocked(version_content).mockResolvedValue({ version_id: 'v-1', ...derive_version_content({ 'team.yml': 'name: my-team\nversion: "1.0.0"\nphases: []\n' }) });
     vi.mocked(Daemon.findByPk).mockResolvedValue(make_daemon() as any);
     vi.mocked(Daemon.findAll).mockResolvedValue([make_daemon()] as any);
     vi.mocked(Scope.findOne).mockResolvedValue({ id: 'scope-1', slug: 'my-scope' } as any);
