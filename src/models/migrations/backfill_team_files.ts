@@ -58,13 +58,15 @@ export function team_yml_from_derived(v: Pick<Version, 'version' | 'workflow_jso
     const phases = Array.isArray(workflow?.phases) ? workflow.phases : [];
     if (!phases.length) return null;
     const capability = json_of(v.capability_json) ?? {};
-    const agents = json_of(v.agents_json);
+    // Only agents the team defines (an entry, env…): the old seed stored the agents a team uses as empty entries.
+    const agents = Object.fromEntries(Object.entries(json_of(v.agents_json) ?? {})
+        .filter(([, def]) => def && typeof def === 'object' && Object.keys(def as object).length > 0));
     const doc: Record<string, unknown> = { name: v.team_scope ? `@${v.team_scope}/${v.team_name}` : v.team_name, version: v.version };
     if (v.team_description) doc.description = v.team_description;
     for (const key of ['inputs', 'use_when', 'not_for'] as const) {
         if (Array.isArray(capability[key]) && (capability[key] as unknown[]).length) doc[key] = capability[key];
     }
-    if (agents && Object.keys(agents).length) doc.agents = agents;
+    if (Object.keys(agents).length) doc.agents = agents;
     doc.phases = phases;
     if (Array.isArray(workflow?.support) && workflow.support.length) doc.support = workflow.support;
     return yaml.dump(doc, { lineWidth: -1, noRefs: true });

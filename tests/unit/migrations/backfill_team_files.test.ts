@@ -129,7 +129,11 @@ describe('backfill_team_files', () => {
         const files = files_from_columns(v);
         expect(Object.keys(files).sort()).toEqual(['README.md', 'team.yml']);
         const doc = yaml.load(files['team.yml']) as Record<string, unknown>;
-        expect(doc).toMatchObject({ name: '@cliq/hello-world', version: '2.0.0', description: 'Say hello, then a person reviews it', agents: { exec: {}, hug: {} } });
+        expect(doc).toMatchObject({ name: '@cliq/hello-world', version: '2.0.0', description: 'Say hello, then a person reviews it' });
+        // the seed stored the agents it uses as empty entries: those define nothing, so team.yml has no agents
+        expect(doc).not.toHaveProperty('agents');
+        const defined = yaml.load(team_yml_from_derived({ ...v, agents_json: JSON.stringify({ exec: {}, mine: { entry: 'node mine.js' } }) })!) as Record<string, unknown>;
+        expect(defined.agents).toEqual({ mine: { entry: 'node mine.js' } });
         // parsed the way publish parses team.yml, it gives back the stored phases and inputs
         expect(workflow_from_team_yml(doc)).toEqual(JSON.parse(HELLO_2_0.workflow_json));
         expect({ inputs: doc.inputs }).toEqual(JSON.parse(HELLO_2_0.capability_json));
