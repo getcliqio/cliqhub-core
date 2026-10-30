@@ -1143,6 +1143,27 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_saved_at" TIMESTAMPTZ`);
     // A version's dependencies.yml (tools the team needs and how to install them) — shown in the builder.
     await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "dependencies_yaml" TEXT NOT NULL DEFAULT ''`);
+    // A draft is a version (PLAN-team-bundle §2.2): status draft | published; a draft has no number or date yet.
+    // A team can have several drafts (each upload / publish names its draft by id).
+    await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "status" TEXT NOT NULL DEFAULT 'published'`);
+    await run(`ALTER TABLE cliq."team_versions" ALTER COLUMN "version" DROP NOT NULL`);
+    await run(`ALTER TABLE cliq."team_versions" ALTER COLUMN "published_at" DROP NOT NULL`);
+    // team_files: which files a version has and where their bytes are (the content stays in storage).
+    await run(`
+        CREATE TABLE IF NOT EXISTS cliq."team_files" (
+            "id" UUID PRIMARY KEY,
+            "team_id" UUID NOT NULL,
+            "version_id" UUID NOT NULL REFERENCES cliq."team_versions" ("id") ON DELETE CASCADE,
+            "path" TEXT NOT NULL,
+            "name" TEXT NOT NULL,
+            "size" INTEGER NOT NULL,
+            "sha256" TEXT NOT NULL,
+            "content_type" TEXT NOT NULL DEFAULT 'application/octet-stream',
+            "storage_key" TEXT NOT NULL,
+            "created_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`);
+    await run(`CREATE UNIQUE INDEX IF NOT EXISTS "team_files_version_path" ON cliq."team_files" ("version_id", "path")`);
+    await run(`CREATE INDEX IF NOT EXISTS "team_files_team" ON cliq."team_files" ("team_id")`);
 
     // Org team library: teams an org has taken on (from the marketplace or its own
     // scopes). A team joins the org before any of the org's realms can add it.

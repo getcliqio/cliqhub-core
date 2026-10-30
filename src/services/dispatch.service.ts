@@ -1839,12 +1839,13 @@ export class DispatchService {
         // Fetching all rows and picking in Node keeps the semver logic in
         // one place (lib/semver.ts) — the version count per team is tiny
         // (unbounded but effectively O(10s)).
-        const all_versions = await _team_version_repo.find_all(
-            { team_id: hub_team.id } as any,
-        );
+        // Published versions only: a draft (PLAN-team-bundle §2.2) has no number and is never dispatched.
+        const all_versions = (await _team_version_repo.find_all(
+            { team_id: hub_team.id, status: 'published' } as any,
+        )).filter((v) => v.version !== null);
         if (all_versions.length === 0) return null;
         const latest_version = SemVer.sort_desc(
-            all_versions.map((v) => ({ version: v.version, row: v })),
+            all_versions.map((v) => ({ version: v.version as string, row: v })),
         )[0].row;
 
         return { team: hub_team, version: latest_version };

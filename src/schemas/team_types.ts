@@ -622,3 +622,26 @@ export type TeamTagVO = TeamTagVo;
 export type TeamRoleVO = TeamRoleVo;
 /** @deprecated Prefer PascalCase `*Dto` names. */
 export type TeamListItemDTO = TeamListItemDto;
+
+/** `teams/files/upload` — the JSON `payload` part of the multipart request (PLAN-team-bundle §2.6). */
+export const TeamsFilesUploadPayload = z.object({
+    team_id: z.string().uuid().describe('The team the files belong to'),
+    version_id: z.string().uuid().optional()
+        .describe('The draft to add them to; omit to start a new draft'),
+});
+export type TeamsFilesUploadPayload = z.infer<typeof TeamsFilesUploadPayload>;
+
+/** POST /v1/teams/files/remove — take paths out of a draft. */
+export const TeamsFilesRemoveInput = z.object({
+    team_id: z.string().uuid().describe('The team'),
+    version_id: z.string().uuid().describe('The draft'),
+    paths: z.array(z.string().min(1)).min(1).describe('Paths in the team to remove'),
+});
+export type TeamsFilesRemoveInput = z.infer<typeof TeamsFilesRemoveInput>;
+
+/** POST /v1/teams/files/get — a version's files. */
+export const TeamsFilesGetInput = z.object({
+    team_id: z.string().uuid().describe('The team'),
+    version_id: z.string().uuid().describe('A draft or published version of it'),
+});
+export type TeamsFilesGetInput = z.infer<typeof TeamsFilesGetInput>;

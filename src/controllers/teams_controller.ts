@@ -23,6 +23,7 @@
  * Inbound SoT: PascalCase Zod `Teams*Input` in `schemas/teams/types.ts`.
  */
 
+import { Readable } from 'node:stream';
 import type { Request, Response } from 'express';
 import { Op } from 'sequelize';
 
@@ -60,11 +61,17 @@ import {
     TEAM_CATALOG_SORT_KEYS,
     TEAM_REALM_SORT_KEYS,
     type TeamCatalogSortKey,
+    TeamsFilesGetInput,
+    TeamsFilesRemoveInput,
+    TeamsFilesUploadPayload,
 } from '../schemas/team_types.js';
 import { teams_build_schema } from '../schemas/builder_types.js';
 import { to_team_list_item_dto } from '../lib/mappers.js';
 
 const log = get_logger('ctrl.teams');
+
+/** The largest `teams/files/upload` body: 10 MB of files plus the multipart framing. */
+const UPLOAD_MAX_BYTES = 11 * 1024 * 1024;
 
 export class TeamsController extends BaseController {
     constructor(
@@ -372,6 +379,55 @@ export class TeamsController extends BaseController {
         const result = await this._teams_service.unpublish(req.auth!, body);
         log.info('team_unpublished', { team_id: body.team_id, scope: body.scope, name: body.name });
         this.ok(res, result as TeamMutationData);
+    }
+
+    /**
+     * POST /v1/teams/files/upload — multipart: a JSON `payload` part (`team_id`, `version_id?`) and the files as
+     * attachments, each filename being its path in the team (PLAN-team-bundle §2.6).
+     */
+    async upload_files(req: Request, res: Response): Promise<void> {
+        const type = String(req.headers['content-type'] ?? '');
+        if (!type.startsWith('multipart/form-data')) {
+            throw new LegacyApiError('invalid_params', 'Send the files as multipart/form-data (a payload part and the files)', 415);
+        }
+        if (Number(req.headers['content-length'] ?? 0) > UPLOAD_MAX_BYTES) {
+            throw new LegacyApiError('invalid_package', 'Upload too large (a team\'s files total at most 10 MB)', 413);
+        }
+        const form = await new globalThis.Request('http://core/upload', {
+            method: 'POST',
+            headers: { 'content-type': type },
+            body: Readable.toWeb(req) as ReadableStream,
+            duplex: 'half',
+        } as RequestInit).formData().catch(() => {
+            throw new LegacyApiError('invalid_params', 'The multipart body could not be read', 400);
+        });
+        const raw = form.get('payload');
+        let payload_json: unknown;
+        try {
+            payload_json = JSON.parse(typeof raw === 'string' ? raw : await (raw as Blob | null)?.text() ?? '');
+        } catch {
+            throw new LegacyApiError('invalid_params', 'The payload part must be JSON: { team_id, version_id? }', 422);
+        }
+        const payload = TeamsFilesUploadPayload.safeParse(payload_json);
+        if (!payload.success) throw new LegacyApiError('invalid_params', payload.error.issues.map((i) => i.message).join('; '), 422);
+        const files = await Promise.all(form.getAll('files').filter((f): f is File => typeof f !== 'string').map(async (f) => ({
+            path: f.name,
+            content_type: f.type || 'application/octet-stream',
+            data: Buffer.from(await f.arrayBuffer()),
+        })));
+        this.ok(res, await this._teams_service.upload_files(req.auth!, { ...payload.data, files }), 201);
+    }
+
+    /** POST /v1/teams/files/remove — take paths out of a draft. */
+    async remove_files(req: ApiRequest<TeamsFilesRemoveInput, unknown>, res: ApiOkResponse<unknown>): Promise<void> {
+        const body = this.parse_body(TeamsFilesRemoveInput, req);
+        this.ok(res, await this._teams_service.remove_files(req.auth!, body));
+    }
+
+    /** POST /v1/teams/files/get — a version's files. */
+    async get_files(req: ApiRequest<TeamsFilesGetInput, unknown>, res: ApiOkResponse<unknown>): Promise<void> {
+        const body = this.parse_body(TeamsFilesGetInput, req);
+        this.ok(res, await this._teams_service.get_files(req.auth!, body));
     }
 
     /**

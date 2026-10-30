@@ -45,6 +45,12 @@ export function team_draft_prefix(team_id: string): string {
     return `${team_prefix(team_id)}draft/`;
 }
 
+/** `teams/<team_id>/files/<file_id>` — one uploaded file's bytes, named by its id (never overwritten). */
+export function team_file_key(team_id: string, file_id: string): string {
+    assert_id('file', file_id);
+    return `${team_prefix(team_id)}files/${file_id}`;
+}
+
 /** `teams/<team_id>/versions/<version_id>.zip` — one published version. */
 export function version_zip_key(team_id: string, version_id: string): string {
     assert_id('version', version_id);

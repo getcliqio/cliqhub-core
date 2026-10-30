@@ -88,6 +88,7 @@ vi.mock('../../../src/models/index.js', () => ({
     OrgAgentSetting: { findAll: vi.fn(), findOne: vi.fn() },
     RealmInvite: { findOne: vi.fn(), create: vi.fn() },
     TeamVersion: {},
+    TeamFile: {},
     WorkspaceTeam: {},
     Workspace: {},
     ScopeMember: {},
@@ -232,6 +233,25 @@ const FILES = {
 
 /* ─── Helper to build service with all repos ─────────────────── */
 
+/** team_files in memory, by version (PLAN-team-bundle S1.3b). */
+function make_file_repo() {
+    const rows: Array<Record<string, unknown>> = [];
+    return {
+        rows,
+        list_by_version: vi.fn(async (version_id: string) => rows.filter((r) => r.version_id === version_id)),
+        replace_paths: vi.fn(async (version_id: string, add: Array<Record<string, unknown>>) => {
+            const paths = add.map((r) => r.path);
+            for (let i = rows.length - 1; i >= 0; i--) if (rows[i].version_id === version_id && paths.includes(rows[i].path)) rows.splice(i, 1);
+            rows.push(...add);
+        }),
+        delete_paths: vi.fn(async (version_id: string, paths: string[]) => {
+            const before = rows.length;
+            for (let i = rows.length - 1; i >= 0; i--) if (rows[i].version_id === version_id && paths.includes(rows[i].path as string)) rows.splice(i, 1);
+            return before - rows.length;
+        }),
+    };
+}
+
 function build_service(overrides: {
     team_repo?: ReturnType<typeof make_team_repo>;
     version_repo?: ReturnType<typeof make_version_repo>;
@@ -241,6 +261,7 @@ function build_service(overrides: {
     packages_path?: string;
     scope_repo?: ReturnType<typeof make_scope_repo>;
     audit_repo?: ReturnType<typeof make_audit_repo>;
+    file_repo?: ReturnType<typeof make_file_repo>;
 } = {}) {
     const team_repo = overrides.team_repo ?? make_team_repo();
     const version_repo = overrides.version_repo ?? make_version_repo();
@@ -249,6 +270,7 @@ function build_service(overrides: {
         team_repo as any, version_repo as any, tag_repo as any,
         overrides.download_log_repo as any, overrides.storage as any,
         overrides.packages_path, overrides.scope_repo as any, overrides.audit_repo as any,
+        (overrides.file_repo ?? make_file_repo()) as any,
     );
     return { service, team_repo, version_repo, tag_repo };
 }
@@ -755,6 +777,73 @@ describe('TeamsService — publish', () => {
 /* ================================================================
    download
    ================================================================ */
+
+describe('TeamsService — team files (S1.3b)', () => {
+    let service: TeamsService;
+    let team_repo: ReturnType<typeof make_team_repo>;
+    let version_repo: ReturnType<typeof make_version_repo> & { create_draft: ReturnType<typeof vi.fn>; find_draft: ReturnType<typeof vi.fn> };
+    let storage: ReturnType<typeof make_storage>;
+    let files: ReturnType<typeof make_file_repo>;
+    const DRAFT = '0d0d0d0d-1111-4222-8333-555555555555';
+    const yml = { path: 'team.yml', content_type: 'text/yaml', data: Buffer.from('name: x\n') };
+    const png = { path: 'roles/brief.md', content_type: 'text/markdown', data: Buffer.from('# Brief') };
+
+    beforeEach(() => {
+        vi.clearAllMocks();
+        storage = make_storage();
+        files = make_file_repo();
+        const built = build_service({ storage, file_repo: files });
+        service = built.service;
+        team_repo = built.team_repo;
+        version_repo = Object.assign(built.version_repo, {
+            create_draft: vi.fn().mockResolvedValue(DRAFT),
+            find_draft: vi.fn().mockResolvedValue({ id: DRAFT, team_id: PUBLIC_TEAM.id }),
+        });
+        team_repo.find_by_id.mockResolvedValue(PUBLIC_TEAM);
+    });
+
+    it('without a version_id, starts a draft; each file gets an id, its bytes stored under it, and a row', async () => {
+        const out = await service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [yml, png] });
+        expect(version_repo.create_draft).toHaveBeenCalledWith(PUBLIC_TEAM.id, expect.anything());
+        expect(out.version_id).toBe(DRAFT);
+        expect(out.files.map((f) => f.path)).toEqual(['team.yml', 'roles/brief.md']);
+        for (const f of out.files) {
+            expect(storage.write).toHaveBeenCalledWith(`teams/${PUBLIC_TEAM.id}/files/${f.id}`, expect.any(Buffer), expect.any(String));
+        }
+        expect(files.rows.map((r) => [r.path, r.version_id, r.size])).toEqual([['team.yml', DRAFT, 8], ['roles/brief.md', DRAFT, 7]]);
+        expect(files.rows[0].sha256).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it('with a version_id, adds to that draft and replaces a path it already has', async () => {
+        await service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, version_id: DRAFT, files: [yml] });
+        await service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, version_id: DRAFT, files: [{ ...yml, data: Buffer.from('name: y\n') }, png] });
+        expect(version_repo.create_draft).not.toHaveBeenCalled();
+        expect(files.rows.map((r) => r.path).sort()).toEqual(['roles/brief.md', 'team.yml']);
+        expect(storage.write).toHaveBeenCalledTimes(3);
+    });
+
+    it('a published version (or another team\'s draft) cannot take files', async () => {
+        version_repo.find_draft.mockResolvedValueOnce(null);
+        await expect(service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, version_id: DRAFT, files: [yml] })).rejects.toMatchObject({ status: 404 });
+        version_repo.find_draft.mockResolvedValueOnce({ id: DRAFT, team_id: hub_legacy_uuid(77) });
+        await expect(service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, version_id: DRAFT, files: [yml] })).rejects.toMatchObject({ status: 404 });
+        expect(storage.write).not.toHaveBeenCalled();
+    });
+
+    it('refuses paths that are not team paths, a path twice, and a draft over 10 MB — before storing anything', async () => {
+        await expect(service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [yml, { ...png, path: 'scripts/x.sh' }] })).rejects.toMatchObject({ status: 422, details: { paths: ['scripts/x.sh'] } });
+        await expect(service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [yml, yml] })).rejects.toMatchObject({ status: 422 });
+        await expect(service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [{ ...yml, data: Buffer.alloc(10 * 1024 * 1024 + 1) }] })).rejects.toThrow('more than 10 MB');
+        expect(storage.write).not.toHaveBeenCalled();
+    });
+
+    it('remove takes paths out of a draft; get lists a draft\'s files', async () => {
+        await service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, version_id: DRAFT, files: [yml, png] });
+        expect(await service.remove_files(ALICE, { team_id: PUBLIC_TEAM.id, version_id: DRAFT, paths: ['roles/brief.md'] })).toEqual({ removed: 1 });
+        const listed = await service.get_files(ALICE, { team_id: PUBLIC_TEAM.id, version_id: DRAFT });
+        expect(listed.files.map((f) => f.path)).toEqual(['team.yml']);
+    });
+});
 
 describe('TeamsService — download', () => {
     let service: TeamsService;

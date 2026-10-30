@@ -2080,7 +2080,7 @@ export class RealmService {
                 // Fetch all versions for these teams in one query.
                 if (registry_ids.length > 0) {
                     const all_versions = await _tv_repo.find_all_q({
-                        where: { team_id: { [Op.in]: registry_ids } },
+                        where: { team_id: { [Op.in]: registry_ids }, status: 'published' },
                         attributes: ['team_id', 'version', 'workflow_json', 'capability_json'],
                         raw: true,
                     });
@@ -2098,7 +2098,7 @@ export class RealmService {
                     const team_agents = new Map<string, Set<string>>();
 
                     for (const [team_id, versions] of by_team) {
-                        const latest_ver = SemVer.max(versions.map((v) => v.version));
+                        const latest_ver = SemVer.max(versions.map((v) => v.version).filter((v): v is string => v !== null));
                         const target = latest_ver
                             ? versions.find((v) => v.version === latest_ver)
                             : versions[0];

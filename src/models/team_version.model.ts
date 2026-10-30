@@ -4,7 +4,10 @@ import { BaseModel } from './base_model.js';
 export class TeamVersion extends BaseModel {
     declare id: string;
     declare team_id: string;
-    declare version: string;
+    /** `draft` (its files still editable) or `published` (fixed). PLAN-team-bundle §2.2. */
+    declare status: 'draft' | 'published';
+    /** Set when published; a draft has none. */
+    declare version: string | null;
     declare changelog: string;
     declare package_path: string;
     declare workflow_json: string;
@@ -18,13 +21,14 @@ export class TeamVersion extends BaseModel {
     declare dependencies_yaml: string;
     declare cliq_version: string | null;
     declare tools: string;
-    declare published_at: Date;
+    declare published_at: Date | null;
 
     static register(sequelize: Sequelize): void {
         TeamVersion.init({
             id: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
             team_id: { type: DataTypes.UUID, allowNull: false },
-            version: { type: DataTypes.TEXT, allowNull: false },
+            status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'published' },
+            version: { type: DataTypes.TEXT, allowNull: true },
             changelog: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
             package_path: { type: DataTypes.TEXT, allowNull: false },
             workflow_json: { type: DataTypes.TEXT, allowNull: false, defaultValue: '{}' },
@@ -36,7 +40,7 @@ export class TeamVersion extends BaseModel {
             dependencies_yaml: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
             cliq_version: { type: DataTypes.TEXT, allowNull: true },
             tools: { type: DataTypes.TEXT, allowNull: false, defaultValue: '[]' },
-            published_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
+            published_at: { type: DataTypes.DATE, allowNull: true, defaultValue: DataTypes.NOW },
         }, {
             sequelize, tableName: 'team_versions', schema: 'cliq',
             indexes: [{ unique: true, fields: ['team_id', 'version'] }],

@@ -13,6 +13,7 @@ import { Scope } from './scope.model.js';
 import { ScopeMember } from './scope_member.model.js';
 import { Team } from './team.model.js';
 import { TeamVersion } from './team_version.model.js';
+import { TeamFile } from './team_file.model.js';
 import { TeamTag } from './team_tag.model.js';
 import { OrgTeam } from './org_team.model.js';
 import { Draft } from './draft.model.js';
@@ -65,7 +66,7 @@ export {
     // Registry
     User, Org, OrgMember, OrgRole,
     AccountAgentSetting, AccountInvite, RealmInvite, ApiToken,
-    Scope, ScopeMember, Team, TeamVersion, TeamTag, OrgTeam,
+    Scope, ScopeMember, Team, TeamVersion, TeamFile, TeamTag, OrgTeam,
     Draft, AuditLog, DownloadLog, Setting,
     OrgAgentSetting, UserRealmAgentSetting,
     PasswordReset, PasswordResetRequest, EmailDelivery,
@@ -100,6 +101,7 @@ export function init_models(sequelize: Sequelize): void {
     ScopeMember.register(sequelize);
     Team.register(sequelize);
     TeamVersion.register(sequelize);
+    TeamFile.register(sequelize);
     TeamTag.register(sequelize);
     OrgTeam.register(sequelize);
     Draft.register(sequelize);
@@ -186,6 +188,9 @@ export function init_models(sequelize: Sequelize): void {
 
     Team.hasMany(TeamVersion, { foreignKey: 'team_id', as: 'versions', onDelete: 'CASCADE' });
     TeamVersion.belongsTo(Team, { foreignKey: 'team_id' });
+
+    TeamVersion.hasMany(TeamFile, { foreignKey: 'version_id', as: 'files', onDelete: 'CASCADE' });
+    TeamFile.belongsTo(TeamVersion, { foreignKey: 'version_id' });
 
     Team.hasMany(TeamTag, { foreignKey: 'team_id', as: 'tags', onDelete: 'CASCADE' });
     TeamTag.belongsTo(Team, { foreignKey: 'team_id' });

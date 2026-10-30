@@ -37,6 +37,9 @@ export function register_teams_routes(
     router.post('/teams/publish', teams_controller.wrap(teams_controller.publish));
     router.post('/teams/unpublish', teams_controller.wrap(teams_controller.unpublish));
     router.post('/teams/download',                 teams_controller.wrap(teams_controller.download));
+    router.post('/teams/files/upload', teams_controller.wrap(teams_controller.upload_files));
+    router.post('/teams/files/remove', teams_controller.wrap(teams_controller.remove_files));
+    router.post('/teams/files/get',    no_store, teams_controller.wrap(teams_controller.get_files));
     router.post('/teams/delete', teams_controller.wrap(teams_controller.delete_team));
     router.post('/teams/delete_version', teams_controller.wrap(teams_controller.delete_version));
     router.post('/teams/rename', teams_controller.wrap(teams_controller.rename));

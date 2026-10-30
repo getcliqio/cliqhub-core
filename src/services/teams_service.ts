@@ -15,7 +15,9 @@ import type { DownloadLogRepository } from '../repositories/download_log_reposit
 import type { ScopeRepository } from '../repositories/scope_repository.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { PackageStorage } from '../storage/package_storage.js';
-import { stored_key, team_draft_prefix, version_zip_key } from '../storage/package_storage.js';
+import { stored_key, team_draft_prefix, team_file_key, version_zip_key } from '../storage/package_storage.js';
+import { TeamFileRepository, type TeamFileRow } from '../repositories/team_file_repository.js';
+import { createHash, randomUUID } from 'node:crypto';
 import type { AuthContext } from '../schemas/auth_types.js';
 import type { TeamCatalogSortKey, TeamListItemVO, TeamRoleVO } from '../schemas/team_types.js';
 import { Op, QueryTypes, col, fn, literal, type WhereOptions } from 'sequelize';
@@ -27,7 +29,7 @@ import { ScopeRepository as ScopeRepoClass } from '../repositories/scope_reposit
 
 import { get_logger } from '../lib/log.js';
 import { escape_like } from '../lib/search.js';
-import { lint_team, MAX_BUNDLE_UNPACKED, pack_bundle, TEAM_YML, unknown_paths, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
+import { is_bundle_path, lint_team, MAX_BUNDLE_FILES, MAX_BUNDLE_UNPACKED, pack_bundle, TEAM_YML, unknown_paths, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
 import { AgentCatalog } from '../models/agent_catalog.model.js';
 import { Team } from '../models/team.model.js';
 import { TeamVersionRepository as TeamVersionRepoClass } from '../repositories/team_version_repository.js';
@@ -231,7 +233,94 @@ export class TeamsService {
         private _packages_path?: string,
         private _scope_repo?: ScopeRepository,
         private _audit_repo?: AuditRepository,
+        private _file_repo: TeamFileRepository = new TeamFileRepository(),
     ) {}
+
+    // ─── Team files (PLAN-team-bundle §2.2 / §2.6) ───
+
+    /**
+     * Upload files into a draft version: into the draft named by `version_id`, or a new draft when none is
+     * named. Each file gets an id, its bytes go to `teams/<team_id>/files/<file_id>` (never overwritten), and
+     * all the rows are written in one transaction, replacing paths the draft already has.
+     *
+     * @throws ApiError 422 for a path that isn't a team path, a path twice, or a draft over 10 MB / 1000 files;
+     *   404 for a draft that isn't this team's open draft.
+     */
+    async upload_files(auth: AuthContext, params: {
+        team_id: string; version_id?: string;
+        files: Array<{ path: string; content_type: string; data: Buffer }>;
+    }): Promise<{ version_id: string; files: Array<{ id: string; path: string; size: number; sha256: string }> }> {
+        if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
+        assert_access(auth, 'teams', 'write');
+        const team = await this._resolve_team_for_write(auth, { team_id: params.team_id });
+        if (params.files.length === 0) throw new ApiError('invalid_params', 'No files to upload', 422);
+        const paths = params.files.map((f) => f.path);
+        const not_team = paths.filter((p) => !is_bundle_path(p));
+        if (not_team.length) throw new ApiError('invalid_package', `Not part of a team: ${not_team.join(', ')} (team.yml, roles/<name>.md, dependencies.yml, README.md)`, 422, { paths: not_team });
+        const twice = paths.filter((p, i) => paths.indexOf(p) !== i);
+        if (twice.length) throw new ApiError('invalid_params', `Sent twice: ${[...new Set(twice)].join(', ')}`, 422, { paths: twice });
+
+        let draft_id = params.version_id;
+        let kept: TeamFileRow[] = [];
+        if (draft_id) {
+            const draft = await this._version_repo.find_draft(draft_id);
+            if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (a published version can\'t change)', 404);
+            kept = (await this._file_repo.list_by_version(draft_id)).filter((r) => !paths.includes(r.path));
+        }
+        const total = kept.reduce((n, r) => n + r.size, 0) + params.files.reduce((n, f) => n + f.data.length, 0);
+        if (total > MAX_BUNDLE_UNPACKED) throw new ApiError('invalid_package', `A team's files total more than ${MAX_BUNDLE_UNPACKED / 1024 / 1024} MB`, 422);
+        if (kept.length + params.files.length > MAX_BUNDLE_FILES) throw new ApiError('invalid_package', `A team has more than ${MAX_BUNDLE_FILES} files`, 422);
+        if (!this._storage) throw new ApiError('internal', 'No storage configured', 500);
+
+        // Bytes first, under new ids: a row only ever points at bytes that exist.
+        const rows: TeamFileRow[] = [];
+        for (const f of params.files) {
+            const id = randomUUID();
+            const storage_key = team_file_key(team.id, id);
+            await this._storage.write(storage_key, f.data, f.content_type);
+            rows.push({
+                id, team_id: team.id, version_id: '', path: f.path, name: f.path.split('/').pop()!,
+                size: f.data.length, sha256: createHash('sha256').update(f.data).digest('hex'),
+                content_type: f.content_type, storage_key,
+            });
+        }
+        await get_sequelize().transaction(async (t) => {
+            if (!draft_id) draft_id = await this._version_repo.create_draft(team.id, t);
+            for (const r of rows) r.version_id = draft_id;
+            await this._file_repo.replace_paths(draft_id, rows, t);
+        });
+        log.info('team_files_uploaded', { team_id: team.id, version_id: draft_id, files: rows.length });
+        return { version_id: draft_id!, files: rows.map((r) => ({ id: r.id, path: r.path, size: r.size, sha256: r.sha256 })) };
+    }
+
+    /** Take paths out of a draft (their bytes stay for the cleanup). */
+    async remove_files(auth: AuthContext, params: { team_id: string; version_id: string; paths: string[] }): Promise<{ removed: number }> {
+        if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
+        assert_access(auth, 'teams', 'write');
+        const team = await this._resolve_team_for_write(auth, { team_id: params.team_id });
+        const draft = await this._version_repo.find_draft(params.version_id);
+        if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (a published version can\'t change)', 404);
+        return { removed: await this._file_repo.delete_paths(params.version_id, params.paths) };
+    }
+
+    /**
+     * A version's files (path, size, sha256, id). A published version: anyone who can see the team; a draft:
+     * only someone who can edit it.
+     */
+    async get_files(auth: AuthContext, params: { team_id: string; version_id: string }) {
+        const team = await this._team_repo.find_by_id(params.team_id);
+        if (!team || !can_view_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
+        const draft = await this._version_repo.find_draft(params.version_id);
+        if (draft) {
+            if (draft.team_id !== team.id) throw new ApiError('not_found', 'Version not found', 404);
+            await this._resolve_team_for_write(auth, { team_id: team.id });
+        } else {
+            const published = await this._version_repo.find_package_by_id(params.version_id);
+            if (!published || published.team_id !== team.id) throw new ApiError('not_found', 'Version not found', 404);
+        }
+        const rows = await this._file_repo.list_by_version(params.version_id);
+        return { version_id: params.version_id, files: rows.map((r) => ({ id: r.id, path: r.path, size: r.size, sha256: r.sha256, content_type: r.content_type })) };
+    }
 
     // ─── Unified list (replaces list, search, list_mine, list_all_mine, admin_list_teams) ───
 
