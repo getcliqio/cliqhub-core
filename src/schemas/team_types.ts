@@ -249,11 +249,16 @@ export type TeamsUnpublishInput = z.infer<typeof TeamsUnpublishInput>;
 
 /** POST /v1/teams/download — fetch the package for a published version. */
 export const TeamsDownloadInput = z.object({
-    name: z.string().min(1, 'name is required').describe('Team name'),
+    version_id: z.string().uuid().optional()
+        .describe('The version to download, by id (wins over name / scope / version)'),
+    name: z.string().min(1).optional().describe('Team name (required without version_id)'),
     scope: z.string().optional().describe('Scope (publisher) slug'),
     version: z.string().optional()
         .describe('Specific version to download; omit for latest published'),
-});
+}).refine(
+    (d) => Boolean(d.version_id) || Boolean(d.name),
+    { message: 'Provide version_id, or name (with scope / version)' },
+);
 export type TeamsDownloadInput = z.infer<typeof TeamsDownloadInput>;
 
 /** POST /v1/teams/delete — soft-delete a team and all its versions. */

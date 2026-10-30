@@ -36,6 +36,12 @@ async function main() {
     const { seed_all } = await import('./lib/seed.js');
     await seed_all();
 
+    // One time: version zips move to id keys (PLAN-team-bundle S1.2). Not fatal: until it has run,
+    // versions still download from their old keys.
+    const { migrate_team_zips_by_id } = await import('./models/migrations/migrate_team_zips_by_id.js');
+    await migrate_team_zips_by_id({ storage: container.storage, versions: container.version_repo, settings: container.settings_repo })
+        .catch((err: unknown) => log.error('team_zips_by_id_failed', { error: err instanceof Error ? err.message : String(err), note: 'old keys still serve downloads' }));
+
     const app = create_app(container);
 
     start_run_reaper();

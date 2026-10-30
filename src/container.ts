@@ -29,7 +29,7 @@ import { OrgsController } from './controllers/orgs_controller.js';
 import { InvitationsController } from './controllers/invitations_controller.js';
 import { BuilderService } from './services/builder_service.js';
 import { HostedLlmAdapter } from './services/llm/hosted_adapter.js';
-import { create_package_storage } from './storage/package_storage.js';
+import { create_package_storage, type PackageStorage } from './storage/package_storage.js';
 import { AuditRepository } from './repositories/audit_repository.js';
 import { SettingsRepository } from './repositories/settings_repository.js';
 import { SettingsService } from './services/settings_service.js';
@@ -74,6 +74,9 @@ export interface Container {
     tag_repo: TagRepository;
     download_log_repo: DownloadLogRepository;
     draft_repo: DraftRepository;
+    /** Team packages (zips, draft folders). */
+    storage: PackageStorage;
+    settings_repo: SettingsRepository;
 }
 
 export async function create_container(config: EnvConfig): Promise<Container> {
@@ -185,5 +188,6 @@ export async function create_container(config: EnvConfig): Promise<Container> {
         email_sender,
         user_repo, token_repo, scope_repo, org_member_repo, org_repo, scope_member_repo,
         team_repo, version_repo, tag_repo, download_log_repo, draft_repo,
+        storage, settings_repo,
     };
 }

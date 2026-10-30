@@ -51,6 +51,16 @@ export function version_zip_key(team_id: string, version_id: string): string {
     return `${team_prefix(team_id)}versions/${version_id}.zip`;
 }
 
+/**
+ * The storage key a version row points at. New versions store their key (`teams/<team_id>/versions/<id>.zip`);
+ * versions published before S1.2 stored `<name>-<version>.zip` or a local path ending in it, whose key is the
+ * file name.
+ */
+export function stored_key(package_path: string): string {
+    if (package_path.startsWith('teams/')) return package_path;
+    return package_path.split('/').pop() || package_path;
+}
+
 /** A key or relative path that stays inside its folder (no `..`, no leading `/`, no backslash). */
 function assert_safe_key(key: string): void {
     if (!key || key.startsWith('/') || key.includes('\\') || key.split('/').some((part) => part === '..' || part === '')) {

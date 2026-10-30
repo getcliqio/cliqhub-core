@@ -107,7 +107,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     async find_latest_package(team_id: string) {
         const rows = await TeamVersion.findAll({
             where: { team_id },
-            attributes: ['package_path', 'version'],
+            attributes: ['id', 'package_path', 'version'],
             raw: true,
         });
         if (rows.length === 0) return null;
@@ -117,12 +117,26 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     async find_package_by_version(team_id: string, version: string) {
         return TeamVersion.findOne({
             where: { team_id, version },
-            attributes: ['package_path', 'version'],
+            attributes: ['id', 'package_path', 'version'],
             raw: true,
         });
     }
 
-    async update_package_path(id: string, pkg_path: string): Promise<void> {
-        await TeamVersion.update({ package_path: pkg_path }, { where: { id } });
+    /** A version by its id: its team, number and stored package. */
+    async find_package_by_id(id: string) {
+        return TeamVersion.findOne({
+            where: { id },
+            attributes: ['id', 'team_id', 'package_path', 'version'],
+            raw: true,
+        });
+    }
+
+    /** Every version's id, team and stored package (the one-time move to id keys, S1.2). */
+    async list_all_packages() {
+        return TeamVersion.findAll({ attributes: ['id', 'team_id', 'version', 'package_path'], raw: true });
+    }
+
+    async update_package_path(id: string, pkg_path: string, transaction?: Transaction): Promise<void> {
+        await TeamVersion.update({ package_path: pkg_path }, { where: { id }, transaction });
     }
 }

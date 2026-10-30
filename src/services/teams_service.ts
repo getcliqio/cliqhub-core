@@ -15,7 +15,7 @@ import type { DownloadLogRepository } from '../repositories/download_log_reposit
 import type { ScopeRepository } from '../repositories/scope_repository.js';
 import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { PackageStorage } from '../storage/package_storage.js';
-import { package_key, package_path } from '../storage/package_storage.js';
+import { stored_key, version_zip_key } from '../storage/package_storage.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 import type { TeamCatalogSortKey, TeamListItemVO, TeamRoleVO } from '../schemas/team_types.js';
 import { Op, QueryTypes, col, fn, literal, type WhereOptions } from 'sequelize';
@@ -892,10 +892,8 @@ export class TeamsService {
             }
         }
 
-        const pkg_key = package_key(name, resolved_version);
-        const pkg_path = this._packages_path ? package_path(this._packages_path, name, resolved_version) : pkg_key;
-        // Stored as a zip whatever was sent (daemons unzip it).
-        if (this._storage) await this._storage.write(pkg_key, await to_package_zip(zip_buffer, { manifest_yaml, roles, readme, dependencies_yml }));
+        // Stored as a zip whatever was sent (daemons unzip it), at teams/<team_id>/versions/<version_id>.zip.
+        const zip = await to_package_zip(zip_buffer, { manifest_yaml, roles, readme, dependencies_yml });
 
         let published_team_id = '';
         await get_sequelize().transaction(async (t) => {
@@ -915,11 +913,16 @@ export class TeamsService {
                 );
             }
 
-            await this._version_repo.create(
-                effective_team_id, resolved_version!, params.changelog || '', pkg_path,
+            const version_id = await this._version_repo.create(
+                effective_team_id, resolved_version!, params.changelog || '', 'pending',
                 cliq_version, tools, workflow_json, manifest_yaml,
                 readme, capability_json, agents_json, roles_json, t, dependencies_yml,
             );
+            // Keyed by ids, so teams with the same name in different scopes never share a zip (P24). Written
+            // inside the transaction: if storage fails, the version isn't created.
+            const zip_key = version_zip_key(effective_team_id, version_id);
+            if (this._storage) await this._storage.write(zip_key, zip);
+            await this._version_repo.update_package_path(version_id, zip_key, t);
 
             if (tags) {
                 await this._tag_repo.delete_by_team_id(effective_team_id, t);
@@ -942,19 +945,27 @@ export class TeamsService {
         };
     }
 
-    async download(auth: AuthContext, params: { name: string; scope?: string; version?: string }) {
-        log.debug('download', { name: params.name, scope: params.scope, version: params.version });
-        const scope = params.scope || null;
-        const team = await this._team_repo.find_by_name_and_scope(params.name, scope);
-        if (!team || !can_view_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
-
-        const ver = params.version
-            ? await this._version_repo.find_package_by_version(team.id, params.version)
-            : await this._version_repo.find_latest_package(team.id);
+    async download(auth: AuthContext, params: { name?: string; scope?: string; version?: string; version_id?: string }) {
+        log.debug('download', { name: params.name, scope: params.scope, version: params.version, version_id: params.version_id });
+        let team: Awaited<ReturnType<TeamRepository['find_by_id']>>;
+        let ver: { id: string; package_path: string; version: string } | null;
+        if (params.version_id) {
+            // A version by its id (what cliqd installs from, S5).
+            const row = await this._version_repo.find_package_by_id(params.version_id);
+            team = row ? await this._team_repo.find_by_id(row.team_id) : null;
+            if (!row || !team || !can_view_team(auth, team)) throw new ApiError('not_found', 'Version not found', 404);
+            ver = row;
+        } else {
+            if (!params.name) throw new ApiError('invalid_params', 'name or version_id is required', 422);
+            team = await this._team_repo.find_by_name_and_scope(params.name, params.scope || null);
+            if (!team || !can_view_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
+            ver = params.version
+                ? await this._version_repo.find_package_by_version(team.id, params.version)
+                : await this._version_repo.find_latest_package(team.id);
+        }
         if (!ver) throw new ApiError('not_found', 'No versions published', 404);
 
-        const pkg_key_val = package_key(params.name, ver.version);
-        const data = this._storage ? await this._storage.read(pkg_key_val) : null;
+        const data = this._storage ? await this._storage.read(stored_key(ver.package_path)) : null;
         if (!data) throw new ApiError('internal', `Package archive missing for v${ver.version}. It may need to be republished.`, 500);
 
         if (this._download_log_repo) {
@@ -967,7 +978,7 @@ export class TeamsService {
             }
         }
 
-        return { filename: `${team.name}-${ver.version}.zip`, data_base64: data.toString('base64'), version: ver.version };
+        return { filename: `${team.name}-${ver.version}.zip`, data_base64: data.toString('base64'), version: ver.version, version_id: ver.id };
     }
 
     async delete_team(auth: AuthContext, params: { name?: string; scope?: string; team_id?: string }) {
@@ -995,10 +1006,7 @@ export class TeamsService {
         });
 
         if (this._storage) {
-            for (const v of versions) {
-                const key = v.package_path.split('/').pop() || v.package_path;
-                await this._storage.delete(key);
-            }
+            for (const v of versions) await this._storage.delete(stored_key(v.package_path));
         }
 
         // Cascade: remove from all realm team_lists and purge from cliq.teams
@@ -1029,10 +1037,7 @@ export class TeamsService {
         if (!ver) throw new ApiError('not_found', `Version ${params.version} not found`, 404);
 
         await this._version_repo.delete_by_id(ver.id);
-        if (this._storage && ver.package_path) {
-            const key = ver.package_path.split('/').pop() || ver.package_path;
-            await this._storage.delete(key);
-        }
+        if (this._storage && ver.package_path) await this._storage.delete(stored_key(ver.package_path));
         return { deleted: true, version: params.version };
     }
 

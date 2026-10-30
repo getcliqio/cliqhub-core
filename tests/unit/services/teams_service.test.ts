@@ -144,7 +144,7 @@ function make_team_repo() {
         list_filtered: vi.fn().mockResolvedValue([]),
         count_filtered: vi.fn().mockResolvedValue(0),
         find_author_username: vi.fn().mockResolvedValue('alice'),
-        create: vi.fn().mockResolvedValue(1),
+        create: vi.fn().mockResolvedValue(NEW_TEAM_ID),
         update: vi.fn().mockResolvedValue(undefined),
         update_description: vi.fn().mockResolvedValue(undefined),
         delete_by_id: vi.fn().mockResolvedValue(undefined),
@@ -159,13 +159,19 @@ function make_team_repo() {
     };
 }
 
+/** Ids repositories hand out: uuids, as storage keys need (S1.2). */
+const NEW_TEAM_ID = '0f0f0f0f-1111-4222-8333-444444444444';
+const NEW_VERSION_ID = '0e0e0e0e-5555-4666-8777-888888888888';
+
 function make_version_repo() {
     return {
         find_by_team_and_version: vi.fn(),
         find_latest_version: vi.fn(),
         find_detail_by_team_and_version: vi.fn(),
         list_by_team_id: vi.fn().mockResolvedValue([]),
-        create: vi.fn().mockResolvedValue(10),
+        create: vi.fn().mockResolvedValue(NEW_VERSION_ID),
+        update_package_path: vi.fn().mockResolvedValue(undefined),
+        find_package_by_id: vi.fn(),
         delete_by_id: vi.fn().mockResolvedValue(undefined),
         find_package_by_version: vi.fn(),
         find_latest_package: vi.fn(),
@@ -661,9 +667,11 @@ describe('TeamsService — publish', () => {
         expect(team_repo.create).toHaveBeenCalled();
         expect(version_repo.create).toHaveBeenCalled();
         expect(storage.write).toHaveBeenCalled();
-        // Stored as a zip even though what was sent isn't one.
-        const stored = storage.write.mock.calls[0][1] as Buffer;
+        // Stored as a zip even though what was sent isn't one, under the team's and version's ids (S1.2).
+        const [key, stored] = storage.write.mock.calls[0] as [string, Buffer];
+        expect(key).toBe(`teams/${NEW_TEAM_ID}/versions/${NEW_VERSION_ID}.zip`);
         expect([stored[0], stored[1]]).toEqual([0x50, 0x4B]);
+        expect(version_repo.update_package_path).toHaveBeenCalledWith(NEW_VERSION_ID, key, expect.anything());
     });
 
     it('a package with a broken dependencies.yml is refused before anything is stored', async () => {
@@ -770,6 +778,33 @@ describe('TeamsService — download', () => {
         expect(result.filename).toBe('my-team-1.0.0.zip');
         expect(result.data_base64).toBe(Buffer.from('zip-data').toString('base64'));
         expect(download_log_repo.create).toHaveBeenCalled();
+    });
+
+    it('reads the stored key: an id key as it is, an old name key by its file name (S1.2)', async () => {
+        const id_key = `teams/${NEW_TEAM_ID}/versions/${NEW_VERSION_ID}.zip`;
+        team_repo.find_by_name_and_scope.mockResolvedValue(PUBLIC_TEAM);
+        version_repo.find_latest_package.mockResolvedValueOnce({ id: NEW_VERSION_ID, version: '1.0.0', package_path: id_key });
+        await service.download(ALICE, { name: 'my-team', scope: 'alice' });
+        expect(storage.read).toHaveBeenLastCalledWith(id_key);
+        version_repo.find_latest_package.mockResolvedValueOnce({ id: NEW_VERSION_ID, version: '1.0.0', package_path: '/data/packages/my-team-1.0.0.zip' });
+        await service.download(ALICE, { name: 'my-team', scope: 'alice' });
+        expect(storage.read).toHaveBeenLastCalledWith('my-team-1.0.0.zip');
+    });
+
+    it('downloads by version_id and answers with it (S1.2)', async () => {
+        version_repo.find_package_by_id.mockResolvedValueOnce({ id: NEW_VERSION_ID, team_id: PUBLIC_TEAM.id, version: '1.2.0', package_path: `teams/${PUBLIC_TEAM.id}/versions/${NEW_VERSION_ID}.zip` });
+        team_repo.find_by_id.mockResolvedValueOnce(PUBLIC_TEAM);
+        const result = await service.download(ALICE, { version_id: NEW_VERSION_ID });
+        expect(result).toMatchObject({ version: '1.2.0', version_id: NEW_VERSION_ID });
+        expect(team_repo.find_by_name_and_scope).not.toHaveBeenCalled();
+    });
+
+    it('an unknown version_id, or one of a team the caller can\'t see, is not found', async () => {
+        version_repo.find_package_by_id.mockResolvedValueOnce(null);
+        await expect(service.download(ALICE, { version_id: NEW_VERSION_ID })).rejects.toThrow('Version not found');
+        version_repo.find_package_by_id.mockResolvedValueOnce({ id: NEW_VERSION_ID, team_id: PRIVATE_TEAM.id, version: '1.0.0', package_path: 'x.zip' });
+        team_repo.find_by_id.mockResolvedValueOnce(PRIVATE_TEAM);
+        await expect(service.download(UNAUTHED, { version_id: NEW_VERSION_ID })).rejects.toThrow('Version not found');
     });
 });
 
