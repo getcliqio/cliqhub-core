@@ -691,6 +691,8 @@ describe('TeamsService — publish', () => {
         team_repo.find_by_name_and_scope.mockResolvedValue(null);
         const publish = (files: Record<string, string>) => service.publish(ALICE, { name: 'bad', scope: 'alice', bump: 'patch', files });
         await expect(publish({ ...FILES, 'Dockerfile': 'FROM x' })).rejects.toMatchObject({ status: 422, details: { paths: ['Dockerfile'] } });
+        await expect(publish({ ...FILES, 'roles/diagram.png': 'x', 'roles/sub/x.md': 'x' })).rejects.toMatchObject({ status: 422, details: { paths: ['roles/diagram.png', 'roles/sub/x.md'] } });
+        await expect(publish({ ...FILES, 'roles/bin.md': 'PK\u0000\u0003' })).rejects.toMatchObject({ status: 422, details: { paths: ['roles/bin.md'] } });
         await expect(publish({ 'README.md': '# x' })).rejects.toThrow('valid team.yml');
         await expect(publish({ ...FILES, 'README.md': 'x'.repeat(10 * 1024 * 1024 + 1) })).rejects.toThrow('more than 10 MB');
         expect(storage.write_files).not.toHaveBeenCalled();

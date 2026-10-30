@@ -139,7 +139,10 @@ async function check_team_files(files: Record<string, string>) {
     const total = Object.values(files).reduce((n, text) => n + Buffer.byteLength(text, 'utf8'), 0);
     if (total > MAX_BUNDLE_UNPACKED) throw new ApiError('invalid_package', `Team files total more than ${MAX_BUNDLE_UNPACKED / 1024 / 1024} MB`, 422);
     const unknown = unknown_paths({ files });
-    if (unknown.length) throw new ApiError('invalid_package', `Not part of a team: ${unknown.join(', ')} (team.yml, roles/, dependencies.yml, README.md)`, 422, { paths: unknown });
+    if (unknown.length) throw new ApiError('invalid_package', `Not part of a team: ${unknown.join(', ')} (team.yml, roles/<name>.md, dependencies.yml, README.md)`, 422, { paths: unknown });
+    // A team is text: a NUL character means binary content sent as a string.
+    const binary = Object.keys(files).filter((p) => files[p].includes('\u0000')).sort();
+    if (binary.length) throw new ApiError('invalid_package', `Not text: ${binary.join(', ')} (a team's files are UTF-8 text)`, 422, { paths: binary });
     const manifest_yaml = files[TEAM_YML] ?? '';
     const team_yml = manifest_yaml ? parse_manifest_yaml(manifest_yaml) : null;
     if (!team_yml) throw new ApiError('invalid_package', 'Package must contain a valid team.yml', 422);
