@@ -1,8 +1,8 @@
 /**
  * Hugs — Core's side of the one protocol for asking people (PLAN-hug-requests §6).
  *
- * Core stores a Hug, resolves its channels and notifies the people they reach, authorizes and
- * validates their responses, keeps the requester's event stream (numbered per Hug) and delivers
+ * Core stores a Hug, resolves its channels and notifies the people they reach, authorizes
+ * responses and has the Hug's template check them (PLAN-hug-templates), keeps the requester's event stream (numbered per Hug) and delivers
  * each event to the daemon that opened it, expires Hugs and sends their reminders. It never
  * interprets a value: what a response means, and when the requester has heard enough, is the
  * requester's business.
@@ -10,12 +10,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { Op, type Transaction } from 'sequelize';
-import {
-    HugSpecSchema,
-    validate_values,
-    type FileValue,
-    type RequestedInput,
-} from '@getcliqio/cliq-sdk';
+import { HugSpecSchema, type FileValue, type RequestedInput } from '@getcliqio/cliq-sdk';
+import { resolve_template, type HugTemplate } from '@getcliqio/cliq-sdk/hug-templates';
 
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
@@ -57,8 +53,8 @@ export interface HugResponseData {
     response_id: string;
     responder: { user_id: string; name: string };
     via: string[];
+    /** The answer, as the template's keys. */
     values: Record<string, unknown>;
-    comment: string | null;
     responded_at: string;
 }
 
@@ -77,11 +73,12 @@ export interface HugData {
     org_slug: string | null;
     daemon_id: string;
     title: string;
-    prompt: string;
-    context: unknown[];
-    requested_inputs: unknown[];
+    /** The template's name and the version this Hug resolved to (the page renders by these). */
+    template: string;
+    template_version: number;
+    /** The template's params. */
+    params: Record<string, unknown>;
     channels: string[];
-    ui: Record<string, unknown> | null;
     status: string;
     outcome: string | null;
     expires_at: string;
@@ -131,6 +128,9 @@ export class HugsService {
             throw ApiError.unprocessable(`Invalid Hug: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'spec'}: ${i.message}`).join('; ')}`, 'invalid_hug');
         }
         const spec = parsed.data;
+        const template = resolve_template(spec.template)!;
+        const params = template.check_params(spec.params);
+        if (!params.ok) throw ApiError.unprocessable(`Invalid Hug: ${params.problems.join('; ')}`, 'invalid_hug');
         if (spec.expires_in_min === undefined) throw ApiError.unprocessable('expires_in_min is required — every Hug expires', 'invalid_hug');
 
         if (input.hug_id) {
@@ -145,7 +145,7 @@ export class HugsService {
         if (!realm?.org_id) throw ApiError.not_found('Realm not found');
         const org_id = String(realm.org_id);
 
-        await HugsService._check_context_artifacts(spec.context ?? [], input.run_id);
+        await HugsService._check_context_artifacts(params.value['context'], input.run_id);
 
         const channels = [...new Set((spec.channels ?? []).map((c) => c.trim()).filter(Boolean))];
         const raise = (name: string | null) => raise_unknown_channel({
@@ -180,11 +180,10 @@ export class HugsService {
                 realm_id: input.realm_id,
                 org_id,
                 title: spec.title,
-                prompt: spec.prompt,
-                context: spec.context ?? [],
-                requested_inputs: spec.requested_inputs,
+                template: template.name,
+                template_version: template.version,
+                params: params.value,
                 channels,
-                ui: spec.ui ?? null,
                 status: 'open',
                 outcome: null,
                 expires_at,
@@ -269,11 +268,10 @@ export class HugsService {
             org_slug: realm?.org_slug ?? null,
             daemon_id: hug.daemon_id,
             title: hug.title,
-            prompt: hug.prompt,
-            context: hug.context,
-            requested_inputs: hug.requested_inputs,
+            template: hug.template,
+            template_version: hug.template_version,
+            params: hug.params,
             channels: hug.channels,
-            ui: hug.ui,
             status: hug.status,
             outcome: hug.outcome,
             expires_at: hug.expires_at.toISOString(),
@@ -299,8 +297,8 @@ export class HugsService {
     /**
      * Submit or replace a person's response. The Hug must be open and not past `expires_at` (410
      * even when the sweep hasn't run yet); the person must have been reached through its channels;
-     * the values must satisfy its requested inputs. File values must be this person's uploads for
-     * this Hug and input. The response, its `response` event and the delivery to the daemon are
+     * the Hug's template must accept the values. File values must be this person's uploads for this
+     * Hug and input. The response, its `response` event and the delivery to the daemon are
      * written in one transaction that holds the Hug's row, so a `close` or expiry can't slip in
      * between the check and the write, and no response is stored without its delivery.
      */
@@ -308,7 +306,6 @@ export class HugsService {
         hug_id: string;
         user_id: string;
         values: unknown;
-        comment?: string;
     }): Promise<{ response_id: string; seq: number }> {
         const hug = await Hug.findByPk(input.hug_id);
         if (!hug) throw ApiError.not_found('Hug not found');
@@ -317,10 +314,11 @@ export class HugsService {
         const via = await HugsService.channels_reaching(hug, input.user_id);
         if (via.length === 0) throw ApiError.forbidden('This Hug was not sent to you, or you cannot view runs in its realm');
 
-        const inputs = hug.requested_inputs as RequestedInput[];
-        const checked = validate_values(inputs, input.values);
+        const template = template_of(hug);
+        const checked = template.check_answer(hug.params, input.values);
         if (!checked.ok) throw ApiError.unprocessable(checked.problems.join('; '), 'invalid_values');
         const values = { ...checked.value };
+        const inputs = [...template.inputs(hug.params)];
 
         const response = await get_sequelize().transaction(async (t) => {
             const locked = await Hug.findByPk(hug.id, { transaction: t, lock: t.LOCK.UPDATE });
@@ -331,10 +329,10 @@ export class HugsService {
             const now = new Date();
             const existing = await HugResponse.findOne({ where: { hug_id: hug.id, responder_user_id: input.user_id }, transaction: t });
             const row = existing
-                ? await existing.update({ via_channels: via, values, comment: input.comment ?? null, seq, updated_at: now }, { transaction: t })
+                ? await existing.update({ via_channels: via, values, seq, updated_at: now }, { transaction: t })
                 : await HugResponse.create({
                     id: randomUUID(), hug_id: hug.id, responder_user_id: input.user_id, via_channels: via, values,
-                    comment: input.comment ?? null, seq, created_at: now, updated_at: now,
+                    seq, created_at: now, updated_at: now,
                 }, { transaction: t });
             const data = await response_data(row);
             await HugEventRow.create({ hug_id: hug.id, seq, type: 'response', payload: { response: data }, created_at: now }, { transaction: t });
@@ -534,8 +532,9 @@ export class HugsService {
         return Promise.all(rows.map(response_data));
     }
 
-    /** Every `artifact` context block must name a ready stored artifact of this run (§6.5). */
-    private static async _check_context_artifacts(context: ReadonlyArray<{ type: string; artifact_id?: string }>, run_id: string): Promise<void> {
+    /** Every `artifact` block of the params' `context` must name a ready stored artifact of this run (§6.5). */
+    private static async _check_context_artifacts(raw: unknown, run_id: string): Promise<void> {
+        const context = (Array.isArray(raw) ? raw : []) as ReadonlyArray<{ type: string; artifact_id?: string }>;
         const ids = [...new Set(context.filter((b) => b.type === 'artifact').map((b) => b.artifact_id!))];
         if (ids.length === 0) return;
         const found = await StoredArtifact.findAll({ where: { id: { [Op.in]: ids }, run_id, status: 'ready' }, attributes: ['id'], raw: true });
@@ -583,6 +582,18 @@ export class HugsService {
     }
 }
 
+/**
+ * The template a Hug was opened with (the version it resolved to then).
+ *
+ * @throws ApiError 500 when that template version no longer exists — never expected: versions stay
+ *   as long as Hugs use them
+ */
+export function template_of(hug: Pick<Hug, 'id' | 'template' | 'template_version'>): HugTemplate {
+    const template = resolve_template(`${hug.template}@${hug.template_version}`);
+    if (!template) throw ApiError.internal(`Hug ${hug.id} uses an unknown template ${hug.template}@${hug.template_version}`);
+    return template;
+}
+
 /** 404/409/410 unless the Hug can still take a response — the clock counts, not just the status. */
 export function assert_answerable(hug: Pick<Hug, 'status' | 'expires_at'>, now = new Date()): void {
     if (hug.status === 'expired' || (hug.status === 'open' && hug.expires_at.getTime() <= now.getTime())) {
@@ -624,7 +635,6 @@ async function response_data(row: HugResponse): Promise<HugResponseData> {
         responder: { user_id: row.responder_user_id, name: user?.display_name?.trim() || user?.username || row.responder_user_id },
         via: row.via_channels,
         values: row.values,
-        comment: row.comment,
         responded_at: row.updated_at.toISOString(),
     };
 }

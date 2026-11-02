@@ -28,10 +28,9 @@ import type { Request, Response } from 'express';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
-import type { RequestedInput } from '@getcliqio/cliq-sdk';
 import { ApiError } from '../errors/api_error.js';
 import { Hug, StoredArtifact } from '../models/index.js';
-import { assert_answerable, HugsService } from '../services/hugs.service.js';
+import { assert_answerable, HugsService, template_of } from '../services/hugs.service.js';
 import type { UploadTarget } from '../services/artifact_storage.service.js';
 import { get_logger } from '../lib/log.js';
 
@@ -159,7 +158,7 @@ async function hug_upload_target(hug_id: string, requested_input: string | undef
     if (!hug) throw new ApiError('not_found', 'Hug not found', 404);
     assert_answerable(hug);
     if ((await HugsService.channels_reaching(hug, user_id)).length === 0) throw new ApiError('forbidden', 'This Hug was not sent to you', 403);
-    const input = (hug.requested_inputs as RequestedInput[]).find((i) => i.name === requested_input);
+    const input = template_of(hug).inputs(hug.params).find((i) => i.name === requested_input);
     if (!input || input.type !== 'file') {
         throw new ApiError('HUG_FILE_INVALID', `'${requested_input}' is not a file input of this Hug`, 422);
     }
