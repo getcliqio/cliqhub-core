@@ -43,9 +43,8 @@ export type HugsCreateInput = z.infer<typeof HugsCreateInput>;
 /** POST /v1/hugs/respond — a person submits (or replaces) their response. */
 export const HugsRespondInput = z.object({
     hug_id: z.string().min(1),
-    /** Values keyed by requested-input name; file inputs take `{ artifact_id }` from artifacts/upload. */
+    /** The answer, as the Hug template's keys; file inputs take `{ artifact_id }` from artifacts/upload. */
     values: z.record(z.unknown()),
-    comment: z.string().max(10_000).optional(),
 });
 export type HugsRespondInput = z.infer<typeof HugsRespondInput>;
 

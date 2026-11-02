@@ -127,7 +127,7 @@ export class HugsController extends BaseController {
         const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
         const body = this.parse_body(HugsRespondInput, req);
-        const data = await HugsService.respond({ hug_id: body.hug_id, user_id, values: body.values, comment: body.comment });
+        const data = await HugsService.respond({ hug_id: body.hug_id, user_id, values: body.values });
         log.info('hug_response_submitted', { hug_id: body.hug_id });
         res.json({ ok: true, data });
     }

@@ -1317,6 +1317,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_run_started_by(sq);
     await migrate_person_settings_seed(sq);
     await migrate_hugs(sq);
+    await migrate_hug_templates(sq);
     await migrate_team_visibility(sq);
 }
 
@@ -2253,11 +2254,10 @@ const HUGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hugs" (
     "realm_id"          TEXT NOT NULL,
     "org_id"            UUID NOT NULL,
     "title"             TEXT NOT NULL,
-    "prompt"            TEXT NOT NULL,
-    "context"           JSONB NOT NULL DEFAULT '[]'::jsonb,
-    "requested_inputs"  JSONB NOT NULL,
+    "template"          TEXT NOT NULL,
+    "template_version"  INTEGER NOT NULL,
+    "params"            JSONB NOT NULL DEFAULT '{}'::jsonb,
     "channels"          TEXT[] NOT NULL,
-    "ui"                JSONB,
     "status"            TEXT NOT NULL DEFAULT 'open',
     "outcome"           TEXT,
     "expires_at"        TIMESTAMPTZ NOT NULL,
@@ -2287,7 +2287,6 @@ const HUG_RESPONSES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hug_responses"
     "responder_user_id"  UUID NOT NULL,
     "via_channels"       TEXT[] NOT NULL,
     "values"             JSONB NOT NULL,
-    "comment"            TEXT,
     "seq"                INTEGER NOT NULL,
     "created_at"         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at"         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2329,6 +2328,48 @@ export async function migrate_hugs_before_sync(sq: Sequelize): Promise<void> {
     await sq.query(HUG_DELIVERIES_TABLE_SQL);
     await sq.query(HUG_RESPONSES_TABLE_SQL);
     await sq.query(HUG_EVENTS_TABLE_SQL);
+}
+
+/**
+ * Hugs become RPCs to a template (PLAN-hug-templates §8) — no backward compatibility. On a database
+ * whose `hugs` still has `prompt` (and so once):
+ *
+ * - open Hugs are cancelled, each with a `cancelled` event for its daemon's catch-up;
+ * - every Hug becomes `form@1`, its `prompt`, `context` and `requested_inputs` moved into `params`
+ *   (`requested_inputs` → `inputs`); `ui` is dropped;
+ * - a response's `comment` moves into its `values` (a template key now);
+ * - the old columns are dropped. One transaction; safe to repeat (a converted database is skipped).
+ */
+export async function migrate_hug_templates(sq: Sequelize): Promise<void> {
+    if (sq.getDialect() !== 'postgres') return;
+    const [cols] = await sq.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_schema = 'cliq' AND table_name = 'hugs' AND column_name = 'prompt'`,
+    ) as [Array<{ column_name: string }>, unknown];
+    if (cols.length === 0) return;
+    await sq.transaction(async (t) => {
+        const q = (sql: string) => sq.query(sql, { transaction: t });
+        const [cancelled] = await q(`UPDATE cliq."hugs"
+            SET "status" = 'cancelled', "outcome" = 'cancelled: Hugs moved to templates', "closed_at" = NOW(),
+                "next_remind_at" = NULL, "last_seq" = "last_seq" + 1
+            WHERE "status" = 'open' RETURNING "id", "last_seq"`) as [Array<{ id: string; last_seq: number }>, unknown];
+        for (const h of cancelled) {
+            await sq.query(`INSERT INTO cliq."hug_events" ("hug_id", "seq", "type", "payload", "created_at")
+                VALUES (:id, :seq, 'cancelled', '{"reason":"Hugs moved to templates"}'::jsonb, NOW())`,
+            { replacements: { id: h.id, seq: h.last_seq }, transaction: t });
+        }
+        await q(`ALTER TABLE cliq."hugs" ADD COLUMN IF NOT EXISTS "template" TEXT`);
+        await q(`ALTER TABLE cliq."hugs" ADD COLUMN IF NOT EXISTS "template_version" INTEGER`);
+        await q(`ALTER TABLE cliq."hugs" ADD COLUMN IF NOT EXISTS "params" JSONB NOT NULL DEFAULT '{}'::jsonb`);
+        await q(`UPDATE cliq."hugs" SET "template" = 'form', "template_version" = 1,
+            "params" = jsonb_build_object('prompt', "prompt", 'context', "context", 'inputs', "requested_inputs")
+            WHERE "template" IS NULL`);
+        await q(`ALTER TABLE cliq."hugs" ALTER COLUMN "template" SET NOT NULL, ALTER COLUMN "template_version" SET NOT NULL`);
+        await q(`ALTER TABLE cliq."hugs" DROP COLUMN "prompt", DROP COLUMN "context", DROP COLUMN "requested_inputs", DROP COLUMN IF EXISTS "ui"`);
+        await q(`UPDATE cliq."hug_responses" SET "values" = "values" || jsonb_build_object('comment', "comment")
+            WHERE "comment" IS NOT NULL AND ("values"->'comment') IS NULL`);
+        await q(`ALTER TABLE cliq."hug_responses" DROP COLUMN IF EXISTS "comment"`);
+        _mig_log.info('hug_templates_migrated', { cancelled: cancelled.length });
+    });
 }
 
 /** `cliq.settings` key marking the one-time switch from reviews to Hugs as done. */

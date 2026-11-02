@@ -42,13 +42,14 @@ const OWNER = hub_legacy_uuid(1);
 const OUTSIDER = hub_legacy_uuid(9_999);
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+const INPUTS = [
+	{ name: 'release', type: 'text', max_length: 40 },
+	{ name: 'contract', type: 'file', required: false, accept: ['application/pdf'] },
+];
 const SPEC = {
+	template: 'form',
 	title: 'Release name',
-	prompt: 'What should this release be called?',
-	requested_inputs: [
-		{ name: 'release', type: 'text', max_length: 40 },
-		{ name: 'contract', type: 'file', required: false, accept: ['application/pdf'] },
-	],
+	params: { prompt: 'What should this release be called?', inputs: INPUTS },
 	channels: [REALM_MEMBERS_CHANNEL_NAME],
 	expires_in_min: 60,
 };
@@ -121,9 +122,19 @@ describe.skipIf(!has_postgres)('Hugs (Core)', () => {
 		});
 
 		it('refuses an invalid spec and one without an expiry (422)', async () => {
-			await expect(open({ requested_inputs: [{ name: 'x', type: 'select' }] })).rejects.toMatchObject({ status_code: 422 });
+			await expect(open({ params: { inputs: [{ name: 'x', type: 'select' }] } })).rejects.toMatchObject({ status_code: 422 });
 			await expect(open({ expires_in_min: undefined })).rejects.toMatchObject({ status_code: 422, message: expect.stringContaining('expires') });
 			await expect(open({ expires_in_min: 10_081 })).rejects.toMatchObject({ status_code: 422 });
+		});
+
+		it('every Hug names a known template; it is stored with the version it resolved to and its checked params', async () => {
+			await expect(open({ template: undefined })).rejects.toMatchObject({ status_code: 422 });
+			await expect(open({ template: 'survey' })).rejects.toMatchObject({ status_code: 422, message: expect.stringContaining("unknown template 'survey'") });
+			await expect(open({ prompt: 'old shape' })).rejects.toMatchObject({ status_code: 422 });
+			const { hug_id } = await open({ template: 'approval', params: { inputs: INPUTS, reject_choices: [{ value: 'draft' }] } });
+			const hug = (await Hug.findByPk(hug_id, { raw: true }))!;
+			expect(hug).toMatchObject({ template: 'approval', template_version: 1, params: { inputs: INPUTS, reject_choices: [{ value: 'draft' }] } });
+			expect(await HugsService.get(hug_id)).toMatchObject({ template: 'approval', template_version: 1, params: { reject_choices: [{ value: 'draft' }] } });
 		});
 
 		it('raises Unknown channel for names the realm cannot use; none left → 422', async () => {
@@ -187,8 +198,8 @@ describe.skipIf(!has_postgres)('Hugs (Core)', () => {
 				size_bytes: 3, storage_key: 'k', uploaded_by: null, created_at: Date.now(), status: 'ready', source: 'daemon',
 				hug_id: null, hug_requested_input: null, sha256: null,
 			});
-			await expect(open({ context: [{ type: 'artifact', artifact_id: ready.id }] }, { run_id })).resolves.toBeTruthy();
-			await expect(open({ context: [{ type: 'artifact', artifact_id: ready.id }] }, { run_id: `run-${uid()}` })).rejects.toMatchObject({ status_code: 422 });
+			await expect(open({ params: { ...SPEC.params, context: [{ type: 'artifact', artifact_id: ready.id }] } }, { run_id })).resolves.toBeTruthy();
+			await expect(open({ params: { ...SPEC.params, context: [{ type: 'artifact', artifact_id: ready.id }] } }, { run_id: `run-${uid()}` })).rejects.toMatchObject({ status_code: 422 });
 			await StoredArtifact.destroy({ where: { id: ready.id } });
 		});
 	});
@@ -196,16 +207,26 @@ describe.skipIf(!has_postgres)('Hugs (Core)', () => {
 	describe('respond', () => {
 		it('a realm member reached through a shared channel answers; the event is stored and delivered until shortly after expiry', async () => {
 			const { hug_id } = await open();
-			const r = await HugsService.respond({ hug_id, user_id: OWNER, values: { release: 'autumn' }, comment: 'ok' });
+			const r = await HugsService.respond({ hug_id, user_id: OWNER, values: { release: 'autumn', comment: 'ok' } });
 			expect(r.seq).toBe(1);
 			const event = (await HugEventRow.findOne({ where: { hug_id, seq: 1 }, raw: true }))!;
 			expect(event.type).toBe('response');
-			expect(event.payload).toMatchObject({ response: { values: { release: 'autumn' }, via: [REALM_MEMBERS_CHANNEL_NAME], comment: 'ok' } });
+			expect(event.payload).toMatchObject({ response: { values: { release: 'autumn', comment: 'ok' }, via: [REALM_MEMBERS_CHANNEL_NAME] } });
 			const [delivery] = await deliveries(hug_id);
 			expect(JSON.parse(delivery!.payload)).toMatchObject({ hug_id, seq: 1, type: 'response' });
 			const hug = (await Hug.findByPk(hug_id, { raw: true }))!;
 			expect(Number(delivery!.deliver_until)).toBe(hug.expires_at.getTime() + 60 * 60 * 1000);
 			expect(delivery!.daemon_id).toBe('daemon-1');
+		});
+
+		it('the template checks each answer: approval needs its inputs to approve, only a reason to reject', async () => {
+			const { hug_id } = await open({ template: 'approval', params: { inputs: INPUTS, reject_choices: [{ value: 'draft' }] } });
+			await expect(HugsService.respond({ hug_id, user_id: OWNER, values: { decision: 'approve' } })).rejects.toMatchObject({ status_code: 422, message: 'release: required' });
+			await expect(HugsService.respond({ hug_id, user_id: OWNER, values: { decision: 'reject' } })).rejects.toMatchObject({ status_code: 422, message: 'reason: required' });
+			await expect(HugsService.respond({ hug_id, user_id: OWNER, values: { decision: 'reject', reason: 'no', choice: 'legal' } })).rejects.toMatchObject({ status_code: 422 });
+			const r = await HugsService.respond({ hug_id, user_id: OWNER, values: { decision: 'reject', reason: 'Not this sprint', choice: 'draft' } });
+			const event = (await HugEventRow.findOne({ where: { hug_id, seq: r.seq }, raw: true }))!;
+			expect(event.payload).toMatchObject({ response: { values: { decision: 'reject', reason: 'Not this sprint', choice: 'draft' } } });
 		});
 
 		it('refuses someone the Hug did not reach (403), invalid values (422) and unknown inputs', async () => {
