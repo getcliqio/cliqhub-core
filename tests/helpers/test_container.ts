@@ -123,15 +123,6 @@ export function make_mock_repos() {
             find_by_team_key_date: vi.fn().mockResolvedValue(null),
             create: vi.fn(),
         },
-        draft_repo: {
-            list_by_user_id: vi.fn().mockResolvedValue([]),
-            find_by_id_and_user: vi.fn().mockResolvedValue(null),
-            create: vi.fn().mockResolvedValue(1),
-            update: vi.fn(),
-            delete_by_id: vi.fn(),
-            count_by_user_id: vi.fn().mockResolvedValue(0),
-            count_total: vi.fn().mockResolvedValue(0),
-        },
         audit_repo: {
             create: vi.fn().mockResolvedValue(undefined),
             list: vi.fn().mockResolvedValue([]),

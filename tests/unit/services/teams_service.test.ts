@@ -572,11 +572,12 @@ describe('TeamsService — get_by_id', () => {
         expect(result.tags).toEqual(['ai']);
         expect(vi.mocked(version_content)).toHaveBeenCalledWith(hub_legacy_uuid(5));
         expect(result).toMatchObject({
-            version_id: hub_legacy_uuid(5), raw_manifest: team_yml, team_json: team_yml, readme: 'hello', cliq_version: '0.5',
+            version_id: hub_legacy_uuid(5), raw_manifest: team_yml, readme: 'hello', cliq_version: '0.5',
             agents: { exec: {} }, roles: [{ name: 'say', content_md: 'Say it.' }], dependencies: '- name: jq\n',
             workflow: { phases: [{ name: 'say', agent: 'exec' }] },
             inputs: [expect.objectContaining({ name: 'note', required: false })],
         });
+        expect(result).not.toHaveProperty('team_json');
     });
 
     it('returns not_found for missing team', async () => {
@@ -761,11 +762,8 @@ describe('TeamsService — publish', () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
         const result = await publish({ changelog: 'first' });
         expect(result).toMatchObject({ id: PUBLIC_TEAM.id, version: '2.0.0', status: 'published' });
-        expect(version_repo.publish_draft).toHaveBeenCalledWith(DRAFT, expect.objectContaining({ version: '2.0.0', changelog: 'first' }), expect.anything());
-        const fields = version_repo.publish_draft.mock.calls[0][1];
-        expect(JSON.parse(fields.roles_json)).toEqual([{ name: 'dev', content_md: '# Dev' }]);
-        expect(fields.readme).toBe('# README');
-        expect(version_repo.create).not.toHaveBeenCalled();
+        // the version is its files (PLAN-team-bundle S1.5): publish sets only the number and the notes
+        expect(version_repo.publish_draft).toHaveBeenCalledWith(DRAFT, { version: '2.0.0', changelog: 'first' }, expect.anything());
         expect(storage.write).not.toHaveBeenCalled();
         // Same transaction as update — avoids row-lock deadlock on republish.
         expect(team_repo.update_listed).toHaveBeenCalledWith(PUBLIC_TEAM.id, 1, expect.anything());

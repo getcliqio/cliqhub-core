@@ -6,11 +6,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import yaml from 'js-yaml';
 import { BUILTIN_TEAMS } from '@getcliqio/cliq-sdk';
 import { get_logger } from './log.js';
 import { get_sequelize } from './sequelize.js';
 import { attach_cliq_scope } from '../models/migrations/migrate_team_visibility.js';
+import { TeamFileRepository } from '../repositories/team_file_repository.js';
+import { team_file_content_type, write_team_file_objects } from '../services/team_file_objects.js';
+import { content_storage } from '../services/version_content.js';
 
 const log = get_logger('seed');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -382,7 +384,6 @@ async function seed_teams(): Promise<void> {
     // startup backfill, which runs right after (PLAN-team-bundle S1.4a).
     for (const builtin of BUILTIN_TEAMS) {
         const label = `@${builtin.scope}/${builtin.name}`;
-        const parsed = yaml.load(builtin.manifest_yaml) as { phases: unknown[]; inputs?: unknown[] };
         const [team, created] = await Team.findOrCreate({
             where: { name: builtin.name, scope: builtin.scope },
             defaults: {
@@ -398,25 +399,28 @@ async function seed_teams(): Promise<void> {
         });
         if (created) log.info(`seeded registry team ${label}`);
 
-        const version_data = {
-            team_id: team.id,
-            version: builtin.version,
-            changelog: `Built-in ${builtin.name} team.`,
-            package_path: '',
-            workflow_json: JSON.stringify({ phases: parsed.phases }),
-            manifest_yaml: builtin.manifest_yaml,
-            readme: builtin.readme,
-            capability_json: JSON.stringify({ inputs: parsed.inputs ?? [] }),
-            agents_json: JSON.stringify(Object.fromEntries(builtin.agents.map((a) => [a, {}]))),
-            roles_json: '[]',
-            cliq_version: null,
-            tools: '[]',
-        };
+        // A version is its files (PLAN-team-bundle §2.2): team.yml and README.md, stored by id, with the
+        // version row in one transaction. Without storage (no container yet) the built-ins wait for the next seed.
         const existing_ver = await TeamVersion.findOne({ where: { team_id: team.id, version: builtin.version } });
-        if (!existing_ver) {
-            await TeamVersion.create(version_data);
-            log.info(`seeded registry version ${label}@${builtin.version}`);
+        if (existing_ver) continue;
+        const storage = content_storage();
+        if (!storage) {
+            log.warn('builtin_version_not_seeded', { team: label, version: builtin.version, reason: 'no storage yet' });
+            continue;
         }
+        const files: Record<string, string> = { 'team.yml': builtin.manifest_yaml, ...(builtin.readme ? { 'README.md': builtin.readme } : {}) };
+        const rows = await write_team_file_objects(storage, team.id, Object.entries(files).map(([p, text]) => ({
+            path: p, content_type: team_file_content_type(p), data: Buffer.from(text, 'utf8'),
+        })));
+        await get_sequelize().transaction(async (t) => {
+            const version = await TeamVersion.create({
+                team_id: team.id, status: 'published', version: builtin.version,
+                changelog: `Built-in ${builtin.name} team.`, package_path: '',
+            } as never, { transaction: t });
+            for (const r of rows) r.version_id = version.id;
+            await new TeamFileRepository().replace_paths(version.id, rows, t);
+        });
+        log.info(`seeded registry version ${label}@${builtin.version}`);
     }
 }
 

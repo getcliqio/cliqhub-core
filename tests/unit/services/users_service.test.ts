@@ -9,7 +9,7 @@ vi.mock('../../../src/auth/password.js', () => ({
     verify_password: vi.fn().mockResolvedValue(true),
 }));
 
-import { User, ApiToken, OrgMember, OrgRole, Scope, Team, Draft } from '../../../src/models/index.js';
+import { User, ApiToken, OrgMember, OrgRole, Scope, Team } from '../../../src/models/index.js';
 import { hash_password, verify_password } from '../../../src/auth/password.js';
 import { UsersService } from '../../../src/services/users_service.js';
 import { test_config } from '../../helpers/test_container.js';
@@ -162,7 +162,6 @@ describe('UsersService', () => {
             vi.mocked(Scope.count).mockResolvedValueOnce(3);
             vi.mocked(Team.count).mockResolvedValueOnce(2);
             vi.mocked(ApiToken.count).mockResolvedValueOnce(1);
-            vi.mocked(Draft.count).mockResolvedValueOnce(0);
             vi.mocked(OrgMember.findAll).mockResolvedValueOnce([] as any);
 
             const result = await service.get_by_id(admin_auth, { user_id: hub_legacy_uuid(5) });
@@ -171,7 +170,8 @@ describe('UsersService', () => {
             expect(result.scope_count).toBe(3);
             expect(result.team_count).toBe(2);
             expect(result.token_count).toBe(1);
-            expect(result.draft_count).toBe(0);
+            // drafts are team versions now (PLAN-team-bundle S1.5): no per-user count
+            expect(result).not.toHaveProperty('draft_count');
             expect(result.orgs).toEqual([]);
         });
 

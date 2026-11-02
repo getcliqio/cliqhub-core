@@ -67,12 +67,6 @@ describe('TeamVersionRepository', () => {
         expect(result).toEqual([]);
     });
 
-    it('create inserts and returns id', async () => {
-        vi.mocked(TeamVersion.create).mockResolvedValueOnce({ id: hub_legacy_uuid(5) } as any);
-        const result = await repo.create(hub_legacy_uuid(1), '1.0.0', '', '/path', null, '[]', '{}', '', '{}', '{}');
-        expect(result).toBe(hub_legacy_uuid(5));
-    });
-
     it('delete_by_id calls destroy', async () => {
         await repo.delete_by_id(hub_legacy_uuid(5));
         expect(TeamVersion.destroy).toHaveBeenCalledWith({ where: { id: hub_legacy_uuid(5) } });

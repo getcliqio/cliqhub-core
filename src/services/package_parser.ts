@@ -1,4 +1,4 @@
-import { is_zip, MAX_BUNDLE_PACKED, pack_bundle, TEAM_YML, unpack_bundle } from '@getcliqio/cliq-sdk';
+import { TEAM_YML } from '@getcliqio/cliq-sdk';
 import yaml from 'js-yaml';
 
 import type { InputFieldSpec } from '../lib/input_field_spec.js';
@@ -45,66 +45,6 @@ export function workflow_from_team_yml(
     return { phases };
 }
 
-export interface PackageContent {
-    team_yml: ParsedTeamYml | null;
-    /** Raw team.yml text — preserved verbatim for display. */
-    manifest_yaml: string;
-    roles: { name: string; content_md: string }[];
-    readme: string;
-    /** dependencies.yml text: tools the team needs and how to install them ('' when none). */
-    dependencies_yml: string;
-}
-
-
-export async function extract_package(data_buffer: Buffer): Promise<PackageContent> {
-    if (data_buffer.length > MAX_BUNDLE_PACKED) {
-        throw new Error('Package too large (max 10MB)');
-    }
-
-    if (is_zip(data_buffer)) {
-        return extract_zip_package(data_buffer);
-    }
-    return extract_json_package(data_buffer);
-}
-
-function extract_json_package(data_buffer: Buffer): PackageContent {
-    const text = data_buffer.toString('utf8');
-    const pkg = JSON.parse(text) as Record<string, unknown>;
-
-    let team_yml: ParsedTeamYml | null = null;
-    const manifest_yaml = typeof pkg['team.yml'] === 'string' ? pkg['team.yml'] : '';
-    if (manifest_yaml) {
-        team_yml = yaml.load(manifest_yaml) as ParsedTeamYml;
-    }
-
-    const roles: { name: string; content_md: string }[] = [];
-    if (Array.isArray(pkg.roles)) {
-        for (const r of pkg.roles) {
-            const role = r as { name?: string; content?: string };
-            if (role.name && role.content) {
-                roles.push({ name: role.name, content_md: role.content });
-            }
-        }
-    }
-
-    const readme = typeof pkg.readme === 'string' ? pkg.readme : '';
-    const dependencies_yml = typeof pkg['dependencies.yml'] === 'string' ? pkg['dependencies.yml'] : '';
-    return { team_yml, manifest_yaml, roles, readme, dependencies_yml };
-}
-
-/**
- * The package as stored: always a zip (`team.yml`, `roles/<name>.md`, `README.md`, `dependencies.yml`) — daemons install with
- * `unzip`. A zip is kept as sent; a JSON package (the builder's) is rebuilt as a zip from its content.
- */
-export async function to_package_zip(data_buffer: Buffer, content: Pick<PackageContent, 'manifest_yaml' | 'roles' | 'readme'> & { dependencies_yml?: string }): Promise<Buffer> {
-    if (is_zip(data_buffer)) return data_buffer;
-    const files: Record<string, string> = { [TEAM_YML]: content.manifest_yaml ?? '' };
-    for (const role of content.roles) files[`roles/${role.name}.md`] = role.content_md;
-    if (content.readme) files['README.md'] = content.readme;
-    if (content.dependencies_yml) files['dependencies.yml'] = content.dependencies_yml;
-    return pack_bundle({ files });
-}
-
 /**
  * Problems with a dependencies.yml — the same rules cliq-docker applies when it builds a realm image:
  * a list of entries, each with a `name` and an `install` command (`version` optional).
@@ -131,18 +71,6 @@ export function dependencies_problems(text: string): string[] {
         seen.add(name);
     });
     return out;
-}
-
-async function extract_zip_package(zip_buffer: Buffer): Promise<PackageContent> {
-    const { files } = await unpack_bundle(zip_buffer);
-    const manifest_yaml = files[TEAM_YML] ?? '';
-    const team_yml = manifest_yaml ? yaml.load(manifest_yaml) as ParsedTeamYml : null;
-    // Role briefs are the .md files directly in roles/ (a nested folder is not a role).
-    const roles = Object.keys(files)
-        .filter((p) => p.startsWith('roles/') && p.endsWith('.md') && !p.slice('roles/'.length).includes('/'))
-        .sort()
-        .map((p) => ({ name: p.slice('roles/'.length, -'.md'.length), content_md: files[p] }));
-    return { team_yml, manifest_yaml, roles, readme: files['README.md'] ?? '', dependencies_yml: files['dependencies.yml'] ?? '' };
 }
 
 /**

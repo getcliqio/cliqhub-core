@@ -16,7 +16,6 @@ import { TeamVersion } from './team_version.model.js';
 import { TeamFile } from './team_file.model.js';
 import { TeamTag } from './team_tag.model.js';
 import { OrgTeam } from './org_team.model.js';
-import { Draft } from './draft.model.js';
 import { AuditLog } from './audit_log.model.js';
 import { DownloadLog } from './download_log.model.js';
 import { Setting } from './setting.model.js';
@@ -67,7 +66,7 @@ export {
     User, Org, OrgMember, OrgRole,
     AccountAgentSetting, AccountInvite, RealmInvite, ApiToken,
     Scope, ScopeMember, Team, TeamVersion, TeamFile, TeamTag, OrgTeam,
-    Draft, AuditLog, DownloadLog, Setting,
+    AuditLog, DownloadLog, Setting,
     OrgAgentSetting, UserRealmAgentSetting,
     PasswordReset, PasswordResetRequest, EmailDelivery,
     // Store
@@ -104,7 +103,6 @@ export function init_models(sequelize: Sequelize): void {
     TeamFile.register(sequelize);
     TeamTag.register(sequelize);
     OrgTeam.register(sequelize);
-    Draft.register(sequelize);
     AuditLog.register(sequelize);
     DownloadLog.register(sequelize);
     Setting.register(sequelize);
@@ -195,8 +193,6 @@ export function init_models(sequelize: Sequelize): void {
     Team.hasMany(TeamTag, { foreignKey: 'team_id', as: 'tags', onDelete: 'CASCADE' });
     TeamTag.belongsTo(Team, { foreignKey: 'team_id' });
 
-    User.hasMany(Draft, { foreignKey: 'user_id', onDelete: 'CASCADE' });
-    Draft.belongsTo(User, { foreignKey: 'user_id' });
 
     // No FK: audit rows outlive the admin who wrote them (users/delete keeps history).
     User.hasMany(AuditLog, { foreignKey: 'admin_id', constraints: false });

@@ -6,7 +6,6 @@
  */
 
 import type { UserVo, UserDto } from '../schemas/user_types.js';
-import type { DraftVo, DraftListItemVo, DraftDto, DraftListItemDto } from '../schemas/draft_types.js';
 import type { TeamListItemDto } from '../schemas/team_types.js';
 import type { AgentData } from '../schemas/agent_types.js';
 import type { RunData } from '../schemas/run_types.js';
@@ -65,24 +64,6 @@ export function to_team_list_item_dto(
         listed: row.listed !== undefined ? !!row.listed : true,
         visibility,
         status: visibility === 'draft' ? 'draft' : 'published',
-    };
-}
-
-export function to_draft_dto(row: DraftVo): DraftDto {
-    return {
-        id: row.id,
-        title: row.title,
-        team_json: row.team_json,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-    };
-}
-
-export function to_draft_list_item_dto(row: DraftListItemVo): DraftListItemDto {
-    return {
-        id: row.id,
-        title: row.title,
-        updated_at: row.updated_at,
     };
 }
 

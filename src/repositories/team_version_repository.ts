@@ -1,5 +1,6 @@
 import { TeamVersion } from '../models/index.js';
-import { Op, literal, type Transaction } from 'sequelize';
+import { QueryTypes, type Transaction } from 'sequelize';
+import { get_sequelize } from '../lib/sequelize.js';
 import { SemVer } from '../lib/semver.js';
 import { BaseRepository } from './base_repository.js';
 
@@ -77,22 +78,6 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
         return numbered(rows).map((r) => r.version);
     }
 
-    async create(
-        team_id: string, version: string, changelog: string, pkg_path: string,
-        cliq_version: string | null, tools: string, workflow_json: string,
-        manifest_yaml: string,
-        readme: string, capability_json: string, agents_json: string,
-        roles_json: string,
-        transaction?: Transaction,
-        dependencies_yaml = '',
-    ): Promise<string> {
-        const row = await TeamVersion.create(
-            { team_id, version, changelog, package_path: pkg_path, cliq_version, tools, workflow_json, manifest_yaml, readme, capability_json, agents_json, roles_json, dependencies_yaml },
-            { transaction },
-        );
-        return row.id;
-    }
-
     async delete_by_id(id: string): Promise<number> {
         return TeamVersion.destroy({ where: { id } });
     }
@@ -165,20 +150,15 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
         workflow_json: string | null; capability_json: string | null; agents_json: string | null;
         team_scope: string | null; team_name: string; team_description: string | null;
     }>> {
-        const rows = await TeamVersion.findAll({
-            where: {
-                ...PUBLISHED,
-                [Op.and]: [literal('NOT EXISTS (SELECT 1 FROM cliq.team_files f WHERE f.version_id = "TeamVersion"."id")')],
-            },
-            attributes: [
-                'id', 'team_id', 'version', 'package_path', 'manifest_yaml', 'readme', 'dependencies_yaml', 'roles_json',
-                'workflow_json', 'capability_json', 'agents_json',
-                [literal('(SELECT t.scope FROM cliq.teams t WHERE t.id = "TeamVersion"."team_id")'), 'team_scope'],
-                [literal('(SELECT t.name FROM cliq.teams t WHERE t.id = "TeamVersion"."team_id")'), 'team_name'],
-                [literal('(SELECT t.description FROM cliq.teams t WHERE t.id = "TeamVersion"."team_id")'), 'team_description'],
-            ],
-            raw: true,
-        });
+        // Raw SQL: the content columns aren't in the model any more, and exist only until S1.5 drops them.
+        const rows = await get_sequelize().query(
+            `SELECT v.id, v.team_id, v.version, v.package_path, v.manifest_yaml, v.readme, v.dependencies_yaml, v.roles_json,
+                    v.workflow_json, v.capability_json, v.agents_json,
+                    t.scope AS team_scope, t.name AS team_name, t.description AS team_description
+             FROM cliq.team_versions v JOIN cliq.teams t ON t.id = v.team_id
+             WHERE v.status = 'published' AND NOT EXISTS (SELECT 1 FROM cliq.team_files f WHERE f.version_id = v.id)`,
+            { type: QueryTypes.SELECT },
+        );
         return numbered(rows as never[]);
     }
 
@@ -197,11 +177,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
      *
      * @returns false when the row isn't a draft (already published, or gone).
      */
-    async publish_draft(id: string, fields: {
-        version: string; changelog: string; cliq_version: string | null; tools: string; workflow_json: string;
-        manifest_yaml: string; readme: string; capability_json: string; agents_json: string; roles_json: string;
-        dependencies_yaml: string;
-    }, transaction: Transaction): Promise<boolean> {
+    async publish_draft(id: string, fields: { version: string; changelog: string }, transaction: Transaction): Promise<boolean> {
         const [n] = await TeamVersion.update(
             { ...fields, status: 'published', published_at: new Date() } as never,
             { where: { id, status: 'draft' }, transaction },

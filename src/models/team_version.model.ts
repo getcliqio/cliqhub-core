@@ -9,18 +9,8 @@ export class TeamVersion extends BaseModel {
     /** Set when published; a draft has none. */
     declare version: string | null;
     declare changelog: string;
+    /** Its zip once built (`teams/<team_id>/versions/<id>.zip`); its content is its files (PLAN-team-bundle §2.2). */
     declare package_path: string;
-    declare workflow_json: string;
-    /** Raw team.yml text — preserved verbatim for display. */
-    declare manifest_yaml: string;
-    declare readme: string;
-    declare capability_json: string;
-    declare agents_json: string;
-    declare roles_json: string;
-    /** dependencies.yml text ('' when the team has none). */
-    declare dependencies_yaml: string;
-    declare cliq_version: string | null;
-    declare tools: string;
     declare published_at: Date | null;
     /** When a draft's files last changed (upload / remove); picks a team's open draft. */
     declare saved_at: Date | null;
@@ -33,15 +23,6 @@ export class TeamVersion extends BaseModel {
             version: { type: DataTypes.TEXT, allowNull: true },
             changelog: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
             package_path: { type: DataTypes.TEXT, allowNull: false },
-            workflow_json: { type: DataTypes.TEXT, allowNull: false, defaultValue: '{}' },
-            manifest_yaml: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
-            readme: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
-            capability_json: { type: DataTypes.TEXT, allowNull: false, defaultValue: '{}' },
-            agents_json: { type: DataTypes.TEXT, allowNull: false, defaultValue: '{}' },
-            roles_json: { type: DataTypes.TEXT, allowNull: false, defaultValue: '[]' },
-            dependencies_yaml: { type: DataTypes.TEXT, allowNull: false, defaultValue: '' },
-            cliq_version: { type: DataTypes.TEXT, allowNull: true },
-            tools: { type: DataTypes.TEXT, allowNull: false, defaultValue: '[]' },
             published_at: { type: DataTypes.DATE, allowNull: true, defaultValue: DataTypes.NOW },
             saved_at: { type: DataTypes.DATE, allowNull: true },
         }, {

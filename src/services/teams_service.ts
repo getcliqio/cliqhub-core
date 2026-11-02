@@ -500,8 +500,6 @@ export class TeamsService {
             raw_manifest,
             /** dependencies.yml of this version ('' when the team has none). */
             dependencies: content?.dependencies_yml ?? '',
-            /** SPA builder compat — same payload as former drafts.team_json. */
-            team_json: raw_manifest,
             forked_from,
             fork_count,
             draft,
@@ -828,25 +826,16 @@ export class TeamsService {
         if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (upload the files first: teams/files/upload)', 404);
         const files = await this._read_version_files(draft.id);
         const { team_yml } = await check_team_files(files);
-        // The same derivation every read uses (PLAN-team-bundle S1.4b); the columns are filled until S1.5 drops them.
-        const content = derive_version_content(files);
-        const { manifest_yaml, roles, readme, dependencies_yml, workflow } = content;
+        // The same derivation every read uses (PLAN-team-bundle S1.4b); the version's content is its files.
+        const { workflow } = derive_version_content(files);
 
         if (!tags && team_yml.tags) tags = normalize_tags(team_yml.tags);
 
         const description = params.description || team_yml.description || '';
         const license = params.license || 'MIT';
-        const workflow_json = JSON.stringify(workflow);
 
         /** Validate HUG gate phases have mandatory review.reviewers. */
         validate_hug_reviewer_groups(workflow);
-
-        const capability_json = JSON.stringify({ inputs: content.inputs, use_when: team_yml.use_when, not_for: team_yml.not_for });
-        const agents_json = JSON.stringify(content.agents);
-        const cliq_version = content.cliq_version;
-        const tools = JSON.stringify(content.tools);
-        const sorted_roles = [...roles].sort((a, b) => a.name.localeCompare(b.name));
-        const roles_json = JSON.stringify(sorted_roles.map((r) => ({ name: r.name, content_md: r.content_md })));
 
         let resolved_version = params.version;
         if (!resolved_version && params.bump) {
@@ -878,10 +867,7 @@ export class TeamsService {
             // locked team row deadlocks until the statement timeout → 500.
             await this._team_repo.update_listed(team.id, 1, t);
 
-            const flipped = await this._version_repo.publish_draft(draft.id, {
-                version: resolved_version!, changelog: params.changelog || '', cliq_version, tools, workflow_json,
-                manifest_yaml, readme, capability_json, agents_json, roles_json, dependencies_yaml: dependencies_yml,
-            }, t);
+            const flipped = await this._version_repo.publish_draft(draft.id, { version: resolved_version!, changelog: params.changelog || '' }, t);
             if (!flipped) throw new ApiError('conflict', 'That draft was published or discarded meanwhile', 409);
 
             if (tags) {

@@ -35,6 +35,11 @@ export function init_version_content(s: PackageStorage): void {
     storage = s;
 }
 
+/** The storage team files live in (set at container startup), or null before that. */
+export function content_storage(): PackageStorage | null {
+    return storage;
+}
+
 /** Forget cached content (tests). */
 export function clear_version_content_cache(): void {
     cache.clear();

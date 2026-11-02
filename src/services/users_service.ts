@@ -10,7 +10,6 @@ import { UserRepository, user_list_status, type UserListStatus } from '../reposi
 import { ApiTokenRepository } from '../repositories/api_token_repository.js';
 import { ScopeRepository } from '../repositories/scope_repository.js';
 import { TeamRepository } from '../repositories/team_repository.js';
-import { DraftRepository } from '../repositories/draft_repository.js';
 import { OrgMemberRepository } from '../repositories/org_member_repository.js';
 import { OrgRepository } from '../repositories/org_repository.js';
 import { OrgRoleRepository } from '../repositories/org_role_repository.js';
@@ -38,7 +37,6 @@ const _user_repo_us = new UserRepository();
 const _api_token_repo_us = new ApiTokenRepository();
 const _scope_repo_us = new ScopeRepository();
 const _team_repo_us = new TeamRepository();
-const _draft_repo = new DraftRepository();
 const _org_member_repo_us = new OrgMemberRepository();
 const _org_repo_us = new OrgRepository();
 const _org_role_repo_us = new OrgRoleRepository();
@@ -295,11 +293,10 @@ export class UsersService {
         if (!found || (found.deleted_at && auth.user!.role !== 'admin')) throw new ApiError('not_found', 'User not found', 404);
         const user = with_list_status(found);
 
-        const [scope_count, team_count, token_count, draft_count, org_rows] = await Promise.all([
+        const [scope_count, team_count, token_count, org_rows] = await Promise.all([
             _scope_repo_us.find_count_q({ where: { owner_id: user.id } }),
             _team_repo_us.find_count_q({ where: { author_id: user.id } }),
             _api_token_repo_us.find_count_q({ where: { user_id: user.id } }),
-            _draft_repo.find_count_q({ where: { user_id: user.id } }),
             _org_member_repo_us.find_all_q({
                 where: { user_id: user.id, status: 'active', deleted_at: null },
                 include: [{ model: Org, attributes: ['id', 'slug', 'display_name'], where: { deleted_at: null } }],
@@ -318,7 +315,6 @@ export class UsersService {
             scope_count,
             team_count,
             token_count,
-            draft_count,
             orgs,
         };
 

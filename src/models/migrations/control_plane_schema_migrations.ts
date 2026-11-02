@@ -936,12 +936,6 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     // the same inputs. Null for healthy runs; ms-epoch on detection.
     await run(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "state_lost_at" BIGINT`);
 
-    // ── Repair required flags forced by earlier template-scan backfill ─
-    // Prior boot migrated every {{inputs.X}} ref to required:true, wiping
-    // author required:false. Repair from manifest_yaml; keep inventing
-    // undeclared refs as required only.
-    await repair_capability_required_flags(sq);
-
     /** Add user_id to in_app_notifications for per-user targeting. */
     await run(`ALTER TABLE cliq."in_app_notifications"
         ADD COLUMN IF NOT EXISTS "user_id" UUID`);
@@ -1137,18 +1131,20 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "forked_from_team_id" UUID`);
     await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "forked_from_version" TEXT`);
     await run(`CREATE INDEX IF NOT EXISTS "teams_forked_from_idx" ON cliq."teams" ("forked_from_team_id") WHERE "forked_from_team_id" IS NOT NULL`);
-    // Working copy: edits saved without minting a version until the editor saves a version.
-    await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_manifest" TEXT`);
-    await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_description" TEXT`);
-    await run(`ALTER TABLE cliq."teams" ADD COLUMN IF NOT EXISTS "draft_saved_at" TIMESTAMPTZ`);
-    // A version's dependencies.yml (tools the team needs and how to install them) — shown in the builder.
-    await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "dependencies_yaml" TEXT NOT NULL DEFAULT ''`);
     // A draft is a version (PLAN-team-bundle §2.2): status draft | published; a draft has no number or date yet.
     // A team can have several drafts (each upload / publish names its draft by id).
     await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "status" TEXT NOT NULL DEFAULT 'published'`);
     await run(`ALTER TABLE cliq."team_versions" ALTER COLUMN "version" DROP NOT NULL`);
     await run(`ALTER TABLE cliq."team_versions" ALTER COLUMN "published_at" DROP NOT NULL`);
     await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "saved_at" TIMESTAMPTZ`);
+    // The old content columns (PLAN-team-bundle S1.5): nothing writes them any more, so while they exist they
+    // take no value; team_files_only drops them once every version's files are checked against them.
+    for (const c of ['workflow_json', 'manifest_yaml', 'readme', 'capability_json', 'agents_json', 'roles_json', 'dependencies_yaml', 'cliq_version', 'tools']) {
+        await run(`DO $$ BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'cliq' AND table_name = 'team_versions' AND column_name = '${c}')
+            THEN ALTER TABLE cliq."team_versions" ALTER COLUMN "${c}" DROP NOT NULL; END IF;
+        END $$`);
+    }
     // team_files: which files a version has and where their bytes are (the content stays in storage).
     await run(`
         CREATE TABLE IF NOT EXISTS cliq."team_files" (
@@ -1367,126 +1363,6 @@ export async function backfill_personal_channel_email(sq: Sequelize): Promise<vo
         _mig_log.error('personal_channel_email_backfill_failed', { error: (err as Error)?.message ?? String(err) });
     }
 }
-
-/**
- * Repair capability_json.inputs[].required after the old template-scan
- * backfill forced every `{{inputs.X}}` ref to required:true.
- *
- * For each team_version:
- *   1. Restore `required: false` from manifest_yaml when the author set it.
- *   2. Invent undeclared workflow refs as required:true (UI parity with
- *      daemon when there is no team declaration to opt out).
- *
- * Idempotent — only writes when capability_json changes.
- */
-async function repair_capability_required_flags(sq: Sequelize): Promise<void> {
-    const TEMPLATE_RE = /\{\{inputs\.([^}]+)\}\}/g;
-
-    let rows: Array<{
-        id: string;
-        workflow_json: string;
-        capability_json: string;
-        manifest_yaml: string;
-    }>;
-    try {
-        const [result] = await sq.query(
-            `SELECT id, workflow_json, capability_json, manifest_yaml
-               FROM cliq.team_versions`,
-        );
-        rows = result as Array<{
-            id: string;
-            workflow_json: string;
-            capability_json: string;
-            manifest_yaml: string;
-        }>;
-    } catch {
-        return;
-    }
-
-    for (const row of rows) {
-        let capability: {
-            inputs?: Array<{ name: string; required?: boolean; [k: string]: unknown }>;
-            [k: string]: unknown;
-        };
-        try {
-            capability = JSON.parse(row.capability_json || '{}');
-        } catch {
-            capability = {};
-        }
-
-        const by_name = new Map(
-            (capability.inputs ?? []).map((inp) => [inp.name, { ...inp }]),
-        );
-
-        /** Author intent from team.yml — wins over prior forced required:true. */
-        let changed = false;
-        try {
-            const doc = yaml.load(row.manifest_yaml || '') as {
-                inputs?: Array<{ name?: unknown; required?: unknown }>;
-            } | null;
-            if (doc && Array.isArray(doc.inputs)) {
-                for (const raw of doc.inputs) {
-                    if (!raw || typeof raw.name !== 'string' || !raw.name.trim()) continue;
-                    const name = raw.name.trim();
-                    if (raw.required !== false) continue;
-                    const existing = by_name.get(name);
-                    if (existing) {
-                        if (existing.required !== false) {
-                            existing.required = false;
-                            changed = true;
-                        }
-                    } else {
-                        by_name.set(name, { name, required: false });
-                        changed = true;
-                    }
-                }
-            }
-        } catch {
-            /* corrupt manifest — skip restore for this row */
-        }
-
-        /** Undeclared template refs → invent as required (daemon-aligned). */
-        try {
-            const workflow = JSON.parse(row.workflow_json || '{}') as {
-                phases?: Array<{ commands?: Array<{ run?: string }> }>;
-                support?: Array<{ commands?: Array<{ run?: string }> }>;
-            };
-            const all_phases = [
-                ...(workflow.phases ?? []),
-                ...(workflow.support ?? []),
-            ];
-            for (const phase of all_phases) {
-                if (!Array.isArray(phase?.commands)) continue;
-                for (const cmd of phase.commands) {
-                    if (typeof cmd?.run !== 'string') continue;
-                    for (const m of cmd.run.matchAll(TEMPLATE_RE)) {
-                        const name = m[1].trim();
-                        if (!name || by_name.has(name)) continue;
-                        by_name.set(name, { name, required: true });
-                        changed = true;
-                    }
-                }
-            }
-        } catch {
-            /* corrupt workflow — skip invent */
-        }
-
-        if (!changed) continue;
-
-        capability.inputs = [...by_name.values()];
-        try {
-            await sq.query(
-                `UPDATE cliq.team_versions SET capability_json = $1 WHERE id = $2`,
-                { bind: [JSON.stringify(capability), row.id] },
-            );
-        } catch {
-            /* best-effort per row */
-        }
-    }
-}
-
-
-
 
 /** `cliq.settings` key marking the one-time realm channel migration as done. */
 export const REALM_MEMBERS_MIGRATION_KEY = 'migrate.realm_members_channels_2026_10';

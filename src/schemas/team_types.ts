@@ -445,8 +445,6 @@ export const TeamMutationData = z.object({
     version: z.string().nullable().describe('Version string after the mutation; null when no version was seeded'),
     listed: z.boolean().optional().describe('Listed flag (present after unpublish)'),
     visibility: z.enum(['public', 'private']).optional().describe('teams/publish: the visibility after publishing'),
-    draft_saved_at: z.string().nullable().optional()
-        .describe('teams/update: when the working copy was saved (save_as draft), or null after a version was minted'),
     uninstalled_from: z.array(z.object({ realm_id: z.string(), realm_slug: z.string() })).optional()
         .describe('teams/unpublish: the realms it was removed from (all of them, or unpublish is refused)'),
 });

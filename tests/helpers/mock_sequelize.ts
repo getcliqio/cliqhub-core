@@ -134,7 +134,6 @@ export function setup_sequelize_mocks() {
             ApiToken: make_model(),
             ScopeMember: make_model(),
             TeamTag: make_model(),
-            Draft: make_model(),
             AuditLog: make_model(),
             DownloadLog: make_model(),
             AccountAgentSetting: make_model(),

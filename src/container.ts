@@ -16,15 +16,12 @@ import { TagRepository } from './repositories/tag_repository.js';
 import { DownloadLogRepository } from './repositories/download_log_repository.js';
 import { AuthService } from './services/auth_service.js';
 import { TeamsService } from './services/teams_service.js';
-import { DraftRepository } from './repositories/draft_repository.js';
-import { DraftsService } from './services/drafts_service.js';
 import { OrgsService } from './services/orgs_service.js';
 import { InvitationsService } from './services/invitations_service.js';
 import { OrgRepository } from './repositories/org_repository.js';
 import { ScopeMemberRepository } from './repositories/scope_member_repository.js';
 import { AuthController } from './controllers/auth_controller.js';
 import { TeamsController } from './controllers/teams_controller.js';
-import { DraftsController } from './controllers/drafts_controller.js';
 import { OrgsController } from './controllers/orgs_controller.js';
 import { InvitationsController } from './controllers/invitations_controller.js';
 import { BuilderService } from './services/builder_service.js';
@@ -54,7 +51,6 @@ export interface Container {
     config: EnvConfig;
     auth_controller: AuthController;
     teams_controller: TeamsController;
-    drafts_controller: DraftsController;
     orgs_controller: OrgsController;
     invitations_controller: InvitationsController;
     tokens_controller: TokensController;
@@ -74,7 +70,6 @@ export interface Container {
     version_repo: TeamVersionRepository;
     tag_repo: TagRepository;
     download_log_repo: DownloadLogRepository;
-    draft_repo: DraftRepository;
     /** Team packages (zips, draft folders). */
     storage: PackageStorage;
     settings_repo: SettingsRepository;
@@ -112,7 +107,6 @@ export async function create_container(config: EnvConfig): Promise<Container> {
     const version_repo = new TeamVersionRepository();
     const tag_repo = new TagRepository();
     const download_log_repo = new DownloadLogRepository();
-    const draft_repo = new DraftRepository();
     const org_repo = new OrgRepository();
     const scope_member_repo = new ScopeMemberRepository();
 
@@ -145,8 +139,6 @@ export async function create_container(config: EnvConfig): Promise<Container> {
     const builder_service = new BuilderService(llm_adapter);
     const teams_controller = new TeamsController(teams_service, builder_service);
 
-    const drafts_service = new DraftsService(draft_repo);
-    const drafts_controller = new DraftsController(drafts_service);
 
     const reactivation_service = new ReactivationService();
 
@@ -184,13 +176,13 @@ export async function create_container(config: EnvConfig): Promise<Container> {
 
     return {
         config, auth_controller, tokens_controller, teams_controller,
-        drafts_controller, orgs_controller, invitations_controller,
+        orgs_controller, invitations_controller,
         users_controller,
         reports_controller,
         reactivation_service,
         email_sender,
         user_repo, token_repo, scope_repo, org_member_repo, org_repo, scope_member_repo,
-        team_repo, version_repo, tag_repo, download_log_repo, draft_repo,
+        team_repo, version_repo, tag_repo, download_log_repo,
         storage, settings_repo,
     };
 }
