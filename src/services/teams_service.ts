@@ -873,7 +873,7 @@ export class TeamsService {
             if (current_max && SemVer.compare(resolved_version, current_max) < 0) {
                 throw new ApiError(
                     'invalid_params',
-                    `Version ${resolved_version} is older than the current latest (${current_max}). Publish a version >= ${current_max}.`,
+                    `Version ${resolved_version} is older than ${current_max}, the highest version so far (withdrawn ones count): publish a higher version (cliq team publish <dir> --version x.y.z)`,
                     422,
                 );
             }

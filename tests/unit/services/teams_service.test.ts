@@ -871,7 +871,7 @@ describe('TeamsService — publish', () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
         // the highest number used, withdrawn versions included
         version_repo.find_highest_version.mockResolvedValueOnce('2.1.0');
-        await expect(publish()).rejects.toThrow(/older than the current latest \(2\.1\.0\)/);
+        await expect(publish()).rejects.toThrow(/older than 2\.1\.0, the highest version so far/);
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
         version_repo.find_highest_version.mockResolvedValueOnce('1.9.0');
         expect((await publish()).version).toBe('2.0.0');
