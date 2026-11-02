@@ -162,6 +162,17 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
         return numbered(rows as never[]);
     }
 
+    /** Every published version with its team's name: what the old-zip cleanup (PLAN-team-bundle S1.5c) checks. */
+    async list_published_packages(): Promise<Array<{ id: string; team_id: string; version: string; package_path: string; team_name: string }>> {
+        const rows = await get_sequelize().query(
+            `SELECT v.id, v.team_id, v.version, v.package_path, t.name AS team_name
+             FROM cliq.team_versions v JOIN cliq.teams t ON t.id = v.team_id
+             WHERE v.status = 'published'`,
+            { type: QueryTypes.SELECT },
+        );
+        return numbered(rows as never[]);
+    }
+
     /** A new draft version of a team (no number, no date yet): its id. */
     async create_draft(team_id: string, transaction?: Transaction): Promise<string> {
         const row = await TeamVersion.create(

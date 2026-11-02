@@ -499,13 +499,6 @@ export async function migrate_hub_schema(sequelize: Sequelize): Promise<void> {
         ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{}'
     `);
 
-    // Raw team.yml text preserved verbatim per published version.
-    // Existing rows get '' (empty) — those fall back to the reconstructed YAML.
-    await sequelize.query(`
-        ALTER TABLE team_versions
-        ADD COLUMN IF NOT EXISTS manifest_yaml TEXT NOT NULL DEFAULT ''
-    `);
-
     await sequelize.query(`
         DO $$ BEGIN
             IF EXISTS (

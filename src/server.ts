@@ -50,6 +50,13 @@ async function main() {
     await team_files_only({ storage: container.storage, versions: container.version_repo, files: new TeamFileRepository(), settings: container.settings_repo })
         .catch((err: unknown) => log.error('team_files_only_failed', { error: err instanceof Error ? err.message : String(err), note: 'nothing dropped' }));
 
+    // Until it has run (PLAN-team-bundle S1.5c): every published version gets its zip by id, and each pre-S1.2
+    // zip is deleted only when its files are exactly a version's files. What's left is logged and kept in
+    // cliq.settings; the next start tries again.
+    const { drop_old_zip_keys } = await import('./models/migrations/old_zip_keys.js');
+    await drop_old_zip_keys({ storage: container.storage, versions: container.version_repo, files: new TeamFileRepository(), settings: container.settings_repo })
+        .catch((err: unknown) => log.error('old_zip_keys_failed', { error: err instanceof Error ? err.message : String(err), note: 'nothing more deleted' }));
+
     const app = create_app(container);
 
     start_run_reaper();

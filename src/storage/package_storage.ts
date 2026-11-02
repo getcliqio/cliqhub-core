@@ -93,6 +93,13 @@ function local_list(packages_path: string, prefix: string): string[] {
     return keys.sort();
 }
 
+/** The keys at the top of the store (no folder), sorted. */
+function local_list_top(packages_path: string): string[] {
+    const root = path.resolve(packages_path);
+    if (!fs.existsSync(root)) return [];
+    return fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name).sort();
+}
+
 function local_read(packages_path: string, key: string): Buffer | null {
     try {
         return fs.readFileSync(path.resolve(packages_path, key));
@@ -222,12 +229,29 @@ export function create_package_storage(cfg: StorageConfig) {
         return keys.sort();
     }
 
+    /** The keys at the top of the store, outside any folder (pre-S1.2 zips sat there), sorted. */
+    async function list_top(): Promise<string[]> {
+        if (cfg.storage_backend !== 'r2') return local_list_top(cfg.packages_path);
+        const keys: string[] = [];
+        let token: string | undefined;
+        do {
+            const query: Record<string, string> = { 'list-type': '2', delimiter: '/', ...(token ? { 'continuation-token': token } : {}) };
+            const headers = s3_headers(cfg, 'GET', '', 'UNSIGNED-PAYLOAD', {}, query);
+            const res = await fetch(s3_url(cfg, '', query), { method: 'GET', headers });
+            if (!res.ok) throw new Error(`R2 LIST failed: ${res.status}`);
+            const xml = await res.text();
+            keys.push(...xml_values(xml, 'Key'));
+            token = xml_values(xml, 'IsTruncated')[0] === 'true' ? xml_values(xml, 'NextContinuationToken')[0] : undefined;
+        } while (token);
+        return keys.sort();
+    }
+
     /** Remove every file under `prefix`. */
     async function delete_prefix(prefix: string): Promise<void> {
         for (const key of await list(prefix)) await del(key);
     }
 
-    return { write, read, delete: del, list, delete_prefix };
+    return { write, read, delete: del, list, list_top, delete_prefix };
 }
 
 export type PackageStorage = ReturnType<typeof create_package_storage>;

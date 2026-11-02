@@ -109,6 +109,27 @@ async function column_exists(table: string, column: string): Promise<boolean> {
 }
 
 /**
+ * After the drop: a content column an old schema migration added back (until 2 Nov the hub migrations re-added
+ * `manifest_yaml` with default '' at every start) is dropped again when it holds nothing.
+ */
+async function drop_readded_columns(): Promise<void> {
+    const sq = get_sequelize();
+    for (const c of CONTENT_COLUMNS) {
+        if (!(await column_exists('team_versions', c))) continue;
+        const [{ n }] = await sq.query<{ n: string }>(
+            `SELECT count(*) AS n FROM cliq.team_versions WHERE "${c}" IS NOT NULL AND "${c}"::text NOT IN ('', '[]', '{}')`,
+            { type: QueryTypes.SELECT },
+        );
+        if (Number(n) > 0) {
+            log.error('team_files_only_column_back', { column: c, rows: Number(n), note: 'kept: it holds data' });
+            continue;
+        }
+        await sq.query(`ALTER TABLE cliq."team_versions" DROP COLUMN IF EXISTS "${c}"`);
+        log.info('team_files_only_column_dropped_again', { column: c });
+    }
+}
+
+/**
  * Make the files every published version's only copy, or report why not.
  *
  * @param deps - Storage, versions, files and settings.
@@ -120,6 +141,10 @@ export async function team_files_only(deps: {
     settings: SettingsRepository;
 }): Promise<TeamFilesOnlyResult> {
     const sq = get_sequelize();
+    if (await deps.settings.find_by_key(TEAM_FILES_ONLY_KEY)) {
+        await drop_readded_columns();
+        return { dropped: false, already: true, problems: [] };
+    }
     if (!(await column_exists('team_versions', 'manifest_yaml'))) return { dropped: false, already: true, problems: [] };
 
     // 1. Every published version gets its files.
