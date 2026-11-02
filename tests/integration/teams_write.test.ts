@@ -24,7 +24,6 @@ vi.mock('../../src/services/package_parser.js', async (importOriginal) => {
             roles: [], readme: '',
         }),
         normalize_tags: vi.fn().mockImplementation((t: string[]) => t),
-        compute_next_version: vi.fn().mockReturnValue('1.0.1'),
     };
 });
 

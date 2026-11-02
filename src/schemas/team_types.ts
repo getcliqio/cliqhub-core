@@ -163,8 +163,7 @@ export const TeamsCreateInput = z.object({
 export type TeamsCreateInput = z.infer<typeof TeamsCreateInput>;
 
 /**
- * POST /v1/teams/update — update draft manifest / description.
- * Auto patch-bumps semver; pass `bump` for minor/major.
+ * POST /v1/teams/update — change a team's description, or discard a draft (`save_as: 'discard'`).
  * Exactly one of `team_id` or `name` is required.
  */
 export const TeamsUpdateInput = z.object({
@@ -198,9 +197,7 @@ export const TeamsPublishInput = z.object({
     team_id: z.string().uuid().optional()
         .describe('Team UUID — mutually exclusive with name as the lookup key'),
     version: z.string().optional()
-        .describe('Explicit version string; omit to auto-bump from latest'),
-    bump: z.enum(['patch', 'minor', 'major']).optional()
-        .describe('Bump magnitude when auto-versioning; omit for patch'),
+        .describe('The version to publish (semver, higher than every version so far, withdrawn ones included); required with version_id. Without version_id, only the latest version may be named (re-list)'),
     changelog: z.string().optional()
         .describe('Release notes for this version'),
     description: z.string().optional()

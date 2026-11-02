@@ -4,7 +4,7 @@ import { assert_access, assert_admin_access } from '../auth/assert_grant.js';
 import { require_permission } from '../auth/permissions.js';
 
 import yaml from 'js-yaml';
-import { dependencies_problems, derive_version_content, normalize_tags, compute_next_version, parse_team_yml_text } from './package_parser.js';
+import { dependencies_problems, derive_version_content, normalize_tags, parse_team_yml_text } from './package_parser.js';
 import type { ParsedTeamYml } from './package_parser.js';
 import { SemVer } from '../lib/semver.js';
 import { SLUG_PATTERN } from '../config/env.js';
@@ -30,7 +30,7 @@ import { ScopeRepository as ScopeRepoClass } from '../repositories/scope_reposit
 
 import { get_logger } from '../lib/log.js';
 import { escape_like } from '../lib/search.js';
-import { is_bundle_path, lint_team, MAX_BUNDLE_FILES, MAX_BUNDLE_UNPACKED, pack_bundle, TEAM_YML, unknown_paths, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
+import { is_bundle_path, lint_team, MAX_BUNDLE_FILES, MAX_BUNDLE_UNPACKED, pack_bundle, set_identity, TEAM_YML, TeamIdentityError, unknown_paths, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
 import { AgentCatalog } from '../models/agent_catalog.model.js';
 import { Team } from '../models/team.model.js';
 import { TeamVersionRepository as TeamVersionRepoClass } from '../repositories/team_version_repository.js';
@@ -741,7 +741,7 @@ export class TeamsService {
 
     async publish(auth: AuthContext, params: {
         name?: string; scope?: string; team_id?: string;
-        version?: string; bump?: 'patch' | 'minor' | 'major';
+        version?: string;
         changelog?: string; description?: string; license?: string;
         tags?: string[]; visibility?: 'public' | 'private';
         version_id?: string;
@@ -761,9 +761,13 @@ export class TeamsService {
         if (!SLUG_PATTERN.test(name)) throw new ApiError('invalid_params', 'Team name must be lowercase letters, numbers, and hyphens, starting with a letter', 422);
 
         const scope = params.scope !== undefined ? (params.scope || null) : (team ? team.scope : null);
+        // A team's scope is fixed and always set (PLAN-team-bundle S2): no moving it, no team without one.
+        if (team && scope !== team.scope) {
+            throw new ApiError('scope_mismatch', `@${team.scope}/${team.name} is in @${team.scope}, not @${scope ?? '(none)'}: a team can't change scope (fork it into the other scope instead)`, 409);
+        }
+        if (!scope) throw new ApiError('invalid_params', 'A scope is required: name the team @scope/name in team.yml, or pass --scope', 422);
         // `teams.publish` in the scope's org, for a new team or anyone's (PLAN-team-visibility §3.3).
         const scope_row = await this._assert_can_publish(auth, scope);
-        if (team && team.scope !== scope) await this._assert_can_publish(auth, team.scope);
 
         if (!team) team = await this._team_repo.find_by_name_and_scope(name, scope);
 
@@ -777,6 +781,10 @@ export class TeamsService {
             if (!team) throw new ApiError('invalid_params', 'files are required for new teams', 422);
             const latest = await this._version_repo.find_latest_version(team.id);
             if (!latest) throw new ApiError('invalid_params', 'files are required when the team has no versions', 422);
+            // Only the latest version is re-listed; a new number needs its files (cliq 1.15.10 and older send none).
+            if (params.version && params.version !== latest) {
+                throw new ApiError('files_required', `Version ${params.version} needs its files: upload them and publish the draft (on cliq 1.15.10 or older, upgrade cliq and publish again)`, 422);
+            }
             if (params.tags && params.tags.length > 20) throw new ApiError('invalid_params', 'Maximum 20 tags allowed', 422);
             // Publishing (or re-listing) the latest version: its team.yml gets the same check as a new package.
             const row = await this._version_repo.find_by_team_and_version(team.id, latest);
@@ -810,10 +818,9 @@ export class TeamsService {
             };
         }
 
-        if (!params.version && !params.bump) {
-            throw new ApiError('invalid_params', 'Either version or bump (patch|minor|major) is required', 422);
-        }
-        if (params.version && !SEMVER_PATTERN.test(params.version)) {
+        // Every publish names its version (PLAN-team-bundle S2): no bump, no automatic number.
+        if (!params.version) throw new ApiError('invalid_params', 'version is required (e.g. 1.0.0)', 422);
+        if (!SEMVER_PATTERN.test(params.version)) {
             throw new ApiError('invalid_params', 'Version must be valid semver (e.g. 1.0.0)', 422);
         }
 
@@ -825,6 +832,20 @@ export class TeamsService {
         const draft = await this._version_repo.find_draft(params.version_id);
         if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (upload the files first: teams/files/upload)', 404);
         const files = await this._read_version_files(draft.id);
+        // The stored team.yml says what is published: its scope and version are set to the team's and this one.
+        if (files[TEAM_YML] !== undefined) {
+            let with_identity: string;
+            try {
+                with_identity = set_identity(files[TEAM_YML], { scope: team.scope ?? undefined, version: params.version });
+            } catch (err) {
+                if (err instanceof TeamIdentityError) throw new ApiError('invalid_package', err.message, 422);
+                throw err;
+            }
+            if (with_identity !== files[TEAM_YML]) {
+                await this._store_files(team.id, draft.id, [{ path: TEAM_YML, content_type: 'text/yaml', data: Buffer.from(with_identity, 'utf8') }]);
+                files[TEAM_YML] = with_identity;
+            }
+        }
         const { team_yml } = await check_team_files(files);
         // The same derivation every read uses (PLAN-team-bundle S1.4b); the version's content is its files.
         const { workflow } = derive_version_content(files);
@@ -837,12 +858,7 @@ export class TeamsService {
         /** Validate HUG gate phases have mandatory review.reviewers. */
         validate_hug_reviewer_groups(workflow);
 
-        let resolved_version = params.version;
-        if (!resolved_version && params.bump) {
-            const latest = team ? await this._version_repo.find_latest_version(team.id) : null;
-            resolved_version = compute_next_version(latest, params.bump);
-        }
-        if (!resolved_version) throw new ApiError('invalid_params', 'Could not determine version', 422);
+        const resolved_version = params.version;
 
         if (team) {
             const existing_ver = await this._version_repo.find_by_team_and_version(team.id, resolved_version);

@@ -135,16 +135,6 @@ export function normalize_tags(tags: string[]): string[] {
         .slice(0, 20);
 }
 
-export function compute_next_version(current: string | null, bump: 'patch' | 'minor' | 'major'): string {
-    if (!current) return '1.0.0';
-    const match = current.match(/^(\d+)\.(\d+)\.(\d+)/);
-    if (!match) return '1.0.0';
-    const [, maj, min, pat] = match.map(Number);
-    if (bump === 'major') return `${maj + 1}.0.0`;
-    if (bump === 'minor') return `${maj}.${min + 1}.0`;
-    return `${maj}.${min}.${pat + 1}`;
-}
-
 /** team.yml text as an object (YAML, or JSON), or null when it doesn't parse to one. */
 export function parse_team_yml_text(text: string): ParsedTeamYml | null {
     try {

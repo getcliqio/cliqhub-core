@@ -328,8 +328,7 @@ export class TeamsController extends BaseController {
     }
 
     /**
-     * Update draft manifest / description. Auto patch-bumps semver;
-     * pass `bump: minor|major` for larger increments.
+     * Change a team's description, or discard a draft.
      *
      * @param req - Body: {@link TeamsUpdateInput}
      * @param res - `{ ok: true, data: TeamMutationData }`
