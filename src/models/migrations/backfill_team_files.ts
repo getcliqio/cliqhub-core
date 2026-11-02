@@ -5,7 +5,7 @@
  *
  * - With a zip (on its id key since S1.2): the zip's team files, as they are. Paths that aren't part of a team
  *   (anything but team.yml, README.md, dependencies.yml and roles/<name>.md) are left out and logged.
- * - Without one: the version's columns: team.yml from `manifest_yaml`, README.md, dependencies.yml and each role
+ * - Without one, or when what is stored isn't a zip (early versions were stored as a JSON blob): the version's columns: team.yml from `manifest_yaml`, README.md, dependencies.yml and each role
  *   in `roles_json` as roles/<name>.md. A version stored before team.yml was kept (no `manifest_yaml`, e.g. the
  *   built-in `@cliq/hello-world` 2.0.0) gets a team.yml rebuilt from what publish derived from it: its phases
  *   (`workflow_json`), inputs / use_when / not_for (`capability_json`) and agents (`agents_json`).
@@ -14,7 +14,7 @@
  * never visited again, so a pass after the first finds nothing to do. A failure on one version doesn't stop the
  * others.
  */
-import { is_bundle_path, TEAM_YML, unpack_bundle } from '@getcliqio/cliq-sdk';
+import { is_bundle_path, is_zip, TEAM_YML, unpack_bundle } from '@getcliqio/cliq-sdk';
 import yaml from 'js-yaml';
 import { in_parallel } from '../../lib/in_parallel.js';
 import { get_logger } from '../../lib/log.js';
@@ -106,7 +106,9 @@ export async function backfill_team_files(deps: {
         const label = `${v.team_id}@${v.version}`;
         try {
             const key = stored_key(v.package_path);
-            const zip = key ? await deps.storage.read(key) : null;
+            const stored = key ? await deps.storage.read(key) : null;
+            const zip = stored && is_zip(stored) ? stored : null;
+            if (stored && !zip) log.info('team_files_backfill_not_a_zip', { version: label, note: 'files from its columns' });
             let files: Record<string, string>;
             if (zip) {
                 const all = (await unpack_bundle(zip)).files;

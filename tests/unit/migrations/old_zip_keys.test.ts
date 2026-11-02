@@ -92,18 +92,28 @@ describe('drop_old_zip_keys', () => {
         expect(settings.has(OLD_ZIP_KEYS_KEY)).toBe(true);
     });
 
-    it('keeps an old zip with different text or an extra path, and reports it', async () => {
+    it('moves an old zip with different text, an extra path, or that is not a zip to attic/, and records the pass', async () => {
         await storage().write('leaf-1.0.0.zip', await pack_bundle({ files: { ...FILES_A, 'README.md': '# other' } }));
         await storage().write('leaf-2.0.0.zip', await pack_bundle({ files: { ...FILES_B, 'README.md': '# only in the zip' } }));
+        rows[1].version = '2.0.0';
+        const json = Buffer.from('{"team.yml":"name: leaf"}');
+        await storage().write('leaf-3.0.0.zip', json);
+        rows.push({ id: 'eeeeeeee-5555-4555-8555-555555555555', team_id: TEAM_B, version: '3.0.0', package_path: '', team_name: 'leaf' });
+        await give_files(TEAM_B, 'eeeeeeee-5555-4555-8555-555555555555', FILES_B);
         const result = await drop_old_zip_keys(deps());
         expect(result.deleted).toEqual([]);
-        expect(result.kept).toEqual([
-            "leaf-1.0.0.zip: its files differ from every version with this name and number",
-            "leaf-2.0.0.zip: its files differ from every version with this name and number",
-        ]);
-        for (const k of ['leaf-1.0.0.zip', 'leaf-2.0.0.zip']) expect(await storage().read(k)).not.toBeNull();
-        expect(settings.has(OLD_ZIP_KEYS_KEY)).toBe(false);
-        expect(JSON.parse(settings.get(OLD_ZIP_KEYS_REPORT_KEY)!).kept).toHaveLength(2);
+        expect(result.attic).toEqual(['leaf-1.0.0.zip', 'leaf-2.0.0.zip', 'leaf-3.0.0.zip']);
+        expect(result.kept).toEqual([]);
+        for (const k of ['leaf-1.0.0.zip', 'leaf-2.0.0.zip', 'leaf-3.0.0.zip']) expect(await storage().read(k)).toBeNull();
+        expect(await storage().read('attic/leaf-3.0.0.zip')).toEqual(json);
+        expect(settings.has(OLD_ZIP_KEYS_KEY)).toBe(true);
+    });
+
+    it('rebuilds a version whose stored zip is not a zip (an early JSON blob)', async () => {
+        await storage().write(version_zip_key(TEAM_A, V1), Buffer.from('{"team.yml":"name: leaf"}'));
+        const result = await drop_old_zip_keys(deps());
+        expect(result.built).toContain(`${TEAM_A}@1.0.0`);
+        expect((await unpack_bundle((await storage().read(version_zip_key(TEAM_A, V1)))!)).files).toEqual(FILES_A);
     });
 
     it('an old zip shared by same-named teams goes when it matches one of them', async () => {

@@ -76,7 +76,8 @@ beforeEach(async () => {
             readme: '# hello', dependencies_yaml: '- name: jq\n', roles_json: JSON.stringify([{ name: 'greet', content_md: 'Hi.' }, { name: 'plan.md', content_md: 'Plan.' }]),
         },
         { id: V_EMPTY, team_id: TEAM, version: '0.0.1', package_path: 'draft://x', ...blank },
-        { id: V_BAD, team_id: TEAM, version: '0.0.2', package_path: version_zip_key(TEAM, V_BAD), ...blank },
+        // stored as a JSON blob, not a zip (early versions on prod): its columns are its files
+        { id: V_BAD, team_id: TEAM, version: '0.0.2', package_path: version_zip_key(TEAM, V_BAD), ...blank, manifest_yaml: 'name: "@a/old"\nphases: []\n' },
     ];
 });
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
@@ -85,10 +86,10 @@ describe('backfill_team_files', () => {
     it("gives each version its files: the zip's team files, else its columns; lists the rest", async () => {
         const out = await backfill_team_files(deps());
         expect(out.from_zip).toEqual([`${TEAM}@1.0.0`]);
-        expect(out.from_columns).toEqual([`${TEAM}@0.1.0`]);
+        expect(out.from_columns).toEqual([`${TEAM}@0.0.2`, `${TEAM}@0.1.0`]);
         expect(out.empty).toEqual([`${TEAM}@0.0.1`]);
-        expect(out.failed).toHaveLength(1);
-        expect(out.failed[0]).toMatch(new RegExp(`^${TEAM}@0.0.2: `));
+        expect(out.failed).toEqual([]);
+        expect(await files_of(V_BAD)).toEqual({ 'team.yml': 'name: "@a/old"\nphases: []\n' });
 
         // the zip's team files only (a Dockerfile isn't part of a team); its columns are not used
         expect(await files_of(V_ZIP)).toEqual({ 'team.yml': 'name: "@a/leaf"\nphases: []\n', 'README.md': '# leaf', 'roles/say.md': 'Say it.' });

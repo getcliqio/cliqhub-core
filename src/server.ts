@@ -46,7 +46,9 @@ async function main() {
     // last, so a Core still serving from before this release keeps working until just before this one listens.
     const { TeamFileRepository } = await import('./repositories/team_file_repository.js');
     const { build_version_zips, OLD_ZIP_KEYS_KEY } = await import('./models/migrations/old_zip_keys.js');
-    if (!(await container.settings_repo.find_by_key(OLD_ZIP_KEYS_KEY))) {
+    const { TEAM_FILES_ONLY_KEY } = await import('./models/migrations/team_files_only.js');
+    // The backfill reads the old columns, so it only runs while they exist (before the drop is recorded).
+    if (!(await container.settings_repo.find_by_key(OLD_ZIP_KEYS_KEY)) && !(await container.settings_repo.find_by_key(TEAM_FILES_ONLY_KEY))) {
         const { backfill_team_files } = await import('./models/migrations/backfill_team_files.js');
         const zip_deps = { storage: container.storage, versions: container.version_repo, files: new TeamFileRepository() };
         await backfill_team_files(zip_deps)

@@ -3,17 +3,16 @@
  *
  *   1. Every published version gets its zip at `teams/<team_id>/versions/<version_id>.zip`, as its first download
  *      would: built from its files, written, read back and compared, and its row pointed at it. A version already
- *      there is read to check the zip is readable.
+ *      there is read to check it is a zip; one that isn't (an early version stored as a JSON blob) is rebuilt.
  *   2. Each zip left at the top of the store from before S1.2 (`<name>-<version>.zip`, no scope) is deleted
  *      **only when its files are exactly the files of a published version with that name and number**: the same
- *      paths, each with the same text. Anything else (no such version, a path that isn't part of a team, different
- *      text, a zip that won't open) is kept. One no published version uses any more (its team or version was
- *      removed) is moved to `attic/<key>` (copied, read back, then removed from the top), by decision (2 Nov):
- *      nothing is lost and it can be deleted by hand later.
- *   3. When every version has its zip and no old zip is kept, the pass is recorded and not repeated. Otherwise
+ *      paths, each with the same text. Any other (no such version, not a zip, different files) is moved to
+ *      `attic/<key>`: copied, read back, then removed from the top (decided 2 Nov). Nothing is lost; `attic/` can be
+ *      deleted by hand later.
+ *   3. When every version has its zip and nothing failed, the pass is recorded and not repeated. Otherwise
  *      what's left is logged and stored under {@link OLD_ZIP_KEYS_REPORT_KEY}, and the next start tries again.
  */
-import { pack_bundle, unpack_bundle } from '@getcliqio/cliq-sdk';
+import { is_zip, pack_bundle, unpack_bundle } from '@getcliqio/cliq-sdk';
 import { in_parallel } from '../../lib/in_parallel.js';
 import { get_logger } from '../../lib/log.js';
 import type { SettingsRepository } from '../../repositories/settings_repository.js';
@@ -37,7 +36,7 @@ export interface OldZipKeysResult {
     built: string[];
     /** Old keys deleted. */
     deleted: string[];
-    /** Old keys no version uses, moved to `attic/<key>`. */
+    /** Old keys that weren't an exact copy of a version, moved to `attic/<key>`. */
     attic: string[];
     /** `<key or team_id@version>: <why>` left in place. */
     kept: string[];
@@ -73,7 +72,8 @@ export async function build_version_zips(deps: Deps): Promise<{
             const files = await read_team_files(deps.storage, await deps.files.list_by_version(v.id));
             files_of.set(v.id, files);
             const key = stored_key(v.package_path);
-            if (key && await deps.storage.read(key)) return;
+            const stored = key ? await deps.storage.read(key) : null;
+            if (stored && is_zip(stored)) return;
             if (!Object.keys(files).length) {
                 kept.push(`${label}: no files to build its zip from`);
                 return;
@@ -116,22 +116,22 @@ export async function drop_old_zip_keys(deps: Deps & { settings: SettingsReposit
         try {
             const data = await deps.storage.read(key);
             if (!data) return;
-            if (!ids.length) {
-                const attic_key = `attic/${key}`;
-                await deps.storage.write(attic_key, data);
-                const back = await deps.storage.read(attic_key);
-                if (!back || !back.equals(data)) throw new Error(`didn't read back from ${attic_key}`);
+            const old_files = ids.length && is_zip(data) ? (await unpack_bundle(data)).files : null;
+            if (old_files && ids.some((id) => { const f = files_of.get(id); return f && same_files(old_files, f); })) {
                 await deps.storage.delete(key);
-                result.attic.push(key);
+                result.deleted.push(key);
                 return;
             }
-            const old_files = (await unpack_bundle(data)).files;
-            if (!ids.some((id) => { const f = files_of.get(id); return f && same_files(old_files, f); })) {
-                result.kept.push(`${key}: its files differ from every version with this name and number`);
-                return;
-            }
+            // Not an exact copy of a version: kept, out of the way, byte for byte.
+            const why = !ids.length ? 'no published version with this name and number'
+                : !old_files ? 'not a zip' : 'its files differ from every version with this name and number';
+            const attic_key = `attic/${key}`;
+            await deps.storage.write(attic_key, data);
+            const back = await deps.storage.read(attic_key);
+            if (!back || !back.equals(data)) throw new Error(`didn't read back from ${attic_key}`);
             await deps.storage.delete(key);
-            result.deleted.push(key);
+            log.info('old_zip_to_attic', { key, why });
+            result.attic.push(key);
         } catch (err) {
             result.kept.push(`${key}: ${err instanceof Error ? err.message : String(err)}`);
         }
