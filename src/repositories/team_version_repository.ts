@@ -6,6 +6,12 @@ import { BaseRepository } from './base_repository.js';
 
 /** Version reads mean published versions: a draft (PLAN-team-bundle §2.2) has no number and is never "a version". */
 const PUBLISHED = { status: 'published' as const };
+/**
+ * What new installs see (PLAN-team-bundle S2): published and not withdrawn. "Latest", lists and reads by name use
+ * this; reads by id and the duplicate check use {@link PUBLISHED}, so a withdrawn version stays readable and its
+ * number stays taken.
+ */
+const CURRENT = { status: 'published' as const, withdrawn_at: null };
 
 /** A published row: its number is set. */
 function numbered<T extends { version: string | null }>(rows: T[]): Array<T & { version: string }> {
@@ -32,7 +38,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     // semver on top of a newer one must not flip the badge. See lib/semver.ts.
     async find_latest_version(team_id: string): Promise<string | null> {
         const rows = await TeamVersion.findAll({
-            where: { team_id, ...PUBLISHED },
+            where: { team_id, ...CURRENT },
             attributes: ['version'],
             raw: true,
         });
@@ -41,7 +47,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
 
     /** A team's latest published version (highest semver): its id and number, or null. */
     async find_latest_ref(team_id: string): Promise<{ id: string; version: string } | null> {
-        const rows = numbered(await TeamVersion.findAll({ where: { team_id, ...PUBLISHED }, attributes: ['id', 'version'], raw: true }));
+        const rows = numbered(await TeamVersion.findAll({ where: { team_id, ...CURRENT }, attributes: ['id', 'version'], raw: true }));
         const latest = SemVer.max(rows.map((r) => r.version));
         return latest ? rows.find((r) => r.version === latest) ?? null : null;
     }
@@ -50,7 +56,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     async find_latest_refs(team_ids: string[]): Promise<Map<string, { id: string; version: string }>> {
         const out = new Map<string, { id: string; version: string }>();
         if (!team_ids.length) return out;
-        const rows = numbered(await TeamVersion.findAll({ where: { team_id: team_ids, ...PUBLISHED }, attributes: ['id', 'team_id', 'version'], raw: true }));
+        const rows = numbered(await TeamVersion.findAll({ where: { team_id: team_ids, ...CURRENT }, attributes: ['id', 'team_id', 'version'], raw: true }));
         for (const team_id of team_ids) {
             const mine = rows.filter((r) => r.team_id === team_id);
             const latest = SemVer.max(mine.map((r) => r.version));
@@ -60,9 +66,26 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
         return out;
     }
 
+    /** The highest number a team has used, withdrawn versions included: a new version must be higher. */
+    async find_highest_version(team_id: string): Promise<string | null> {
+        const rows = await TeamVersion.findAll({ where: { team_id, ...PUBLISHED }, attributes: ['version'], raw: true });
+        return SemVer.max(numbered(rows).map((r) => r.version));
+    }
+
+    /** A version new installs may use: published and not withdrawn. */
+    async find_current_by_team_and_version(team_id: string, version: string) {
+        return TeamVersion.findOne({ where: { team_id, version, ...CURRENT }, raw: true });
+    }
+
+    /** Withdraw a published version (PLAN-team-bundle S2). False when it is not published or already withdrawn. */
+    async withdraw(id: string, transaction?: Transaction): Promise<boolean> {
+        const [n] = await TeamVersion.update({ withdrawn_at: new Date() } as never, { where: { id, ...CURRENT }, transaction });
+        return n === 1;
+    }
+
     async list_by_team_id(team_id: string) {
         const rows = await TeamVersion.findAll({
-            where: { team_id, ...PUBLISHED },
+            where: { team_id, ...CURRENT },
             attributes: ['version', 'changelog', 'published_at'],
             raw: true,
         });
@@ -71,7 +94,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
 
     async list_versions(team_id: string): Promise<string[]> {
         const rows = await TeamVersion.findAll({
-            where: { team_id, ...PUBLISHED },
+            where: { team_id, ...CURRENT },
             attributes: ['version'],
             raw: true,
         });
@@ -108,7 +131,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
 
     async find_latest_package(team_id: string) {
         const rows = await TeamVersion.findAll({
-            where: { team_id, ...PUBLISHED },
+            where: { team_id, ...CURRENT },
             attributes: ['id', 'package_path', 'version'],
             raw: true,
         });
@@ -118,7 +141,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
 
     async find_package_by_version(team_id: string, version: string) {
         const row = await TeamVersion.findOne({
-            where: { team_id, version, ...PUBLISHED },
+            where: { team_id, version, ...CURRENT },
             attributes: ['id', 'package_path', 'version'],
             raw: true,
         });

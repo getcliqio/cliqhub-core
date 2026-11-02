@@ -198,8 +198,8 @@ export class RealmTeamListService {
         const team = await _team_repo_rtl.find_by_name_and_scope(slug, scope);
         if (!team) throw ApiError.not_found(`Team '@${scope}/${slug}' isn't published`);
         if (version) {
-            const row = await _team_version_repo_rtl.find_by_team_and_version(team.id, version);
-            if (!row) throw ApiError.not_found(`Version ${version} of '@${scope}/${slug}' doesn't exist`);
+            const row = await _team_version_repo_rtl.find_current_by_team_and_version(team.id, version);
+            if (!row) throw ApiError.not_found(`Version ${version} of '@${scope}/${slug}' doesn't exist or was withdrawn`);
             return version;
         }
         const latest = await _team_version_repo_rtl.find_latest_version(team.id);

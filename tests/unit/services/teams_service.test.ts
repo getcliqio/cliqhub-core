@@ -173,6 +173,8 @@ function make_version_repo() {
     return {
         find_by_team_and_version: vi.fn(),
         find_latest_version: vi.fn(),
+        find_highest_version: vi.fn(),
+        withdraw: vi.fn().mockResolvedValue(true),
         find_latest_ref: vi.fn().mockResolvedValue(null),
         list_by_team_id: vi.fn().mockResolvedValue([]),
         create: vi.fn().mockResolvedValue(NEW_VERSION_ID),
@@ -857,10 +859,11 @@ describe('TeamsService — publish', () => {
         version_repo.find_by_team_and_version.mockResolvedValueOnce({ id: hub_legacy_uuid(5), version: '2.0.0' });
         await expect(publish()).rejects.toThrow('Version 2.0.0 already exists');
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
-        version_repo.find_latest_version.mockResolvedValueOnce('2.1.0');
+        // the highest number used, withdrawn versions included
+        version_repo.find_highest_version.mockResolvedValueOnce('2.1.0');
         await expect(publish()).rejects.toThrow(/older than the current latest \(2\.1\.0\)/);
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
-        version_repo.find_latest_version.mockResolvedValueOnce('1.9.0');
+        version_repo.find_highest_version.mockResolvedValueOnce('1.9.0');
         expect((await publish()).version).toBe('2.0.0');
     });
 
@@ -1124,16 +1127,23 @@ describe('TeamsService — delete_version', () => {
             .rejects.toThrow('Version 9.9.9 not found');
     });
 
-    it('deletes version successfully', async () => {
+    it('withdraws the version: nothing is deleted, its files and zip stay (PLAN-team-bundle S2)', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
         version_repo.find_id_and_package.mockResolvedValueOnce({ id: hub_legacy_uuid(5), package_path: `teams/${NEW_TEAM_ID}/versions/${NEW_VERSION_ID}.zip` });
 
         const result = await service.delete_version(ALICE, { name: 'my-team', scope: 'alice', version: '1.0.0' });
 
-        expect(result.deleted).toBe(true);
-        expect(result.version).toBe('1.0.0');
-        expect(version_repo.delete_by_id).toHaveBeenCalledWith(hub_legacy_uuid(5));
-        expect(storage.delete).toHaveBeenCalled();
+        expect(result).toEqual({ withdrawn: true, version: '1.0.0' });
+        expect(version_repo.withdraw).toHaveBeenCalledWith(hub_legacy_uuid(5));
+        expect(version_repo.delete_by_id).not.toHaveBeenCalled();
+        expect(storage.delete).not.toHaveBeenCalled();
+    });
+
+    it('a version already withdrawn is a 409', async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
+        version_repo.find_id_and_package.mockResolvedValueOnce({ id: hub_legacy_uuid(5), package_path: '' });
+        version_repo.withdraw.mockResolvedValueOnce(false);
+        await expect(service.delete_version(ALICE, { name: 'my-team', scope: 'alice', version: '1.0.0' })).rejects.toMatchObject({ status: 409 });
     });
 });
 

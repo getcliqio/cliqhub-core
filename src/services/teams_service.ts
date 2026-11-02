@@ -864,7 +864,8 @@ export class TeamsService {
             const existing_ver = await this._version_repo.find_by_team_and_version(team.id, resolved_version);
             if (existing_ver) throw new ApiError('conflict', `Version ${resolved_version} already exists`, 409);
 
-            const current_max = await this._version_repo.find_latest_version(team.id);
+            // Higher than every number used so far, withdrawn versions included.
+            const current_max = await this._version_repo.find_highest_version(team.id);
             if (current_max && SemVer.compare(resolved_version, current_max) < 0) {
                 throw new ApiError(
                     'invalid_params',
@@ -1007,6 +1008,7 @@ export class TeamsService {
         return { deleted: true };
     }
 
+    /** Withdraw a published version (the route keeps its name, `teams/delete_version`). */
     async delete_version(auth: AuthContext, params: { name: string; scope?: string; version: string }) {
         log.debug('delete_version', { name: params.name, scope: params.scope, version: params.version });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -1019,10 +1021,10 @@ export class TeamsService {
         const ver = await this._version_repo.find_id_and_package(team.id, params.version);
         if (!ver) throw new ApiError('not_found', `Version ${params.version} not found`, 404);
 
-        await this._version_repo.delete_by_id(ver.id);
-        const key = stored_key(ver.package_path ?? '');
-        if (this._storage && key) await this._storage.delete(key);
-        return { deleted: true, version: params.version };
+        // Withdraw, not delete (PLAN-team-bundle S2): out of "latest", lists and installs by name; its files and zip
+        // stay so runs and installed trees that use it keep working; its number can't be published again.
+        if (!(await this._version_repo.withdraw(ver.id))) throw new ApiError('conflict', `Version ${params.version} is already withdrawn`, 409);
+        return { withdrawn: true, version: params.version };
     }
 
     async rename_team(auth: AuthContext, params: { name: string; scope: string; new_name: string }) {
@@ -1217,7 +1219,7 @@ export class TeamsService {
         const sequelize = get_sequelize();
         const [versions, teams, forks] = await Promise.all([
             sequelize.query<{ team_id: string; id: string; version: string }>(
-                'SELECT "team_id", "id", "version" FROM cliq."team_versions" WHERE "team_id" IN (:ids) AND "status" = \'published\'',
+                'SELECT "team_id", "id", "version" FROM cliq."team_versions" WHERE "team_id" IN (:ids) AND "status" = \'published\' AND "withdrawn_at" IS NULL',
                 { replacements: { ids }, type: QueryTypes.SELECT },
             ),
             sequelize.query<{ id: string; updated_at: Date | string | null }>(

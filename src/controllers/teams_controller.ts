@@ -12,7 +12,7 @@
  *   POST /v1/teams/unpublish       — revert to draft
  *   POST /v1/teams/download        — fetch package for a version
  *   POST /v1/teams/delete          — soft-delete team
- *   POST /v1/teams/delete_version  — remove specific version
+ *   POST /v1/teams/delete_version  — withdraw a version (number kept)
  *   POST /v1/teams/rename          — rename within scope
  *   POST /v1/teams/build           — AI builder actions (generate/validate/suggest/chat)
  *   POST /v1/teams/install         — fan-out install (daemon_ids XOR realm_id)
@@ -463,19 +463,20 @@ export class TeamsController extends BaseController {
     }
 
     /**
-     * Remove a specific published version. The team record is kept.
+     * Withdraw a published version (PLAN-team-bundle S2): hidden from "latest", lists and installs by name, still
+     * readable by id; its number can't be published again. The team record is kept.
      *
      * @param req - Body: {@link TeamsDeleteVersionInput}
-     * @param res - `{ ok: true, data: { deleted: boolean, version: string } }` — echoes removed version
+     * @param res - `{ ok: true, data: { withdrawn: true, version: string } }`
      */
     async delete_version(
-        req: ApiRequest<TeamsDeleteVersionInput, { deleted: boolean; version: string }>,
-        res: ApiOkResponse<{ deleted: boolean; version: string }>,
+        req: ApiRequest<TeamsDeleteVersionInput, { withdrawn: boolean; version: string }>,
+        res: ApiOkResponse<{ withdrawn: boolean; version: string }>,
     ): Promise<void> {
         log.debug('delete_version', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsDeleteVersionInput, req);
         const result = await this._teams_service.delete_version(req.auth!, body);
-        log.info('team_version_deleted', { scope: body.scope, name: body.name, version: body.version });
+        log.info('team_version_withdrawn', { scope: body.scope, name: body.name, version: body.version });
         this.ok(res, result);
     }
 

@@ -320,7 +320,7 @@ export class AgentWorkflow {
         const all = await sq.query<{ team_id: string; id: string; version: string }>(
             `SELECT v.team_id, v.id, v.version
              FROM cliq.team_versions v
-             WHERE v.team_id IN (:team_ids) AND v.status = 'published'`,
+             WHERE v.team_id IN (:team_ids) AND v.status = 'published' AND v.withdrawn_at IS NULL`,
             { type: QueryTypes.SELECT, replacements: { team_ids } },
         );
         // Usage counts each team's latest version: read just those from their files (PLAN-team-bundle S1.4b).

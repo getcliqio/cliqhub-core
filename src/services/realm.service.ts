@@ -2081,7 +2081,7 @@ export class RealmService {
                 // Fetch all versions for these teams in one query.
                 if (registry_ids.length > 0) {
                     const all_versions = await _tv_repo.find_all_q({
-                        where: { team_id: { [Op.in]: registry_ids }, status: 'published' },
+                        where: { team_id: { [Op.in]: registry_ids }, status: 'published', withdrawn_at: null },
                         attributes: ['team_id', 'id', 'version'],
                         raw: true,
                     });

@@ -258,11 +258,11 @@ export const TeamsDeleteTeamInput = z.object({
 );
 export type TeamsDeleteTeamInput = z.infer<typeof TeamsDeleteTeamInput>;
 
-/** POST /v1/teams/delete_version — remove a specific published version. */
+/** POST /v1/teams/delete_version — withdraw a published version (its number stays taken). */
 export const TeamsDeleteVersionInput = z.object({
     name: z.string().min(1, 'name is required').describe('Team name'),
     scope: z.string().optional().describe('Scope (publisher) slug'),
-    version: z.string().min(1, 'version is required').describe('Version string to remove'),
+    version: z.string().min(1, 'version is required').describe('The version to withdraw'),
 });
 export type TeamsDeleteVersionInput = z.infer<typeof TeamsDeleteVersionInput>;
 
