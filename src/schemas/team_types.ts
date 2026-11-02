@@ -18,7 +18,6 @@
  *   POST /v1/teams/download        — fetch pack for a version
  *   POST /v1/teams/delete          — soft-delete a team
  *   POST /v1/teams/delete_version  — remove a specific version
- *   POST /v1/teams/rename          — rename a team within its scope
  *   POST /v1/teams/build           — AI builder actions (generate/validate/suggest/chat)
  *   POST /v1/teams/install         — fan-out install to daemon_ids XOR realm_id
  *   POST /v1/teams/uninstall       — fan-out uninstall from daemon_id/daemon_ids XOR realm_id
@@ -159,6 +158,8 @@ export const TeamsCreateInput = z.object({
         version: z.string().optional().describe('Version to fork from; omit for the latest'),
     }).optional()
         .describe("Start the new team's draft as a copy of this team version's files (team.yml renamed); the new team records where it came from"),
+    visibility: z.enum(['public', 'private']).optional()
+        .describe('The visibility the team is meant for (default private). A fork of a private team can be public only for someone who can publish in its scope (checked here and at publish)'),
 });
 export type TeamsCreateInput = z.infer<typeof TeamsCreateInput>;
 
@@ -266,16 +267,6 @@ export const TeamsDeleteVersionInput = z.object({
 });
 export type TeamsDeleteVersionInput = z.infer<typeof TeamsDeleteVersionInput>;
 
-/** POST /v1/teams/rename — rename a team within its scope. */
-export const TeamsRenameInput = z.object({
-    name: z.string().min(1, 'name is required').describe('Current team name'),
-    scope: z.string().min(1, 'scope is required').describe('Scope (publisher) slug'),
-    new_name: z.string()
-        .min(1, 'new_name is required')
-        .regex(/^[a-z][a-z0-9-]*$/, 'New name must be lowercase letters, numbers, and hyphens, starting with a letter')
-        .describe('New team name — same slug rules as create'),
-});
-export type TeamsRenameInput = z.infer<typeof TeamsRenameInput>;
 
 // ─── Fleet install / uninstall ──────────────────────────────────────────────
 
@@ -447,13 +438,6 @@ export const TeamMutationData = z.object({
 });
 export type TeamMutationData = z.infer<typeof TeamMutationData>;
 
-/** Response data for rename: the team and its new name. */
-export const TeamRenameData = z.object({
-    id: z.string().describe('Team UUID'),
-    name: z.string().describe('New team name'),
-    scope: z.string().describe('Scope (publisher) slug'),
-});
-export type TeamRenameData = z.infer<typeof TeamRenameData>;
 
 // ─── Version / phases ────────────────────────────────────────────────────────
 

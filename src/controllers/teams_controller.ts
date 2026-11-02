@@ -13,7 +13,6 @@
  *   POST /v1/teams/download        — fetch package for a version
  *   POST /v1/teams/delete          — soft-delete team
  *   POST /v1/teams/delete_version  — withdraw a version (number kept)
- *   POST /v1/teams/rename          — rename within scope
  *   POST /v1/teams/build           — AI builder actions (generate/validate/suggest/chat)
  *   POST /v1/teams/install         — fan-out install (daemon_ids XOR realm_id)
  *   POST /v1/teams/uninstall       — fan-out uninstall (daemon_id/daemon_ids XOR realm_id)
@@ -42,7 +41,7 @@ const _scope_repo_tc = new ScopeRepository();
 import type { TeamsService } from '../services/teams_service.js';
 import type { BuilderService } from '../services/builder_service.js';
 import type { ApiOkResponse, ApiRequest, PagedData } from '../types/api_response.js';
-import type { TeamData, TeamMutationData, TeamRenameData, TeamsGetVersionsData, TeamsGetPhasesData, TeamsInstallData, TeamsUninstallData } from '../schemas/team_types.js';
+import type { TeamData, TeamMutationData, TeamsGetVersionsData, TeamsGetPhasesData, TeamsInstallData, TeamsUninstallData } from '../schemas/team_types.js';
 import {
     TeamsGetInput,
     TeamsGetByIdInput,
@@ -55,7 +54,6 @@ import {
     TeamsDownloadInput,
     TeamsDeleteTeamInput,
     TeamsDeleteVersionInput,
-    TeamsRenameInput,
     TeamsInstallInput,
     TeamsUninstallInput,
     TEAM_CATALOG_SORT_KEYS,
@@ -477,23 +475,6 @@ export class TeamsController extends BaseController {
         const body = this.parse_body(TeamsDeleteVersionInput, req);
         const result = await this._teams_service.delete_version(req.auth!, body);
         log.info('team_version_withdrawn', { scope: body.scope, name: body.name, version: body.version });
-        this.ok(res, result);
-    }
-
-    /**
-     * Rename a team within its scope. The old name is freed immediately.
-     *
-     * @param req - Body: {@link TeamsRenameInput}
-     * @param res - `{ ok: true, data: TeamRenameData }`
-     */
-    async rename(
-        req: ApiRequest<TeamsRenameInput, TeamRenameData>,
-        res: ApiOkResponse<TeamRenameData>,
-    ): Promise<void> {
-        log.debug('rename', { user_id: req.auth?.user?.id });
-        const body = this.parse_body(TeamsRenameInput, req);
-        const result = await this._teams_service.rename_team(req.auth!, body);
-        log.info('team_renamed', { scope: body.scope, name: body.name, new_name: body.new_name });
         this.ok(res, result);
     }
 

@@ -95,7 +95,7 @@ export function make_mock_repos() {
             set_fork_origin: vi.fn().mockResolvedValue(undefined),
             count_forks: vi.fn().mockResolvedValue(0),
             create: vi.fn().mockResolvedValue(1),
-            update: vi.fn(), update_name: vi.fn(), update_listed: vi.fn(),
+            update: vi.fn(), update_listed: vi.fn(),
             update_description: vi.fn(),
             update_visibility_and_listed: vi.fn(),
             update_install_count: vi.fn(), delete_by_id: vi.fn(),
@@ -194,7 +194,6 @@ export function create_test_app(opts: { route_policy?: AccessStore } = {}) {
     app.post('/v1/teams/download',       teams_controller.wrap(teams_controller.download));
     app.post('/v1/teams/delete',         teams_controller.wrap(teams_controller.delete_team));
     app.post('/v1/teams/delete_version', teams_controller.wrap(teams_controller.delete_version));
-    app.post('/v1/teams/rename',         teams_controller.wrap(teams_controller.rename));
 
     const tokens_controller = new TokensController(
         repos.token_repo as any,

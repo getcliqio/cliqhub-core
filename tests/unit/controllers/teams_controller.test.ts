@@ -20,7 +20,6 @@ const mock_service = {
     download: vi.fn().mockResolvedValue({ data_base64: 'abc' }),
     delete_team: vi.fn().mockResolvedValue({ deleted: true }),
     delete_version: vi.fn().mockResolvedValue({ deleted: true }),
-    rename_team: vi.fn().mockResolvedValue({ renamed: true }),
 };
 
 function make_req(body: Record<string, unknown> = {}, auth = fake_auth) {
@@ -197,15 +196,6 @@ describe('TeamsController', () => {
         const res = mock_res();
         await call(controller.delete_version, make_req({ name: 'team', version: '1.0.0' }), res);
         expect(mock_service.delete_version).toHaveBeenCalled();
-        expect(res.status).toHaveBeenCalledWith(200);
-    });
-
-    // --- rename ---
-
-    it('rename passes with name, scope, new_name', async () => {
-        const res = mock_res();
-        await call(controller.rename, make_req({ name: 'old', scope: 'org', new_name: 'fresh' }), res);
-        expect(mock_service.rename_team).toHaveBeenCalled();
         expect(res.status).toHaveBeenCalledWith(200);
     });
 });

@@ -156,7 +156,6 @@ function make_team_repo() {
         delete_by_id: vi.fn().mockResolvedValue(undefined),
         update_listed: vi.fn().mockResolvedValue(undefined),
         update_visibility_and_listed: vi.fn().mockResolvedValue(undefined),
-        update_name: vi.fn().mockResolvedValue(undefined),
         update_install_count: vi.fn().mockResolvedValue(undefined),
         list_by_scope: vi.fn().mockResolvedValue([]),
         list_by_scope_list: vi.fn().mockResolvedValue([]),
@@ -802,6 +801,17 @@ describe('TeamsService — publish', () => {
         expect(version_repo.publish_draft).not.toHaveBeenCalled();
     });
 
+    it("a fork of a private team is published public only by someone who can publish in the origin's scope", async () => {
+        const FORK = { ...PUBLIC_TEAM, visibility: 'draft' as const, forked_from_team_id: PRIVATE_TEAM.id };
+        team_repo.find_by_id.mockResolvedValue(PRIVATE_TEAM);
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(FORK);
+        await expect(publish({ visibility: 'public' })).rejects.toMatchObject({ status: 403, message: expect.stringContaining('@other/my-team is private') });
+        expect(version_repo.publish_draft).not.toHaveBeenCalled();
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(FORK);
+        expect((await publish({ visibility: 'private' })).visibility).toBe('private');
+        team_repo.find_by_id.mockReset();
+    });
+
     it('a re-list (no draft) takes no version but the latest: a new number needs its files (old CLIs)', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValue(PUBLIC_TEAM);
         version_repo.find_latest_version.mockResolvedValue('2.0.0');
@@ -1192,48 +1202,5 @@ describe('TeamsService — unpublish', () => {
         expect(result.status).toBe('draft');
         expect(result.listed).toBe(false);
         expect(audit_repo.create).toHaveBeenCalled();
-    });
-});
-
-
-/* ================================================================
-   rename_team
-   ================================================================ */
-
-describe('TeamsService — rename_team', () => {
-    let service: TeamsService;
-    let team_repo: ReturnType<typeof make_team_repo>;
-
-    beforeEach(() => {
-        vi.clearAllMocks();
-        const built = build_service();
-        service = built.service;
-        team_repo = built.team_repo;
-    });
-
-    it('returns 404 for non-existent team', async () => {
-        team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
-        await expect(service.rename_team(ALICE, { name: 'ghost', scope: 'alice', new_name: 'renamed' }))
-            .rejects.toThrow('Team not found');
-    });
-
-    it('returns 409 when name conflict', async () => {
-        team_repo.find_by_name_and_scope
-            .mockResolvedValueOnce(PUBLIC_TEAM)
-            .mockResolvedValueOnce({ id: hub_legacy_uuid(2), name: 'taken' });
-
-        await expect(service.rename_team(ALICE, { name: 'my-team', scope: 'alice', new_name: 'taken' }))
-            .rejects.toThrow('already exists');
-    });
-
-    it('renames successfully', async () => {
-        team_repo.find_by_name_and_scope
-            .mockResolvedValueOnce(PUBLIC_TEAM)
-            .mockResolvedValueOnce(null);
-
-        const result = await service.rename_team(ALICE, { name: 'my-team', scope: 'alice', new_name: 'renamed' });
-
-        expect(result).toEqual({ id: hub_legacy_uuid(1), name: 'renamed', scope: 'alice' });
-        expect(team_repo.update_name).toHaveBeenCalledWith(hub_legacy_uuid(1), 'renamed');
     });
 });

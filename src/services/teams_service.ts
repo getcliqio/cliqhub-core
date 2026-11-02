@@ -582,6 +582,8 @@ export class TeamsService {
     async create(auth: AuthContext, params: {
         name: string; scope: string; description?: string;
         forked_from?: { team_id: string; version?: string };
+        /** The visibility the new team is meant for; a fork of a private team checks it here (and again at publish). */
+        visibility?: 'public' | 'private';
     }) {
         log.debug('create', { name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -595,6 +597,7 @@ export class TeamsService {
         if (existing) throw new ApiError('conflict', `Team @${params.scope}/${params.name} already exists`, 409);
 
         const origin = params.forked_from ? await this._fork_origin(auth, params.forked_from) : null;
+        if (origin) await this._assert_fork_visibility(auth, origin.team_id, params.visibility ?? 'private');
         const description = params.description || origin?.description || '';
         const label = `@${params.scope}/${params.name}`;
         const seed: Record<string, string> = origin
@@ -775,6 +778,7 @@ export class TeamsService {
         const visibility: 'public' | 'private' = params.visibility
             ?? (team && team.visibility !== 'draft' ? team.visibility as 'public' | 'private' : 'private');
         const visibility_was = team && team.visibility !== 'draft' ? team.visibility : null;
+        if (team?.forked_from_team_id) await this._assert_fork_visibility(auth, team.forked_from_team_id, visibility);
 
         // Status-only republish: list the team again without a new version.
         if (!params.version_id) {
@@ -1027,26 +1031,24 @@ export class TeamsService {
         return { withdrawn: true, version: params.version };
     }
 
-    async rename_team(auth: AuthContext, params: { name: string; scope: string; new_name: string }) {
-        log.debug('rename_team', { name: params.name, scope: params.scope, new_name: params.new_name });
-        if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
-        assert_access(auth, 'teams', 'write');
-        const new_name = (params.new_name || '').trim().toLowerCase();
-        if (!new_name || !SLUG_PATTERN.test(new_name)) throw new ApiError('invalid_params', 'Name must be lowercase alphanumeric with hyphens (e.g. my-team)', 422);
-        if (new_name === params.name) throw new ApiError('invalid_params', 'New name is the same as the current name', 422);
-
-        const team = await this._team_repo.find_by_name_and_scope(params.name, params.scope);
-        if (!team) throw new ApiError('not_found', 'Team not found', 404);
-        await this._assert_can_publish(auth, team.scope);
-
-        const existing = await this._team_repo.find_by_name_and_scope(new_name, params.scope);
-        if (existing) throw new ApiError('conflict', `Team @${params.scope}/${new_name} already exists`, 409);
-
-        await this._team_repo.update_name(team.id, new_name);
-        return { id: team.id, name: new_name, scope: params.scope };
-    }
-
     // ─── Private helpers ────────────────────────────────────────────
+
+    /**
+     * A fork of a private team may be public only for someone who can publish in the origin's scope
+     * (PLAN-team-bundle S2): otherwise its content would leave the scope that keeps it private.
+     *
+     * @throws ApiError 403 when the fork would be public and the caller can't publish in the origin's scope.
+     */
+    private async _assert_fork_visibility(auth: AuthContext, origin_team_id: string, visibility: 'public' | 'private'): Promise<void> {
+        if (visibility !== 'public') return;
+        const origin = await this._team_repo.find_by_id(origin_team_id);
+        if (!origin || origin.visibility !== 'private') return;
+        try {
+            await this._assert_can_publish(auth, origin.scope);
+        } catch {
+            throw new ApiError('forbidden', `@${origin.scope}/${origin.name} is private: its fork can be public only for someone who can publish in @${origin.scope}`, 403);
+        }
+    }
 
     /**
      * The team version a new team is forked from: the caller must be able to

@@ -77,7 +77,6 @@ app.post('/v1/teams/delete_version', teams_controller.wrap(teams_controller.dele
 app.post('/v1/teams/create',         teams_controller.wrap(teams_controller.create));
 app.post('/v1/teams/update',         teams_controller.wrap(teams_controller.update));
 app.post('/v1/teams/unpublish',      teams_controller.wrap(teams_controller.unpublish));
-app.post('/v1/teams/rename',         teams_controller.wrap(teams_controller.rename));
 
 app.use(error_handler);
 
@@ -326,46 +325,6 @@ describe('POST /v1/teams/unpublish', () => {
     });
 });
 
-
-// ─── POST /v1/teams/rename ─────────────────────────────────────
-
-describe('POST /v1/teams/rename', () => {
-    beforeEach(() => vi.clearAllMocks());
-
-    it('returns 401 when not authenticated', async () => {
-        const res = await request(app)
-            .post('/v1/teams/rename')
-            .send({ name: 'my-team', scope: 'alice', new_name: 'new-team' });
-        expect(res.status).toBe(401);
-    });
-
-    it('returns 200 and renames team', async () => {
-        mock_auth_jwt();
-        repos.team_repo.find_by_name_and_scope
-            .mockResolvedValueOnce({ ...PUBLIC_TEAM, author_id: hub_legacy_uuid(1) })
-            .mockResolvedValueOnce(null);
-
-        const res = await request(app)
-            .post('/v1/teams/rename')
-            .set('Authorization', auth_header())
-            .send({ name: 'my-team', scope: 'alice', new_name: 'new-team' });
-        expect(res.status).toBe(200);
-        expect(res.body.data.name).toBe('new-team');
-    });
-
-    it('returns 409 when new name conflicts', async () => {
-        mock_auth_jwt();
-        repos.team_repo.find_by_name_and_scope
-            .mockResolvedValueOnce({ ...PUBLIC_TEAM, author_id: hub_legacy_uuid(1) })
-            .mockResolvedValueOnce({ ...PUBLIC_TEAM, id: hub_legacy_uuid(2), name: 'taken-name' });
-
-        const res = await request(app)
-            .post('/v1/teams/rename')
-            .set('Authorization', auth_header())
-            .send({ name: 'my-team', scope: 'alice', new_name: 'taken-name' });
-        expect(res.status).toBe(409);
-    });
-});
 
 // ─── POST /v1/teams/get (mine) ─────────────────────────────────
 

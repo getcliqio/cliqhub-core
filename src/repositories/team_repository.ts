@@ -135,9 +135,6 @@ export class TeamRepository extends BaseRepository<Team> {
         return Team.findByPk(id, { raw: true });
     }
 
-    async update_name(id: string, new_name: string): Promise<void> {
-        await Team.update({ name: new_name, updated_at: fn('NOW') }, { where: { id } });
-    }
 
     async update_listed(id: string, listed: number, transaction?: Transaction): Promise<void> {
         await Team.update({ listed }, { where: { id }, transaction });
