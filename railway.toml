@@ -6,8 +6,8 @@ dockerfilePath = "Dockerfile"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 startCommand = "node dist/server.js"
-
-[deploy.healthcheck]
-path = "/v1/health"
-interval = 30
-timeout = 5
+# Railway keeps the running deployment until a new one answers here. A first start after a release can run long
+# data migrations before it listens (PLAN-team-bundle S1: ~418 versions' files and zips on R2), so allow 30 min.
+# (These are Railway's config-as-code keys; the old [deploy.healthcheck] table isn't one, so it set nothing.)
+healthcheckPath = "/v1/health"
+healthcheckTimeout = 1800

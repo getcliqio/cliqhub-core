@@ -15,6 +15,7 @@
  *      SQL), and the next start tries again.
  */
 import { QueryTypes } from 'sequelize';
+import { in_parallel } from '../../lib/in_parallel.js';
 import { get_logger } from '../../lib/log.js';
 import { get_sequelize } from '../../lib/sequelize.js';
 import type { SettingsRepository } from '../../repositories/settings_repository.js';
@@ -160,16 +161,17 @@ export async function team_files_only(deps: {
         ...backfill.empty.map((v) => `${v}: no zip and no manifest`),
         ...backfill.failed,
     ];
-    for (const v of rows) {
+    await in_parallel(rows, 8, async (v) => {
         let content: VersionContent | null;
         try {
             content = await version_content(v.id);
         } catch (err) {
             problems.push(`${v.team_id}@${v.version}: files unreadable (${err instanceof Error ? err.message : String(err)})`);
-            continue;
+            return;
         }
         for (const d of column_differences(v, content)) problems.push(`${v.team_id}@${v.version}: ${d}`);
-    }
+    });
+    problems.sort();
 
     const report = JSON.stringify({ at: new Date().toISOString(), versions: rows.length, problems });
     if (problems.length) {

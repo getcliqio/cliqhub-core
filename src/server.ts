@@ -42,11 +42,22 @@ async function main() {
     await migrate_team_zips_by_id({ storage: container.storage, versions: container.version_repo, settings: container.settings_repo })
         .catch((err: unknown) => log.error('team_zips_by_id_failed', { error: err instanceof Error ? err.message : String(err), note: 'old keys still serve downloads' }));
 
+    // The steps that only add (files, zips by id) run first and the two that remove (the old columns, the old zips)
+    // last, so a Core still serving from before this release keeps working until just before this one listens.
+    const { TeamFileRepository } = await import('./repositories/team_file_repository.js');
+    const { build_version_zips, OLD_ZIP_KEYS_KEY } = await import('./models/migrations/old_zip_keys.js');
+    if (!(await container.settings_repo.find_by_key(OLD_ZIP_KEYS_KEY))) {
+        const { backfill_team_files } = await import('./models/migrations/backfill_team_files.js');
+        const zip_deps = { storage: container.storage, versions: container.version_repo, files: new TeamFileRepository() };
+        await backfill_team_files(zip_deps)
+            .then(() => build_version_zips(zip_deps))
+            .catch((err: unknown) => log.error('version_zips_failed', { error: err instanceof Error ? err.message : String(err), note: 'retried below and next start' }));
+    }
+
     // Until it has run (PLAN-team-bundle S1.5): every published version gets its files, its old content columns
     // are checked against them, and only when nothing differs are the columns dropped. Otherwise nothing is
     // dropped and the problems are logged and kept in cliq.settings; the next start tries again.
     const { team_files_only } = await import('./models/migrations/team_files_only.js');
-    const { TeamFileRepository } = await import('./repositories/team_file_repository.js');
     await team_files_only({ storage: container.storage, versions: container.version_repo, files: new TeamFileRepository(), settings: container.settings_repo })
         .catch((err: unknown) => log.error('team_files_only_failed', { error: err instanceof Error ? err.message : String(err), note: 'nothing dropped' }));
 

@@ -8,6 +8,7 @@
  * left for S1.5, which builds theirs. The key is recorded once a pass finishes; until then it is safe to repeat,
  * and versions already on an id key are skipped.
  */
+import { in_parallel } from '../../lib/in_parallel.js';
 import { get_logger } from '../../lib/log.js';
 import type { SettingsRepository } from '../../repositories/settings_repository.js';
 import type { TeamVersionRepository } from '../../repositories/team_version_repository.js';
@@ -47,14 +48,14 @@ export async function migrate_team_zips_by_id(deps: {
 
     let moved = 0;
     const missing: string[] = [];
-    for (const v of await deps.versions.list_all_packages()) {
-        if (v.package_path.startsWith('teams/')) continue;
+    await in_parallel(await deps.versions.list_all_packages(), 8, async (v) => {
+        if (v.package_path.startsWith('teams/')) return;
         const data = v.package_path && !v.package_path.startsWith('draft://')
             ? await deps.storage.read(old_key(v.package_path))
             : null;
         if (!data) {
             missing.push(`${v.team_id}@${v.version}`);
-            continue;
+            return;
         }
         const key = version_zip_key(v.team_id, v.id);
         await deps.storage.write(key, data);
@@ -62,7 +63,8 @@ export async function migrate_team_zips_by_id(deps: {
         if (!back || !back.equals(data)) throw new Error(`zip for ${v.team_id}@${v.version} didn't read back from ${key}`);
         await deps.versions.update_package_path(v.id, key);
         moved += 1;
-    }
+    });
+    missing.sort();
 
     await deps.settings.create(TEAM_ZIPS_BY_ID_MIGRATION_KEY, JSON.stringify({ moved, missing, at: new Date().toISOString() }));
     log.info('team_zips_by_id_done', { moved, missing });

@@ -16,6 +16,7 @@
  */
 import { is_bundle_path, TEAM_YML, unpack_bundle } from '@getcliqio/cliq-sdk';
 import yaml from 'js-yaml';
+import { in_parallel } from '../../lib/in_parallel.js';
 import { get_logger } from '../../lib/log.js';
 import { get_sequelize } from '../../lib/sequelize.js';
 import type { TeamFileRepository } from '../../repositories/team_file_repository.js';
@@ -101,7 +102,7 @@ export async function backfill_team_files(deps: {
     files: TeamFileRepository;
 }): Promise<TeamFilesBackfillResult> {
     const result: TeamFilesBackfillResult = { from_zip: [], from_columns: [], empty: [], failed: [] };
-    for (const v of await deps.versions.list_published_without_files()) {
+    await in_parallel(await deps.versions.list_published_without_files(), 8, async (v) => {
         const label = `${v.team_id}@${v.version}`;
         try {
             const key = stored_key(v.package_path);
@@ -117,7 +118,7 @@ export async function backfill_team_files(deps: {
             }
             if (!files[TEAM_YML]) {
                 result.empty.push(label);
-                continue;
+                return;
             }
             const rows = await write_team_file_objects(deps.storage, v.team_id, Object.entries(files).map(([path, text]) => ({
                 path, content_type: team_file_content_type(path), data: Buffer.from(text, 'utf8'),
@@ -128,7 +129,8 @@ export async function backfill_team_files(deps: {
         } catch (err) {
             result.failed.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
         }
-    }
+    });
+    for (const list of Object.values(result)) list.sort();
     if (result.from_zip.length || result.from_columns.length || result.empty.length || result.failed.length) {
         log.info('team_files_backfill_done', { ...result });
     }
