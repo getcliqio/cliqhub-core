@@ -3,7 +3,7 @@ import { RealmRepository } from '../repositories/realm_repository.js';
 import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
 import { RunRepository } from '../repositories/run_repository.js';
 import { TeamRepository } from '../repositories/team_repository.js';
-import { latest_version_content } from './version_content.js';
+import { version_content } from './version_content.js';
 
 const _realm_repo_a2ai = new RealmRepository();
 const _realm_member_repo_a2ai = new RealmMemberRepository();
@@ -146,18 +146,16 @@ export class A2aInvokeService {
         }
 
         const [scope, slug] = skill_id.split('/');
-        const on_list = (realm.team_list ?? []).some(
-            (entry) => entry.scope === scope && entry.slug === slug,
-        );
-        if (!on_list) {
+        const hub_team = await _team_repo_a2ai.find_one_q({ where: { scope, name: slug } });
+        // On the realm's list, through its service (PLAN-team-bundle S4.1).
+        const { RealmTeamListService } = await import('./realm_team_list.service.js');
+        const listed = hub_team ? await RealmTeamListService.find(realm.id, hub_team.id) : null;
+        if (!listed) {
             throw ApiError.not_found(`Skill '${skill_id}' is not installed on this realm`);
         }
 
-        const hub_team = await _team_repo_a2ai.find_one_q({ where: { scope, name: slug } });
-        if (!hub_team) throw ApiError.not_found(`Team '${skill_id}' not found`);
-
-        // The latest version's inputs, from its files (PLAN-team-bundle S1.4b).
-        const latest = await latest_version_content(hub_team.id);
+        // The inputs of the version the realm runs, from its files (PLAN-team-bundle S1.4b, S4.1).
+        const latest = await version_content(listed.version_id);
         if (!latest) throw ApiError.not_found(`Team '${skill_id}' has no published version`);
 
         const inputs = input.inputs ?? {};

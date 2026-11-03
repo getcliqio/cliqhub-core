@@ -1954,8 +1954,9 @@ export class DispatchService {
      * team in the realm. Best-effort — called after team uninstall.
      */
     private static async _cleanup_orphaned_realm_settings(realm_id: string): Promise<void> {
-        const realm = await _realm_repo.find_by_id(realm_id);
-        const team_list = (realm as any)?.team_list ?? [];
+        // The realm's teams, through the list's service (PLAN-team-bundle S4.1).
+        const { RealmTeamListService } = await import('./realm_team_list.service.js');
+        const team_list = await RealmTeamListService.entries(realm_id);
         if (team_list.length === 0) {
             await _realm_agent_setting_repo.delete_where({ realm_id } as any);
             return;
@@ -1971,15 +1972,8 @@ export class DispatchService {
         // Derive still-needed agents from Hub registry manifests
         const still_needed = new Set<string>();
         for (const entry of team_list) {
-            const scope_slug = entry.scope.replace(/^@/, '');
-            const hub_team = await _team_repo.find_one(
-                { scope: scope_slug, name: entry.slug } as any,
-                { attributes: ['id'] },
-            );
-            if (!hub_team) continue;
-
-            // The latest version's phases, from its files (PLAN-team-bundle S1.4b).
-            const latest = await latest_version_content(hub_team.id);
+            // The phases of the version the realm runs, from its files (PLAN-team-bundle S1.4b, S4.1).
+            const latest = await version_content(entry.version_id);
             for (const phase of (latest?.workflow.phases ?? []) as Array<{ type?: string; agent?: string }>) {
                 if (phase?.type === 'team') continue;
                 if (phase?.agent) still_needed.add(phase.agent);

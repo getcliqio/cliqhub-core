@@ -14,6 +14,7 @@ import { ScopeMember } from './scope_member.model.js';
 import { Team } from './team.model.js';
 import { TeamVersion } from './team_version.model.js';
 import { TeamFile } from './team_file.model.js';
+import { RealmTeam } from './realm_team.model.js';
 import { TeamTag } from './team_tag.model.js';
 import { OrgTeam } from './org_team.model.js';
 import { AuditLog } from './audit_log.model.js';
@@ -65,7 +66,7 @@ export {
     // Registry
     User, Org, OrgMember, OrgRole,
     AccountAgentSetting, AccountInvite, RealmInvite, ApiToken,
-    Scope, ScopeMember, Team, TeamVersion, TeamFile, TeamTag, OrgTeam,
+    Scope, ScopeMember, Team, TeamVersion, TeamFile, TeamTag, OrgTeam, RealmTeam,
     AuditLog, DownloadLog, Setting,
     OrgAgentSetting, UserRealmAgentSetting,
     PasswordReset, PasswordResetRequest, EmailDelivery,
@@ -101,6 +102,7 @@ export function init_models(sequelize: Sequelize): void {
     Team.register(sequelize);
     TeamVersion.register(sequelize);
     TeamFile.register(sequelize);
+    RealmTeam.register(sequelize);
     TeamTag.register(sequelize);
     OrgTeam.register(sequelize);
     AuditLog.register(sequelize);

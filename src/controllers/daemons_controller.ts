@@ -27,7 +27,6 @@ import {
     DaemonRemoveInput,
 } from '../schemas/daemon_types.js';
 import { TeamService } from '../services/teams_install_service.js';
-import { Realm } from '../models/index.js';
 import { get_logger } from '../lib/log.js';
 
 function bearer_plaintext(req: Request): string {
@@ -149,9 +148,9 @@ export class DaemonController extends BaseController {
             }
             assert_realm_domain(req.auth!, realm_id);
             await RealmService.assert_daemon_in_realm(realm_id, daemon_id);
-            // Only teams on the realm's list may be on its daemons (PLAN-team-ids rule 7).
-            const realm = await Realm.findByPk(realm_id, { attributes: ['team_list'] });
-            const realm_teams = new Set(((realm?.team_list ?? []) as Array<{ scope: string; slug: string }>).map((e) => `${e.scope}/${e.slug}`));
+            // Only teams on the realm's list may be on its daemons (PLAN-team-ids rule 7); the list through its service (S4.1).
+            const { RealmTeamListService } = await import('../services/realm_team_list.service.js');
+            const realm_teams = await RealmTeamListService.keys(realm_id);
             const settled = await TeamService.register_from_daemon(daemon_id, teams, Boolean(complete), realm_teams);
             log.info('daemon_teams_registered', { daemon_id, count: settled.length, complete: Boolean(complete) });
             res.json({ ok: true, data: { teams: settled } });

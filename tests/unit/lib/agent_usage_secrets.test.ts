@@ -5,6 +5,11 @@ vi.mock('../../../src/services/version_content.js', () => ({
     latest_version_content: vi.fn(async () => null),
     version_contents: vi.fn(async () => new Map()),
 }));
+// A realm's teams come from their service (PLAN-team-bundle S4.1).
+vi.mock('../../../src/services/realm_team_list.service.js', () => ({
+    RealmTeamListService: { entries_for: vi.fn(async () => new Map()) },
+}));
+import { RealmTeamListService } from '../../../src/services/realm_team_list.service.js';
 import { version_contents } from '../../../src/services/version_content.js';
 import { derive_version_content } from '../../../src/services/package_parser.js';
 import { build_agent_usage } from '../../../src/lib/agent_workflow.js';
@@ -59,11 +64,14 @@ describe('find_org_agent_usage (queries)', () => {
         const calls: Array<{ sql: string; rep: Record<string, unknown> }> = [];
         const sq = { query: async (sql: string, o: { replacements: Record<string, unknown> }) => {
             calls.push({ sql, rep: o.replacements });
-            if (sql.includes('FROM cliq.realms')) return [{ id: 'r1', team_list: [{ scope: 'other', slug: 'shared' }] }];
+            if (sql.includes('FROM cliq.realms')) return [{ id: 'r1' }];
             if (sql.includes('FROM cliq.scopes')) return [{ slug: 'acme' }];
             if (sql.includes('FROM cliq.teams')) return [{ id: 't1', scope: 'acme', name: 'triage' }, { id: 't2', scope: 'other', name: 'shared' }];
             return [{ team_id: 't1', id: 'v1', version: '1.0.0' }, { team_id: 't2', id: 'v2', version: '2.0.0' }];
         } };
+        vi.mocked(RealmTeamListService.entries_for).mockResolvedValueOnce(new Map([
+            ['r1', [{ id: 'rt1', realm_id: 'r1', team_id: 't2', version_id: 'v2', scope: 'other', slug: 'shared', version: '2.0.0' }]],
+        ]) as never);
         // each team's latest version, from its files (PLAN-team-bundle S1.4b)
         const yml = (...agents: string[]) => `name: x\nphases:\n${agents.map((a, i) => `  - name: p${i}\n    agent: ${a}\n`).join('')}`;
         vi.mocked(version_contents).mockResolvedValueOnce(new Map([
@@ -81,7 +89,7 @@ describe('find_org_agent_usage (queries)', () => {
     it('no scopes and nothing listed → empty, no team query', async () => {
         const { find_org_agent_usage } = await import('../../../src/lib/agent_workflow.js');
         let n = 0;
-        const sq = { query: async (sql: string) => { n++; return sql.includes('realms') ? [{ id: 'r1', team_list: [] }] : []; } };
+        const sq = { query: async (sql: string) => { n++; return sql.includes('realms') ? [{ id: 'r1' }] : []; } };
         expect((await find_org_agent_usage('o', sq as never)).size).toBe(0);
         expect(n).toBe(2);
     });

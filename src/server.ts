@@ -70,6 +70,12 @@ async function main() {
     await drop_old_zip_keys({ storage: container.storage, versions: container.version_repo, files: new TeamFileRepository(), settings: container.settings_repo })
         .catch((err: unknown) => log.error('old_zip_keys_failed', { error: err instanceof Error ? err.message : String(err), note: 'nothing more deleted' }));
 
+    // Until it has run (PLAN-team-bundle S4.1): each realm's team_list JSON names become realm_teams rows by id.
+    // An entry that can't move is logged and kept in cliq.settings; the next start tries again.
+    const { realm_teams_from_json } = await import('./models/migrations/realm_teams_from_json.js');
+    await realm_teams_from_json({ settings: container.settings_repo, versions: container.version_repo })
+        .catch((err: unknown) => log.error('realm_teams_from_json_failed', { error: err instanceof Error ? err.message : String(err) }));
+
     const app = create_app(container);
 
     start_run_reaper();

@@ -65,7 +65,6 @@ const TOKEN_PREFIX = 'cliq_dt_';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** Teams every new realm starts with. */
-const BUILTIN_REALM_TEAMS = [{ scope: 'cliq', slug: 'hello-world' }] as const;
 
 /** What a realm create can include besides the realm itself — all saved together. */
 export interface Realm_create_extras {
@@ -380,7 +379,6 @@ export class RealmService {
                 owner_user_id: user_id,
                 created_by: user_id,
                 org_id,
-                team_list: [...BUILTIN_REALM_TEAMS] as any,
                 deleted: false,
                 deleted_at: null,
                 created_at: ts,
@@ -432,9 +430,8 @@ export class RealmService {
             });
         }
 
-        // Pre-populate realm team_list with built-in teams so the first
-        // daemon to register gets them installed through the proper flow
-        // (DispatchService.install_team), wiring all scope/realm associations.
+        // Seed the built-in teams (at their latest version) so the first daemon to register gets them installed
+        // through the proper flow (DispatchService.install_team).
         try {
             const { RealmTeamListService } = await import('./realm_team_list.service.js');
             await RealmTeamListService.seed_builtin_teams(realm.id);
@@ -1897,8 +1894,9 @@ export class RealmService {
         // Realm + team-list.
         const realm = await _realm_repo.find_by_id(params.realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
-        const team_list = ((realm as unknown as { team_list?: Array<{ scope: string; slug: string; version?: string }> })
-            .team_list) ?? [];
+        // The realm's teams, through the list's service (PLAN-team-bundle S4.1).
+        const { RealmTeamListService } = await import('./realm_team_list.service.js');
+        const team_list = await RealmTeamListService.entries(params.realm_id);
         const team_list_set = new Set(team_list.map((e) => `${e.scope}/${e.slug}`));
         const realm_versions = new Map(team_list.map((e) => [`${e.scope}/${e.slug}`, e.version ?? null]));
 

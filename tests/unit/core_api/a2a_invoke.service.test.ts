@@ -15,6 +15,11 @@ vi.mock('../../../src/models/index.js', () => ({
     TeamVersion: { findOne: vi.fn() },
 }));
 
+// The realm's teams come from their service (PLAN-team-bundle S4.1), each with the version the realm runs.
+vi.mock('../../../src/services/realm_team_list.service.js', () => ({
+    RealmTeamListService: { find: vi.fn(async () => null) },
+}));
+
 vi.mock('../../../src/services/realm_a2a.service.js', () => ({
     RealmA2aService: {
         is_enabled: vi.fn(),
@@ -56,7 +61,8 @@ vi.mock('../../../src/lib/api_error.js', () => ({
 import { A2aInvokeService } from '../../../src/services/a2a_invoke.service.js';
 import { Realm, Run, RealmMember } from '../../../src/models/index.js';
 import { Team as HubTeam } from '../../../src/models/index.js';
-import { latest_version_content } from '../../../src/services/version_content.js';
+import { version_content } from '../../../src/services/version_content.js';
+import { RealmTeamListService } from '../../../src/services/realm_team_list.service.js';
 import { RealmA2aService } from '../../../src/services/realm_a2a.service.js';
 import { DispatchService } from '../../../src/services/dispatch.service.js';
 import { QueueService } from '../../../src/services/queue.service.js';
@@ -71,10 +77,14 @@ describe('A2aInvokeService', () => {
             id: 'r1',
             deleted: false,
             owner_user_id: '42',
-            team_list: [{ scope: 'cliq', slug: 'hello-world' }],
         } as any);
-        vi.mocked(HubTeam.findOne).mockResolvedValue({ id: hub_legacy_uuid(10), name: 'hello-world' } as any);
-        vi.mocked(latest_version_content).mockResolvedValue({
+        vi.mocked(HubTeam.findOne).mockImplementation((async (q: any) =>
+            q?.where?.name === 'hello-world' ? { id: hub_legacy_uuid(10), name: 'hello-world' } : null) as any);
+        vi.mocked(RealmTeamListService.find).mockImplementation((async (_realm: string, team_id: string) =>
+            team_id === hub_legacy_uuid(10)
+                ? { id: 'rt1', realm_id: 'r1', team_id, version_id: 'v1', scope: 'cliq', slug: 'hello-world', version: '1.0.0' }
+                : null) as any);
+        vi.mocked(version_content).mockResolvedValue({
             version_id: 'v1', version: '1.0.0', inputs: [{ name: 'message', required: true }],
         } as any);
     });

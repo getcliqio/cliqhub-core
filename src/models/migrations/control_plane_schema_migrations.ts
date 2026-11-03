@@ -1166,6 +1166,20 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`CREATE UNIQUE INDEX IF NOT EXISTS "team_files_version_path" ON cliq."team_files" ("version_id", "path")`);
     await run(`CREATE INDEX IF NOT EXISTS "team_files_team" ON cliq."team_files" ("team_id")`);
 
+    // realm_teams (PLAN-team-bundle S4.1): the teams a realm runs, one version each, by id. Replaces the
+    // realms.team_list JSON names; only RealmTeamListService reads or writes it (a guard test enforces that).
+    await run(`
+        CREATE TABLE IF NOT EXISTS cliq."realm_teams" (
+            "id" UUID PRIMARY KEY,
+            "realm_id" TEXT NOT NULL REFERENCES cliq."realms" ("id") ON DELETE CASCADE,
+            "team_id" UUID NOT NULL REFERENCES cliq."teams" ("id") ON DELETE CASCADE,
+            "version_id" UUID NOT NULL REFERENCES cliq."team_versions" ("id") ON DELETE CASCADE,
+            "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+            "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`);
+    await run(`CREATE UNIQUE INDEX IF NOT EXISTS "realm_teams_realm_team" ON cliq."realm_teams" ("realm_id", "team_id")`);
+    await run(`CREATE INDEX IF NOT EXISTS "realm_teams_team" ON cliq."realm_teams" ("team_id")`);
+
     // Org team library: teams an org has taken on (from the marketplace or its own
     // scopes). A team joins the org before any of the org's realms can add it.
     await run(`

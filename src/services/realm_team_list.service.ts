@@ -1,40 +1,48 @@
 /**
- * Realm Team List — CRUD + apply for the declarative team set on a realm.
+ * Realm Team List — the teams a realm runs, one version each (PLAN-team-bundle S4.1).
  *
- * The team list declares which teams should be installed on every daemon
- * in the realm. "Apply" fans out installs to all online daemons.
- * Auto-inject on registration reads this list to bootstrap new daemons.
+ * The list lives in `cliq.realm_teams` (team and version by id). **This service is the only code that reads or
+ * writes it**: everything that asks "which teams does this realm run" or "is this team on the realm" calls the
+ * reads below (a guard test fails the build otherwise). Adding a team fans out installs to the realm's online
+ * daemons; a daemon that registers gets the list injected, and stale teams on it are uninstalled.
  */
 
 import { RealmRepository } from '../repositories/realm_repository.js';
 import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
 import { DaemonRepository } from '../repositories/daemon_repository.js';
 import { RealmAgentSettingRepository } from '../repositories/realm_agent_setting_repository.js';
-import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
 import { ScopeRepository } from '../repositories/scope_repository.js';
 import { TeamRepository } from '../repositories/team_repository.js';
 import { TeamVersionRepository } from '../repositories/team_version_repository.js';
 import { OrgAgentSettingRepository } from '../repositories/org_agent_setting_repository.js';
+import { RealmTeamRepository, type RealmTeamRow } from '../repositories/realm_team_repository.js';
 
 const _realm_repo_rtl = new RealmRepository();
 const _dt_repo_rtl = new DaemonTeamRepository();
 const _daemon_repo_rtl = new DaemonRepository();
 const _ras_repo = new RealmAgentSettingRepository();
-const _realm_member_repo_rtl = new RealmMemberRepository();
 const _scope_repo_rtl = new ScopeRepository();
 const _team_repo_rtl = new TeamRepository();
 const _team_version_repo_rtl = new TeamVersionRepository();
 const _org_agent_setting_repo = new OrgAgentSettingRepository();
-import { RealmService } from './realm.service.js';
+const _realm_team_repo = new RealmTeamRepository();
 import { DispatchService } from './dispatch.service.js';
 import { command_outbox_enqueue } from './command_outbox.service.js';
 import { InAppNotificationService } from './in_app_notification.service.js';
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import type { TeamListEntry } from '../models/realm.model.js';
-import { Op } from 'sequelize';
+import type { Transaction } from 'sequelize';
 
 const log = get_logger('realm-team-list');
+
+/** A team on a realm: its ids, and its names as labels. */
+export type RealmTeamEntry = RealmTeamRow;
+
+/** The built-in teams every new realm starts with (at their latest published version). */
+const BUILTIN_TEAMS: Array<{ scope: string; slug: string }> = [{ scope: 'cliq', slug: 'hello-world' }];
+
+const key_of = (e: { scope: string | null; slug: string }) => `${e.scope ?? ''}/${e.slug}`;
 
 export interface ApplyTeamResult {
     scope: string;
@@ -139,72 +147,70 @@ export class RealmTeamListService {
         }
     }
 
-    /**
-     * Re-run team-list inject on every online daemon in the realm.
-     * Used after agent settings are fixed so previously-failed installs retry.
-     */
-    static async reinject_online_daemons(realm_id: string, user_id: string): Promise<void> {
-        const memberships = await _realm_member_repo_rtl.find_all_q({
-            where: { realm_id, member_type: 'daemon' },
-            attributes: ['member_id'],
-            raw: true,
-        });
-        if (memberships.length === 0) return;
+    // ─── Reads: every reader of a realm's teams goes through these ────────────
 
-        const daemon_ids = memberships.map((m) => m.member_id);
-        const daemons = await _daemon_repo_rtl.find_all_q({
-            where: { id: { [Op.in]: daemon_ids }, status: 'online' },
-            attributes: ['id'],
-        });
-
-        for (const daemon of daemons) {
-            await RealmTeamListService.inject_for_daemon(realm_id, daemon.id, user_id);
-        }
+    /** A realm's teams: ids, and names as labels. */
+    static async entries(realm_id: string): Promise<RealmTeamEntry[]> {
+        return _realm_team_repo.list(realm_id);
     }
 
-    /** Read the team list for a realm. */
-    static async get(realm_id: string, user_id: string): Promise<TeamListEntry[]> {
-        await RealmService.assert_member(realm_id, user_id);
-        const realm = await _realm_repo_rtl.find_by_id(realm_id);
-        if (!realm) throw ApiError.not_found('Realm not found');
-        return (realm as any).team_list ?? [];
+    /** Several realms' teams, by realm id. */
+    static async entries_for(realm_ids: string[]): Promise<Map<string, RealmTeamEntry[]>> {
+        const out = new Map<string, RealmTeamEntry[]>(realm_ids.map((id) => [id, []]));
+        for (const row of await _realm_team_repo.list_for(realm_ids)) out.get(row.realm_id)?.push(row);
+        return out;
     }
 
-    /** Replace the full team list. Deduplicates by scope+slug. */
-    static async set(
-        realm_id: string,
-        user_id: string,
-        teams: TeamListEntry[],
-    ): Promise<TeamListEntry[]> {
-        await RealmService.require_admin(realm_id, user_id);
-        const deduped = dedupe(teams);
-        await _realm_repo_rtl.update_where(
-            { id: realm_id } as any,
-            { team_list: deduped as any, updated_at: Date.now() } as any,
-        );
-        log.info(`team list set: realm=${realm_id} count=${deduped.length}`);
-        void import('./mesh_lifecycle.service.js')
-            .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
-            .catch(() => {});
-        return deduped;
+    /** A realm's teams as `scope/slug` keys (for callers that still hold names, until they hold ids). */
+    static async keys(realm_id: string): Promise<Set<string>> {
+        return new Set((await _realm_team_repo.list(realm_id)).map(key_of));
     }
+
+    /** One team on a realm, by its catalog id, or null when it isn't on the realm. */
+    static async find(realm_id: string, team_id: string): Promise<RealmTeamEntry | null> {
+        return _realm_team_repo.find(realm_id, team_id);
+    }
+
+    /** Whether a team (by catalog id) is on a realm. */
+    static async has(realm_id: string, team_id: string): Promise<boolean> {
+        return (await _realm_team_repo.find(realm_id, team_id)) !== null;
+    }
+
+    /** Whether a team (by name) is on a realm. */
+    static async has_ref(realm_id: string, scope: string | null, slug: string): Promise<boolean> {
+        const team = await _team_repo_rtl.find_by_name_and_scope(slug, scope);
+        return team ? RealmTeamListService.has(realm_id, team.id) : false;
+    }
+
+    /** The realms that run a team (optionally only an org's). */
+    static async realms_with(team_id: string, org_id?: string): Promise<string[]> {
+        return _realm_team_repo.realm_ids_with(team_id, org_id);
+    }
+
+    // ─── Writes ───────────────────────────────────────────────────────────────
 
     /**
-     * The version a realm records for a team: the one asked for (it must be published), else the latest.
+     * The team and version a realm records: the version asked for (it must be published and not withdrawn), else
+     * the latest.
      *
      * @throws ApiError 404 when the team isn't in the catalog, has no version, or the version doesn't exist.
      */
-    static async resolve_version(scope: string, slug: string, version?: string): Promise<string> {
+    static async resolve(scope: string, slug: string, version?: string): Promise<{ team_id: string; version_id: string; version: string }> {
         const team = await _team_repo_rtl.find_by_name_and_scope(slug, scope);
         if (!team) throw ApiError.not_found(`Team '@${scope}/${slug}' isn't published`);
         if (version) {
             const row = await _team_version_repo_rtl.find_current_by_team_and_version(team.id, version);
             if (!row) throw ApiError.not_found(`Version ${version} of '@${scope}/${slug}' doesn't exist or was withdrawn`);
-            return version;
+            return { team_id: team.id, version_id: row.id, version };
         }
-        const latest = await _team_version_repo_rtl.find_latest_version(team.id);
+        const latest = await _team_version_repo_rtl.find_latest_ref(team.id);
         if (!latest) throw ApiError.not_found(`Team '@${scope}/${slug}' has no published version`);
-        return latest;
+        return { team_id: team.id, version_id: latest.id, version: latest.version };
+    }
+
+    /** The version a realm records for a team (see {@link resolve}). */
+    static async resolve_version(scope: string, slug: string, version?: string): Promise<string> {
+        return (await RealmTeamListService.resolve(scope, slug, version)).version;
     }
 
     /**
@@ -220,62 +226,35 @@ export class RealmTeamListService {
         const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
-        const current: TeamListEntry[] = (realm as any).team_list ?? [];
-        const key = `${entry.scope}/${entry.slug}`;
-        const existing = current.find((e) => `${e.scope}/${e.slug}` === key);
-        const version = await RealmTeamListService.resolve_version(entry.scope, entry.slug, entry.version);
-        if (existing?.version === version) return current;
-
-        const next: TeamListEntry = { scope: entry.scope, slug: entry.slug, version };
-        const updated = existing
-            ? current.map((e) => (`${e.scope}/${e.slug}` === key ? next : e))
-            : [...current, next];
-        await _realm_repo_rtl.update_where(
-            { id: realm_id } as any,
-            { team_list: updated as any, updated_at: Date.now() } as any,
-        );
-        log.info(`team list ${existing ? 'version' : 'add'}: realm=${realm_id} team=${key} version=${version}`);
-        void import('./mesh_lifecycle.service.js')
-            .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
-            .catch(() => {});
-        return updated;
+        const { team_id, version_id, version } = await RealmTeamListService.resolve(entry.scope, entry.slug, entry.version);
+        const existing = await _realm_team_repo.find(realm_id, team_id);
+        if (existing?.version_id !== version_id) {
+            await _realm_team_repo.put(realm_id, team_id, version_id);
+            log.info(`team list ${existing ? 'version' : 'add'}: realm=${realm_id} team=${key_of(entry)} version=${version}`);
+            void import('./mesh_lifecycle.service.js')
+                .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
+                .catch(() => {});
+        }
+        return RealmTeamListService.list_entries(realm_id);
     }
 
     /**
-     * Seed built-in teams into a realm's team_list.
-     *
-     * Called during realm creation (not user-initiated) so it bypasses
-     * the admin role check. Idempotent — skips teams already present.
+     * Seed the built-in teams into a realm, at their latest published version. Called during realm creation (not
+     * user-initiated), so no admin check. Idempotent — skips teams already on the realm.
      */
     static async seed_builtin_teams(realm_id: string): Promise<void> {
-        const BUILTIN_TEAMS: TeamListEntry[] = [
-            { scope: 'cliq', slug: 'hello-world' },
-        ];
-
-        const realm = await _realm_repo_rtl.find_by_id(realm_id);
-        if (!realm) return;
-
-        const current: TeamListEntry[] = (realm as any).team_list ?? [];
-        const existing_keys = new Set(current.map((e) => `${e.scope}/${e.slug}`));
-
-        const to_add: TeamListEntry[] = [];
+        const added: string[] = [];
         for (const t of BUILTIN_TEAMS) {
-            if (existing_keys.has(`${t.scope}/${t.slug}`)) continue;
             try {
-                to_add.push({ ...t, version: await RealmTeamListService.resolve_version(t.scope, t.slug) });
+                const { team_id, version_id } = await RealmTeamListService.resolve(t.scope, t.slug);
+                if (await _realm_team_repo.find(realm_id, team_id)) continue;
+                await _realm_team_repo.put(realm_id, team_id, version_id);
+                added.push(key_of(t));
             } catch {
                 // Not published on this hub (e.g. a fresh local stack): nothing to seed.
             }
         }
-
-        if (to_add.length === 0) return;
-
-        const updated = [...current, ...to_add];
-        await _realm_repo_rtl.update_where(
-            { id: realm_id } as any,
-            { team_list: updated as any, updated_at: Date.now() } as any,
-        );
-        log.info(`seeded builtin teams into realm=${realm_id}: ${to_add.map((t) => `${t.scope}/${t.slug}`).join(', ')}`);
+        if (added.length) log.info(`seeded builtin teams into realm=${realm_id}: ${added.join(', ')}`);
     }
 
     /** Remove a single team from the list. Idempotent. */
@@ -288,79 +267,24 @@ export class RealmTeamListService {
         const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
-        const current: TeamListEntry[] = (realm as any).team_list ?? [];
-        const key = `${entry.scope}/${entry.slug}`;
-        const updated = current.filter((e) => `${e.scope}/${e.slug}` !== key);
-
-        if (updated.length === current.length) {
-            return current;
+        const team = await _team_repo_rtl.find_by_name_and_scope(entry.slug, entry.scope);
+        if (team && await _realm_team_repo.take_off(realm_id, team.id)) {
+            log.info(`team list remove: realm=${realm_id} team=${key_of(entry)}`);
+            void import('./mesh_lifecycle.service.js')
+                .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
+                .catch(() => {});
         }
-
-        await _realm_repo_rtl.update_where(
-            { id: realm_id } as any,
-            { team_list: updated as any, updated_at: Date.now() } as any,
-        );
-        log.info(`team list remove: realm=${realm_id} team=${key}`);
-        void import('./mesh_lifecycle.service.js')
-            .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
-            .catch(() => {});
-        return updated;
+        return RealmTeamListService.list_entries(realm_id);
     }
 
-    /**
-     * Apply the team list to all online daemons in the realm.
-     * Loops over each entry, resolves it, and fans out installs.
-     */
-    static async apply(
-        realm_id: string,
-        user_id: string,
-        org_ids?: string[],
-    ): Promise<ApplyTeamResult[]> {
-        await RealmService.require_admin(realm_id, user_id);
-        const realm = await _realm_repo_rtl.find_by_id(realm_id);
-        if (!realm) throw ApiError.not_found('Realm not found');
+    /** Take a team off the given realms (unpublish: it leaves every realm at once, in the caller's transaction). */
+    static async take_off_realms(team_id: string, realm_ids: string[], transaction?: Transaction): Promise<void> {
+        await _realm_team_repo.take_off_realms(team_id, realm_ids, transaction);
+    }
 
-        const team_list: TeamListEntry[] = (realm as any).team_list ?? [];
-        if (team_list.length === 0) {
-            return [];
-        }
-
-        const results: ApplyTeamResult[] = [];
-
-        for (const entry of team_list) {
-            const team_ref = `${entry.scope}/${entry.slug}`;
-            try {
-                const install_result = await DispatchService.install_team({
-                    team_id: team_ref,
-                    ...(entry.version ? { version: entry.version } : {}),
-                    realm_id,
-                    user_id,
-                    org_ids,
-                });
-                results.push({
-                    scope: entry.scope,
-                    slug: entry.slug,
-                    daemon_results: install_result.results,
-                });
-            } catch (err) {
-                log.warn(
-                    `apply team list: failed to install ${team_ref} on realm ${realm_id}: `
-                    + (err instanceof Error ? err.message : String(err)),
-                );
-                results.push({
-                    scope: entry.scope,
-                    slug: entry.slug,
-                    daemon_results: [{
-                        daemon_id: '*',
-                        ok: false,
-                        error: err instanceof Error ? err.message : String(err),
-                    }],
-                });
-            }
-        }
-
-        log.info(`team list applied: realm=${realm_id} teams=${team_list.length}`);
-        return results;
+    /** The list as the routes answer it: `{ scope, slug, version }` per team. */
+    private static async list_entries(realm_id: string): Promise<TeamListEntry[]> {
+        return (await _realm_team_repo.list(realm_id)).map((e) => ({ scope: e.scope, slug: e.slug, version: e.version }));
     }
 
     /**
@@ -378,10 +302,8 @@ export class RealmTeamListService {
         const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
-        const team_list: TeamListEntry[] = (realm as any).team_list ?? [];
-        const listed = team_list.find(
-            (e) => e.scope === entry.scope && e.slug === entry.slug,
-        );
+        const team = await _team_repo_rtl.find_by_name_and_scope(entry.slug, entry.scope);
+        const listed = team ? await _realm_team_repo.find(realm_id, team.id) : null;
         if (!listed) {
             throw ApiError.bad_request(
                 `Team '${entry.scope}/${entry.slug}' is not on this realm's team list`,
@@ -398,7 +320,7 @@ export class RealmTeamListService {
         try {
             const install_result = await DispatchService.install_team({
                 team_id: team_ref,
-                ...(listed.version ? { version: listed.version } : {}),
+                version: listed.version,
                 realm_id,
                 user_id,
                 org_ids,
@@ -439,11 +361,8 @@ export class RealmTeamListService {
         org_ids?: string[],
     ): Promise<void> {
         try {
-            const realm = await _realm_repo_rtl.find_by_id(realm_id);
-            if (!realm) return;
-
-            const team_list: TeamListEntry[] = (realm as any).team_list ?? [];
-            const desired_keys = new Set(team_list.map((e) => `${e.scope}/${e.slug}`));
+            const team_list = await _realm_team_repo.list(realm_id);
+            const desired_keys = new Set(team_list.map(key_of));
             const agent_settings = await RealmTeamListService.load_effective_agent_settings(
                 realm_id,
                 user_id,
@@ -456,11 +375,11 @@ export class RealmTeamListService {
             // failures during the daemon-register / sync-register race.
             const failed: Array<{ team_ref: string; error: string }> = [];
             for (const entry of team_list) {
-                const team_ref = `${entry.scope}/${entry.slug}`;
+                const team_ref = key_of(entry);
                 try {
                     await DispatchService.install_team({
                         team_id: team_ref,
-                        ...(entry.version ? { version: entry.version } : {}),
+                        version: entry.version,
                         daemon_ids: [daemon_id],
                         user_id,
                         org_ids,
@@ -527,32 +446,6 @@ export class RealmTeamListService {
     }
 
     /**
-     * Public entry point for post-heartbeat reconciliation.
-     * Reads the realm's team list and uninstalls any teams on the daemon
-     * that are not in the declared set. Safe to call frequently — no-ops
-     * if the daemon's roster already matches.
-     */
-    static async reconcile_daemon(
-        realm_id: string,
-        daemon_id: string,
-        user_id: string,
-    ): Promise<void> {
-        try {
-            const realm = await _realm_repo_rtl.find_by_id(realm_id);
-            if (!realm) return;
-
-            const team_list: TeamListEntry[] = (realm as any).team_list ?? [];
-            const desired_keys = new Set(team_list.map((e) => `${e.scope}/${e.slug}`));
-            await RealmTeamListService._reconcile_stale(daemon_id, desired_keys, user_id);
-        } catch (err) {
-            log.warn(
-                `reconcile_daemon failed: realm=${realm_id} daemon=${daemon_id}: `
-                + (err instanceof Error ? err.message : String(err)),
-            );
-        }
-    }
-
-    /**
      * Uninstall teams on a daemon that are not in the desired set.
      * Uses the heartbeat-synced teams table to find what the daemon has.
      */
@@ -594,23 +487,15 @@ export class RealmTeamListService {
         }
     }
     /**
-     * Remove a team from ALL realm team_lists and purge from cliq.teams.
-     * Used during registry-level team deletion to cascade across realms.
+     * Take a team off every realm (team deletion cascades here), and mark its daemon slots uninstalled. Runs keep
+     * their team.
      */
     static async remove_from_all_realms(scope_slug: string, team_slug: string): Promise<void> {
         const key = `${scope_slug}/${team_slug}`;
-
-        const realms = await _realm_repo_rtl.find_all_q({ attributes: ['id', 'team_list'] });
-        for (const realm of realms) {
-            const current: TeamListEntry[] = (realm as any).team_list ?? [];
-            const updated = current.filter((e) => `${e.scope}/${e.slug}` !== key);
-            if (updated.length < current.length) {
-                await _realm_repo_rtl.update_where(
-                    { id: (realm as any).id } as any,
-                    { team_list: updated as any, updated_at: Date.now() } as any,
-                );
-                log.info(`cascade remove: realm=${(realm as any).id} team=${key}`);
-            }
+        const team = await _team_repo_rtl.find_by_name_and_scope(team_slug, scope_slug);
+        if (team) {
+            const realm_ids = await _realm_team_repo.take_off_everywhere(team.id);
+            for (const realm_id of realm_ids) log.info(`cascade remove: realm=${realm_id} team=${key}`);
         }
 
         const scope_row = await _scope_repo_rtl.find_one_q({ where: { slug: scope_slug }, attributes: ['id'] });
@@ -623,17 +508,4 @@ export class RealmTeamListService {
             log.info(`cascade uninstall daemon team slots: ${key}`);
         }
     }
-}
-
-/** Deduplicate team list entries by scope+slug. */
-function dedupe(teams: TeamListEntry[]): TeamListEntry[] {
-    const seen = new Set<string>();
-    const result: TeamListEntry[] = [];
-    for (const t of teams) {
-        const key = `${t.scope}/${t.slug}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        result.push({ scope: t.scope, slug: t.slug });
-    }
-    return result;
 }

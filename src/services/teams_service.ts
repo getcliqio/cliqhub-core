@@ -680,12 +680,12 @@ export class TeamsService {
         const scope = team.scope ?? '';
         const slug = team.name;
         const sq = get_sequelize();
-        const has_team = `EXISTS (SELECT 1 FROM jsonb_array_elements(r."team_list") e
-                           WHERE e->>'slug' = :slug AND NULLIF(e->>'scope', '') IS NOT DISTINCT FROM NULLIF(:scope, ''))`;
-        const realms = await sq.query<{ id: string; slug: string }>(
-            `SELECT r."id", r."slug" FROM cliq."realms" r WHERE NOT r."deleted" AND ${has_team} ORDER BY r."slug"`,
-            { replacements: { slug, scope }, type: QueryTypes.SELECT },
-        );
+        // The live realms that run it, through the realm list's service (PLAN-team-bundle S4.1).
+        const on_realms = await RealmTeamListService.realms_with(team.id);
+        const realms = on_realms.length ? await sq.query<{ id: string; slug: string }>(
+            `SELECT r."id", r."slug" FROM cliq."realms" r WHERE NOT r."deleted" AND r."id" IN (:ids) ORDER BY r."slug"`,
+            { replacements: { ids: on_realms }, type: QueryTypes.SELECT },
+        ) : [];
 
         // Pre-flight: the caller must be able to remove it from every one of them.
         const [{ ROUTE_POLICY }, { decide }, { SequelizeAccessStore }] = await Promise.all([
@@ -710,16 +710,7 @@ export class TeamsService {
         }
 
         await sq.transaction(async (t) => {
-            if (realms.length) {
-                await sq.query(
-                    `UPDATE cliq."realms" r SET "team_list" = COALESCE((
-                         SELECT jsonb_agg(e) FROM jsonb_array_elements(r."team_list") e
-                          WHERE NOT (e->>'slug' = :slug AND NULLIF(e->>'scope', '') IS NOT DISTINCT FROM NULLIF(:scope, ''))
-                     ), '[]'::jsonb), "updated_at" = :now
-                     WHERE r."id" IN (:ids)`,
-                    { replacements: { slug, scope, now: Date.now(), ids: realms.map((r) => r.id) }, transaction: t },
-                );
-            }
+            if (realms.length) await RealmTeamListService.take_off_realms(team.id, realms.map((r) => r.id), t);
             await this._team_repo.update_visibility_and_listed(team.id, 'draft', 0, t);
         });
 
