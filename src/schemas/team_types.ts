@@ -593,6 +593,8 @@ export const TeamsFilesUploadPayload = z.object({
     team_id: z.string().uuid().describe('The team the files belong to'),
     version_id: z.string().uuid().optional()
         .describe('The draft to add them to; omit to start a new draft'),
+    based_on_version_id: z.string().uuid().optional()
+        .describe("A new draft's: the published version of this team it starts from (shown as 'Draft · based on 1.2.0'); ignored with version_id"),
 });
 export type TeamsFilesUploadPayload = z.infer<typeof TeamsFilesUploadPayload>;
 

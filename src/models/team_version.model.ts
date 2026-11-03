@@ -16,6 +16,8 @@ export class TeamVersion extends BaseModel {
     declare saved_at: Date | null;
     /** When it was withdrawn (PLAN-team-bundle S2): out of "latest", lists and installs by name; still readable by id. */
     declare withdrawn_at: Date | null;
+    /** A draft's: the published version it was started from, when it was (PLAN-team-bundle S3). */
+    declare based_on_version_id: string | null;
 
     static register(sequelize: Sequelize): void {
         TeamVersion.init({
@@ -28,6 +30,7 @@ export class TeamVersion extends BaseModel {
             published_at: { type: DataTypes.DATE, allowNull: true, defaultValue: DataTypes.NOW },
             saved_at: { type: DataTypes.DATE, allowNull: true },
             withdrawn_at: { type: DataTypes.DATE, allowNull: true },
+            based_on_version_id: { type: DataTypes.UUID, allowNull: true },
         }, {
             sequelize, tableName: 'team_versions', schema: 'cliq',
             indexes: [{ unique: true, fields: ['team_id', 'version'] }],

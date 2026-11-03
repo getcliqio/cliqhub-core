@@ -197,9 +197,9 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     }
 
     /** A new draft version of a team (no number, no date yet): its id. */
-    async create_draft(team_id: string, transaction?: Transaction): Promise<string> {
+    async create_draft(team_id: string, transaction?: Transaction, based_on_version_id?: string): Promise<string> {
         const row = await TeamVersion.create(
-            { team_id, status: 'draft', version: null, published_at: null, saved_at: new Date(), package_path: '', changelog: '' } as never,
+            { team_id, status: 'draft', version: null, published_at: null, saved_at: new Date(), package_path: '', changelog: '', based_on_version_id: based_on_version_id ?? null } as never,
             { transaction },
         );
         return row.id;
@@ -225,10 +225,10 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     }
 
     /** A team's open draft: the most recently saved one, or null. */
-    async find_open_draft(team_id: string): Promise<{ id: string; saved_at: Date | null } | null> {
+    async find_open_draft(team_id: string): Promise<{ id: string; saved_at: Date | null; based_on_version_id: string | null } | null> {
         return TeamVersion.findOne({
             where: { team_id, status: 'draft' },
-            attributes: ['id', 'saved_at'],
+            attributes: ['id', 'saved_at', 'based_on_version_id'],
             order: [['saved_at', 'DESC NULLS LAST']],
             raw: true,
         });

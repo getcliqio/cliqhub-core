@@ -217,11 +217,13 @@ export class TeamsService {
      * named. Each file gets an id, its bytes go to `teams/<team_id>/files/<file_id>` (never overwritten), and
      * all the rows are written in one transaction, replacing paths the draft already has.
      *
+     * A new draft can name the published version it starts from (`based_on_version_id`, PLAN-team-bundle S3).
+     *
      * @throws ApiError 422 for a path that isn't a team path, a path twice, or a draft over 10 MB / 1000 files;
-     *   404 for a draft that isn't this team's open draft.
+     *   404 for a draft that isn't this team's open draft, or a `based_on_version_id` that isn't one of its versions.
      */
     async upload_files(auth: AuthContext, params: {
-        team_id: string; version_id?: string;
+        team_id: string; version_id?: string; based_on_version_id?: string;
         files: Array<{ path: string; content_type: string; data: Buffer }>;
     }): Promise<{ version_id: string; files: Array<{ id: string; path: string; size: number; sha256: string }> }> {
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -237,8 +239,11 @@ export class TeamsService {
         if (params.version_id) {
             const draft = await this._version_repo.find_draft(params.version_id);
             if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (a published version can\'t change)', 404);
+        } else if (params.based_on_version_id) {
+            const base = await this._version_repo.find_by_id(params.based_on_version_id);
+            if (!base || base.team_id !== team.id) throw new ApiError('not_found', `Version ${params.based_on_version_id} isn't one of this team's versions`, 404);
         }
-        const out = await this._store_files(team.id, params.version_id, params.files);
+        const out = await this._store_files(team.id, params.version_id, params.files, params.version_id ? undefined : params.based_on_version_id);
         log.info('team_files_uploaded', { team_id: team.id, version_id: out.version_id, files: out.files.length });
         return out;
     }
@@ -248,7 +253,7 @@ export class TeamsService {
      * each file gets an id and its bytes go to storage first, then all rows are written in one transaction,
      * replacing paths the draft has, and the draft is marked saved.
      */
-    private async _store_files(team_id: string, draft_id: string | undefined, files: Array<{ path: string; content_type: string; data: Buffer }>) {
+    private async _store_files(team_id: string, draft_id: string | undefined, files: Array<{ path: string; content_type: string; data: Buffer }>, based_on_version_id?: string) {
         const paths = files.map((f) => f.path);
         const kept = draft_id ? (await this._file_repo.list_by_version(draft_id)).filter((r) => !paths.includes(r.path)) : [];
         const total = kept.reduce((n, r) => n + r.size, 0) + files.reduce((n, f) => n + f.data.length, 0);
@@ -259,7 +264,7 @@ export class TeamsService {
         const rows = await write_team_file_objects(this._storage, team_id, files);
         let version_id = draft_id;
         await get_sequelize().transaction(async (t) => {
-            if (!version_id) version_id = await this._version_repo.create_draft(team_id, t);
+            if (!version_id) version_id = await this._version_repo.create_draft(team_id, t, based_on_version_id);
             for (const r of rows) r.version_id = version_id;
             if (rows.length) await this._file_repo.replace_paths(version_id, rows, t);
             await this._version_repo.touch_draft(version_id, t);
@@ -476,7 +481,12 @@ export class TeamsService {
         const fork_count = await this._team_repo.count_forks(team.id);
         // Only people who can edit the team see its open draft (the builder reopens it from its files).
         const open_draft = permissions.can_edit ? await this._version_repo.find_open_draft(team.id) : null;
-        const draft = open_draft ? { version_id: open_draft.id, saved_at: open_draft.saved_at } : null;
+        const based_on = open_draft?.based_on_version_id ? await this._version_repo.find_by_id(open_draft.based_on_version_id) : null;
+        const draft = open_draft ? {
+            version_id: open_draft.id, saved_at: open_draft.saved_at,
+            // The published version it started from ("Draft · based on 1.2.0"), when it did.
+            based_on: based_on ? { version_id: based_on.id, version: based_on.version } : null,
+        } : null;
 
         const raw_manifest = content?.manifest_yaml || null;
 

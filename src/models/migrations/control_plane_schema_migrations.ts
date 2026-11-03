@@ -1139,6 +1139,8 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "saved_at" TIMESTAMPTZ`);
     // A withdrawn version (PLAN-team-bundle S2): out of "latest", lists and installs by name; readable by id; number kept.
     await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "withdrawn_at" TIMESTAMPTZ`);
+    // The published version a draft was started from (PLAN-team-bundle S3): the builder's "Draft · based on 1.2.0".
+    await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "based_on_version_id" UUID`);
     // The old content columns (PLAN-team-bundle S1.5): nothing writes them any more, so while they exist they
     // take no value; team_files_only drops them once every version's files are checked against them.
     for (const c of ['workflow_json', 'manifest_yaml', 'readme', 'capability_json', 'agents_json', 'roles_json', 'dependencies_yaml', 'cliq_version', 'tools']) {
