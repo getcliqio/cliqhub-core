@@ -15,6 +15,7 @@ import {
 import { close_sequelize } from '../../../src/db/sequelize.js';
 import { database_url } from './control_plane_store.js';
 import { test_config } from '../../helpers/test_container.js';
+import { test_packages_path } from './version_files.js';
 
 export type Live_hub = {
     app: Express;
@@ -27,7 +28,9 @@ export function live_hub_config(): EnvConfig {
         ...test_config(),
         database_url,
         jwt_secret: 'test-secret',
-        packages_path: '/tmp/cliqhub-e2e-packages',
+        // The same file storage as every other test on this database: the app's container sets the content
+        // reader's storage, and a version's files must be where the version was written (PLAN-team-bundle S1.4b).
+        packages_path: test_packages_path,
     };
 }
 
