@@ -92,7 +92,7 @@
             "body": { "ok": true, "data": { "artifact_id": "art-1", "name": "plan.md", "mime_type": "text/markdown", "size_bytes": 5, "download_url": "https://dl/art-1" } }
         },
         "hugs_open": {
-            "request": { "path": "/v1/hugs/open", "body": { "run_id": "<run>", "phase": "go", "iteration": 0, "title": "Approve?", "prompt": "Ship it?", "requested_inputs": [{ "name": "ok", "type": "boolean" }], "channels": ["ops"], "expires_in_min": 60 } },
+            "request": { "path": "/v1/hugs/open", "body": { "run_id": "<run>", "phase": "go", "iteration": 0, "template": "form", "title": "Approve?", "params": { "prompt": "Ship it?", "inputs": [{ "name": "ok", "type": "boolean" }] }, "channels": ["ops"], "expires_in_min": 60 } },
             "status": 200,
             "exact": false,
             "body": { "ok": true, "data": { "hug_id": "<hug>" } }

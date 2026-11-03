@@ -148,8 +148,8 @@ export async function seed_authz(app: Express): Promise<Seed> {
 
     const hug_a1 = `azh${stamp}`;
     await Hug.create({
-        id: hug_a1, run_id: run_a1, phase: 'p', daemon_id: 'authz-daemon', realm_id: A1, org_id: acme, title: 'Authz', prompt: 'p',
-        requested_inputs: [], channels: ['a1'], status: 'open', expires_at: new Date(now + 3_600_000),
+        id: hug_a1, run_id: run_a1, phase: 'p', daemon_id: 'authz-daemon', realm_id: A1, org_id: acme, title: 'Authz', template: 'form', template_version: 1,
+        params: {}, channels: ['a1'], status: 'open', expires_at: new Date(now + 3_600_000),
     } as never);
     const artifact_a1 = randomUUID();
     await StoredArtifact.create({ id: artifact_a1, run_id: run_a1, phase: 'p', name: 'a.txt', mime_type: 'text/plain', size_bytes: 1, storage_key: `authz/${stamp}`, created_at: now } as never);

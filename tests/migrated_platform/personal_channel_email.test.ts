@@ -86,7 +86,7 @@ async function hug_to(channel: string): Promise<string> {
 	await RealmMember.create({ id: `${realm.id}:${KAI}`, realm_id: realm.id, member_type: 'user', member_id: KAI, role: 'member', created_at: Date.now() } as never);
 	const created = await HugsService.create({
 		run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id, phase: 'human-review', iteration: 0,
-		spec: { title: 'Approve the release', prompt: 'Approve?', requested_inputs: [], channels: [channel], expires_in_min: 60 },
+		spec: { template: 'form', title: 'Approve the release', params: { prompt: 'Approve?' }, channels: [channel], expires_in_min: 60 },
 		actor_id: ORG,
 	});
 	return created.hug_id;

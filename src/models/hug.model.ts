@@ -1,7 +1,7 @@
 /**
  * Hugs — requests for input from people, opened by a run's phase (PLAN-hug-requests §6.1).
  *
- * - `Hug` — the request: prompt, context, requested inputs, channels, expiry, reminders.
+ * - `Hug` — the request: its template and params, title, channels, expiry, reminders (PLAN-hug-templates).
  * - `HugDelivery` — one row per destination the channels resolved to (who was asked).
  * - `HugResponse` — one per responder (latest wins).
  * - `HugEvent` — the requester's stream, numbered per Hug (`seq`), for delivery and catch-up.
@@ -36,11 +36,12 @@ export class Hug extends BaseModel {
     declare realm_id: string;
     declare org_id: string;
     declare title: string;
-    declare prompt: string;
-    declare context: unknown[];
-    declare requested_inputs: unknown[];
+    /** The template's name; with `template_version`, the one this Hug resolved to at open. */
+    declare template: string;
+    declare template_version: number;
+    /** The template's params (key-values, checked by the template; never read by Core). */
+    declare params: Record<string, unknown>;
     declare channels: string[];
-    declare ui: Record<string, unknown> | null;
     declare status: HugStatus;
     declare outcome: string | null;
     declare expires_at: Date;
@@ -64,11 +65,10 @@ export class Hug extends BaseModel {
             realm_id: { type: DataTypes.TEXT, allowNull: false },
             org_id: { type: DataTypes.UUID, allowNull: false },
             title: { type: DataTypes.TEXT, allowNull: false },
-            prompt: { type: DataTypes.TEXT, allowNull: false },
-            context: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
-            requested_inputs: { type: DataTypes.JSONB, allowNull: false },
+            template: { type: DataTypes.TEXT, allowNull: false },
+            template_version: { type: DataTypes.INTEGER, allowNull: false },
+            params: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
             channels: { type: DataTypes.ARRAY(DataTypes.TEXT), allowNull: false },
-            ui: { type: DataTypes.JSONB, allowNull: true },
             status: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'open' },
             outcome: { type: DataTypes.TEXT, allowNull: true },
             expires_at: { type: DataTypes.DATE, allowNull: false },
@@ -113,8 +113,8 @@ export class HugResponse extends BaseModel {
     declare responder_user_id: string;
     /** The Hug's channels that reached this responder. */
     declare via_channels: string[];
+    /** The answer, as the template's keys. */
     declare values: Record<string, unknown>;
-    declare comment: string | null;
     /** `seq` of the event that last delivered this response. */
     declare seq: number;
     declare created_at: Date;
@@ -127,7 +127,6 @@ export class HugResponse extends BaseModel {
             responder_user_id: { type: DataTypes.UUID, allowNull: false },
             via_channels: { type: DataTypes.ARRAY(DataTypes.TEXT), allowNull: false },
             values: { type: DataTypes.JSONB, allowNull: false },
-            comment: { type: DataTypes.TEXT, allowNull: true },
             seq: { type: DataTypes.INTEGER, allowNull: false },
             created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
             updated_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
