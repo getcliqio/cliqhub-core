@@ -991,21 +991,26 @@ export class TeamsService {
         } catch {
             throw new ApiError('unauthorized', 'This daemon isn\'t in your realm', 401);
         }
-        // The team and version: by id (the hub's install message), else by name (cliq team install @x/foo).
+        // The team: by id (the hub's install message), else by name (cliq team install @x/foo). The daemon must
+        // have it installed from its realm.
         let team_id = params.team_id ?? null;
-        let version_id = params.version_id ?? null;
         if (!team_id && params.name) team_id = (await this._team_repo.find_by_name_and_scope(params.name, params.scope || null))?.id ?? null;
-        if (team_id && !version_id && params.version) version_id = (await this._version_repo.find_by_team_and_version(team_id, params.version))?.id ?? null;
         const row = team_id
-            ? await new DaemonTeamRepository().find_one_q({
-                where: { daemon_id: params.daemon_id, team_id, ...(version_id ? { version_id } : {}) },
-            })
+            ? await new DaemonTeamRepository().find_one_q({ where: { daemon_id: params.daemon_id, team_id } })
             : null;
-        if (!row?.version_id) {
+        if (!row) {
             throw new ApiError('not_installable', 'This team isn\'t available for installation on this daemon. Add it to the realm first.', 404);
         }
-        const ver = await this._version_repo.find_package_by_id(row.version_id);
-        if (!ver) throw new ApiError('not_found', 'Version not found', 404);
+        // The version (PLAN-team-bundle S5.3): any published version of that team the daemon asks for by id (a run
+        // started on 1.0 resumes from 1.0 while the realm moves to 1.1), else the one the realm runs there.
+        let version_id = params.version_id ?? null;
+        if (!version_id && params.version) {
+            version_id = (await this._version_repo.find_by_team_and_version(row.team_id!, params.version))?.id ?? null;
+            if (!version_id) throw new ApiError('not_found', `Version ${params.version} not found`, 404);
+        }
+        version_id ??= row.version_id;
+        const ver = version_id ? await this._version_repo.find_package_by_id(version_id) : null;
+        if (!ver || ver.team_id !== row.team_id) throw new ApiError('not_found', 'Version not found', 404);
         const data = await this._version_zip(row.team_id!, ver.id, ver.package_path);
         if (!data) throw new ApiError('internal', `Package archive missing for v${ver.version}. It may need to be republished.`, 500);
         const team = await this._team_repo.find_by_id(row.team_id!);

@@ -238,7 +238,7 @@ export const TeamsDownloadInput = z.object({
     team_id: z.string().uuid().optional()
         .describe('A daemon installing: the catalog team (with version_id or a version)'),
     daemon_id: z.string().min(1).optional()
-        .describe('A daemon installing (PLAN-team-bundle S4.2): the daemon, in the token\'s realm. Answers the daemon_team_id it keeps; refused when the hub has not installed this team and version on it'),
+        .describe('A daemon installing (PLAN-team-bundle S4.2, S5.3): the daemon, in the token\'s realm. Answers the daemon_team_id it keeps, for any published version of a team the hub installed on it (default: the version the realm runs there); refused when the hub has not installed the team on it'),
     name: z.string().min(1).optional().describe('Team name (required without version_id)'),
     scope: z.string().optional().describe('Scope (publisher) slug'),
     version: z.string().optional()
