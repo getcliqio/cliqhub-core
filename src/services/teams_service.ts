@@ -982,7 +982,7 @@ export class TeamsService {
      */
     private async _download_for_daemon(
         auth: AuthContext,
-        params: { name?: string; scope?: string; version?: string; version_id?: string; team_id?: string; daemon_id: string },
+        params: { name?: string; scope?: string; version?: string; version_id?: string; team_id?: string; daemon_team_id?: string; daemon_id: string },
     ) {
         if (auth.auth_via !== 'daemon_token' || !auth.realm_id) throw new ApiError('unauthorized', 'A daemon installs with its own token', 401);
         const { RealmService } = await import('./realm.service.js');
@@ -993,11 +993,13 @@ export class TeamsService {
         }
         // The team: by id (the hub's install message), else by name (cliq team install @x/foo). The daemon must
         // have it installed from its realm.
+        // Or the daemon's install itself, by CliqHub's id for it (S5.6: fetching a version a run needs).
         let team_id = params.team_id ?? null;
         if (!team_id && params.name) team_id = (await this._team_repo.find_by_name_and_scope(params.name, params.scope || null))?.id ?? null;
-        const row = team_id
-            ? await new DaemonTeamRepository().find_one_q({ where: { daemon_id: params.daemon_id, team_id } })
-            : null;
+        const dt_repo = new DaemonTeamRepository();
+        const row = params.daemon_team_id
+            ? await dt_repo.find_one_q({ where: { id: params.daemon_team_id, daemon_id: params.daemon_id } })
+            : team_id ? await dt_repo.find_one_q({ where: { daemon_id: params.daemon_id, team_id } }) : null;
         if (!row) {
             throw new ApiError('not_installable', 'This team isn\'t available for installation on this daemon. Add it to the realm first.', 404);
         }

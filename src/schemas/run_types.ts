@@ -164,7 +164,8 @@ export const RunsEnqueueInput = z.object({
     team_id: z.string().min(1).optional(),
     workspace_id: z.string().min(1).optional(),
     workspace_path: z.string().optional(),
-    manifest_yaml: z.string().optional(),
+    /** Gone (PLAN-team-bundle S5.6): a run uses its daemon's installed team; refused so it isn't silently ignored. */
+    manifest_yaml: z.never({ message: 'manifest_yaml is no longer accepted: a run uses the team installed on its daemon' }).optional(),
     run_name: z.string().optional(),
     execution_type: z.enum(['local', 'docker']).optional(),
     priority: z.number().int().optional(),

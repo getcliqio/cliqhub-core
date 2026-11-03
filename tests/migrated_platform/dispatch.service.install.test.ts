@@ -243,6 +243,16 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
         await expect(teams().download(daemon_auth(realm_id), { name: team.name, scope: team.scope, version: '9.9.9', daemon_id: d1 })).rejects.toMatchObject({ status: 404, code: 'not_found' });
     });
 
+    it("download by the daemon's install id (daemon_team_id) with a version id: its own install only (S5.6)", async () => {
+        await DispatchService.install_team({ team_id, daemon_ids: [d1, d2], user_id, org_ids: [org_id] });
+        const mine = (await row_of(d1)).id;
+        const out = await teams().download(daemon_auth(realm_id), { daemon_team_id: mine, version_id, daemon_id: d1 }) as any;
+        expect(out).toMatchObject({ version: '1.0.0', version_id, team_id, daemon_team_id: mine });
+        // Another daemon's install id is not this daemon's.
+        await expect(teams().download(daemon_auth(realm_id), { daemon_team_id: (await row_of(d2)).id, version_id, daemon_id: d1 }))
+            .rejects.toMatchObject({ status: 404, code: 'not_installable' });
+    });
+
     it("download for a daemon the hub hasn't installed it on is refused: add it to the realm first", async () => {
         await expect(teams().download(daemon_auth(other_realm_id), { team_id, version_id, daemon_id: d_out }))
             .rejects.toMatchObject({ status: 404, code: 'not_installable', message: expect.stringContaining('Add it to the realm first') });

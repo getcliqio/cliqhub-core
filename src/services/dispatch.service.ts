@@ -84,7 +84,6 @@ export interface DispatchRunInput {
     team_id: string;
     daemon_id: string;
     workspace_path?: string;
-    manifest_yaml?: string;
     run_context: {
         id?: string;
         labels?: Record<string, string>;
@@ -193,7 +192,8 @@ export class DispatchService {
         const workspace_path = stored_path.startsWith('/') ? stored_path : '';
 
         const team = await _dt_repo.find_by_id(input.team_id);
-        const manifest_yaml = input.manifest_yaml ?? team?.manifest;
+        // Core's copy of the team's phases, for its own checks before dispatch; the daemon runs its installed folder.
+        const manifest_yaml = team?.manifest;
 
         // ── Validate required inputs against the registry team's declared inputs ──
         // Prevents runs from being dispatched only to stall immediately on
@@ -253,8 +253,9 @@ export class DispatchService {
         await command_outbox_enqueue(daemon.id, '/v1/execute', {
             run_id,
             workspace_dir: workspace_path,
-            manifest_yaml,
+            // By id (PLAN-team-bundle S5.6): the daemon runs that version's folder of its install; no manifest travels.
             team_id: input.team_id,
+            ...(team?.version_id ? { version_id: team.version_id } : {}),
             ...(team_version ? { version: team_version } : {}),
             run_context: input.run_context,
             run_name,
@@ -1144,9 +1145,6 @@ export class DispatchService {
             team_id: resolved_team.team_id,
             daemon_id: item.claimed_by,
             workspace_path: resolved_workspace.workspace_path || undefined,
-            manifest_yaml: typeof payload.manifest_yaml === 'string'
-                ? payload.manifest_yaml
-                : resolved_team.manifest,
             run_context,
             run_name: typeof payload.run_name === 'string' ? payload.run_name : undefined,
             execution_type: payload.execution_type === 'docker' ? 'docker' : 'local',

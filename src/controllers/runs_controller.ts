@@ -314,7 +314,6 @@ export class RunController extends BaseController {
                 daemon_id: body.daemon_id,
                 realm_id: body.realm_id,
                 workspace_path: body.workspace_path,
-                manifest_yaml: body.manifest_yaml,
                 run_context,
                 run_name: body.run_name,
                 execution_type: body.execution_type,
@@ -336,7 +335,6 @@ export class RunController extends BaseController {
         if (body.team_id) payload.team_id = body.team_id;
         if (body.workspace_id) payload.workspace_id = body.workspace_id;
         if (body.workspace_path) payload.workspace_path = body.workspace_path;
-        if (body.manifest_yaml) payload.manifest_yaml = body.manifest_yaml;
         if (body.run_name) payload.run_name = body.run_name;
         if (body.execution_type) payload.execution_type = body.execution_type;
         if (body.notify_channels) payload.notify_channels = body.notify_channels;

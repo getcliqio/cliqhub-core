@@ -239,6 +239,8 @@ export const TeamsDownloadInput = z.object({
         .describe('A daemon installing: the catalog team (with version_id or a version)'),
     daemon_id: z.string().min(1).optional()
         .describe('A daemon installing (PLAN-team-bundle S4.2, S5.3): the daemon, in the token\'s realm. Answers the daemon_team_id it keeps, for any published version of a team the hub installed on it (default: the version the realm runs there); refused when the hub has not installed the team on it'),
+    daemon_team_id: z.string().uuid().optional()
+        .describe('A daemon fetching a version of its own install (PLAN-team-bundle S5.6): CliqHub\'s id for it (its hub_team_id), with version_id and daemon_id'),
     name: z.string().min(1).optional().describe('Team name (required without version_id)'),
     scope: z.string().optional().describe('Scope (publisher) slug'),
     version: z.string().optional()

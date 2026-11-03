@@ -326,12 +326,10 @@ describe('DispatchService.dispatch_run', () => {
         expect(mock_enqueue).toHaveBeenCalled();
     });
 
-    it('allows missing team when manifest_yaml is provided', async () => {
+    it("a team Core has no row for is still sent by id (the daemon refuses it if it hasn't got it)", async () => {
         vi.mocked(DaemonTeam.findByPk).mockResolvedValueOnce(null as any);
 
-        const result = await DispatchService.dispatch_run(
-            make_dispatch_input({ manifest_yaml: 'name: x\nphases: []\n' }),
-        );
+        const result = await DispatchService.dispatch_run(make_dispatch_input());
         expect(result.run_id).toBe('run-001');
         expect(result.daemon_id).toBe('daemon-1');
         expect(mock_enqueue).toHaveBeenCalled();
@@ -351,12 +349,14 @@ describe('DispatchService.dispatch_run', () => {
     // and transport errors were removed — dispatch now enqueues to the
     // command outbox. Delivery and retry are tested in command_outbox.test.ts.
 
-    it('sends workspace_dir and manifest_yaml in outbox payload', async () => {
+    it('sends workspace_dir and the version by id — no manifest travels (S5.6)', async () => {
+        vi.mocked(DaemonTeam.findByPk).mockResolvedValue(make_team({ version_id: 'v-1' }) as any);
         await DispatchService.dispatch_run(make_dispatch_input());
 
         const payload = mock_enqueue.mock.calls[0][2] as Record<string, unknown>;
         expect(payload.workspace_dir).toBe('/home/user/project');
-        expect(payload.manifest_yaml).toBeDefined();
+        expect(payload).not.toHaveProperty('manifest_yaml');
+        expect(payload).toMatchObject({ team_id: 'team-1', version_id: 'v-1', version: '1.0.0' });
         expect(payload.run_id).toBe('run-001');
     });
 
@@ -375,21 +375,6 @@ describe('DispatchService.dispatch_run', () => {
         expect(payload.run_name).toBe('nightly-parsers');
     });
 
-    it('uses team manifest when manifest_yaml not provided', async () => {
-        await DispatchService.dispatch_run(make_dispatch_input());
-
-        const payload = mock_enqueue.mock.calls[0][2] as Record<string, unknown>;
-        expect(payload.manifest_yaml).toBe('name: my-team\nversion: "1.0.0"\nphases: []\n');
-    });
-
-    it('uses provided manifest_yaml over team manifest', async () => {
-        await DispatchService.dispatch_run(
-            make_dispatch_input({ manifest_yaml: 'custom: true' }),
-        );
-
-        const payload = mock_enqueue.mock.calls[0][2] as Record<string, unknown>;
-        expect(payload.manifest_yaml).toBe('custom: true');
-    });
 });
 
 // ── cancel_run ──────────────────────────────────────────────────────

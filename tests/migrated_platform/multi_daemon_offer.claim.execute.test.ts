@@ -194,7 +194,6 @@ describe.skipIf(!has_postgres)('multi-daemon offer + claim + execute (Slice 3)',
                 workspace_id,
                 team_id,
                 workspace_path: `/tmp/m3-ws`,
-                manifest_yaml: 'name: m3\nversion: "1.0.0"\nphases: []\n',
                 run_name: 'multi-daemon-run',
             },
         });
