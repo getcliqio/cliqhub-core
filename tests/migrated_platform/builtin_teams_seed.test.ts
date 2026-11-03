@@ -66,7 +66,8 @@ describe.skipIf(!has_postgres)('built-in hello-world', () => {
         const gate = manifest.phases.find((p) => p.name === 'human-review')!;
         expect(gate.review).toMatchObject({ artifacts: ['plan.md'], inputs: [{ name: 'guest_list', type: 'file', accept: ['.csv', 'text/csv'], required: true }] });
         expect(manifest.phases.find((p) => p.name === 'invitations')!.commands![0]!.run).toBe('cliq hug files human-review guest_list guests/');
-        expect(v.agents).toEqual({ exec: {}, hug: {} });
+        // The agents its phases use (team.yml has no `agents:` block to define them further).
+        expect(new Set(v.workflow.phases.map((p) => p.agent))).toEqual(new Set(['exec', 'hug']));
     });
 
     it("the lint reads each agent's newest catalog version: an older hug that required `role` doesn't count", async () => {
