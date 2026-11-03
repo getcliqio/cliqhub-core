@@ -94,107 +94,71 @@ export class TeamService {
     }
 
     /**
-     * The one rule for a daemon's install slot (daemon, scope, slug): a slot
-     * keeps its id for life. An existing slot (installed or uninstalled) is
-     * reactivated and keeps its id; if the daemon proposed a different id, this
-     * daemon's runs carrying it are moved to the slot. A new slot takes the
-     * proposed id when free, else a fresh one.
+     * The one rule for a daemon's install slot (PLAN-team-bundle S4.2): one row per (daemon, catalog team) for
+     * life, written only when the hub installs a realm team onto the daemon. An existing row (installed or not)
+     * is reactivated and keeps its id, now pointing at this realm team and version; otherwise a row is created
+     * with a fresh id. Core never takes an id from a daemon.
      *
-     * @returns the slot id the daemon must use.
+     * @returns the row id: what the daemon keeps (cliqd's `hub_team_id`) and its runs carry.
      */
-    static async settle_slot(input: {
+    static async install_slot(input: {
         daemon_id: string;
+        /** The realm team being installed (from `RealmTeamListService`). */
+        realm_team: { id: string; team_id: string; version_id: string; version: string };
         scope_id: string;
         slug: string;
-        /** The id the daemon has (or would like) for this team. */
-        proposed_id?: string | null;
-        version: string | null;
-        /** Who placed this installation: `'cli'` or `'hub'`. */
-        origin?: string | null;
         description: string | null;
         manifest: string;
         dockerfile?: string | null;
         dependencies?: string | null;
-    }): Promise<{ id: string; created: boolean; moved_runs: number }> {
+    }): Promise<{ id: string; created: boolean }> {
         const now = Date.now();
-        const proposed = input.proposed_id?.trim() || null;
+        const { realm_team } = input;
+        const fields = {
+            team_id: realm_team.team_id,
+            realm_team_id: realm_team.id,
+            version_id: realm_team.version_id,
+            version: realm_team.version,
+            scope_id: input.scope_id,
+            slug: input.slug,
+            origin: 'hub',
+            description: input.description,
+            manifest: input.manifest,
+            uninstalled_at: null,
+            updated_at: now,
+        };
+        // The installed row first, else the most recent uninstalled one: a reinstall gets its id back.
         const slot = await _dt_repo_ti.find_one_any({
-            where: { daemon_id: input.daemon_id, scope_id: input.scope_id, slug: input.slug },
+            where: { daemon_id: input.daemon_id, team_id: realm_team.team_id },
+            order: [[get_sequelize().literal('"uninstalled_at" IS NULL'), 'DESC'], ['updated_at', 'DESC']],
         });
         if (slot) {
             await slot.update({
-                version: input.version,
-                origin: input.origin ?? slot.origin,
-                description: input.description,
-                manifest: input.manifest,
+                ...fields,
                 dockerfile: input.dockerfile ?? slot.dockerfile,
                 dependencies: input.dependencies ?? slot.dependencies,
-                uninstalled_at: null,
-                updated_at: now,
-            });
-            let moved_runs = 0;
-            if (proposed && proposed !== slot.id) {
-                [moved_runs] = await _run_repo_ti.update_where(
-                    { daemon_id: input.daemon_id, team_id: proposed } as any,
-                    { team_id: slot.id } as any,
-                );
-                log.info('daemon_team_id_settled', {
-                    daemon_id: input.daemon_id, slug: input.slug, slot_id: slot.id, daemon_had: proposed, moved_runs,
-                });
-            }
-            return { id: slot.id, created: false, moved_runs };
+            } as any);
+            return { id: slot.id, created: false };
         }
-
-        // A proposed id already used by another slot can't be reused — except an
-        // installed, not-yet-bound row of this very team (an explicit install of
-        // that row): the daemon takes it over and its id. Detached leftovers are
-        // uninstalled and never taken over.
-        const taken = proposed ? await _dt_repo_ti.find_by_id_any(proposed) : null;
-        if (
-            taken
-            && !taken.daemon_id
-            && taken.uninstalled_at == null
-            && taken.scope_id === input.scope_id
-            && taken.slug === input.slug
-        ) {
-            await taken.update({
-                daemon_id: input.daemon_id,
-                version: input.version,
-                origin: input.origin ?? taken.origin,
-                description: input.description,
-                manifest: input.manifest,
-                dockerfile: input.dockerfile ?? taken.dockerfile,
-                dependencies: input.dependencies ?? taken.dependencies,
-                updated_at: now,
-            });
-            return { id: taken.id, created: false, moved_runs: 0 };
-        }
-        const id = proposed && !taken ? proposed : randomUUID();
-        const row = await _dt_repo_ti.create_one({
+        const id = randomUUID();
+        await _dt_repo_ti.create_one({
             id,
             daemon_id: input.daemon_id,
-            scope_id: input.scope_id,
-            slug: input.slug,
-            version: input.version,
-            origin: input.origin ?? null,
-            description: input.description,
-            manifest: input.manifest,
+            ...fields,
             dockerfile: input.dockerfile ?? null,
             dependencies: input.dependencies ?? null,
-            uninstalled_at: null,
             created_at: now,
-            updated_at: now,
         } as any);
-        return { id: String(row.id ?? id), created: true, moved_runs: 0 };
+        return { id, created: true };
     }
 
     /**
-     * `daemons/register_teams`: settle each team the daemon reports and return
-     * the id it must use. With `complete`, the list is the daemon's whole
-     * roster: its other installed slots are marked uninstalled. Scopes are
-     * looked up, never created — an unknown scope comes back as an error.
-     * With `realm_teams` (the daemon's realm team list, `scope/slug`), a team
-     * not on it is refused (`reason: not_in_realm`) and gets no slot.
+     * `daemons/register_teams` (PLAN-team-bundle S4.2): the daemon reports the teams it has by the id the hub gave
+     * it (the row id). A team is kept only when the hub installed it on this daemon and its catalog team is on the
+     * daemon's realm (`realm_teams`); its version is updated to what the daemon has. Anything else gets no id:
+     * `unknown` (not a team the hub installed here — a local or CLI install stays in cliqd) or `not_in_realm` (the
+     * team is no longer on the realm: the row is marked uninstalled). With `complete`, the list is the daemon's
+     * whole roster: its other installed rows are marked uninstalled.
      */
     static async register_from_daemon(
         daemon_id: string,
@@ -209,40 +173,41 @@ export class TeamService {
             dependencies?: string | null;
         }>,
         complete: boolean,
-        realm_teams: ReadonlySet<string> | null = null,
-    ): Promise<Array<{ scope: string; slug: string; id: string | null; error?: string; reason?: 'not_in_realm' | 'unknown_scope' }>> {
-        const scope_slugs = [...new Set(teams.map((t) => t.scope))];
-        const scopes = scope_slugs.length
-            ? await _scope_repo_ti.find_all_q({ where: { slug: { [Op.in]: scope_slugs } } })
-            : [];
-        const scope_id_by_slug = new Map(scopes.map((sc) => [sc.slug, String(sc.id)]));
-
-        const out: Array<{ scope: string; slug: string; id: string | null; error?: string; reason?: 'not_in_realm' | 'unknown_scope' }> = [];
+        /** The daemon's realm teams, by catalog team id. */
+        realm_teams: ReadonlyMap<string, { id: string; team_id: string; version_id: string; version: string }>,
+    ): Promise<Array<{ scope: string; slug: string; id: string | null; error?: string; reason?: 'not_in_realm' | 'unknown' }>> {
+        const out: Array<{ scope: string; slug: string; id: string | null; error?: string; reason?: 'not_in_realm' | 'unknown' }> = [];
         const kept = new Set<string>();
         for (const t of teams) {
-            const scope_id = scope_id_by_slug.get(t.scope);
-            if (!scope_id) {
-                out.push({ scope: t.scope, slug: t.slug, id: null, error: `Unknown scope '${t.scope}'`, reason: 'unknown_scope' });
+            const label = `@${t.scope}/${t.slug}`;
+            const row = t.id ? await _dt_repo_ti.find_by_id_any(t.id) : null;
+            if (!row || row.daemon_id !== daemon_id || !row.team_id) {
+                out.push({ scope: t.scope, slug: t.slug, id: null, reason: 'unknown', error: `${label} wasn't installed on this daemon by the hub. Add it to the realm to install it.` });
                 continue;
             }
-            if (realm_teams && !realm_teams.has(`${t.scope}/${t.slug}`)) {
-                out.push({ scope: t.scope, slug: t.slug, id: null, error: `@${t.scope}/${t.slug} isn't in this daemon's realm`, reason: 'not_in_realm' });
+            const realm_team = realm_teams.get(row.team_id);
+            if (!realm_team) {
+                if (row.uninstalled_at == null) await TeamService._mark_uninstalled(row);
+                out.push({ scope: t.scope, slug: t.slug, id: null, reason: 'not_in_realm', error: `${label} isn't in this daemon's realm` });
                 continue;
             }
-            const settled = await TeamService.settle_slot({
-                daemon_id,
-                scope_id,
-                slug: t.slug,
-                proposed_id: t.id ?? null,
-                version: t.version ?? null,
-                origin: (t as unknown as { origin?: string }).origin ?? null,
-                description: t.description ?? null,
-                manifest: t.manifest ?? '',
-                dockerfile: t.dockerfile ?? null,
-                dependencies: t.dependencies ?? null,
-            });
-            kept.add(settled.id);
-            out.push({ scope: t.scope, slug: t.slug, id: settled.id });
+            const version = t.version ?? row.version;
+            const version_id = version === realm_team.version
+                ? realm_team.version_id
+                : version === row.version ? row.version_id : await TeamService._version_id(row.team_id, version);
+            await row.update({
+                realm_team_id: realm_team.id,
+                version,
+                version_id,
+                ...(t.description !== undefined ? { description: t.description } : {}),
+                ...(t.manifest ? { manifest: t.manifest } : {}),
+                ...(t.dockerfile ? { dockerfile: t.dockerfile } : {}),
+                ...(t.dependencies ? { dependencies: t.dependencies } : {}),
+                uninstalled_at: null,
+                updated_at: Date.now(),
+            } as any);
+            kept.add(row.id);
+            out.push({ scope: t.scope, slug: t.slug, id: row.id });
         }
 
         if (complete) {
@@ -252,6 +217,13 @@ export class TeamService {
             }
         }
         return out;
+    }
+
+    /** A catalog version's id by its number (published), or null. */
+    private static async _version_id(team_id: string, version: string | null): Promise<string | null> {
+        if (!version) return null;
+        const { TeamVersionRepository } = await import('../repositories/team_version_repository.js');
+        return (await new TeamVersionRepository().find_by_team_and_version(team_id, version))?.id ?? null;
     }
 
     static async get(scope_id: string, slug: string) {
@@ -283,42 +255,6 @@ export class TeamService {
         const team = await _dt_repo_ti.find_by_id(id);
         if (!team) throw ApiError.not_found(`team '${id}' not found`);
         return team;
-    }
-
-    static async create(
-        scope_id: string,
-        slug: string,
-        version: string | null,
-        description: string | null,
-        manifest: string,
-        deps?: {
-            dockerfile?: string | null;
-            dependencies?: string | null;
-            /**
-             * Daemon that owns this installation (Design Z). Required
-             * for new writes; the CLI reads the current daemon id from
-             * `~/.cliqrc/settings.json` and threads it through.
-             */
-            daemon_id?: string | null;
-            /** Hub-minted PK — must match the id installed on the daemon. */
-            id?: string;
-        },
-    ) {
-        log.debug('create', { scope_id, slug, daemon_id: deps?.daemon_id });
-        const now = Date.now();
-        return _dt_repo_ti.create_one({
-            id: deps?.id?.trim() || randomUUID(),
-            daemon_id: deps?.daemon_id ?? null,
-            scope_id,
-            slug,
-            version: version ?? null,
-            description: description ?? null,
-            manifest,
-            dockerfile: deps?.dockerfile ?? null,
-            dependencies: deps?.dependencies ?? null,
-            created_at: now,
-            updated_at: now,
-        });
     }
 
     static async update(

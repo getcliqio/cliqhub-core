@@ -20,16 +20,12 @@ vi.mock('../../../src/services/workspace.service.js', () => ({
 vi.mock('../../../src/repositories/workspace_repository.js', () => ({
     WorkspaceRepository: class { find_all = vi.fn(async () => []); },
 }));
-vi.mock('../../../src/services/daemon_team_cache.service.js', () => ({
-    DaemonTeamCacheService: { sync: vi.fn(async () => undefined) },
-}));
 vi.mock('../../../src/lib/log.js', () => ({
     get_logger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 
 import { DispatchService } from '../../../src/services/dispatch.service.js';
 import { WorkspaceService } from '../../../src/services/workspace.service.js';
-import { DaemonTeamCacheService } from '../../../src/services/daemon_team_cache.service.js';
 import { live_teams_from_daemon, live_workspaces_from_daemon } from '../../../src/services/daemon_live_inventory.service.js';
 
 /** The `data` of a pinned success reply. */
@@ -44,15 +40,11 @@ function pinned_data(name: 'teams_get' | 'workspaces_get'): Record<string, Array
 beforeEach(() => vi.clearAllMocks());
 
 describe('live_teams_from_daemon', () => {
-    it('asks teams/get with {} and caches data.teams[]', async () => {
+    it('asks teams/get with {} and answers it as is: a read, Core records nothing from it (PLAN-team-bundle S4.2)', async () => {
         const data = pinned_data('teams_get');
         vi.mocked(DispatchService.query_daemon).mockResolvedValueOnce(data);
         expect(await live_teams_from_daemon('daemon-1', 'user-1')).toBe(data);
         expect(DispatchService.query_daemon).toHaveBeenCalledWith('daemon-1', '/v1/teams/get', {}, 'user-1');
-        const team = data.teams![0]!;
-        expect(DaemonTeamCacheService.sync).toHaveBeenCalledWith('daemon-1', [expect.objectContaining({
-            id: team.team_id, scope: team.scope, slug: team.slug, version: team.version, manifest: team.manifest,
-        })]);
     });
 });
 

@@ -1180,6 +1180,53 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`CREATE UNIQUE INDEX IF NOT EXISTS "realm_teams_realm_team" ON cliq."realm_teams" ("realm_id", "team_id")`);
     await run(`CREATE INDEX IF NOT EXISTS "realm_teams_team" ON cliq."realm_teams" ("team_id")`);
 
+    // daemon_teams is a child of a realm team (PLAN-team-bundle S4.2): the catalog team, the realm team it was
+    // installed from, the version installed. Uninstalled rows stay (runs point at them), so the columns are
+    // nullable; a live row needs its realm team — that CHECK is added by the one-time re-key
+    // (daemon_teams_to_realm_teams), once every live row has one.
+    await run(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "team_id" UUID`);
+    await run(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "realm_team_id" UUID`);
+    await run(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "version_id" UUID`);
+    for (const [name, column, ref] of [
+        ['daemon_teams_team_fk', 'team_id', 'teams'],
+        ['daemon_teams_realm_team_fk', 'realm_team_id', 'realm_teams'],
+        ['daemon_teams_version_fk', 'version_id', 'team_versions'],
+    ] as const) {
+        await run(`
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '${name}') THEN
+                    ALTER TABLE cliq."daemon_teams" ADD CONSTRAINT "${name}"
+                        FOREIGN KEY ("${column}") REFERENCES cliq."${ref}" ("id") ON DELETE SET NULL;
+                END IF;
+            END $$`);
+    }
+    // When its realm team goes (removed from the realm, realm deleted), the row is uninstalled, not left live.
+    await run(`
+        CREATE OR REPLACE FUNCTION cliq.daemon_teams_realm_team_gone() RETURNS trigger AS $$
+        BEGIN
+            IF NEW."realm_team_id" IS NULL AND OLD."realm_team_id" IS NOT NULL AND NEW."uninstalled_at" IS NULL THEN
+                NEW."uninstalled_at" := (extract(epoch FROM now()) * 1000)::bigint;
+                NEW."updated_at" := NEW."uninstalled_at";
+            END IF;
+            RETURN NEW;
+        END $$ LANGUAGE plpgsql`);
+    await run(`DROP TRIGGER IF EXISTS "daemon_teams_realm_team_gone" ON cliq."daemon_teams"`);
+    await run(`
+        CREATE TRIGGER "daemon_teams_realm_team_gone" BEFORE UPDATE OF "realm_team_id" ON cliq."daemon_teams"
+        FOR EACH ROW EXECUTE FUNCTION cliq.daemon_teams_realm_team_gone()`);
+    // One live row per (daemon, catalog team); the old (daemon, scope, slug, version) unique index goes.
+    await run(`
+        DO $$ DECLARE i record; BEGIN
+            FOR i IN SELECT indexname FROM pg_indexes
+                WHERE schemaname = 'cliq' AND tablename = 'daemon_teams'
+                  AND indexdef ILIKE '%UNIQUE%' AND indexdef ILIKE '%(daemon_id, scope_id, slug, version)%'
+            LOOP EXECUTE format('DROP INDEX cliq.%I', i.indexname); END LOOP;
+        END $$`);
+    await run(`
+        CREATE UNIQUE INDEX IF NOT EXISTS "daemon_teams_daemon_team" ON cliq."daemon_teams" ("daemon_id", "team_id")
+        WHERE "team_id" IS NOT NULL AND "uninstalled_at" IS NULL`);
+    await run(`CREATE INDEX IF NOT EXISTS "daemon_teams_realm_team" ON cliq."daemon_teams" ("realm_team_id")`);
+
     // Org team library: teams an org has taken on (from the marketplace or its own
     // scopes). A team joins the org before any of the org's realms can add it.
     await run(`

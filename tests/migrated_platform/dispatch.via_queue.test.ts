@@ -5,7 +5,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { randomUUID } from 'node:crypto';
-import { Op } from 'sequelize';
 
 import {
     close_test_control_plane_store,
@@ -18,10 +17,14 @@ import {
     RealmMember,
     RealmDispatchQueue,
     DaemonTeam,
+    Team,
+    TeamVersion,
 } from '../../src/models/index.js';
 import { Scope } from '../../src/models/index.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
+import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
+import { publish_version } from './helpers/version_files.js';
 import * as outbox from '../../src/services/command_outbox.service.js';
 
 const has_postgres = await postgres_reachable();
@@ -55,22 +58,17 @@ describe.skipIf(!has_postgres)('DispatchService install/uninstall via queue (Sli
         });
         scope_id = scope.id;
 
-        const team = await DaemonTeam.create({
-            id: randomUUID(),
-            scope_id,
-            slug: `t-${uid()}`,
-            version: '1.0.0',
-            description: null,
-            manifest: 'name: t\nversion: "1.0.0"\nphases: []\n',
-            dockerfile: null,
-            dependencies: null,
-            created_at: Date.now(),
-            updated_at: Date.now(),
-        });
-        team_id = team.id;
+        // A published catalog team on the realm's list (PLAN-team-bundle S4.2: daemons install realm teams only).
+        const name = `t-${uid()}`.slice(0, 40);
+        team_id = (await Team.create({
+            id: randomUUID(), name, scope: scope.slug, description: 't',
+            author_id: user_id, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
+        } as any)).id;
+        await publish_version(team_id, '1.0.0', { name: `@${scope.slug}/${name}`, phases: [] });
 
         const realm = await RealmService.create(user_id, `s4-${uid()}`.slice(0, 40), 'Slice4 Realm');
         realm_id = realm.id;
+        await RealmTeamListService.add(realm_id, user_id, { team_id });
 
         d1 = uid();
         d2 = uid();
@@ -97,22 +95,6 @@ describe.skipIf(!has_postgres)('DispatchService install/uninstall via queue (Sli
     beforeEach(async () => {
         mock_enqueue.mockReset();
         mock_enqueue.mockResolvedValue({ tx_id: 'test-tx-id' });
-        // Realm fan-out in earlier tests can rebind the seeded team to
-        // whichever daemon Postgres returns first (order between d1/d2
-        // isn't fully deterministic given equal last_heartbeats). Reset
-        // the seed team to its unbound baseline so per-test assertions
-        // on team_id are stable. Also clear the daemon-cloned rows that
-        // fan-out may create for the "other" daemon.
-        if (team_id) {
-            await DaemonTeam.update({ daemon_id: null }, { where: { id: team_id } });
-            await DaemonTeam.destroy({
-                where: {
-                    scope_id,
-                    id: { [Op.ne]: team_id },
-                    daemon_id: { [Op.in]: [d1, d2] },
-                },
-            });
-        }
     });
 
     afterAll(async () => {
@@ -122,7 +104,9 @@ describe.skipIf(!has_postgres)('DispatchService install/uninstall via queue (Sli
         await Realm.destroy({ where: { id: realm_id } });
         await Daemon.destroy({ where: { id: d1 } });
         await Daemon.destroy({ where: { id: d2 } });
-        await DaemonTeam.destroy({ where: { id: team_id } });
+        await DaemonTeam.unscoped().destroy({ where: { team_id } });
+        await TeamVersion.destroy({ where: { team_id } });
+        await Team.destroy({ where: { id: team_id } });
         await Scope.destroy({ where: { id: scope_id } });
         await close_test_control_plane_store();
     });

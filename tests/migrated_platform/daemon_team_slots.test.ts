@@ -1,7 +1,8 @@
 /**
- * Daemon team slots (PLAN-team-ids.md): one id per (daemon, scope, slug) for
- * life — register, CliqHub install, sync and uninstall all keep it, and runs
- * keep their team after an uninstall.
+ * Daemon team rows (PLAN-team-bundle S4.2): a child of a realm team, one per (daemon, catalog team) for life.
+ * Core writes a row only when the hub installs a realm team on a daemon, with a fresh id it sends the daemon; a
+ * daemon reports teams by that id, and Core never takes an id from a daemon. Uninstall keeps the row (runs keep
+ * their team) and a reinstall gets the same id back; when its realm team goes, the row is uninstalled.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
@@ -10,34 +11,60 @@ import { RunService } from '../../src/services/run.service.js';
 import { ScopeService } from '../../src/services/control_scope_service.js';
 import { TeamService } from '../../src/services/teams_install_service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
-import { DaemonTeamCacheService } from '../../src/services/daemon_team_cache.service.js';
+import { RealmService } from '../../src/services/realm.service.js';
+import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
-import { Daemon, DaemonTeam, Run, Workspace } from '../../src/models/index.js';
+import { publish_version } from './helpers/version_files.js';
+import { Daemon, DaemonTeam, Realm, RealmMember, Run, Scope, Team, TeamVersion, Workspace } from '../../src/models/index.js';
 
 const has_postgres = await postgres_reachable();
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const user_id = hub_legacy_uuid(1);
 
 let scope_slug: string;
+let scope_id: string;
 let workspace_id: string;
+let realm_id: string;
 const daemons: string[] = [];
+const team_ids: string[] = [];
 
-async function new_daemon(): Promise<string> {
+async function new_daemon(in_realm = true): Promise<string> {
     const id = randomUUID();
     await Daemon.create({
-        id, api_key_hash: 'slot-test', user_id: hub_legacy_uuid(1), user_email: 'platform@test.local',
+        id, api_key_hash: 'slot-test', user_id, user_email: 'platform@test.local',
         hostname: 'slot-test', ip: null, port: null, public_url: null, status: 'online',
         last_heartbeat: Date.now(), capacity: 5, created_at: Date.now(), last_registered_at: Date.now(),
     });
     daemons.push(id);
+    if (in_realm) await RealmService.upsert_daemon_member(realm_id, id);
     return id;
 }
 
-const team = (slug: string, id?: string) => ({ id: id ?? randomUUID(), scope: scope_slug, slug, version: '1.0', manifest: 'phases: []' });
+/** A published catalog team on the realm's list: its id and its versions' ids. */
+async function realm_team(name = `t-${uid()}`, versions = ['1.0.0']): Promise<{ team_id: string; name: string; v: Record<string, string> }> {
+    const team_id = (await Team.create({
+        id: randomUUID(), name, scope: scope_slug, description: name,
+        author_id: user_id, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
+    } as never)).id as string;
+    team_ids.push(team_id);
+    const v: Record<string, string> = {};
+    for (const version of versions) v[version] = await publish_version(team_id, version, { name: `@${scope_slug}/${name}`, phases: [] });
+    await RealmTeamListService.add(realm_id, user_id, { team_id, version_id: v[versions[0]] });
+    return { team_id, name, v };
+}
 
-/** The slot row, installed or not. */
-const slot = (daemon_id: string, slug: string) => DaemonTeam.unscoped().findOne({ where: { daemon_id, slug } });
+/** What the hub does when it installs a realm team on a daemon: write (or reuse) its row. */
+async function hub_install(daemon_id: string, t: { team_id: string; name: string }): Promise<string> {
+    const rt = (await RealmTeamListService.find(realm_id, t.team_id))!;
+    return (await TeamService.install_slot({ daemon_id, realm_team: rt, scope_id, slug: t.name, description: null, manifest: '{"phases":[]}' })).id;
+}
 
-/** The team label a run shows (the run list read). */
+/** The daemon's realm teams, as register_teams passes them. */
+const realm_teams = async () => new Map((await RealmTeamListService.entries(realm_id)).map((e) => [e.team_id, e]));
+/** What a daemon reports: the id the hub gave it. */
+const report = (id: string | null, name: string, version = '1.0.0') => ({ id, scope: scope_slug, slug: name, version, manifest: '{"phases":[]}' });
+const row = (id: string) => DaemonTeam.unscoped().findByPk(id, { raw: true }) as Promise<any>;
+
 async function run_label(run_id: string, workspace: string): Promise<string | null> {
     const { runs } = await RunService.list_recent(50, undefined, { workspace_id: workspace, site_admin: true });
     return (runs.find((r: { run_id: string }) => r.run_id === run_id) as { team_label?: string | null } | undefined)?.team_label ?? null;
@@ -47,8 +74,13 @@ beforeAll(async () => {
     if (!has_postgres) return;
     process.env.CLIQ_BFF_LOG_LEVEL = 'error';
     await open_test_control_plane_store();
+    const realm = await RealmService.create(user_id, `slots-${uid()}`.slice(0, 40), 'Slots');
+    realm_id = realm.id;
+    // The scope belongs to the realm's org (a scope with no org trips the visibility migration).
     scope_slug = `slots-${uid()}`;
-    await ScopeService.add(scope_slug);
+    await ScopeService.add(scope_slug, 'Slots', String((await Realm.findByPk(realm_id, { raw: true }) as any).org_id));
+    scope_id = String((await Scope.findOne({ where: { slug: scope_slug }, raw: true }) as any).id);
+    for (const e of await RealmTeamListService.entries(realm_id)) await RealmTeamListService.remove(realm_id, user_id, e.team_id);
     const { record } = await WorkspaceService.upsert_by_path(`/tmp/slot-test-ws-${uid()}`);
     workspace_id = record.id;
 });
@@ -56,128 +88,122 @@ beforeAll(async () => {
 afterAll(async () => {
     if (!has_postgres) return;
     await Run.destroy({ where: { workspace_id } });
+    await RealmMember.destroy({ where: { realm_id } });
+    await Realm.destroy({ where: { id: realm_id } });
     await DaemonTeam.unscoped().destroy({ where: { daemon_id: daemons } });
     await Daemon.destroy({ where: { id: daemons } });
+    await TeamVersion.destroy({ where: { team_id: team_ids } });
+    await Team.destroy({ where: { id: team_ids } });
+    await Scope.destroy({ where: { slug: scope_slug } });
     await close_test_control_plane_store();
 });
 
-describe.skipIf(!has_postgres)('daemon team slots', () => {
-    it('S1: a new team takes the id the daemon proposes', async () => {
+describe.skipIf(!has_postgres)('daemon team rows: children of realm teams', () => {
+    it('the hub installing a realm team writes the row: a fresh id, its catalog team, realm team and version', async () => {
         const d = await new_daemon();
-        const t = team('qa');
-        const [out] = await TeamService.register_from_daemon(d, [t], false);
-        expect(out).toEqual({ scope: scope_slug, slug: 'qa', id: t.id });
+        const t = await realm_team();
+        const id = await hub_install(d, t);
+        const rt = (await RealmTeamListService.find(realm_id, t.team_id))!;
+        expect(await row(id)).toMatchObject({ daemon_id: d, team_id: t.team_id, realm_team_id: rt.id, version_id: t.v['1.0.0'], version: '1.0.0', uninstalled_at: null });
     });
 
-    it('S2: an existing slot keeps its id; the daemon is told to use it and its runs move', async () => {
+    it('the realm moving to another version keeps the row and its id; the version follows', async () => {
         const d = await new_daemon();
-        const first = team('qa');
-        await TeamService.register_from_daemon(d, [first], false);
-        // The daemon reinstalled offline and minted another id, then ran the team.
+        const t = await realm_team(undefined, ['1.0.0', '1.1.0']);
+        const id = await hub_install(d, t);
+        await RealmTeamListService.add(realm_id, user_id, { team_id: t.team_id, version_id: t.v['1.1.0'] });
+        expect(await hub_install(d, t)).toBe(id);
+        expect(await row(id)).toMatchObject({ version_id: t.v['1.1.0'], version: '1.1.0' });
+        expect(await DaemonTeam.unscoped().count({ where: { daemon_id: d, team_id: t.team_id } })).toBe(1);
+    });
+
+    it('two daemons, same team: two rows', async () => {
+        const [d1, d2] = [await new_daemon(), await new_daemon()];
+        const t = await realm_team();
+        expect(await hub_install(d1, t)).not.toBe(await hub_install(d2, t));
+    });
+
+    it('register_teams keeps a team by the id the hub gave; the version it reports is recorded', async () => {
+        const d = await new_daemon();
+        const t = await realm_team(undefined, ['1.0.0', '1.1.0']);
+        const id = await hub_install(d, t);
+        const [out] = await TeamService.register_from_daemon(d, [report(id, t.name, '1.1.0')], false, await realm_teams());
+        expect(out).toEqual({ scope: scope_slug, slug: t.name, id });
+        expect(await row(id)).toMatchObject({ version: '1.1.0', version_id: t.v['1.1.0'], uninstalled_at: null });
+    });
+
+    it("register_teams never takes a daemon's id: an id the hub didn't give this daemon is unknown, no row is made", async () => {
+        const [d, other] = [await new_daemon(), await new_daemon()];
+        const t = await realm_team();
+        const others = await hub_install(other, t);
         const local = randomUUID();
-        const run_id = await RunService.create(workspace_id, local, { daemon_id: d });
-        const [out] = await TeamService.register_from_daemon(d, [team('qa', local)], false);
-        expect(out!.id).toBe(first.id);
-        expect((await Run.findByPk(run_id))!.get('team_id')).toBe(first.id);
+        const out = await TeamService.register_from_daemon(d, [report(local, t.name), report(others, t.name), report(null, t.name)], false, await realm_teams());
+        expect(out.map((o) => [o.id, o.reason])).toEqual([[null, 'unknown'], [null, 'unknown'], [null, 'unknown']]);
+        expect(await row(local)).toBeNull();
+        expect(await DaemonTeam.unscoped().count({ where: { daemon_id: d } })).toBe(0);
     });
 
-    it('S3/S4: uninstall keeps the slot (runs keep their team); reinstall gets the same id back', async () => {
+    it('register_teams: a team no longer on the realm is not_in_realm and its row is uninstalled', async () => {
         const d = await new_daemon();
-        const t = team('qa');
-        await TeamService.register_from_daemon(d, [t], true);
-        const run_id = await RunService.create(workspace_id, t.id, { daemon_id: d });
+        const t = await realm_team();
+        const id = await hub_install(d, t);
+        const without = await realm_teams();
+        without.delete(t.team_id);
+        const [out] = await TeamService.register_from_daemon(d, [report(id, t.name)], false, without);
+        expect(out).toMatchObject({ id: null, reason: 'not_in_realm' });
+        expect((await row(id)).uninstalled_at).not.toBeNull();
+    });
 
+    it('uninstall keeps the row (runs keep their team); the hub installing again gets the same id back', async () => {
+        const d = await new_daemon();
+        const t = await realm_team();
+        const id = await hub_install(d, t);
+        const run_id = await RunService.create(workspace_id, id, { daemon_id: d });
         // The daemon's whole roster no longer has it → uninstalled, not deleted.
-        await TeamService.register_from_daemon(d, [], true);
-        expect((await slot(d, 'qa'))!.get('uninstalled_at')).not.toBeNull();
-        expect(await DaemonTeam.findOne({ where: { daemon_id: d, slug: 'qa' } })).toBeNull();
-        expect(await run_label(run_id, workspace_id)).toBe(`@${scope_slug}/qa`);
+        await TeamService.register_from_daemon(d, [], true, await realm_teams());
+        expect((await row(id)).uninstalled_at).not.toBeNull();
+        expect(await DaemonTeam.findOne({ where: { daemon_id: d, team_id: t.team_id } })).toBeNull();
+        expect(await run_label(run_id, workspace_id)).toBe(`@${scope_slug}/${t.name}`);
 
-        const [again] = await TeamService.register_from_daemon(d, [team('qa')], true);
-        expect(again!.id).toBe(t.id);
-        expect((await slot(d, 'qa'))!.get('uninstalled_at')).toBeNull();
+        expect(await hub_install(d, t)).toBe(id);
+        expect((await row(id)).uninstalled_at).toBeNull();
     });
 
-    it('a proposed id already used by another slot is not reused', async () => {
-        const d1 = await new_daemon();
-        const d2 = await new_daemon();
-        const t = team('qa');
-        await TeamService.register_from_daemon(d1, [t], false);
-        const [out] = await TeamService.register_from_daemon(d2, [team('qa', t.id)], false);
-        expect(out!.id).not.toBe(t.id);
-    });
-
-    it('S11: two daemons, same team — two slots, no cross-claiming', async () => {
-        const d1 = await new_daemon();
-        const d2 = await new_daemon();
-        const a = team('shared');
-        const b = team('shared');
-        await TeamService.register_from_daemon(d1, [a], false);
-        await TeamService.register_from_daemon(d2, [b], false);
-        expect((await slot(d1, 'shared'))!.id).toBe(a.id);
-        expect((await slot(d2, 'shared'))!.id).toBe(b.id);
-    });
-
-    it('an unknown scope is refused per team, never created', async () => {
+    it('the realm team going (removed from the realm) uninstalls the row and clears its realm team', async () => {
         const d = await new_daemon();
-        const [out] = await TeamService.register_from_daemon(d, [{ ...team('x'), scope: `nope-${uid()}` }], false);
-        expect(out!.id).toBeNull();
-        expect(out!.error).toMatch(/Unknown scope/);
-        expect(out!.reason).toBe('unknown_scope');
+        const t = await realm_team();
+        const id = await hub_install(d, t);
+        await RealmTeamListService.remove(realm_id, user_id, t.team_id);
+        expect(await row(id)).toMatchObject({ realm_team_id: null, team_id: t.team_id });
+        expect((await row(id)).uninstalled_at).not.toBeNull();
+        // Added back: a new realm team, the same row.
+        await RealmTeamListService.add(realm_id, user_id, { team_id: t.team_id });
+        expect(await hub_install(d, t)).toBe(id);
     });
 
-    it('rule 7: a team not on the daemon\'s realm list is refused and gets no slot', async () => {
+    it('TeamService.remove marks the row uninstalled and keeps its runs', async () => {
         const d = await new_daemon();
-        const listed = team('listed');
-        const [ok, refused] = await TeamService.register_from_daemon(
-            d, [listed, team('unlisted')], true, new Set([`${scope_slug}/listed`]),
-        );
-        expect(ok!.id).toBe(listed.id);
-        expect(refused).toMatchObject({ slug: 'unlisted', id: null, reason: 'not_in_realm' });
-        expect(await slot(d, 'unlisted')).toBeNull();
-    });
-
-    it('sync (teams/get on a daemon) uses the same rule and uninstalls what the daemon dropped', async () => {
-        const d = await new_daemon();
-        const t = team('qa');
-        await TeamService.register_from_daemon(d, [t], false);
-        const local = randomUUID();
-        const run_id = await RunService.create(workspace_id, local, { daemon_id: d });
-
-        await DaemonTeamCacheService.sync(d, [{ ...team('qa', local), description: null }]);
-        expect((await slot(d, 'qa'))!.id).toBe(t.id);
-        expect((await Run.findByPk(run_id))!.get('team_id')).toBe(t.id);
-
-        await DaemonTeamCacheService.sync(d, []);
-        expect((await slot(d, 'qa'))!.get('uninstalled_at')).not.toBeNull();
-    });
-
-    it('TeamService.remove marks the slot uninstalled and keeps its runs', async () => {
-        const d = await new_daemon();
-        const t = team(`solo-${uid()}`);
-        await TeamService.register_from_daemon(d, [t], false);
-        const run_id = await RunService.create(workspace_id, t.id, { daemon_id: d });
-        const row = (await slot(d, t.slug))!;
-        await TeamService.remove(row.scope_id, t.slug);
-        expect((await slot(d, t.slug))!.get('uninstalled_at')).not.toBeNull();
+        const t = await realm_team();
+        const id = await hub_install(d, t);
+        const run_id = await RunService.create(workspace_id, id, { daemon_id: d });
+        await TeamService.remove(scope_id, t.name);
+        expect((await row(id)).uninstalled_at).not.toBeNull();
         expect(await Run.findByPk(run_id)).not.toBeNull();
     });
 
     it('runs/get { team: scope/slug } lists runs of every install of the team, uninstalled ones included', async () => {
-        const d1 = await new_daemon();
-        const d2 = await new_daemon();
-        const name = `named-${uid()}`;
-        const a = team(name);
-        const b = team(name);
-        const other = team(`other-${uid()}`);
-        await TeamService.register_from_daemon(d1, [a, other], true);
-        await TeamService.register_from_daemon(d2, [b], true);
-        const r1 = await RunService.create(workspace_id, a.id, { daemon_id: d1 });
-        const r2 = await RunService.create(workspace_id, b.id, { daemon_id: d2 });
-        const r3 = await RunService.create(workspace_id, other.id, { daemon_id: d1 });
-        await TeamService.register_from_daemon(d2, [], true); // d2's install uninstalled
+        const [d1, d2] = [await new_daemon(), await new_daemon()];
+        const t = await realm_team();
+        const other = await realm_team();
+        const a = await hub_install(d1, t);
+        const b = await hub_install(d2, t);
+        const o = await hub_install(d1, other);
+        const r1 = await RunService.create(workspace_id, a, { daemon_id: d1 });
+        const r2 = await RunService.create(workspace_id, b, { daemon_id: d2 });
+        const r3 = await RunService.create(workspace_id, o, { daemon_id: d1 });
+        await TeamService.register_from_daemon(d2, [], true, await realm_teams()); // d2's install uninstalled
 
-        const { runs, total } = await RunService.list_recent(50, undefined, { team: { scope: scope_slug, slug: name }, site_admin: true });
+        const { runs, total } = await RunService.list_recent(50, undefined, { team: { scope: scope_slug, slug: t.name }, site_admin: true });
         expect(runs.map((r: { run_id: string }) => r.run_id).sort()).toEqual([r1, r2].sort());
         expect(total).toBe(2);
         expect(runs.some((r: { run_id: string }) => r.run_id === r3)).toBe(false);
@@ -188,11 +214,11 @@ describe.skipIf(!has_postgres)('daemon team slots', () => {
 
     it('deleting a workspace keeps its runs (marked deleted, hidden); registering the path again brings it back', async () => {
         const d = await new_daemon();
-        const t = team(`ws-${uid()}`);
-        await TeamService.register_from_daemon(d, [t], false);
+        const t = await realm_team();
+        const id = await hub_install(d, t);
         const path = `/tmp/ws-delete-${uid()}`;
         const { record } = await WorkspaceService.upsert_by_path(path, 'del', d);
-        const run_id = await RunService.create(String(record.id), t.id, { daemon_id: d });
+        const run_id = await RunService.create(String(record.id), id, { daemon_id: d });
 
         expect(await WorkspaceService.remove(String(record.id))).toBe(true);
         expect(await Run.findByPk(run_id)).not.toBeNull();
@@ -208,4 +234,3 @@ describe.skipIf(!has_postgres)('daemon team slots', () => {
         await Workspace.unscoped().destroy({ where: { id: String(record.id) } });
     });
 });
-

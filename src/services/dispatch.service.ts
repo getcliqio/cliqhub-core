@@ -54,7 +54,8 @@ const _team_version_repo = new TeamVersionRepository();
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import { CustomEventService } from './custom_event.service.js';
-import { latest_version_content, version_content } from './version_content.js';
+import { latest_version_content, version_content, type VersionContent } from './version_content.js';
+import type { RealmTeamEntry } from './realm_team_list.service.js';
 import { SemVer } from '../lib/semver.js';
 import { assert_run_channels } from './run_start_options.js';
 
@@ -511,92 +512,19 @@ export class DispatchService {
             throw ApiError.bad_request('Install requires daemon_ids or realm_id');
         }
 
-        const resolved = await DispatchService._resolve_hub_team(input.team_id);
-        if (resolved) {
-            /** Use the requested version if specified, otherwise latest. */
-            let target_version = resolved.version;
-            if (input.version && input.version !== resolved.version.version) {
-                const specific = await _team_version_repo.find_one(
-                    { team_id: resolved.team.id, version: input.version } as any,
-                );
-                if (!specific) {
-                    throw ApiError.not_found(`Version ${input.version} not found for team '${input.team_id}'`);
-                }
-                target_version = specific;
-            }
-            const { team: hub_team } = resolved;
-            const latest_version = target_version;
-
-            // What the version's files say (PLAN-team-bundle S1.4b).
-            const content = await version_content(latest_version.id);
-            if (!content) throw ApiError.not_found(`Version ${latest_version.version} of '${input.team_id}' has no files`);
-            /** A Hug gate without reviewers can't be installed (versions published before the publish check). */
-            const { validate_hug_reviewer_groups } = await import('./teams_service.js');
-            validate_hug_reviewer_groups(content.workflow);
-            const scope_slug = hub_team.scope ?? '';
-
-            const targets = await DispatchService._resolve_install_targets({
-                ...input,
-                daemon_ids,
-            });
-            if (targets.length === 0) {
-                throw ApiError.not_found('No daemon for install');
-            }
-
-            const manifest = JSON.stringify(content.workflow);
-            const results: InstallDaemonResult[] = [];
-            let last_team_id = '';
-
-            for (const daemon of targets) {
-                try {
-                    const daemon_team = await DispatchService._ensure_daemon_team_row({
-                        daemon_id: daemon.id,
-                        scope_slug,
-                        slug: hub_team.name,
-                        version: latest_version.version,
-                        description: hub_team.description ?? null,
-                        manifest,
-                    });
-                    last_team_id = daemon_team.id;
-
-                    // Enqueue install command for durable delivery.
-                    await command_outbox_enqueue(daemon.id, '/v1/install', {
-                        scope: scope_slug,
-                        slug: hub_team.name,
-                        manifest,
-                        version: latest_version.version,
-                        description: hub_team.description ?? undefined,
-                        team_id: daemon_team.id,
-                        agent_settings: input.agent_settings,
-                        ...(input.force ? { force: true } : {}),
-                    });
-
-                    results.push({ daemon_id: daemon.id, ok: true });
-                } catch (err) {
-                    results.push({
-                        daemon_id: daemon.id,
-                        ok: false,
-                        error: err instanceof Error ? err.message : String(err),
-                    });
-                }
-            }
-
-            if (!results.some((r) => r.ok)) {
-                throw ApiError.bad_request(
-                    `Install failed on all targets: ${results.map((r) => `${r.daemon_id}: ${r.error}`).join('; ')}`,
-                );
-            }
-
-            DispatchService._register_manifest_events(manifest, input.realm_id ?? null, hub_team.name).catch(() => {});
-
-            return { team_id: last_team_id || String(hub_team.id), results };
+        // Installs go through the catalog (PLAN-team-bundle S4.2): a daemon_teams id names its catalog team.
+        let team_ref = input.team_id;
+        if (UUID_RE.test(team_ref) && !(await _team_repo.find_by_id(team_ref))) {
+            const row = await _dt_repo.find_by_id_any(team_ref);
+            if (row?.team_id) team_ref = row.team_id;
         }
-
-        const team = await _dt_repo.find_by_id(input.team_id);
-        if (!team) throw ApiError.not_found(`Team '${input.team_id}' not found`);
-
-        const scope = await _scope_repo.find_by_id(team.scope_id);
-        if (!scope) throw ApiError.not_found(`Scope for team '${input.team_id}' not found`);
+        const resolved = await DispatchService._resolve_hub_team(team_ref);
+        if (!resolved) throw ApiError.not_found(`Team '${input.team_id}' not found`);
+        const { team: hub_team } = resolved;
+        const scope_slug = hub_team.scope ?? '';
+        const label = `@${scope_slug}/${hub_team.name}`;
+        const scope = await _scope_repo.find_one({ slug: scope_slug } as any);
+        if (!scope) throw ApiError.not_found(`Scope '${scope_slug}' not found`);
 
         const targets = await DispatchService._resolve_install_targets({
             ...input,
@@ -606,43 +534,48 @@ export class DispatchService {
             throw ApiError.not_found('No daemon for install');
         }
 
-        const results: InstallDaemonResult[] = [];
-        let last_team_id = team.id;
-
+        // A daemon gets a team only from its realm's list, at the version the realm runs; Core writes the daemon's
+        // row (its id is what the daemon keeps) and the daemon downloads that version by id.
+        const { RealmTeamListService } = await import('./realm_team_list.service.js');
+        const { validate_hug_reviewer_groups } = await import('./teams_service.js');
+        const plan: Array<{ daemon: Daemon; realm_team: RealmTeamEntry | null }> = [];
         for (const daemon of targets) {
-            try {
-                const daemon_team = await DispatchService._ensure_daemon_team_row({
-                    daemon_id: daemon.id,
-                    scope_slug: scope.slug,
-                    slug: team.slug,
-                    version: team.version,
-                    description: team.description,
-                    manifest: team.manifest,
-                    dockerfile: team.dockerfile,
-                    dependencies: team.dependencies,
-                    // An unbound team row (daemon_id === null) is
-                    // adoptable by the target daemon — the existing
-                    // guard inside _ensure_daemon_team_row rebinds it
-                    // and returns the same id. Without this the input
-                    // team is orphaned and a fresh id is minted, which
-                    // breaks call-site expectations that "install
-                    // this team on this daemon" preserves the id.
-                    preferred_id: !team.daemon_id || team.daemon_id === daemon.id ? team.id : undefined,
-                });
-                last_team_id = daemon_team.id;
+            const realm_id = input.realm_id ?? await DispatchService._realm_of_daemon(daemon.id);
+            plan.push({ daemon, realm_team: realm_id ? await RealmTeamListService.find(realm_id, hub_team.id) : null });
+        }
+        // What each version's files say (PLAN-team-bundle S1.4b); a Hug gate without reviewers can't be installed.
+        const contents = new Map<string, VersionContent>();
+        for (const { realm_team } of plan) {
+            if (!realm_team || contents.has(realm_team.version_id)) continue;
+            const content = await version_content(realm_team.version_id);
+            if (!content) throw ApiError.not_found(`Version ${realm_team.version} of '${label}' has no files`);
+            validate_hug_reviewer_groups(content.workflow);
+            contents.set(realm_team.version_id, content);
+        }
 
-                // Enqueue install command for durable delivery.
+        const results: InstallDaemonResult[] = [];
+        let last_team_id = '';
+        for (const { daemon, realm_team } of plan) {
+            try {
+                if (!realm_team) throw ApiError.bad_request(`${label} isn't on this daemon's realm. Add it to the realm first.`);
+                const content = contents.get(realm_team.version_id)!;
+                const slot = await TeamService.install_slot({
+                    daemon_id: daemon.id,
+                    realm_team,
+                    scope_id: String(scope.id),
+                    slug: hub_team.name,
+                    description: hub_team.description ?? null,
+                    manifest: JSON.stringify(content.workflow),
+                });
+                last_team_id = slot.id;
+
+                // Catalog ids only: the daemon downloads the version and gets its row id back (teams/download).
                 await command_outbox_enqueue(daemon.id, '/v1/install', {
-                    scope: scope.slug,
-                    slug: team.slug,
-                    manifest: team.manifest,
-                    version: team.version ?? undefined,
-                    description: team.description ?? undefined,
-                    team_id: daemon_team.id,
+                    team_id: hub_team.id,
+                    version_id: realm_team.version_id,
                     agent_settings: input.agent_settings,
                     ...(input.force ? { force: true } : {}),
                 });
-
                 results.push({ daemon_id: daemon.id, ok: true });
             } catch (err) {
                 results.push({
@@ -659,7 +592,16 @@ export class DispatchService {
             );
         }
 
-        return { team_id: last_team_id, results };
+        const first = [...contents.values()][0];
+        if (first) DispatchService._register_manifest_events(JSON.stringify(first.workflow), input.realm_id ?? null, hub_team.name).catch(() => {});
+
+        return { team_id: last_team_id || String(hub_team.id), results };
+    }
+
+    /** The realm a daemon belongs to (a daemon is in one realm), or null. */
+    private static async _realm_of_daemon(daemon_id: string): Promise<string | null> {
+        const row = await _realm_member_repo.find_one_q({ where: { member_type: 'daemon', member_id: daemon_id }, attributes: ['realm_id'] } as any);
+        return (row as { realm_id?: string } | null)?.realm_id ?? null;
     }
 
     /**
@@ -1868,44 +1810,6 @@ export class DispatchService {
         );
     }
 
-
-    /**
-     * Mint (or reuse) the Hub teams row for a daemon install BEFORE
-     * dispatching `/v1/install`. The Hub UUID is authoritative and is
-     * sent to the daemon so local `teams.id` matches Hub.
-     */
-    private static async _ensure_daemon_team_row(input: {
-        daemon_id: string;
-        scope_slug: string;
-        slug: string;
-        version: string | null;
-        description: string | null;
-        manifest: string;
-        dockerfile?: string | null;
-        dependencies?: string | null;
-        /** The id to use when the daemon has no slot for this team yet. */
-        preferred_id?: string;
-    }): Promise<{ id: string }> {
-        const scope = await _scope_repo.find_one({ slug: input.scope_slug } as any);
-        if (!scope) {
-            throw ApiError.not_found(`Scope '${input.scope_slug}' not found`);
-        }
-
-        // One slot per (daemon, scope, slug) for life: an existing slot — even an
-        // uninstalled one — keeps its id, so a reinstall doesn't orphan runs.
-        const settled = await TeamService.settle_slot({
-            daemon_id: input.daemon_id,
-            scope_id: String(scope.id),
-            slug: input.slug,
-            proposed_id: input.preferred_id ?? null,
-            version: input.version,
-            description: input.description,
-            manifest: input.manifest,
-            dockerfile: input.dockerfile ?? null,
-            dependencies: input.dependencies ?? null,
-        });
-        return { id: settled.id };
-    }
 
     /**
      * Push updated agent settings to all online daemons in a realm.

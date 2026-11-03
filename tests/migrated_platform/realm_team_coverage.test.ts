@@ -127,8 +127,11 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
             await RealmService.upsert_daemon_member(realm_id, id);
         }
 
+        // alpha on d1: a child of the realm's alpha (PLAN-team-bundle S4.2).
+        const alpha_rt = (await RealmTeamListService.find(realm_id, alpha_id))!;
         const dt = await DaemonTeam.create({
             id: randomUUID(), daemon_id: d1, scope_id, slug: 'alpha', version: '1.0.0', description: null,
+            team_id: alpha_id, realm_team_id: alpha_rt.id, version_id: alpha_rt.version_id,
             manifest: 'name: alpha\n', dockerfile: null, dependencies: null, created_at: Date.now(), updated_at: Date.now(),
         });
         alpha_dt_id = dt.id;
@@ -140,7 +143,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
 
     afterAll(async () => {
         vi.restoreAllMocks();
-        await DaemonTeam.destroy({ where: { scope_id } });
+        await DaemonTeam.unscoped().destroy({ where: { scope_id } });
         await RealmMember.destroy({ where: { realm_id } });
         await Realm.destroy({ where: { id: realm_id } });
         await Daemon.destroy({ where: { id: [d1, d2] } });
@@ -201,19 +204,19 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
             team_id: beta_id, daemon_ids: [d2], user_id, org_ids: [],
         });
         expect(result.results).toEqual([expect.objectContaining({ daemon_id: d2, ok: true })]);
-        expect(mock_enqueue).toHaveBeenCalledWith(
-            d2, '/v1/install', expect.objectContaining({ scope: scope_slug, slug: 'beta', version: '1.0.0' }),
-        );
-        const row = await DaemonTeam.findOne({ where: { daemon_id: d2, scope_id, slug: 'beta' } });
-        expect(row).not.toBeNull();
+        // Catalog ids only (S4.2): the daemon downloads the realm's version and gets its row id back.
+        expect(mock_enqueue).toHaveBeenCalledWith(d2, '/v1/install', { team_id: beta_id, version_id: version_of['beta@1.0.0'], agent_settings: undefined });
+        const row = await DaemonTeam.findOne({ where: { daemon_id: d2, team_id: beta_id }, raw: true }) as any;
+        expect(row).toMatchObject({ realm_team_id: (await RealmTeamListService.find(realm_id, beta_id))!.id, version: '1.0.0' });
     });
 
-    it('install by a daemon_teams id still works (fallback path)', async () => {
+    it('install by a daemon_teams id installs its catalog team, at the realm\'s version', async () => {
         mock_enqueue.mockClear();
         const result = await DispatchService.install_team({
             team_id: alpha_dt_id, daemon_ids: [d2], user_id, org_ids: [],
         });
         expect(result.results[0].ok).toBe(true);
+        expect(mock_enqueue).toHaveBeenCalledWith(d2, '/v1/install', { team_id: alpha_id, version_id: version_of['alpha@1.0.0'], agent_settings: undefined });
     });
 
     it('site-admin listed / scope filters return the teams with version_count', async () => {

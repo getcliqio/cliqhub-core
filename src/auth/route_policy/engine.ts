@@ -412,6 +412,17 @@ function with_record(d: Decision, kind: RecordKind, id: string): Decision {
 }
 
 async function decide_team(store: AccessStore, req: RequestLike, id: string | undefined): Promise<Decision> {
+    // A daemon installing a team (teams/download with daemon_id, PLAN-team-bundle S4.2): the daemon must be in the
+    // token's realm, which fixes the tenancy; the handler then requires the row Core wrote when the hub installed
+    // that team and version on it. Anything else is 401.
+    const daemon_id = is_daemon(req.auth) ? (req.body as { daemon_id?: unknown } | undefined)?.daemon_id : undefined;
+    if (typeof daemon_id === 'string' && daemon_id) {
+        const daemon = await store.record('daemon', daemon_id, req);
+        const realm_ids = daemon ? daemon.realm_ids ?? (daemon.realm_id ? [daemon.realm_id] : []) : [];
+        return req.auth!.realm_id && realm_ids.includes(req.auth!.realm_id)
+            ? allow({ realm_id: req.auth!.realm_id, level: 'daemon', record: { kind: 'daemon', id: daemon_id } })
+            : deny(401, 'daemon_other_realm', { record: { kind: 'daemon', id: daemon_id } });
+    }
     if (!id) return req.auth?.user ? allow({}, 'team id missing; handler validates') : deny(401, 'no_token');
     const scope_ = await store.record('team', id, req);
     const auth = req.auth ?? ({ member_scopes: [], publish_orgs: [], org_ids: [], org_slugs: [] } as unknown as AuthContext);

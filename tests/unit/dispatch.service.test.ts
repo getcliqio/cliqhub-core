@@ -36,7 +36,7 @@ vi.mock('../../src/models/index.js', () => ({
     Team: { findByPk: vi.fn(), findOne: vi.fn() },
     TeamVersion: { findOne: vi.fn(), findAll: vi.fn() },
     TeamFile: { findAll: vi.fn() },
-    RealmMember: {},
+    RealmMember: { findOne: vi.fn() },
     Realm: {},
     RealmAgentSetting: {},
     UserRealmAgentSetting: {},
@@ -83,6 +83,15 @@ vi.mock('../../src/models/index.js', () => ({
     ReviewMessage: {},
     HugDelivery: {},
     StoredArtifact: {},
+}));
+
+// A daemon installs a team only from its realm's list (PLAN-team-bundle S4.2).
+const REALM_TEAM = { id: 'rt-1', realm_id: 'realm-1', team_id: hub_legacy_uuid(1), version_id: 'v-1', scope: 'my-scope', slug: 'my-team', version: '1.0.0' };
+vi.mock('../../src/services/realm_team_list.service.js', () => ({
+    RealmTeamListService: { find: vi.fn() },
+}));
+vi.mock('../../src/services/teams_install_service.js', () => ({
+    TeamService: { install_slot: vi.fn(async () => ({ id: 'team-1', created: true })) },
 }));
 
 vi.mock('../../src/services/run.service.js', () => ({
@@ -150,10 +159,12 @@ vi.mock('../../src/services/hugs.service.js', () => ({
     },
 }));
 
-import { Workspace, Run, DaemonTeam, Daemon, Scope, Team, TeamVersion } from '../../src/models/index.js';
+import { Workspace, Run, DaemonTeam, Daemon, Scope, Team, TeamVersion, RealmMember } from '../../src/models/index.js';
 import { version_content } from '../../src/services/version_content.js';
 import { derive_version_content } from '../../src/services/package_parser.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
+import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
+import { TeamService } from '../../src/services/teams_install_service.js';
 import { AccessService } from '../../src/services/access.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { QueueService } from '../../src/services/queue.service.js';
@@ -274,6 +285,8 @@ beforeEach(() => {
     vi.mocked(DaemonTeam.create).mockResolvedValue(make_team() as any);
     vi.mocked(AccessService.list_daemon_ids_for_user).mockResolvedValue(['daemon-1']);
     vi.mocked(RealmService.list_realms_for_daemon).mockResolvedValue([]);
+    vi.mocked(RealmMember.findOne).mockResolvedValue({ realm_id: 'realm-1' } as any);
+    vi.mocked(RealmTeamListService.find).mockResolvedValue(REALM_TEAM as any);
 });
 
 // ── dispatch_run ────────────────────────────────────────────────────
@@ -626,14 +639,17 @@ describe('DispatchService.install_team', () => {
         expect(result.results).toHaveLength(1);
         expect(result.results[0].ok).toBe(true);
 
-        expect(mock_enqueue).toHaveBeenCalledWith(
-            'daemon-1',
-            '/v1/install',
-            expect.objectContaining({
-                scope: 'my-scope',
-                slug: 'my-team',
-            }),
-        );
+        // Catalog ids only: the daemon downloads the version and gets its row id back (S4.2).
+        expect(mock_enqueue).toHaveBeenCalledWith('daemon-1', '/v1/install', { team_id: hub_legacy_uuid(1), version_id: 'v-1', agent_settings: undefined });
+        expect(TeamService.install_slot).toHaveBeenCalledWith(expect.objectContaining({ daemon_id: 'daemon-1', realm_team: REALM_TEAM, slug: 'my-team' }));
+    });
+
+    it("a daemon whose realm doesn't run the team gets nothing: add it to the realm first", async () => {
+        vi.mocked(RealmTeamListService.find).mockResolvedValue(null);
+        await expect(DispatchService.install_team({ team_id: hub_legacy_uuid(1), user_id: 'user-1', daemon_ids: ['daemon-1'] }))
+            .rejects.toThrow(/isn't on this daemon's realm\. Add it to the realm first/);
+        expect(TeamService.install_slot).not.toHaveBeenCalled();
+        expect(mock_enqueue).not.toHaveBeenCalled();
     });
 
     it('passes force:true in outbox payload when force is set', async () => {

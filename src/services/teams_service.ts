@@ -24,6 +24,7 @@ import type { TeamCatalogSortKey, TeamListItemVO, TeamRoleVO } from '../schemas/
 import { Op, QueryTypes, col, fn, literal, type WhereOptions } from 'sequelize';
 import { list_order, type SortColumns, type SortDir } from '../lib/list_sort.js';
 import type { NormalizedWorkflow } from './package_parser.js';
+import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
 import { RealmTeamListService } from '../services/realm_team_list.service.js';
 import { get_sequelize } from '../lib/sequelize.js';
 import { ScopeRepository as ScopeRepoClass } from '../repositories/scope_repository.js';
@@ -934,8 +935,9 @@ export class TeamsService {
         return zip;
     }
 
-    async download(auth: AuthContext, params: { name?: string; scope?: string; version?: string; version_id?: string }) {
-        log.debug('download', { name: params.name, scope: params.scope, version: params.version, version_id: params.version_id });
+    async download(auth: AuthContext, params: { name?: string; scope?: string; version?: string; version_id?: string; team_id?: string; daemon_id?: string }) {
+        log.debug('download', { name: params.name, scope: params.scope, version: params.version, version_id: params.version_id, daemon_id: params.daemon_id });
+        if (params.daemon_id) return this._download_for_daemon(auth, params as typeof params & { daemon_id: string });
         let team: Awaited<ReturnType<TeamRepository['find_by_id']>>;
         let ver: { id: string; package_path: string; version: string } | null;
         if (params.version_id) {
@@ -968,6 +970,49 @@ export class TeamsService {
         }
 
         return { filename: `${team.name}-${ver.version}.zip`, data_base64: data.toString('base64'), version: ver.version, version_id: ver.id };
+    }
+
+    /**
+     * A daemon installing a team (PLAN-team-bundle S4.2): the version's files and the `daemon_team_id` the daemon
+     * keeps, only when the hub installed that team and version on this daemon (its realm runs it). The daemon is
+     * in the token's realm (route policy); the team and version come by id, or by name for `cliq team install`.
+     *
+     * @throws ApiError 401 when the daemon isn't in the caller's realm; 404 `not_installable` when the hub hasn't
+     *   installed this team and version on the daemon.
+     */
+    private async _download_for_daemon(
+        auth: AuthContext,
+        params: { name?: string; scope?: string; version?: string; version_id?: string; team_id?: string; daemon_id: string },
+    ) {
+        if (auth.auth_via !== 'daemon_token' || !auth.realm_id) throw new ApiError('unauthorized', 'A daemon installs with its own token', 401);
+        const { RealmService } = await import('./realm.service.js');
+        try {
+            await RealmService.assert_daemon_in_realm(auth.realm_id, params.daemon_id);
+        } catch {
+            throw new ApiError('unauthorized', 'This daemon isn\'t in your realm', 401);
+        }
+        // The team and version: by id (the hub's install message), else by name (cliq team install @x/foo).
+        let team_id = params.team_id ?? null;
+        let version_id = params.version_id ?? null;
+        if (!team_id && params.name) team_id = (await this._team_repo.find_by_name_and_scope(params.name, params.scope || null))?.id ?? null;
+        if (team_id && !version_id && params.version) version_id = (await this._version_repo.find_by_team_and_version(team_id, params.version))?.id ?? null;
+        const row = team_id
+            ? await new DaemonTeamRepository().find_one_q({
+                where: { daemon_id: params.daemon_id, team_id, ...(version_id ? { version_id } : {}) },
+            })
+            : null;
+        if (!row?.version_id) {
+            throw new ApiError('not_installable', 'This team isn\'t available for installation on this daemon. Add it to the realm first.', 404);
+        }
+        const ver = await this._version_repo.find_package_by_id(row.version_id);
+        if (!ver) throw new ApiError('not_found', 'Version not found', 404);
+        const data = await this._version_zip(row.team_id!, ver.id, ver.package_path);
+        if (!data) throw new ApiError('internal', `Package archive missing for v${ver.version}. It may need to be republished.`, 500);
+        const team = await this._team_repo.find_by_id(row.team_id!);
+        return {
+            filename: `${team?.name ?? row.slug}-${ver.version}.zip`, data_base64: data.toString('base64'),
+            version: ver.version, version_id: ver.id, team_id: row.team_id, daemon_team_id: row.id,
+        };
     }
 
     async delete_team(auth: AuthContext, params: { name?: string; scope?: string; team_id?: string }) {

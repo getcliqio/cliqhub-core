@@ -15,6 +15,7 @@ import {
 import { Scope } from '../../src/models/index.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
+import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
 import { ApiError } from '../../src/lib/api_error.js';
 import * as outbox from '../../src/services/command_outbox.service.js';
 
@@ -28,10 +29,12 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
      *  to resolve/create a personal org for the NOT NULL realms.org_id. */
     const user_id = hub_legacy_uuid(1);
     let scope_id: string;
-    let team_id: string;
+    let team_id: string;      // a catalog team on the realm's list
+    let version_id: string;   // the version the realm runs
     let realm_id: string;
     let d1: string;
     let d2: string;
+    let d_out: string;        // a daemon in no realm
     const catalog_ids: string[] = [];
     /** Spy on outbox enqueue — install now goes through the durable outbox. */
     const mock_enqueue = vi.fn();
@@ -54,26 +57,24 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
         });
         scope_id = scope.id;
 
-        const team = await DaemonTeam.create({
-            id: randomUUID(),
-            scope_id,
-            slug: `t-${uid()}`,
-            version: '1.0.0',
-            description: null,
-            manifest: 'name: t\nversion: "1.0.0"\nphases: []\n',
-            dockerfile: null,
-            dependencies: null,
-            created_at: Date.now(),
-            updated_at: Date.now(),
-        });
+        // A published catalog team, on the realm's list (PLAN-team-bundle S4.2: daemons install realm teams only).
+        const name = `t-${uid()}`.slice(0, 40);
+        const team = await Team.create({
+            id: randomUUID(), name, scope: scope.slug, description: 't',
+            author_id: user_id, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
+        } as any);
         team_id = team.id;
+        catalog_ids.push(team_id);
+        version_id = await publish_version(team_id, '1.0.0', { name: `@${scope.slug}/${name}`, phases: [] });
 
         const realm = await RealmService.create(user_id, `inst-${uid()}`.slice(0, 40), 'Install Realm');
         realm_id = realm.id;
+        await RealmTeamListService.add(realm_id, user_id, { team_id });
 
         d1 = uid();
         d2 = uid();
-        for (const id of [d1, d2]) {
+        d_out = uid();
+        for (const id of [d1, d2, d_out]) {
             await Daemon.create({
                 id,
                 api_key_hash: 'h',
@@ -89,7 +90,7 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
                 created_at: Date.now(),
                 last_registered_at: Date.now(),
             });
-            await RealmService.upsert_daemon_member(realm_id, id);
+            if (id !== d_out) await RealmService.upsert_daemon_member(realm_id, id);
         }
     });
 
@@ -104,30 +105,47 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
         await RealmMember.destroy({ where: { realm_id } });
         await Realm.destroy({ where: { id: realm_id } });
         await Daemon.destroy({ where: { id: d1 } });
-        await Daemon.destroy({ where: { id: d2 } });
-        await DaemonTeam.destroy({ where: { id: team_id } });
+        await Daemon.destroy({ where: { id: [d2, d_out] } });
         await TeamVersion.destroy({ where: { team_id: catalog_ids } });
-        await DaemonTeam.destroy({ where: { scope_id } });
+        await DaemonTeam.unscoped().destroy({ where: { scope_id } });
         await Team.destroy({ where: { id: catalog_ids } });
         await Scope.destroy({ where: { id: scope_id } });
         await close_test_control_plane_store();
     });
 
-    it('enqueues install for a single daemon_ids entry', async () => {
-        const result = await DispatchService.install_team({
-            team_id,
-            daemon_ids: [d1],
-            user_id,
-            org_ids: [org_id],
-        });
-        expect(result.results).toHaveLength(1);
+    /** The daemon's live row for the team (Core writes it when the hub installs). */
+    const row_of = (daemon_id: string) => DaemonTeam.findOne({ where: { daemon_id, team_id }, raw: true }) as Promise<any>;
+
+    it('a daemon in the realm: Core writes its row (child of the realm team) and sends catalog ids only', async () => {
+        const result = await DispatchService.install_team({ team_id, daemon_ids: [d1], user_id, org_ids: [org_id] });
+        expect(result.results).toEqual([{ daemon_id: d1, ok: true }]);
+        const row = await row_of(d1);
+        const realm_team = await RealmTeamListService.find(realm_id, team_id);
+        expect(row).toMatchObject({ team_id, version_id, realm_team_id: realm_team!.id, version: '1.0.0', origin: 'hub', uninstalled_at: null });
+        expect(result.team_id).toBe(row.id);
+        // The daemon downloads the version by these ids and gets its row id back (teams/download).
+        expect(mock_enqueue).toHaveBeenCalledWith(d1, '/v1/install', { team_id, version_id, agent_settings: undefined });
+    });
+
+    it('installing again keeps the row and its id', async () => {
+        const before = await row_of(d1);
+        await DispatchService.install_team({ team_id, daemon_ids: [d1], user_id, org_ids: [org_id] });
+        expect((await row_of(d1)).id).toBe(before.id);
+        expect(await DaemonTeam.unscoped().count({ where: { daemon_id: d1, team_id } })).toBe(1);
+    });
+
+    it("a daemon whose realm doesn't run the team gets nothing: no row, no install", async () => {
+        await expect(DispatchService.install_team({ team_id, daemon_ids: [d_out], user_id, org_ids: [org_id] }))
+            .rejects.toThrow(/isn't on this daemon's realm\. Add it to the realm first/);
+        expect(await row_of(d_out)).toBeNull();
+        expect(mock_enqueue).not.toHaveBeenCalled();
+    });
+
+    it("a daemon_teams id installs its catalog team", async () => {
+        const row = await row_of(d1);
+        const result = await DispatchService.install_team({ team_id: row.id, daemon_ids: [d2], user_id, org_ids: [org_id] });
         expect(result.results[0].ok).toBe(true);
-        expect(result.results[0].daemon_id).toBe(d1);
-        expect(mock_enqueue).toHaveBeenCalledWith(
-            d1,
-            '/v1/install',
-            expect.objectContaining({ team_id }),
-        );
+        expect(mock_enqueue).toHaveBeenCalledWith(d2, '/v1/install', { team_id, version_id, agent_settings: undefined });
     });
 
     it('enqueues install for each daemon_id', async () => {
@@ -185,6 +203,7 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
             name: `@${scope!.slug}/${name}`,
             phases: [{ name: 'human-review', type: 'gate', agent: 'hug', ...(review ? { review } : {}) }],
         });
+        await RealmTeamListService.add(realm_id, user_id, { team_id: team.id });
         return `${scope!.slug}/${name}`;
     }
 

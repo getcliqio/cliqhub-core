@@ -1,12 +1,11 @@
 /**
- * Live installed teams / workspaces from a daemon (read-through cache).
+ * Live installed teams / workspaces from a daemon (read-through).
  * Called from POST /v1/teams/get|{daemon_id} and /v1/workspaces/get|{daemon_id}.
  */
 
 import { DispatchService } from './dispatch.service.js';
 import { WorkspaceService } from './workspace.service.js';
 import { WorkspaceRepository } from '../repositories/workspace_repository.js';
-import { DaemonTeamCacheService, type HeartbeatTeamEntry } from './daemon_team_cache.service.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('svc.daemon_inventory');
@@ -25,23 +24,8 @@ export async function live_teams_from_daemon(
         user_id,
     );
 
-    const live_teams: any[] = Array.isArray(result.teams) ? result.teams : [];
-    const entries: HeartbeatTeamEntry[] = live_teams
-        .filter((t: any) => t.team_id && t.scope && t.slug)
-        .map((t: any) => ({
-            id: t.team_id,
-            scope: t.scope,
-            slug: t.slug,
-            version: t.version ?? null,
-            origin: t.origin ?? null,
-            description: t.description ?? null,
-            manifest: t.manifest ?? '',
-            dockerfile: t.dockerfile ?? null,
-            dependencies: t.dependencies ?? null,
-            created_at: t.created_at ?? Date.now(),
-        }));
-
-    void DaemonTeamCacheService.sync(daemon_id, entries).catch(() => {});
+    // A read only (PLAN-team-bundle S4.2): Core records a daemon's teams when the hub installs them, never from
+    // what a daemon reports here (these are the daemon's own ids, local installs included).
     return result;
 }
 

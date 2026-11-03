@@ -75,6 +75,10 @@ async function main() {
     const { realm_teams_from_json } = await import('./models/migrations/realm_teams_from_json.js');
     await realm_teams_from_json({ settings: container.settings_repo, versions: container.version_repo })
         .catch((err: unknown) => log.error('realm_teams_from_json_failed', { error: err instanceof Error ? err.message : String(err) }));
+    // Then each daemon's installed teams are tied to their realm team (PLAN-team-bundle S4.2; waits for the move above).
+    const { daemon_teams_to_realm_teams } = await import('./models/migrations/daemon_teams_to_realm_teams.js');
+    await daemon_teams_to_realm_teams({ settings: container.settings_repo })
+        .catch((err: unknown) => log.error('daemon_teams_to_realm_teams_failed', { error: err instanceof Error ? err.message : String(err) }));
 
     const app = create_app(container);
 

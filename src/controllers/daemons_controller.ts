@@ -148,9 +148,9 @@ export class DaemonController extends BaseController {
             }
             assert_realm_domain(req.auth!, realm_id);
             await RealmService.assert_daemon_in_realm(realm_id, daemon_id);
-            // Only teams on the realm's list may be on its daemons (PLAN-team-ids rule 7); the list through its service (S4.1).
+            // Only teams on the realm's list may be on its daemons; the list through its service, by catalog team id (S4.2).
             const { RealmTeamListService } = await import('../services/realm_team_list.service.js');
-            const realm_teams = await RealmTeamListService.keys(realm_id);
+            const realm_teams = new Map((await RealmTeamListService.entries(realm_id)).map((e) => [e.team_id, e]));
             const settled = await TeamService.register_from_daemon(daemon_id, teams, Boolean(complete), realm_teams);
             log.info('daemon_teams_registered', { daemon_id, count: settled.length, complete: Boolean(complete) });
             res.json({ ok: true, data: { teams: settled } });

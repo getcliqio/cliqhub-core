@@ -235,6 +235,10 @@ export type TeamsUnpublishInput = z.infer<typeof TeamsUnpublishInput>;
 export const TeamsDownloadInput = z.object({
     version_id: z.string().uuid().optional()
         .describe('The version to download, by id (wins over name / scope / version)'),
+    team_id: z.string().uuid().optional()
+        .describe('A daemon installing: the catalog team (with version_id or a version)'),
+    daemon_id: z.string().min(1).optional()
+        .describe('A daemon installing (PLAN-team-bundle S4.2): the daemon, in the token\'s realm. Answers the daemon_team_id it keeps; refused when the hub has not installed this team and version on it'),
     name: z.string().min(1).optional().describe('Team name (required without version_id)'),
     scope: z.string().optional().describe('Scope (publisher) slug'),
     version: z.string().optional()

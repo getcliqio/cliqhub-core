@@ -292,3 +292,19 @@ describe('teams', () => {
         expect(await status('POST /v1/teams/get_phases', 'omar', { team_id: 't-private' })).toBe(404);
     });
 });
+
+describe('teams/download by a daemon installing (PLAN-team-bundle S4.2)', () => {
+    it("a daemon token naming a daemon of its own realm passes, even for a private team (the handler requires Core's row)", async () => {
+        expect(await status('POST /v1/teams/download', 'daemon_a1', { team_id: 't-private', version_id: 'v', daemon_id: 'd-a1' })).toBe(200);
+        expect(await status('POST /v1/teams/download', 'daemon_a1', { team_id: 't-private', version_id: 'v', daemon_id: 'd-multi' })).toBe(200);
+    });
+    it("a daemon outside the token's realm, or one Core doesn't know, is 401", async () => {
+        expect(await status('POST /v1/teams/download', 'daemon_b1', { team_id: 't-public', version_id: 'v', daemon_id: 'd-a1' })).toBe(401);
+        expect(await status('POST /v1/teams/download', 'daemon_a1', { team_id: 't-public', version_id: 'v', daemon_id: 'd-nope' })).toBe(401);
+    });
+    it('without daemon_id it is the team read as before; a user naming a daemon gets no daemon pass', async () => {
+        expect(await status('POST /v1/teams/download', 'daemon_a1', { team_id: 't-private' })).toBe(404);
+        expect(await status('POST /v1/teams/download', 'omar', { team_id: 't-private', daemon_id: 'd-a1' })).toBe(404);
+        expect(await status('POST /v1/teams/download', 'mia', { team_id: 't-private', daemon_id: 'd-a1' })).toBe(200);
+    });
+});
