@@ -47,11 +47,13 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
         await publish_version(team.id, '1.0.0', files.team_yml ?? { name: `@${scope_slug}/${name}`, phases: [] }, files.other);
         return team.id;
     }
+    let keep_me_id = '';
+    /** A realm that runs exactly `team` (a catalog id) and keep-me. */
     async function realm_with(owner: string, team: string): Promise<string> {
         // The realm runs exactly this team and keep-me (realm_teams, PLAN-team-bundle S4.1).
         const r = await RealmService.create(owner, uid().slice(0, 40), 'Unpublish');
-        await RealmTeamListService.remove(r.id, owner, { scope: 'cliq', slug: 'hello-world' });
-        for (const slug of [team, 'keep-me']) await RealmTeamListService.add(r.id, owner, { scope: scope_slug, slug });
+        for (const e of await RealmTeamListService.entries(r.id)) await RealmTeamListService.remove(r.id, owner, e.team_id);
+        for (const team_id of [team, keep_me_id]) await RealmTeamListService.add(r.id, owner, { team_id });
         return r.id;
     }
     const list_of = async (realm_id: string) => (await RealmTeamListService.entries(realm_id)).map((e) => ({ scope: e.scope, slug: e.slug }));
@@ -61,7 +63,7 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
         process.env.CLIQ_BFF_LOG_LEVEL = 'error';
         await open_test_control_plane_store();
         await Scope.create({ id: randomUUID(), slug: scope_slug, display_name: 'Unpublish', owner_id: author, org_id: null, is_default: 0, created_at: new Date() } as any);
-        await team_named('keep-me'); // the other team on each realm, which unpublishing another team leaves alone
+        keep_me_id = await team_named('keep-me'); // the other team on each realm, which unpublishing another team leaves alone
     });
     beforeEach(() => {
         uninstall.mockReset().mockResolvedValue({ daemons: [] });
@@ -77,8 +79,8 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
 
     it('removes it from every realm, then makes it a draft; other teams stay; daemons are told', async () => {
         const id = await team_named('everywhere');
-        const a = await realm_with(author, 'everywhere');
-        const b = await realm_with(author, 'everywhere');
+        const a = await realm_with(author, id);
+        const b = await realm_with(author, id);
         const res = await service.unpublish(auth, { name: 'everywhere', scope: scope_slug });
         expect(res.status).toBe('draft');
         expect(res.uninstalled_from.map((r) => r.realm_id).sort()).toEqual([a, b].sort());
@@ -89,8 +91,8 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
 
     it('a realm where the caller is only a member blocks it: nothing changes', async () => {
         const id = await team_named('member-only');
-        const mine = await realm_with(author, 'member-only');
-        const theirs = await realm_with(other, 'member-only');
+        const mine = await realm_with(author, id);
+        const theirs = await realm_with(other, id);
         await RealmMember.create({ id: randomUUID(), realm_id: theirs, member_type: 'user', member_id: author, role: 'member', created_at: Date.now() } as any);
         const slug = ((await Realm.findByPk(theirs, { raw: true })) as any).slug;
         await expect(service.unpublish(auth, { name: 'member-only', scope: scope_slug })).rejects.toMatchObject({
@@ -104,8 +106,8 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
 
     it('a realm the caller can’t see blocks it too, counted but not named', async () => {
         const id = await team_named('hidden-realm');
-        await realm_with(author, 'hidden-realm');
-        await realm_with(other, 'hidden-realm');
+        await realm_with(author, id);
+        await realm_with(other, id);
         const err = await service.unpublish(auth, { name: 'hidden-realm', scope: scope_slug }).catch((e) => e);
         expect(err).toMatchObject({ code: 'unpublish_blocked', details: { blocked: [], hidden: 1 } });
         expect(err.message).toContain('1 realm you can’t see'.replace('’', '\''));

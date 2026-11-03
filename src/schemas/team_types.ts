@@ -443,6 +443,7 @@ export type TeamMutationData = z.infer<typeof TeamMutationData>;
 
 /** One version entry in a team's version history. */
 export const TeamVersionEntry = z.object({
+    id: z.string().describe('Version id (what realms/add_team takes as version_id)'),
     version: z.string().describe('Semver version string'),
     changelog: z.string().nullable().describe('Release notes for this version'),
     published_at: z.number().nullable().describe('Publish timestamp (unix ms)'),

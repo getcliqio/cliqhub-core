@@ -154,14 +154,13 @@ export const RealmRemoveMemberInput = z.object({
 });
 export type RealmRemoveMemberInput = z.infer<typeof RealmRemoveMemberInput>;
 
-/** POST /v1/realms/add_team | remove_team */
+/** POST /v1/realms/add_team | remove_team: the team by its catalog id (PLAN-team-bundle S4.1). */
 export const RealmTeamRefInput = z.object({
     realm_id: z.string().min(1).describe('Realm UUID'),
-    scope: z.string().min(1).describe('Team scope (e.g. cliq or org slug)'),
-    slug: z.string().min(1).describe('Team slug'),
-    version: z.string().min(1).optional()
-        .describe('add_team: the version this realm runs (default: the latest published). A team already on the list moves to it — without a version, to the latest.'),
-});
+    team_id: z.string().uuid().describe('Catalog team id'),
+    version_id: z.string().uuid().optional()
+        .describe('add_team: the version this realm runs (default: the latest published). A team already on the list moves to it — without a version, to the latest. remove_team: ignored.'),
+}).strict();
 export type RealmTeamRefInput = z.infer<typeof RealmTeamRefInput>;
 
 

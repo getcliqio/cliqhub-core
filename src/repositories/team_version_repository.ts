@@ -77,6 +77,12 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
         return TeamVersion.findOne({ where: { team_id, version, ...CURRENT }, raw: true });
     }
 
+    /** A version new installs may use, by id: published and not withdrawn (PLAN-team-bundle S4.1). */
+    async find_current_by_id(id: string): Promise<{ id: string; team_id: string; version: string } | null> {
+        const row = await TeamVersion.findOne({ where: { id, ...CURRENT }, attributes: ['id', 'team_id', 'version'], raw: true });
+        return row ? numbered([row])[0] ?? null : null;
+    }
+
     /** Withdraw a published version (PLAN-team-bundle S2). False when it is not published or already withdrawn. */
     async withdraw(id: string, transaction?: Transaction): Promise<boolean> {
         const [n] = await TeamVersion.update({ withdrawn_at: new Date() } as never, { where: { id, ...CURRENT }, transaction });
@@ -86,7 +92,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     async list_by_team_id(team_id: string) {
         const rows = await TeamVersion.findAll({
             where: { team_id, ...CURRENT },
-            attributes: ['version', 'changelog', 'published_at'],
+            attributes: ['id', 'version', 'changelog', 'published_at'],
             raw: true,
         });
         return SemVer.sort_desc(numbered(rows));

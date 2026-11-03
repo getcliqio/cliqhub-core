@@ -350,23 +350,23 @@ export class RealmController extends BaseController {
     ): Promise<void> {
         const user = this.assert_user(req);
         log.debug('add_team', { user_id: user.user_id });
-        // Zod SoT — realm_id + published team scope/slug.
+        // Zod SoT — realm_id + the catalog team (and version) by id (PLAN-team-bundle S4.1).
         const body = this.parse_body(RealmTeamRefInput, req);
-        const entry = { scope: body.scope, slug: body.slug, ...(body.version ? { version: body.version } : {}) };
+        const team = await this._team_list.team(body.team_id);
 
         // A team joins the realm's org before the realm (added to the org here when allowed).
-        await OrgTeamsService.ensure_for_realm(req.auth!, body.realm_id, body.scope, body.slug);
-        // Persist on realm.team_list first so list reads stay consistent.
-        const team_list = await this._team_list.add(body.realm_id, user.user_id, entry);
+        await OrgTeamsService.ensure_for_realm(req.auth!, body.realm_id, team.scope, team.slug);
+        // Record it on the realm's list first so list reads stay consistent.
+        const team_list = await this._team_list.add(body.realm_id, user.user_id, { team_id: team.id, version_id: body.version_id });
         // Fan-out install commands to online daemons (outbox; may be empty).
         const fanout = await this._team_list.sync_team(
             body.realm_id,
             user.user_id,
-            entry,
+            team.id,
             user.org_ids,
         );
 
-        log.info('team_added', { realm_id: body.realm_id, scope: body.scope, slug: body.slug });
+        log.info('team_added', { realm_id: body.realm_id, team_id: team.id, scope: team.scope, slug: team.slug });
         res.json({ ok: true, team_list, install: fanout });
     }
 
@@ -383,20 +383,20 @@ export class RealmController extends BaseController {
         const user = this.assert_user(req);
         log.debug('remove_team', { user_id: user.user_id });
         const body = this.parse_body(RealmTeamRefInput, req);
-        const entry = { scope: body.scope, slug: body.slug };
+        const team = await this._team_list.team(body.team_id);
 
         // Drop from realm set before daemon uninstall so Hub SoT is already clean.
-        const team_list = await this._team_list.remove(body.realm_id, user.user_id, entry);
-        // Best-effort uninstall on online daemons; failures surface in uninstall DTO.
+        const team_list = await this._team_list.remove(body.realm_id, user.user_id, team.id);
+        // Best-effort uninstall on online daemons (daemons still name teams by scope/slug until S4.2).
         const uninstall = await this._dispatch.uninstall_team({
-            scope: entry.scope,
-            slug: entry.slug,
+            scope: team.scope,
+            slug: team.slug,
             realm_id: body.realm_id,
             user_id: user.user_id,
             org_ids: user.org_ids,
         });
 
-        log.info('team_removed', { realm_id: body.realm_id, scope: body.scope, slug: body.slug });
+        log.info('team_removed', { realm_id: body.realm_id, team_id: team.id, scope: team.scope, slug: team.slug });
         res.json({ ok: true, team_list, uninstall });
     }
 }

@@ -100,13 +100,13 @@ describe.skipIf(!has_postgres)('org Teams list', () => {
         expect(list.body.data.items.find((t: { team_id: string }) => t.team_id === market))
             .toMatchObject({ kind: 'added', added_by: expect.any(String), added_at: expect.any(String), realms: [] });
 
-        const added = await post('/v1/realms/add_team', 'omar', { realm_id: s.A1, scope: beta_scope, slug: market_name });
+        const added = await post('/v1/realms/add_team', 'omar', { realm_id: s.A1, team_id: market });
         expect(added.status, JSON.stringify(added.body)).toBe(200);
         const blocked = await post('/v1/orgs/remove_team', 'omar', { org_id: s.acme, team_id: market });
         expect(blocked.status).toBe(409);
         expect(blocked.body.details.realms).toEqual([{ realm_id: s.A1, slug: expect.any(String) }]);
 
-        expect((await post('/v1/realms/remove_team', 'omar', { realm_id: s.A1, scope: beta_scope, slug: market_name })).status).toBe(200);
+        expect((await post('/v1/realms/remove_team', 'omar', { realm_id: s.A1, team_id: market })).status).toBe(200);
         const removed = await post('/v1/orgs/remove_team', 'omar', { org_id: s.acme, team_id: market });
         expect(removed.status, JSON.stringify(removed.body)).toBe(200);
         expect(removed.body.data.removed).toBe(true);
@@ -118,7 +118,7 @@ describe.skipIf(!has_postgres)('org Teams list', () => {
         await Team.create({ id, name: priv, scope: beta_scope, visibility: 'private', listed: 0, author_id: s.user.ben } as never);
         try {
             expect((await post('/v1/orgs/add_team', 'omar', { org_id: s.acme, team_id: id })).status).toBe(404);
-            const added = await post('/v1/realms/add_team', 'omar', { realm_id: s.A1, scope: beta_scope, slug: priv });
+            const added = await post('/v1/realms/add_team', 'omar', { realm_id: s.A1, team_id: id });
             expect(added.status, JSON.stringify(added.body)).toBe(404);
             const installed = await post('/v1/teams/install', 'omar', { team_id: id, realm_id: s.A1 });
             expect(installed.status, JSON.stringify(installed.body)).toBe(404);

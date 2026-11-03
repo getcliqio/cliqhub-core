@@ -59,12 +59,14 @@ vi.mock('../../../src/repositories/realm_team_repository.js', () => ({
 vi.mock('../../../src/repositories/team_repository.js', () => ({
     TeamRepository: class {
         async find_by_name_and_scope(name: string, scope: string) { return CATALOG.teams.find((t) => t.name === name && t.scope === scope) ?? null; }
+        async find_by_id(id: string) { return CATALOG.teams.find((t) => t.id === id) ?? null; }
     },
 }));
 vi.mock('../../../src/repositories/team_version_repository.js', () => ({
     TeamVersionRepository: class {
         async find_current_by_team_and_version(team_id: string, version: string) { return CATALOG.versions.find((v) => v.team_id === team_id && v.version === version) ?? null; }
         async find_latest_ref(team_id: string) { return CATALOG.versions.filter((v) => v.team_id === team_id).at(-1) ?? null; }
+        async find_current_by_id(id: string) { return CATALOG.versions.find((v) => v.id === id) ?? null; }
     },
 }));
 vi.mock('../../../src/repositories/realm_repository.js', () => ({
@@ -83,7 +85,7 @@ vi.mock('../../../src/repositories/org_agent_setting_repository.js', () => ({ Or
 vi.mock('../../../src/services/dispatch.service.js', () => ({ DispatchService: {} }));
 vi.mock('../../../src/services/command_outbox.service.js', () => ({ command_outbox_enqueue: vi.fn() }));
 vi.mock('../../../src/services/in_app_notification.service.js', () => ({ InAppNotificationService: {} }));
-const mesh = { changed: vi.fn(async () => undefined) };
+const mesh = { changed: vi.fn(async (_realm_id: string) => undefined) };
 vi.mock('../../../src/services/mesh_lifecycle.service.js', () => ({ MeshLifecycleService: { on_skills_changed: (id: string) => mesh.changed(id) } }));
 vi.mock('../../../src/lib/log.js', () => ({
     get_logger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
@@ -98,34 +100,35 @@ describe('RealmTeamListService over realm_teams', () => {
         mesh.changed.mockClear();
     });
 
-    it('add puts a team on at the latest version, or the one asked for', async () => {
-        expect(await RealmTeamListService.add('r1', 'u', { scope: 'acme', slug: 'claims' }))
-            .toEqual([{ scope: 'acme', slug: 'claims', version: '2.0.0' }]);
-        await RealmTeamListService.add('r2', 'u', { scope: 'acme', slug: 'claims', version: '1.0.0' });
+    it('add puts a team on at the latest version, or the one asked for; the list carries ids and names', async () => {
+        expect(await RealmTeamListService.add('r1', 'u', { team_id: 't-claims' }))
+            .toEqual([{ team_id: 't-claims', version_id: 'v-c2', scope: 'acme', slug: 'claims', version: '2.0.0' }]);
+        await RealmTeamListService.add('r2', 'u', { team_id: 't-claims', version_id: 'v-c1' });
         expect(db.rows.map((r) => [r.realm_id, r.team_id, r.version_id])).toEqual([['r1', 't-claims', 'v-c2'], ['r2', 't-claims', 'v-c1']]);
     });
 
     it('add of a team already on the realm moves its version; it stays one row', async () => {
-        await RealmTeamListService.add('r1', 'u', { scope: 'acme', slug: 'claims', version: '1.0.0' });
-        await RealmTeamListService.add('r1', 'u', { scope: 'acme', slug: 'claims' });
+        await RealmTeamListService.add('r1', 'u', { team_id: 't-claims', version_id: 'v-c1' });
+        await RealmTeamListService.add('r1', 'u', { team_id: 't-claims' });
         expect(db.rows).toHaveLength(1);
         expect(db.rows[0].version_id).toBe('v-c2');
     });
 
-    it('add says what is wrong: unknown realm, team or version', async () => {
-        await expect(RealmTeamListService.add('nope', 'u', { scope: 'acme', slug: 'claims' })).rejects.toMatchObject({ status_code: 404 });
-        await expect(RealmTeamListService.add('r1', 'u', { scope: 'acme', slug: 'ghost' })).rejects.toThrow(/isn't published/);
-        await expect(RealmTeamListService.add('r1', 'u', { scope: 'acme', slug: 'claims', version: '9.9.9' })).rejects.toThrow(/doesn't exist or was withdrawn/);
+    it("add says what is wrong: unknown realm, team or version, or another team's version", async () => {
+        await expect(RealmTeamListService.add('nope', 'u', { team_id: 't-claims' })).rejects.toMatchObject({ status_code: 404 });
+        await expect(RealmTeamListService.add('r1', 'u', { team_id: 't-ghost' })).rejects.toThrow(/Team not found/);
+        await expect(RealmTeamListService.add('r1', 'u', { team_id: 't-claims', version_id: 'v-none' })).rejects.toThrow(/doesn't exist or was withdrawn/);
+        await expect(RealmTeamListService.add('r1', 'u', { team_id: 't-claims', version_id: 'v-h1' })).rejects.toThrow(/doesn't exist or was withdrawn/);
         expect(db.rows).toEqual([]);
     });
 
     it('remove takes the team off; removing again is a no-op', async () => {
-        await RealmTeamListService.add('r1', 'u', { scope: 'acme', slug: 'claims' });
-        await RealmTeamListService.add('r1', 'u', { scope: 'cliq', slug: 'hello-world' });
-        expect(await RealmTeamListService.remove('r1', 'u', { scope: 'acme', slug: 'claims' }))
-            .toEqual([{ scope: 'cliq', slug: 'hello-world', version: '0.1.0' }]);
+        await RealmTeamListService.add('r1', 'u', { team_id: 't-claims' });
+        await RealmTeamListService.add('r1', 'u', { team_id: 't-hello' });
+        expect(await RealmTeamListService.remove('r1', 'u', 't-claims'))
+            .toEqual([{ team_id: 't-hello', version_id: 'v-h1', scope: 'cliq', slug: 'hello-world', version: '0.1.0' }]);
         await vi.waitFor(() => expect(mesh.changed).toHaveBeenCalledTimes(3)); // two adds and the remove tell the mesh
-        await RealmTeamListService.remove('r1', 'u', { scope: 'acme', slug: 'claims' });
+        await RealmTeamListService.remove('r1', 'u', 't-claims');
         await new Promise((r) => setTimeout(r, 10));
         expect(mesh.changed).toHaveBeenCalledTimes(3);
     });
@@ -137,8 +140,8 @@ describe('RealmTeamListService over realm_teams', () => {
     });
 
     it('the reads: entries, entries_for, keys, find, has, has_ref, realms_with', async () => {
-        await RealmTeamListService.add('r1', 'u', { scope: 'acme', slug: 'claims' });
-        await RealmTeamListService.add('r3', 'u', { scope: 'acme', slug: 'claims', version: '1.0.0' });
+        await RealmTeamListService.add('r1', 'u', { team_id: 't-claims' });
+        await RealmTeamListService.add('r3', 'u', { team_id: 't-claims', version_id: 'v-c1' });
         expect((await RealmTeamListService.entries('r1')).map((e) => e.version)).toEqual(['2.0.0']);
         const by_realm = await RealmTeamListService.entries_for(['r1', 'r2']);
         expect([...by_realm.keys()]).toEqual(['r1', 'r2']);
@@ -153,15 +156,15 @@ describe('RealmTeamListService over realm_teams', () => {
     });
 
     it('take_off_realms takes a team off only the realms named', async () => {
-        for (const r of ['r1', 'r2', 'r3']) await RealmTeamListService.add(r, 'u', { scope: 'acme', slug: 'claims' });
+        for (const r of ['r1', 'r2', 'r3']) await RealmTeamListService.add(r, 'u', { team_id: 't-claims' });
         await RealmTeamListService.take_off_realms('t-claims', ['r1', 'r3']);
         expect(db.rows.map((r) => r.realm_id)).toEqual(['r2']);
     });
 
     it('remove_from_all_realms takes the team off every realm and marks its slots uninstalled', async () => {
-        await RealmTeamListService.add('r1', 'u', { scope: 'acme', slug: 'claims' });
-        await RealmTeamListService.add('r1', 'u', { scope: 'cliq', slug: 'hello-world' });
-        await RealmTeamListService.add('r3', 'u', { scope: 'acme', slug: 'claims' });
+        await RealmTeamListService.add('r1', 'u', { team_id: 't-claims' });
+        await RealmTeamListService.add('r1', 'u', { team_id: 't-hello' });
+        await RealmTeamListService.add('r3', 'u', { team_id: 't-claims' });
         await RealmTeamListService.remove_from_all_realms('acme', 'claims');
         expect(db.rows.map((r) => r.team_id)).toEqual(['t-hello']);
         expect(slots.updates).toEqual([{ where: { scope_id: 'scope-acme', slug: 'claims' }, set: expect.objectContaining({ uninstalled_at: expect.any(Number) }) }]);

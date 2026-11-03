@@ -31,7 +31,6 @@ import { command_outbox_enqueue } from './command_outbox.service.js';
 import { InAppNotificationService } from './in_app_notification.service.js';
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
-import type { TeamListEntry } from '../models/realm.model.js';
 import type { Transaction } from 'sequelize';
 
 const log = get_logger('realm-team-list');
@@ -43,6 +42,15 @@ export type RealmTeamEntry = RealmTeamRow;
 const BUILTIN_TEAMS: Array<{ scope: string; slug: string }> = [{ scope: 'cliq', slug: 'hello-world' }];
 
 const key_of = (e: { scope: string | null; slug: string }) => `${e.scope ?? ''}/${e.slug}`;
+
+/** A team on the list as the routes answer it: its ids and its names. */
+export interface RealmTeamListItem {
+    team_id: string;
+    version_id: string;
+    scope: string;
+    slug: string;
+    version: string;
+}
 
 export interface ApplyTeamResult {
     scope: string;
@@ -190,8 +198,8 @@ export class RealmTeamListService {
     // ─── Writes ───────────────────────────────────────────────────────────────
 
     /**
-     * The team and version a realm records: the version asked for (it must be published and not withdrawn), else
-     * the latest.
+     * The team and version a built-in team gets, by name (the seed): the version asked for (it must be published
+     * and not withdrawn), else the latest.
      *
      * @throws ApiError 404 when the team isn't in the catalog, has no version, or the version doesn't exist.
      */
@@ -208,9 +216,32 @@ export class RealmTeamListService {
         return { team_id: team.id, version_id: latest.id, version: latest.version };
     }
 
-    /** The version a realm records for a team (see {@link resolve}). */
-    static async resolve_version(scope: string, slug: string, version?: string): Promise<string> {
-        return (await RealmTeamListService.resolve(scope, slug, version)).version;
+    /**
+     * A catalog team by id, with its names.
+     *
+     * @throws ApiError 404 when there is no such team.
+     */
+    static async team(team_id: string): Promise<{ id: string; scope: string; slug: string }> {
+        const team = await _team_repo_rtl.find_by_id(team_id);
+        if (!team) throw ApiError.not_found('Team not found');
+        return { id: team.id, scope: team.scope ?? '', slug: team.name };
+    }
+
+    /**
+     * The version a realm records for a team: the one asked for (it must be the team's, published and not
+     * withdrawn), else the latest.
+     *
+     * @throws ApiError 404 when the version isn't the team's or can't be installed, or the team has none.
+     */
+    static async resolve_by_id(team: { id: string; scope: string; slug: string }, version_id?: string): Promise<{ version_id: string; version: string }> {
+        if (version_id) {
+            const row = await _team_version_repo_rtl.find_current_by_id(version_id);
+            if (!row || row.team_id !== team.id) throw ApiError.not_found(`That version of '@${team.scope}/${team.slug}' doesn't exist or was withdrawn`);
+            return { version_id: row.id, version: row.version };
+        }
+        const latest = await _team_version_repo_rtl.find_latest_ref(team.id);
+        if (!latest) throw ApiError.not_found(`Team '@${team.scope}/${team.slug}' has no published version`);
+        return { version_id: latest.id, version: latest.version };
     }
 
     /**
@@ -220,17 +251,18 @@ export class RealmTeamListService {
     static async add(
         realm_id: string,
         user_id: string,
-        entry: TeamListEntry,
-    ): Promise<TeamListEntry[]> {
+        ref: { team_id: string; version_id?: string },
+    ): Promise<RealmTeamListItem[]> {
         // Callers authorized this: realms/add_team (route policy: operate + realms.teams.manage).
         const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
-        const { team_id, version_id, version } = await RealmTeamListService.resolve(entry.scope, entry.slug, entry.version);
-        const existing = await _realm_team_repo.find(realm_id, team_id);
+        const team = await RealmTeamListService.team(ref.team_id);
+        const { version_id, version } = await RealmTeamListService.resolve_by_id(team, ref.version_id);
+        const existing = await _realm_team_repo.find(realm_id, team.id);
         if (existing?.version_id !== version_id) {
-            await _realm_team_repo.put(realm_id, team_id, version_id);
-            log.info(`team list ${existing ? 'version' : 'add'}: realm=${realm_id} team=${key_of(entry)} version=${version}`);
+            await _realm_team_repo.put(realm_id, team.id, version_id);
+            log.info(`team list ${existing ? 'version' : 'add'}: realm=${realm_id} team=${key_of(team)} version=${version}`);
             void import('./mesh_lifecycle.service.js')
                 .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
                 .catch(() => {});
@@ -261,15 +293,14 @@ export class RealmTeamListService {
     static async remove(
         realm_id: string,
         user_id: string,
-        entry: TeamListEntry,
-    ): Promise<TeamListEntry[]> {
+        team_id: string,
+    ): Promise<RealmTeamListItem[]> {
         // Callers authorized this: realms/remove_team (route policy: operate + realms.teams.manage).
         const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
-        const team = await _team_repo_rtl.find_by_name_and_scope(entry.slug, entry.scope);
-        if (team && await _realm_team_repo.take_off(realm_id, team.id)) {
-            log.info(`team list remove: realm=${realm_id} team=${key_of(entry)}`);
+        if (await _realm_team_repo.take_off(realm_id, team_id)) {
+            log.info(`team list remove: realm=${realm_id} team=${team_id}`);
             void import('./mesh_lifecycle.service.js')
                 .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
                 .catch(() => {});
@@ -282,9 +313,9 @@ export class RealmTeamListService {
         await _realm_team_repo.take_off_realms(team_id, realm_ids, transaction);
     }
 
-    /** The list as the routes answer it: `{ scope, slug, version }` per team. */
-    private static async list_entries(realm_id: string): Promise<TeamListEntry[]> {
-        return (await _realm_team_repo.list(realm_id)).map((e) => ({ scope: e.scope, slug: e.slug, version: e.version }));
+    /** The list as the routes answer it: ids and names per team. */
+    private static async list_entries(realm_id: string): Promise<RealmTeamListItem[]> {
+        return (await _realm_team_repo.list(realm_id)).map((e) => ({ team_id: e.team_id, version_id: e.version_id, scope: e.scope, slug: e.slug, version: e.version }));
     }
 
     /**
@@ -295,20 +326,16 @@ export class RealmTeamListService {
     static async sync_team(
         realm_id: string,
         user_id: string,
-        entry: TeamListEntry,
+        team_id: string,
         org_ids?: string[],
     ): Promise<ApplyTeamResult> {
         // Callers authorized this: realms/add_team, right after add (route policy: operate + realms.teams.manage).
         const realm = await _realm_repo_rtl.find_by_id(realm_id);
         if (!realm) throw ApiError.not_found('Realm not found');
 
-        const team = await _team_repo_rtl.find_by_name_and_scope(entry.slug, entry.scope);
-        const listed = team ? await _realm_team_repo.find(realm_id, team.id) : null;
-        if (!listed) {
-            throw ApiError.bad_request(
-                `Team '${entry.scope}/${entry.slug}' is not on this realm's team list`,
-            );
-        }
+        const listed = await _realm_team_repo.find(realm_id, team_id);
+        if (!listed) throw ApiError.bad_request(`Team ${team_id} is not on this realm's team list`);
+        const entry = { scope: listed.scope, slug: listed.slug };
 
         const agent_settings = await RealmTeamListService.load_effective_agent_settings(
             realm_id,

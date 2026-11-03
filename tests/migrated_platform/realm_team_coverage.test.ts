@@ -46,6 +46,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
     let beta_id: string;       // published, on the roster, on no daemon
     let alpha_dt_id: string;   // alpha's daemon_teams row on d1
     let gamma_dt_id: string;   // gamma's daemon_teams row on d2 (a CLI team)
+    const version_of: Record<string, string> = {};  // name@version → version id
     const mock_enqueue = vi.fn().mockResolvedValue({ tx_id: 'tx' });
 
     const teams_controller = () => new TeamsController(new TeamsService(
@@ -91,7 +92,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
             } as any);
             // Each version's use_when / not_for / inputs are in its team.yml.
             for (const [version, capability] of Object.entries(versions)) {
-                await publish_version(team.id, version, { name: `@${scope_slug}/${name}`, ...(capability as object), phases: [] });
+                version_of[`${name}@${version}`] = await publish_version(team.id, version, { name: `@${scope_slug}/${name}`, ...(capability as object), phases: [] });
             }
             return team.id;
         };
@@ -112,8 +113,8 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
         realm_id = realm.id;
         // The realm runs alpha at 1.0.0 and beta at its latest (realm_teams, PLAN-team-bundle S4.1). gamma was never
         // published, so it can't be on the realm's list: it shows up because a daemon has it (a CLI team).
-        await RealmTeamListService.add(realm_id, user_id, { scope: scope_slug, slug: 'alpha', version: '1.0.0' });
-        await RealmTeamListService.add(realm_id, user_id, { scope: scope_slug, slug: 'beta' });
+        await RealmTeamListService.add(realm_id, user_id, { team_id: alpha_id, version_id: version_of['alpha@1.0.0'] });
+        await RealmTeamListService.add(realm_id, user_id, { team_id: beta_id });
 
         d1 = uid();
         d2 = uid();

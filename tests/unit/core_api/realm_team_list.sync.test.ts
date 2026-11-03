@@ -121,7 +121,7 @@ describe('RealmTeamListService.sync_team', () => {
         const result = await RealmTeamListService.sync_team(
             'rlm_1',
             'user-1',
-            { scope: 'acme', slug: 'claims' },
+            'team-claims',
             ['org-1'],
         );
 
@@ -143,7 +143,7 @@ describe('RealmTeamListService.sync_team', () => {
         listed.rows = [{ realm_id: 'rlm_1', team_id: 'team-other', version_id: 'v-9', scope: 'acme', slug: 'other', version: '2.0.0' }];
 
         await expect(
-            RealmTeamListService.sync_team('rlm_1', 'user-1', { scope: 'acme', slug: 'claims' }),
+            RealmTeamListService.sync_team('rlm_1', 'user-1', 'team-claims'),
         ).rejects.toThrow(/not on this realm's team list/i);
 
         expect(DispatchService.install_team).not.toHaveBeenCalled();
@@ -157,7 +157,7 @@ describe('RealmTeamListService.sync_team', () => {
         await RealmTeamListService.sync_team(
             'rlm_1',
             'user-1',
-            { scope: 'acme', slug: 'claims' },
+            'team-claims',
         );
 
         expect(DispatchService.install_team).toHaveBeenCalledWith(
@@ -174,7 +174,7 @@ describe('RealmTeamListService.sync_team', () => {
         const result = await RealmTeamListService.sync_team(
             'rlm_1',
             'user-1',
-            { scope: 'acme', slug: 'claims' },
+            'team-claims',
         );
 
         expect(result.daemon_results).toEqual([

@@ -535,7 +535,8 @@ export class TeamsService {
         const latest = rows.length > 0 ? rows[0].version : null;
         return {
             name: params.name, scope, latest,
-            versions: rows.map((r) => ({ version: r.version, changelog: r.changelog || null, published_at: r.published_at, is_latest: r.version === latest })),
+            // Each version's id: what realms/add_team takes (PLAN-team-bundle S4.1).
+            versions: rows.map((r) => ({ id: r.id, version: r.version, changelog: r.changelog || null, published_at: r.published_at, is_latest: r.version === latest })),
         };
     }
 
@@ -696,7 +697,7 @@ export class TeamsService {
         const blocked: Array<{ realm_id: string; realm_slug: string }> = [];
         let hidden = 0;
         for (const r of realms) {
-            const d = await decide(policy, { method: 'POST', path: '/v1/realms/remove_team', body: { realm_id: r.id, scope, slug }, auth }, store, { allow_pat_daemon_writes: false });
+            const d = await decide(policy, { method: 'POST', path: '/v1/realms/remove_team', body: { realm_id: r.id, team_id: team.id }, auth }, store, { allow_pat_daemon_writes: false });
             if (d.allow) continue;
             if (d.status === 404) hidden += 1; else blocked.push({ realm_id: r.id, realm_slug: r.slug });
         }
@@ -817,6 +818,7 @@ export class TeamsService {
                 name: team.name,
                 scope: team.scope,
                 version: latest,
+                version_id: row?.id ?? null,
                 status: 'published' as const,
                 listed: true,
                 visibility,
@@ -906,6 +908,7 @@ export class TeamsService {
             name,
             scope,
             version: resolved_version,
+            version_id: draft.id,
             status: 'published' as const,
             listed: true,
             visibility,
