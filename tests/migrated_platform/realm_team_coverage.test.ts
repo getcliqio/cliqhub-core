@@ -17,6 +17,7 @@ import type { Request, Response } from 'express';
 
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
+import { publish_version } from './helpers/version_files.js';
 import { Daemon, DaemonTeam, Realm, RealmMember, Scope, Team, TeamVersion } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
@@ -88,12 +89,9 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
                 id: randomUUID(), name, scope: scope_slug, description: `${name} team`,
                 author_id: user_id, license: 'MIT', visibility: 'public', listed, install_count: 0,
             } as any);
+            // Each version's use_when / not_for / inputs are in its team.yml.
             for (const [version, capability] of Object.entries(versions)) {
-                await TeamVersion.create({
-                    id: randomUUID(), team_id: team.id, version, changelog: '', package_path: '/tmp/x.zip',
-                    workflow_json: JSON.stringify({ phases: [] }), manifest_yaml: '', readme: '',
-                    capability_json: JSON.stringify(capability), agents_json: '{}', roles_json: '[]', tools: '[]', published_at: new Date(),
-                } as any);
+                await publish_version(team.id, version, { name: `@${scope_slug}/${name}`, ...(capability as object), phases: [] });
             }
             return team.id;
         };

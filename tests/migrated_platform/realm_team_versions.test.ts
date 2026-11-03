@@ -109,7 +109,7 @@ describe.skipIf(!has_postgres)('the realm owns each team\'s version', () => {
     const set_json = (id: string, list: unknown[]) => get_sequelize().query(
         `UPDATE cliq."realms" SET "team_list" = CAST(:list AS jsonb) WHERE "id" = :id`, { replacements: { id, list: JSON.stringify(list) } });
     const json_of = async (id: string) => ((await get_sequelize().query(
-        `SELECT "team_list" FROM cliq."realms" WHERE "id" = :id`, { type: 'SELECT', replacements: { id } } as never)) as Array<{ team_list: unknown }>)[0].team_list;
+        `SELECT "team_list" FROM cliq."realms" WHERE "id" = :id`, { type: 'SELECT', replacements: { id } } as never)) as unknown as Array<{ team_list: unknown }>)[0].team_list;
 
     it('adding a team records the latest published version; asking for another moves the realm to it', async () => {
         let list = await RealmTeamListService.add(realm_id, user_id, alpha());

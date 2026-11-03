@@ -13,6 +13,10 @@ import { BUILTIN_TEAMS } from '@getcliqio/cliq-sdk';
 import { seed_all } from '../../src/lib/seed.js';
 import { assert_team_lints } from '../../src/services/teams_service.js';
 import { AgentCatalog, Team, TeamVersion } from '../../src/models/index.js';
+import { version_content } from '../../src/services/version_content.js';
+
+/** A version's content, from its files (PLAN-team-bundle S1.4b). */
+const content_of = async (version_id: string) => (await version_content(version_id))!;
 
 const has_postgres = await postgres_reachable();
 
@@ -33,13 +37,13 @@ describe.skipIf(!has_postgres)('built-in hello-world', () => {
         const team = (await Team.findOne({ where: { scope: 'cliq', name: 'hello-world' }, raw: true }))!;
         const rows = await TeamVersion.findAll({ where: { team_id: team.id, version: '2.2.0' }, raw: true });
         expect(rows).toHaveLength(1);
-        const v = rows[0]!;
+        const v = await content_of(rows[0]!.id);
         const manifest = yaml.load(v.manifest_yaml) as { version: string; phases: Array<{ name: string; review?: { artifacts?: string[]; reviewers?: Array<{ channels: string[] }> } }> };
         expect(manifest.version).toBe('2.2.0');
         const gate = manifest.phases.find((p) => p.name === 'human-review')!;
         expect(gate.review).toMatchObject({ artifacts: ['review.txt'], reviewers: [{ channels: ['{{inputs.reviewers}}'] }] });
-        expect(JSON.parse(v.workflow_json).phases).toEqual(manifest.phases);
-        expect(JSON.parse(v.capability_json).inputs.map((i: { name: string; type: string }) => [i.name, i.type])).toEqual([['name', 'text'], ['reviewers', 'channel']]);
+        expect(v.workflow.phases).toEqual(manifest.phases);
+        expect(v.inputs.map((i) => [i.name, i.type])).toEqual([['name', 'text'], ['reviewers', 'channel']]);
         await expect(assert_team_lints(manifest as never)).resolves.toBeUndefined();
     });
 
@@ -48,7 +52,7 @@ describe.skipIf(!has_postgres)('built-in hello-world', () => {
         for (const builtin of BUILTIN_TEAMS) {
             const team = (await Team.findOne({ where: { scope: builtin.scope, name: builtin.name }, raw: true }))!;
             const [row] = await TeamVersion.findAll({ where: { team_id: team.id, version: builtin.version }, raw: true });
-            expect(row?.manifest_yaml, `${builtin.name}@${builtin.version}`).toBe(builtin.manifest_yaml);
+            expect(row && (await content_of(row.id)).manifest_yaml, `${builtin.name}@${builtin.version}`).toBe(builtin.manifest_yaml);
             await expect(assert_team_lints(yaml.load(builtin.manifest_yaml) as never), builtin.name).resolves.toBeUndefined();
         }
     });
@@ -56,12 +60,13 @@ describe.skipIf(!has_postgres)('built-in hello-world', () => {
     it('hug-example 2.0.0: the gate attaches plan.md and asks for the guest list as a CSV file; the next phase runs cliq hug files', async () => {
         await seed_all();
         const team = (await Team.findOne({ where: { scope: 'cliq', name: 'hug-example' }, raw: true }))!;
-        const [v] = await TeamVersion.findAll({ where: { team_id: team.id, version: '2.0.0' }, raw: true });
-        const manifest = yaml.load(v!.manifest_yaml) as { phases: Array<{ name: string; review?: Record<string, unknown>; commands?: Array<{ run: string }> }> };
+        const [row] = await TeamVersion.findAll({ where: { team_id: team.id, version: '2.0.0' }, raw: true });
+        const v = await content_of(row!.id);
+        const manifest = yaml.load(v.manifest_yaml) as { phases: Array<{ name: string; review?: Record<string, unknown>; commands?: Array<{ run: string }> }> };
         const gate = manifest.phases.find((p) => p.name === 'human-review')!;
         expect(gate.review).toMatchObject({ artifacts: ['plan.md'], inputs: [{ name: 'guest_list', type: 'file', accept: ['.csv', 'text/csv'], required: true }] });
         expect(manifest.phases.find((p) => p.name === 'invitations')!.commands![0]!.run).toBe('cliq hug files human-review guest_list guests/');
-        expect(JSON.parse(v!.agents_json)).toEqual({ exec: {}, hug: {} });
+        expect(v.agents).toEqual({ exec: {}, hug: {} });
     });
 
     it("the lint reads each agent's newest catalog version: an older hug that required `role` doesn't count", async () => {

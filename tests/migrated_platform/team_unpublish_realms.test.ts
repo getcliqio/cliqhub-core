@@ -10,6 +10,8 @@ import { randomUUID } from 'node:crypto';
 
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
+import { publish_version, test_package_storage } from './helpers/version_files.js';
+import { version_content } from '../../src/services/version_content.js';
 import { Realm, RealmMember, Scope, Team, TeamVersion } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
@@ -31,22 +33,18 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
     const scope_slug = uid().slice(0, 40);
     const service = new TeamsService(
         new TeamRepository() as any, new TeamVersionRepository() as any, new TagRepository() as any,
-        new DownloadLogRepository() as any, {} as any, '/tmp/test',
+        new DownloadLogRepository() as any, test_package_storage(), '/tmp/test',
         new ScopeRepository() as any, new AuditRepository() as any,
     );
     const auth = { user: { id: author, role: 'user', username: 'author' }, org_ids: [], org_slugs: [], scopes: [{ id: 's', slug: scope_slug }] } as any;
     const uninstall = vi.fn();
 
-    async function team_named(name: string): Promise<string> {
+    async function team_named(name: string, files: { team_yml?: string; other?: Record<string, string> } = {}): Promise<string> {
         const team = await Team.create({
             id: randomUUID(), name, scope: scope_slug, description: name,
             author_id: author, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
         } as any);
-        await TeamVersion.create({
-            id: randomUUID(), team_id: team.id, version: '1.0.0', changelog: '', package_path: '/tmp/x.zip',
-            workflow_json: JSON.stringify({ phases: [] }), manifest_yaml: '', readme: '',
-            capability_json: '{}', agents_json: '{}', roles_json: '[]', tools: '[]', published_at: new Date(),
-        } as any);
+        await publish_version(team.id, '1.0.0', files.team_yml ?? { name: `@${scope_slug}/${name}`, phases: [] }, files.other);
         return team.id;
     }
     async function realm_with(owner: string, team: string): Promise<string> {
@@ -71,6 +69,9 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
     });
     afterAll(async () => {
         vi.restoreAllMocks();
+        // A scope with no org makes the team-visibility migration complain on every later start: leave none behind.
+        await Team.destroy({ where: { scope: scope_slug } });
+        await Scope.destroy({ where: { slug: scope_slug } });
         await close_test_control_plane_store();
     });
 
@@ -112,12 +113,15 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
     });
 
     it('a fork copies the origin version’s role briefs as well as its team.yml', async () => {
-        const id = await team_named('with-roles');
-        await TeamVersion.update({ manifest_yaml: 'name: with-roles\nphases:\n  - name: design\n    type: standard\n', roles_json: JSON.stringify([{ name: 'design', content_md: 'You are the designer.' }]) } as any, { where: { team_id: id } });
+        const id = await team_named('with-roles', {
+            team_yml: 'name: with-roles\nversion: 1.0.0\nphases:\n  - name: design\n    type: standard\n',
+            other: { 'roles/design.md': 'You are the designer.' },
+        });
         const fork = await service.create(auth, { name: `with-roles-fork-${Date.now()}`, scope: scope_slug, forked_from: { team_id: id } });
-        const v = (await TeamVersion.findOne({ where: { team_id: fork.id }, raw: true })) as any;
-        expect(JSON.parse(v.roles_json)).toEqual([{ name: 'design', content_md: 'You are the designer.' }]);
-        expect(v.manifest_yaml).toContain(`name: ${fork.name}`);
+        // The fork's draft is the origin's files, renamed.
+        const v = (await version_content(fork.version_id))!;
+        expect(v.roles).toEqual([{ name: 'design', content_md: 'You are the designer.' }]);
+        expect(v.manifest_yaml).toContain(fork.name);
     });
 
     it('a team on no realm just becomes a draft', async () => {
