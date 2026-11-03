@@ -206,6 +206,8 @@ export class TeamsController extends BaseController {
                 label: r.label,
                 scope: r.scope,
                 version: r.version,
+                // The realm's version, by id (PLAN-team-bundle S4.1): "Update them" re-installs it.
+                version_id: r.version_id,
                 origin: r.origin,
                 in_team_list: r.in_team_list,
                 installed_daemon_ids: r.installed_daemon_ids,

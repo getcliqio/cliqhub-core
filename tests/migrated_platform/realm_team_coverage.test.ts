@@ -155,7 +155,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
         const by = Object.fromEntries(rows.map((r) => [r.slug, r]));
 
         expect(by.alpha).toMatchObject({
-            scope: scope_slug, origin: 'hub', team_id: alpha_id,
+            scope: scope_slug, origin: 'hub', team_id: alpha_id, version_id: version_of['alpha@1.0.0'],
             sample_team_id: alpha_dt_id, installed_daemon_ids: [d1], in_team_list: true,
         });
         // On the roster, on no daemon: still installable by its catalog id.
@@ -164,7 +164,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
             sample_team_id: null, installed_daemon_ids: [],
         });
         // Never published, on a daemon only: no catalog id, not on the realm's list.
-        expect(by.gamma).toMatchObject({ scope: scope_slug, origin: 'cli', team_id: null, sample_team_id: gamma_dt_id, in_team_list: false });
+        expect(by.gamma).toMatchObject({ scope: scope_slug, origin: 'cli', team_id: null, version_id: null, sample_team_id: gamma_dt_id, in_team_list: false });
     });
 
     it('rows say when to use a team: the realm version\'s use_when / not_for, required inputs, description', async () => {
@@ -188,7 +188,8 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
     it('teams/get realm mode: rows carry scope and the catalog id', async () => {
         const data = await call('get', { realm_id });
         const by = Object.fromEntries(data.items.map((t: any) => [t.slug, t]));
-        expect(by.alpha).toMatchObject({ id: alpha_id, scope: scope_slug, origin: 'hub' });
+        // The realm's version by id: what "Update them" sends back to realms/add_team.
+        expect(by.alpha).toMatchObject({ id: alpha_id, scope: scope_slug, origin: 'hub', version_id: version_of['alpha@1.0.0'] });
         expect(by.beta).toMatchObject({ id: beta_id, scope: scope_slug, origin: 'hub' });
         expect(by.gamma.id).toBeUndefined();
         expect(by.gamma.scope).toBe(scope_slug);

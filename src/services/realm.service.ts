@@ -1866,6 +1866,8 @@ export class RealmService {
             coverage_label: string;
             /** The realm's version of a team on its list; for a team only daemons report, what they report. */
             version: string | null;
+            /** The id of the realm's version (what realms/add_team takes); null for a team not on the list. */
+            version_id: string | null;
             /** Online daemons not on the realm's version (older, or not installed); null for a team not on the list. */
             online_stale: number | null;
             /** Daemons (any status) that have the realm's version installed; empty for a team not on the list. */
@@ -1899,6 +1901,7 @@ export class RealmService {
         const team_list = await RealmTeamListService.entries(params.realm_id);
         const team_list_set = new Set(team_list.map((e) => `${e.scope}/${e.slug}`));
         const realm_versions = new Map(team_list.map((e) => [`${e.scope}/${e.slug}`, e.version ?? null]));
+        const realm_version_ids = new Map(team_list.map((e) => [`${e.scope}/${e.slug}`, e.version_id]));
 
         // Daemons in realm — online count is the denominator for coverage.
         // Even with zero daemons we still surface realm.team_list rows below
@@ -2182,6 +2185,7 @@ export class RealmService {
                 online_daemon_count,
                 coverage_label,
                 version: team_list_set.has(key) ? realm_version : r.version,
+                version_id: realm_version_ids.get(key) ?? null,
                 online_stale,
                 current_daemon_ids: realm_version ? [...r.installed_daemon_ids].filter((d) => r.daemon_versions.get(d) === realm_version) : [],
                 sample_team_id: r.sample_team_id,
