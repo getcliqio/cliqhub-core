@@ -1293,8 +1293,26 @@ export class DispatchService {
     }
 
     /**
-     * Resolve a run team_ref (UUID or scope/slug) to the claiming daemon's
-     * cached team row — required for team_runs FK + execute manifest.
+     * The catalog team a run or install ref names (PLAN-team-bundle S4.2): a daemon_teams id, a catalog id, or
+     * scope/slug. A daemon's rows are found by this id, never by name.
+     */
+    private static async _catalog_team_id(team_ref: string): Promise<string | null> {
+        const ref = team_ref.trim().replace(/^@/, '');
+        if (!ref) return null;
+        if (ref.includes('/')) {
+            const slash = ref.indexOf('/');
+            const team = await _team_repo.find_by_name_and_scope(ref.slice(slash + 1), ref.slice(0, slash));
+            return team ? String(team.id) : null;
+        }
+        if (!UUID_RE.test(ref)) return null;
+        const row = await _dt_repo.find_by_id_any(ref);
+        if (row) return row.team_id ?? null;
+        return (await _team_repo.find_by_id(ref)) ? ref : null;
+    }
+
+    /**
+     * Resolve a run team_ref (daemon_teams id, catalog id or scope/slug) to the claiming daemon's row for that
+     * catalog team — required for team_runs FK + execute manifest.
      */
     private static async _resolve_daemon_team_id(
         team_ref: string,
@@ -1304,56 +1322,20 @@ export class DispatchService {
         if (!ref) throw ApiError.bad_request('run payload requires team_id');
 
         const by_pk = await _dt_repo.find_by_id(ref);
-        if (by_pk) {
-            if (by_pk.daemon_id === daemon_id) {
-                return { team_id: by_pk.id, manifest: by_pk.manifest ?? undefined };
-            }
-
-            const on_daemon = await _dt_repo.find_one(
-                {
-                    daemon_id,
-                    scope_id: by_pk.scope_id,
-                    slug: by_pk.slug,
-                } as any,
-            );
-            if (on_daemon) {
-                return { team_id: on_daemon.id, manifest: on_daemon.manifest ?? undefined };
-            }
-
-            if (!by_pk.daemon_id) {
-                throw ApiError.bad_request(
-                    `Team '${by_pk.slug}' is not installed on the claiming daemon — apply the realm team list or install it first`,
-                );
-            }
-
-            throw ApiError.bad_request(
-                `Team '${ref}' belongs to another daemon; not installed on '${daemon_id}'`,
-            );
+        if (by_pk?.daemon_id === daemon_id) {
+            return { team_id: by_pk.id, manifest: by_pk.manifest ?? undefined };
         }
 
-        if (!ref.includes('/')) {
-            throw ApiError.not_found(`Team '${team_ref}' not found`);
-        }
+        const catalog_id = await DispatchService._catalog_team_id(ref);
+        if (!catalog_id) throw ApiError.not_found(`Team '${team_ref}' not found`);
 
-        const slash = ref.indexOf('/');
-        const scope_slug = ref.slice(0, slash);
-        const slug = ref.slice(slash + 1);
-        if (!scope_slug || !slug) {
-            throw ApiError.bad_request(`Invalid team_id '${team_ref}' — expected scope/slug or UUID`);
-        }
-
-        const scope = await _scope_repo.find_one({ slug: scope_slug } as any);
-        if (!scope) throw ApiError.not_found(`Scope '${scope_slug}' not found`);
-
-        const on_daemon = await _dt_repo.find_one(
-            { daemon_id, scope_id: scope.id, slug } as any,
-        );
+        const on_daemon = await _dt_repo.find_one({ daemon_id, team_id: catalog_id } as any);
         if (on_daemon) {
             return { team_id: on_daemon.id, manifest: on_daemon.manifest ?? undefined };
         }
 
         throw ApiError.bad_request(
-            `Team '${scope_slug}/${slug}' is not installed on the claiming daemon — apply the realm team list or install it first`,
+            `Team '${ref}' is not installed on the claiming daemon — add it to the daemon's realm first`,
         );
     }
 
@@ -1437,46 +1419,18 @@ export class DispatchService {
         return { workspace_id: id, workspace_path: '' };
     }
 
-    /** Daemons whose cached roster includes the team (by UUID or scope/slug). */
+    /** Daemons that have the team installed (ref: daemon_teams id, catalog id or scope/slug). */
     private static async _daemon_ids_with_team(
         team_ref: string,
         daemon_ids: string[],
     ): Promise<string[]> {
         if (daemon_ids.length === 0) return [];
 
-        const ref = team_ref.trim().replace(/^@/, '');
-        if (!ref) return [];
-
-        if (ref.includes('/')) {
-            const slash = ref.indexOf('/');
-            const scope_slug = ref.slice(0, slash);
-            const slug = ref.slice(slash + 1);
-            const scope = await _scope_repo.find_one({ slug: scope_slug } as any);
-            if (!scope) return [];
-            const rows = await _dt_repo.find_all(
-                {
-                    scope_id: scope.id,
-                    slug,
-                    daemon_id: { [Op.in]: daemon_ids },
-                } as any,
-                { attributes: ['daemon_id'] },
-            );
-            return [...new Set(rows.map((r) => r.daemon_id).filter(Boolean) as string[])];
-        }
-
-        const by_id = await _dt_repo.find_by_id(ref);
-        if (!by_id) return [];
-
-        if (by_id.daemon_id && daemon_ids.includes(by_id.daemon_id)) {
-            return [by_id.daemon_id];
-        }
+        const catalog_id = await DispatchService._catalog_team_id(team_ref);
+        if (!catalog_id) return [];
 
         const rows = await _dt_repo.find_all(
-            {
-                scope_id: by_id.scope_id,
-                slug: by_id.slug,
-                daemon_id: { [Op.in]: daemon_ids },
-            } as any,
+            { team_id: catalog_id, daemon_id: { [Op.in]: daemon_ids } } as any,
             { attributes: ['daemon_id'] },
         );
         return [...new Set(rows.map((r) => r.daemon_id).filter(Boolean) as string[])];

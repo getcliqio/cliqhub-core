@@ -23,6 +23,7 @@ import {
     RealmMember,
     RealmDispatchQueue,
     Run,
+    Team,
 } from '../../src/models/index.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
 import { QueueService } from '../../src/services/queue.service.js';
@@ -101,6 +102,7 @@ describe.skipIf(!has_postgres)('multi-daemon offer + claim + execute (Slice 3)',
     let workspace_id: string;
     let team_id: string;
     let scope_id: string;
+    let catalog_id: string;
     let stub_a: Stub_daemon;
     let stub_b: Stub_daemon;
     /** Spy on outbox enqueue — execute is now dispatched via the durable outbox. */
@@ -118,12 +120,18 @@ describe.skipIf(!has_postgres)('multi-daemon offer + claim + execute (Slice 3)',
         const scope = await ScopeService.add(`m3-scope-${uid()}`);
         scope_id = scope.id;
         const team_slug = `m3-team-${uid()}`;
+        // The catalog team: a daemon's row is found by it, not by name (PLAN-team-bundle S4.2).
+        catalog_id = (await Team.create({
+            id: crypto.randomUUID(), name: team_slug, scope: scope.slug, description: team_slug,
+            author_id: user_id, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
+        } as never)).id as string;
         const registry_team = await make_daemon_team_row(
             scope.id,
             team_slug,
             '1.0.0',
             null,
             'name: m3\nversion: "1.0.0"\nphases: []\n',
+            { team_id: catalog_id },
         );
         team_id = registry_team.get('id') as string;
 
@@ -159,7 +167,7 @@ describe.skipIf(!has_postgres)('multi-daemon offer + claim + execute (Slice 3)',
                 '1.0.0',
                 null,
                 'name: m3\nversion: "1.0.0"\nphases: []\n',
-                { daemon_id: stub.id },
+                { daemon_id: stub.id, team_id: catalog_id },
             );
         }
     }, 120_000);
@@ -173,6 +181,7 @@ describe.skipIf(!has_postgres)('multi-daemon offer + claim + execute (Slice 3)',
         await Realm.destroy({ where: { id: realm_id } });
         if (stub_a) await Daemon.destroy({ where: { id: stub_a.id } });
         if (stub_b) await Daemon.destroy({ where: { id: stub_b.id } });
+        if (catalog_id) await Team.destroy({ where: { id: catalog_id } });
         await close_test_control_plane_store();
     }, 120_000);
 

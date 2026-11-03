@@ -9,6 +9,7 @@ import { RunLogLineRepository } from '../repositories/run_log_line_repository.js
 import { RunPhaseRepository } from '../repositories/run_phase_repository.js';
 import { RunArtifactRepository } from '../repositories/run_artifact_repository.js';
 import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
+import { TeamRepository } from '../repositories/team_repository.js';
 import { WorkspaceRepository } from '../repositories/workspace_repository.js';
 import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
 import { DaemonRepository } from '../repositories/daemon_repository.js';
@@ -30,6 +31,7 @@ const _run_log_line_repo = new RunLogLineRepository();
 const _run_phase_repo_rs = new RunPhaseRepository();
 const _run_artifact_repo_rs = new RunArtifactRepository();
 const _dt_repo_rs = new DaemonTeamRepository();
+const _team_repo_rs = new TeamRepository();
 const _ws_repo_rs = new WorkspaceRepository();
 const _realm_member_repo_rs = new RealmMemberRepository();
 const _daemon_repo_rs = new DaemonRepository();
@@ -577,10 +579,16 @@ export class RunService {
             where.team_id = filters.team_id;
         }
         if (filters?.team) {
-            // Runs carry the team's install id (one per daemon), not a published team id.
+            // Runs carry the team's install id (one per daemon), not a published team id. Installs are found by
+            // their catalog team; only rows from before S4.2 that never matched one are found by name.
+            const catalog = await _team_repo_rs.find_by_name_and_scope(filters.team.slug, filters.team.scope);
             const scope = await _scope_repo_rs.find_one_q({ where: { slug: filters.team.scope }, attributes: ['id'] });
-            const installs = scope
-                ? await _dt_repo_rs.find_all_any({ where: { scope_id: String(scope.id), slug: filters.team.slug }, attributes: ['id'] })
+            const match = [
+                ...(catalog ? [{ team_id: String(catalog.id) }] : []),
+                ...(scope ? [{ team_id: null, scope_id: String(scope.id), slug: filters.team.slug }] : []),
+            ];
+            const installs = match.length > 0
+                ? await _dt_repo_rs.find_all_any({ where: { [Op.or]: match }, attributes: ['id'] })
                 : [];
             if (installs.length === 0) return { runs: [], total: 0 };
             const ids = installs.map((t) => String(t.id));

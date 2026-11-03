@@ -520,19 +520,15 @@ export class RealmTeamListService {
     static async remove_from_all_realms(scope_slug: string, team_slug: string): Promise<void> {
         const key = `${scope_slug}/${team_slug}`;
         const team = await _team_repo_rtl.find_by_name_and_scope(team_slug, scope_slug);
-        if (team) {
-            const realm_ids = await _realm_team_repo.take_off_everywhere(team.id);
-            for (const realm_id of realm_ids) log.info(`cascade remove: realm=${realm_id} team=${key}`);
-        }
+        if (!team) return;
+        const realm_ids = await _realm_team_repo.take_off_everywhere(team.id);
+        for (const realm_id of realm_ids) log.info(`cascade remove: realm=${realm_id} team=${key}`);
 
-        const scope_row = await _scope_repo_rtl.find_one_q({ where: { slug: scope_slug }, attributes: ['id'] });
-        if (scope_row) {
-            // Slots are marked uninstalled, not deleted: their runs keep the team.
-            await _dt_repo_rtl.update_where(
-                { scope_id: (scope_row as any).id, slug: team_slug } as any,
-                { uninstalled_at: Date.now(), updated_at: Date.now() } as any,
-            );
-            log.info(`cascade uninstall daemon team slots: ${key}`);
-        }
+        // Slots are marked uninstalled, not deleted: their runs keep the team. Found by the catalog team, not by name.
+        await _dt_repo_rtl.update_where(
+            { team_id: team.id } as any,
+            { uninstalled_at: Date.now(), updated_at: Date.now() } as any,
+        );
+        log.info(`cascade uninstall daemon team slots: ${key}`);
     }
 }

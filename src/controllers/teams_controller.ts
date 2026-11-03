@@ -35,9 +35,9 @@ import { OrgTeamsService } from '../services/org_teams.service.js';
 import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
 
 const _dt_repo_tc = new DaemonTeamRepository();
-import { ScopeRepository } from '../repositories/scope_repository.js';
+import { TeamRepository } from '../repositories/team_repository.js';
 
-const _scope_repo_tc = new ScopeRepository();
+const _team_repo_tc = new TeamRepository();
 import type { TeamsService } from '../services/teams_service.js';
 import type { BuilderService } from '../services/builder_service.js';
 import type { ApiOkResponse, ApiRequest, PagedData } from '../types/api_response.js';
@@ -89,9 +89,9 @@ export class TeamsController extends BaseController {
     }
 
     /**
-     * Delete `cliq.teams` rows for a scope/slug scoped to the target daemons.
+     * Mark the target daemons' slots for a team uninstalled (found by the catalog team, not by name).
      * Must be called before dispatching uninstall so re-install picks up fresh state.
-     * No-op when the scope or realm resolves to zero daemons.
+     * No-op when the team is unknown or the realm resolves to zero daemons.
      */
     private async _purge_team_cache(
         scope_slug: string,
@@ -99,13 +99,10 @@ export class TeamsController extends BaseController {
         realm_id?: string,
         daemon_ids?: string[],
     ): Promise<void> {
-        const scope_row = await _scope_repo_tc.find_one_q({ where: { slug: scope_slug }, attributes: ['id'] });
-        if (!scope_row) return;
+        const team = await _team_repo_tc.find_by_name_and_scope(team_slug, scope_slug);
+        if (!team) return;
 
-        const where: Record<string, unknown> = {
-            scope_id: (scope_row as unknown as { id: string }).id,
-            slug: team_slug,
-        };
+        const where: Record<string, unknown> = { team_id: team.id };
 
         if (daemon_ids && daemon_ids.length > 0) {
             where.daemon_id = { [Op.in]: daemon_ids };

@@ -167,6 +167,6 @@ describe('RealmTeamListService over realm_teams', () => {
         await RealmTeamListService.add('r3', 'u', { team_id: 't-claims' });
         await RealmTeamListService.remove_from_all_realms('acme', 'claims');
         expect(db.rows.map((r) => r.team_id)).toEqual(['t-hello']);
-        expect(slots.updates).toEqual([{ where: { scope_id: 'scope-acme', slug: 'claims' }, set: expect.objectContaining({ uninstalled_at: expect.any(Number) }) }]);
+        expect(slots.updates).toEqual([{ where: { team_id: 't-claims' }, set: expect.objectContaining({ uninstalled_at: expect.any(Number) }) }]);
     });
 });

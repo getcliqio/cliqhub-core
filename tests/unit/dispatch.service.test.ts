@@ -692,9 +692,12 @@ describe('DispatchService.dispatch_claimed_run', () => {
 
     beforeEach(() => {
         vi.mocked(Scope.findOne).mockResolvedValue({ id: 'scope-cliq', slug: 'cliq' } as any);
+        // scope/slug names the catalog team; the daemon's row is found by it (PLAN-team-bundle S4.2).
+        vi.mocked(Team.findOne).mockResolvedValue({ id: 't-hello', name: 'hello-world', scope: 'cliq' } as any);
         vi.mocked(DaemonTeam.findByPk).mockResolvedValue(null as any);
         vi.mocked(DaemonTeam.findOne).mockResolvedValue({
             id: 'team-daemon-row',
+            team_id: 't-hello',
             daemon_id: 'daemon-1',
             scope_id: 'scope-cliq',
             slug: 'hello-world',
@@ -711,12 +714,14 @@ describe('DispatchService.dispatch_claimed_run', () => {
         mock_fetch.mockResolvedValue(ok_response({ accepted: true }));
     });
 
-    it('resolves scope/slug to the claiming daemon team row', async () => {
+    it('resolves scope/slug to the claiming daemon team row, by its catalog team', async () => {
         const updated = await DispatchService.dispatch_claimed_run(claimed_item as any, {
             user_id: 'user-1',
         });
 
-        expect(DaemonTeam.findOne).toHaveBeenCalled();
+        expect(DaemonTeam.findOne).toHaveBeenCalledWith(
+            expect.objectContaining({ where: expect.objectContaining({ daemon_id: 'daemon-1', team_id: 't-hello' }) }),
+        );
         expect(RunService.create).toHaveBeenCalledWith(
             expect.any(String),
             'team-daemon-row',
@@ -724,6 +729,21 @@ describe('DispatchService.dispatch_claimed_run', () => {
         );
         expect(updated.status).toBe('running');
         expect(updated.run_id).toBe('run-001');
+    });
+
+    it("a run naming another daemon's row runs the claiming daemon's row for the same catalog team", async () => {
+        const other_row = '6f1d3c2a-9b8e-4d7c-a1b2-c3d4e5f60718';
+        vi.mocked(DaemonTeam.findByPk).mockResolvedValue({ id: other_row, team_id: 't-hello', daemon_id: 'daemon-2' } as any);
+
+        await DispatchService.dispatch_claimed_run(
+            { ...claimed_item, payload: { team_id: other_row, run_name: 'ui-run' } } as any,
+            { user_id: 'user-1' },
+        );
+
+        expect(DaemonTeam.findOne).toHaveBeenCalledWith(
+            expect.objectContaining({ where: expect.objectContaining({ daemon_id: 'daemon-1', team_id: 't-hello' }) }),
+        );
+        expect(RunService.create).toHaveBeenCalledWith(expect.any(String), 'team-daemon-row', expect.any(Object));
     });
 
     it('reuses an existing workspace when workspace_path already exists', async () => {
