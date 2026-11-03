@@ -246,10 +246,7 @@ export class DispatchService {
             ?? ((await _run_repo.find_by_id(run_id)) as Run | null)?.run_name
             ?? undefined;
 
-        const team_scope_slug = team
-            ? (await _scope_repo.find_by_id(team.scope_id))?.slug
-            : undefined;
-
+        // The daemon finds its copy by this id and the installed version, never by name (PLAN-team-bundle S4.3).
         const team_version = team?.version ?? undefined;
 
         // Enqueue the execute command for durable delivery via the outbox.
@@ -258,7 +255,6 @@ export class DispatchService {
             workspace_dir: workspace_path,
             manifest_yaml,
             team_id: input.team_id,
-            ...(team_scope_slug && team ? { scope: team_scope_slug, slug: team.slug } : {}),
             ...(team_version ? { version: team_version } : {}),
             run_context: input.run_context,
             run_name,
@@ -623,6 +619,10 @@ export class DispatchService {
         // Callers authorized this: runs/enqueue (operate + teams.run) or an A2A
         // dispatch key (queued as the realm owner).
         const payload = input.payload ?? {};
+        // A run names its team by id (PLAN-team-bundle S4.3): the catalog team (or a daemon's install of it).
+        if (input.kind === 'run' && !(typeof payload.team_id === 'string' && UUID_RE.test(payload.team_id.trim()))) {
+            throw ApiError.unprocessable('team_id: the catalog team id (a UUID), not @scope/slug', 'invalid_params');
+        }
         const fan_out = input.kind === 'install' || input.kind === 'uninstall';
         const item = await QueueService.create({
             realm_id,
@@ -1293,17 +1293,11 @@ export class DispatchService {
     }
 
     /**
-     * The catalog team a run or install ref names (PLAN-team-bundle S4.2): a daemon_teams id, a catalog id, or
-     * scope/slug. A daemon's rows are found by this id, never by name.
+     * The catalog team a run names (PLAN-team-bundle S4.2, S4.3): a catalog id, or a daemon_teams id (its catalog
+     * team). Never a name. A daemon's rows are found by this id.
      */
     private static async _catalog_team_id(team_ref: string): Promise<string | null> {
-        const ref = team_ref.trim().replace(/^@/, '');
-        if (!ref) return null;
-        if (ref.includes('/')) {
-            const slash = ref.indexOf('/');
-            const team = await _team_repo.find_by_name_and_scope(ref.slice(slash + 1), ref.slice(0, slash));
-            return team ? String(team.id) : null;
-        }
+        const ref = team_ref.trim();
         if (!UUID_RE.test(ref)) return null;
         const row = await _dt_repo.find_by_id_any(ref);
         if (row) return row.team_id ?? null;
@@ -1311,14 +1305,14 @@ export class DispatchService {
     }
 
     /**
-     * Resolve a run team_ref (daemon_teams id, catalog id or scope/slug) to the claiming daemon's row for that
+     * Resolve a run team_ref (catalog id or daemon_teams id) to the claiming daemon's row for that
      * catalog team — required for team_runs FK + execute manifest.
      */
     private static async _resolve_daemon_team_id(
         team_ref: string,
         daemon_id: string,
     ): Promise<{ team_id: string; manifest?: string }> {
-        const ref = team_ref.trim().replace(/^@/, '');
+        const ref = team_ref.trim();
         if (!ref) throw ApiError.bad_request('run payload requires team_id');
 
         const by_pk = await _dt_repo.find_by_id(ref);
@@ -1419,7 +1413,7 @@ export class DispatchService {
         return { workspace_id: id, workspace_path: '' };
     }
 
-    /** Daemons that have the team installed (ref: daemon_teams id, catalog id or scope/slug). */
+    /** Daemons that have the team installed (ref: catalog id or daemon_teams id). */
     private static async _daemon_ids_with_team(
         team_ref: string,
         daemon_ids: string[],

@@ -29,20 +29,14 @@ export const RunsGetInput = z.object({
     /** Restrict to runs whose daemon is a member of this realm. */
     realm_id: z.string().optional(),
     /**
-     * Restrict to runs of this team (any version). Narrowing filter only —
-     * the realm-membership gate still applies. May be sent without org_id:
-     * the gate then spans the caller's realms in every org.
+     * Restrict to runs of this team (PLAN-team-bundle S4.3): a catalog team id lists the runs of every daemon's
+     * install of it (uninstalled ones included); a daemon team id, that install's runs. Narrowing filter only —
+     * the realm-membership gate still applies. May be sent without org_id: the gate then spans the caller's
+     * realms in every org.
      */
-    team_id: z.string().uuid().optional(),
-    /**
-     * Restrict to runs of this team by name — any install of it on any daemon
-     * (uninstalled ones included). Use this for a published team: its id is
-     * not the id runs carry. Narrowing only; the realm gate still applies.
-     */
-    team: z.object({
-        scope: z.string().min(1).describe('Scope slug'),
-        slug: z.string().min(1).describe('Team slug (name)'),
-    }).optional().describe('Runs of any install of this team (scope/slug)'),
+    team_id: z.string().uuid().optional().describe("Runs of this team: a catalog team id (any daemon's install) or a daemon team id"),
+    /** Replaced by `team_id` (S4.3): refused, so an old caller isn't silently widened to every team's runs. */
+    team: z.never({ message: 'team ({ scope, slug }) was replaced by team_id, the catalog team id' }).optional(),
     /**
      * Organization UUID. Required for org-scoped recent list when
      * realm_id / daemon_id / workspace_id / parent_run_id are omitted.
@@ -74,15 +68,15 @@ export const RunsGetInput = z.object({
     if (v.workspace_id?.trim()) return;
     if (v.realm_id?.trim()) return;
     if (v.daemon_id?.trim()) return;
-    // Team filter (by id or by name): realm gate over all the caller's realms (no org needed).
-    if (v.team_id || v.team) return;
+    // Team filter (by id): realm gate over all the caller's realms (no org needed).
+    if (v.team_id) return;
     // Site-admin hub-wide list (controller ignores `all` for everyone else → 422 there).
     if (v.all) return;
     // Org-scoped recent list — body org_id is invent SoT.
     if (!v.org_id) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: 'org_id is required when listing recent runs without realm_id, daemon_id, workspace_id, parent_run_id, team_id or team',
+            message: 'org_id is required when listing recent runs without realm_id, daemon_id, workspace_id, parent_run_id or team_id',
             path: ['org_id'],
         });
     }

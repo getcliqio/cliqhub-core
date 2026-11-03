@@ -114,7 +114,8 @@ describe('A2aInvokeService', () => {
                 kind: 'run',
                 user_id: '42',
                 payload: expect.objectContaining({
-                    team_id: 'cliq/hello-world',
+                    // The skill is @cliq/hello-world; the run is started by the catalog team's id (S4.3).
+                    team_id: hub_legacy_uuid(10),
                     inputs: { message: 'hi' },
                 }),
             }),

@@ -668,13 +668,24 @@ describe('DispatchService.install_team', () => {
 
 // ── dispatch_claimed_run (team + workspace resolution) ──────────────
 
+describe('DispatchService.enqueue — a run names its team by id (PLAN-team-bundle S4.3)', () => {
+    it('refuses @scope/slug with 422 before anything is queued', async () => {
+        vi.mocked(QueueService.create).mockClear();
+        await expect(DispatchService.enqueue({ realm_id: 'realm-1', kind: 'run', user_id: 'user-1', payload: { team_id: 'cliq/hello-world' } }))
+            .rejects.toMatchObject({ status_code: 422, code: 'invalid_params' });
+        expect(QueueService.create).not.toHaveBeenCalled();
+    });
+});
+
 describe('DispatchService.dispatch_claimed_run', () => {
+    /** The catalog team the run names (PLAN-team-bundle S4.3: runs name their team by id). */
+    const CATALOG = '7e2d4c1a-3b5f-4a6e-9c8d-1f2e3a4b5c6d';
     const claimed_item = {
         id: 'q1',
         realm_id: 'realm-1',
         kind: 'run' as const,
         payload: {
-            team_id: 'cliq/hello-world',
+            team_id: CATALOG,
             run_name: 'ui-run',
         },
         status: 'claimed',
@@ -692,12 +703,12 @@ describe('DispatchService.dispatch_claimed_run', () => {
 
     beforeEach(() => {
         vi.mocked(Scope.findOne).mockResolvedValue({ id: 'scope-cliq', slug: 'cliq' } as any);
-        // scope/slug names the catalog team; the daemon's row is found by it (PLAN-team-bundle S4.2).
-        vi.mocked(Team.findOne).mockResolvedValue({ id: 't-hello', name: 'hello-world', scope: 'cliq' } as any);
+        // The daemon's row is found by the catalog team (PLAN-team-bundle S4.2).
+        vi.mocked(Team.findByPk).mockResolvedValue({ id: CATALOG, name: 'hello-world', scope: 'cliq' } as any);
         vi.mocked(DaemonTeam.findByPk).mockResolvedValue(null as any);
         vi.mocked(DaemonTeam.findOne).mockResolvedValue({
             id: 'team-daemon-row',
-            team_id: 't-hello',
+            team_id: CATALOG,
             daemon_id: 'daemon-1',
             scope_id: 'scope-cliq',
             slug: 'hello-world',
@@ -714,13 +725,13 @@ describe('DispatchService.dispatch_claimed_run', () => {
         mock_fetch.mockResolvedValue(ok_response({ accepted: true }));
     });
 
-    it('resolves scope/slug to the claiming daemon team row, by its catalog team', async () => {
+    it('resolves the catalog team to the claiming daemon team row', async () => {
         const updated = await DispatchService.dispatch_claimed_run(claimed_item as any, {
             user_id: 'user-1',
         });
 
         expect(DaemonTeam.findOne).toHaveBeenCalledWith(
-            expect.objectContaining({ where: expect.objectContaining({ daemon_id: 'daemon-1', team_id: 't-hello' }) }),
+            expect.objectContaining({ where: expect.objectContaining({ daemon_id: 'daemon-1', team_id: CATALOG }) }),
         );
         expect(RunService.create).toHaveBeenCalledWith(
             expect.any(String),
@@ -733,7 +744,7 @@ describe('DispatchService.dispatch_claimed_run', () => {
 
     it("a run naming another daemon's row runs the claiming daemon's row for the same catalog team", async () => {
         const other_row = '6f1d3c2a-9b8e-4d7c-a1b2-c3d4e5f60718';
-        vi.mocked(DaemonTeam.findByPk).mockResolvedValue({ id: other_row, team_id: 't-hello', daemon_id: 'daemon-2' } as any);
+        vi.mocked(DaemonTeam.findByPk).mockResolvedValue({ id: other_row, team_id: CATALOG, daemon_id: 'daemon-2' } as any);
 
         await DispatchService.dispatch_claimed_run(
             { ...claimed_item, payload: { team_id: other_row, run_name: 'ui-run' } } as any,
@@ -741,7 +752,7 @@ describe('DispatchService.dispatch_claimed_run', () => {
         );
 
         expect(DaemonTeam.findOne).toHaveBeenCalledWith(
-            expect.objectContaining({ where: expect.objectContaining({ daemon_id: 'daemon-1', team_id: 't-hello' }) }),
+            expect.objectContaining({ where: expect.objectContaining({ daemon_id: 'daemon-1', team_id: CATALOG }) }),
         );
         expect(RunService.create).toHaveBeenCalledWith(expect.any(String), 'team-daemon-row', expect.any(Object));
     });
@@ -757,7 +768,7 @@ describe('DispatchService.dispatch_claimed_run', () => {
             {
                 ...claimed_item,
                 payload: {
-                    team_id: 'cliq/hello-world',
+                    team_id: CATALOG,
                     workspace_path: '/Users/me/proj',
                 },
             } as any,
@@ -772,7 +783,7 @@ describe('DispatchService.dispatch_claimed_run', () => {
         );
     });
 
-    it('fails clearly when scope/slug is not on the claiming daemon', async () => {
+    it('fails clearly when the team is not on the claiming daemon', async () => {
         vi.mocked(DaemonTeam.findOne).mockResolvedValue(null as any);
 
         await expect(

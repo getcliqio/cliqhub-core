@@ -50,6 +50,8 @@ export class Run extends BaseModel {
     declare started_by: string | null;
     declare started_at: number;
     declare completed_at: number | null;
+    /** `@scope/slug` of the run's team, kept from when the run was created (PLAN-team-bundle S4.3). */
+    declare team_label: string | null;
 
     static register(sequelize: Sequelize): void {
         Run.init({
@@ -81,6 +83,7 @@ export class Run extends BaseModel {
             started_by: { type: DataTypes.TEXT, allowNull: true },
             started_at: { type: DataTypes.BIGINT, allowNull: false },
             completed_at: { type: DataTypes.BIGINT },
+            team_label: { type: DataTypes.TEXT, allowNull: true },
         }, ModelConfig.table_options(sequelize, 'team_runs'));
     }
 }

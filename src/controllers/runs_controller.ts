@@ -90,9 +90,9 @@ export class RunController extends BaseController {
         const filters = this.parse_body(RunsGetInput, req);
 
         const site_admin = filters.all === true && AdminCheck.is_site_admin(req);
-        const keyed = Boolean(filters.parent_run_id?.trim() || filters.workspace_id?.trim() || filters.realm_id?.trim() || filters.daemon_id?.trim() || filters.team_id || filters.team);
+        const keyed = Boolean(filters.parent_run_id?.trim() || filters.workspace_id?.trim() || filters.realm_id?.trim() || filters.daemon_id?.trim() || filters.team_id);
         if (filters.all && !site_admin && !filters.org_id && !keyed) {
-            throw ApiError.unprocessable('org_id is required when listing recent runs without realm_id, daemon_id, workspace_id, parent_run_id, team_id or team', 'invalid_params');
+            throw ApiError.unprocessable('org_id is required when listing recent runs without realm_id, daemon_id, workspace_id, parent_run_id or team_id', 'invalid_params');
         }
         let org_id: string | undefined;
         // Route policy: realm view + runs.view, or org runs.view.
@@ -106,7 +106,6 @@ export class RunController extends BaseController {
                 state: filters.state,
                 realm_id: filters.realm_id,
                 team_id: filters.team_id,
-                team: filters.team,
                 offset: filters.offset,
                 since_ms: filters.since_ms,
                 until_ms: filters.until_ms,

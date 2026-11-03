@@ -75,7 +75,7 @@ export async function load_run_info_map(run_ids: string[]): Promise<Map<string, 
 
 	const runs = await _run_repo_re.find_all_q({
 		where: { run_id: { [Op.in]: unique } },
-		attributes: ['run_id', 'run_name', 'team_id'],
+		attributes: ['run_id', 'run_name', 'team_id', 'team_label'],
 	});
 	const team_ids = [...new Set(runs.map((r) => r.team_id).filter(Boolean))];
 	const teams = team_ids.length === 0
@@ -98,7 +98,8 @@ export async function load_run_info_map(run_ids: string[]): Promise<Map<string, 
 		map.set(run.run_id, {
 			run_id: run.run_id,
 			run_name: run.run_name?.trim() || null,
-			team: run.team_id ? (team_by_id.get(String(run.team_id)) ?? null) : null,
+			// The label kept on the run (S4.3), else its install's.
+			team: run.team_label ?? (run.team_id ? (team_by_id.get(String(run.team_id)) ?? null) : null),
 		});
 	}
 	return map;

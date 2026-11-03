@@ -84,11 +84,11 @@ export class RunTelemetryService {
                 SELECT
                     s."end_unix_nano"                                              AS "end_unix_nano",
                     s."attributes"                                                 AS "attributes",
-                    CASE
+                    COALESCE(tr."team_label", CASE
                         WHEN t."slug" IS NOT NULL AND sc."slug" IS NOT NULL
                             THEN '@' || sc."slug" || '/' || t."slug"
                         ELSE NULL
-                    END                                                            AS "team_label",
+                    END)                                                           AS "team_label",
                     (tr."usage_snapshot" ->> 'total_cost_usd')::numeric            AS "run_cost_usd"
                   FROM cliq."run_spans"  s
                   LEFT JOIN cliq."team_runs" tr ON tr."run_id" = s."run_id"

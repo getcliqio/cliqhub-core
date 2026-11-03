@@ -117,6 +117,32 @@ describe.skipIf(!has_postgres)('daemon team rows: children of realm teams', () =
         expect(await DaemonTeam.unscoped().count({ where: { daemon_id: d, team_id: t.team_id } })).toBe(1);
     });
 
+    it("a run records the version its daemon has installed (not the latest); an older run keeps its own (S4.3)", async () => {
+        const d = await new_daemon();
+        const t = await realm_team(undefined, ['1.0.0', '1.1.0']);
+        const id = await hub_install(d, t);
+        const first = await RunService.create(workspace_id, id, { daemon_id: d });
+        expect(await RunService.load_team_version_id(first)).toBe(t.v['1.0.0']);
+
+        await RealmTeamListService.add(realm_id, user_id, { team_id: t.team_id, version_id: t.v['1.1.0'] });
+        await hub_install(d, t);
+        const second = await RunService.create(workspace_id, id, { daemon_id: d });
+        expect(await RunService.load_team_version_id(second)).toBe(t.v['1.1.0']);
+        expect(await RunService.load_team_version_id(first)).toBe(t.v['1.0.0']);
+    });
+
+    it("a run keeps its team's @scope/slug from when it was created, even after the install's row goes (S4.3)", async () => {
+        const d = await new_daemon();
+        const t = await realm_team();
+        const id = await hub_install(d, t);
+        const run_id = await RunService.create(workspace_id, id, { daemon_id: d });
+        expect((await Run.findByPk(run_id, { raw: true }) as any).team_label).toBe(`@${scope_slug}/${t.name}`);
+
+        await DaemonTeam.unscoped().destroy({ where: { id } });
+        const { runs } = await RunService.list_recent(50, undefined, { workspace_id, site_admin: true });
+        expect(runs.find((r: { run_id: string }) => r.run_id === run_id)?.team_label).toBe(`@${scope_slug}/${t.name}`);
+    });
+
     it('two daemons, same team: two rows', async () => {
         const [d1, d2] = [await new_daemon(), await new_daemon()];
         const t = await realm_team();
@@ -191,7 +217,7 @@ describe.skipIf(!has_postgres)('daemon team rows: children of realm teams', () =
         expect(await Run.findByPk(run_id)).not.toBeNull();
     });
 
-    it('runs/get { team: scope/slug } lists runs of every install of the team, uninstalled ones included', async () => {
+    it('runs/get { team_id } (the catalog team) lists runs of every install of it, uninstalled ones included; a daemon team id its own (S4.3)', async () => {
         const [d1, d2] = [await new_daemon(), await new_daemon()];
         const t = await realm_team();
         const other = await realm_team();
@@ -203,12 +229,15 @@ describe.skipIf(!has_postgres)('daemon team rows: children of realm teams', () =
         const r3 = await RunService.create(workspace_id, o, { daemon_id: d1 });
         await TeamService.register_from_daemon(d2, [], true, await realm_teams()); // d2's install uninstalled
 
-        const { runs, total } = await RunService.list_recent(50, undefined, { team: { scope: scope_slug, slug: t.name }, site_admin: true });
+        const { runs, total } = await RunService.list_recent(50, undefined, { team_id: t.team_id, site_admin: true });
         expect(runs.map((r: { run_id: string }) => r.run_id).sort()).toEqual([r1, r2].sort());
         expect(total).toBe(2);
         expect(runs.some((r: { run_id: string }) => r.run_id === r3)).toBe(false);
 
-        const none = await RunService.list_recent(50, undefined, { team: { scope: scope_slug, slug: 'no-such-team' }, site_admin: true });
+        const own = await RunService.list_recent(50, undefined, { team_id: b, site_admin: true });
+        expect(own.runs.map((r: { run_id: string }) => r.run_id)).toEqual([r2]);
+
+        const none = await RunService.list_recent(50, undefined, { team_id: randomUUID(), site_admin: true });
         expect(none.total).toBe(0);
     });
 

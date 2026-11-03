@@ -167,7 +167,8 @@ export class A2aInvokeService {
             kind: 'run',
             user_id: owner_user_id,
             payload: {
-                team_id: skill_id,
+                // The skill is named @scope/slug on the agent card; the run is started by the catalog team's id.
+                team_id: listed.team_id,
                 inputs,
                 ...(input.context_id ? { a2a_context_id: input.context_id } : {}),
                 a2a_request_id: randomUUID(),

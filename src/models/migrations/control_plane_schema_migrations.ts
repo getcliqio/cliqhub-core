@@ -1227,6 +1227,14 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
         WHERE "team_id" IS NOT NULL AND "uninstalled_at" IS NULL`);
     await run(`CREATE INDEX IF NOT EXISTS "daemon_teams_realm_team" ON cliq."daemon_teams" ("realm_team_id")`);
 
+    // A run keeps its team's name (PLAN-team-bundle S4.3): `@scope/slug` when it is created, so it still reads
+    // after the install goes. Runs from before get it from their install's row (where it still exists).
+    await run(`ALTER TABLE cliq."team_runs" ADD COLUMN IF NOT EXISTS "team_label" TEXT`);
+    await run(`
+        UPDATE cliq."team_runs" r SET "team_label" = '@' || sc."slug" || '/' || dt."slug"
+          FROM cliq."daemon_teams" dt JOIN cliq."scopes" sc ON sc."id"::text = dt."scope_id"
+         WHERE r."team_label" IS NULL AND dt."id" = r."team_id"`);
+
     // Org team library: teams an org has taken on (from the marketplace or its own
     // scopes). A team joins the org before any of the org's realms can add it.
     await run(`

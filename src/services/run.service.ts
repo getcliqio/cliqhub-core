@@ -9,7 +9,6 @@ import { RunLogLineRepository } from '../repositories/run_log_line_repository.js
 import { RunPhaseRepository } from '../repositories/run_phase_repository.js';
 import { RunArtifactRepository } from '../repositories/run_artifact_repository.js';
 import { DaemonTeamRepository } from '../repositories/daemon_team_repository.js';
-import { TeamRepository } from '../repositories/team_repository.js';
 import { WorkspaceRepository } from '../repositories/workspace_repository.js';
 import { RealmMemberRepository } from '../repositories/realm_member_repository.js';
 import { DaemonRepository } from '../repositories/daemon_repository.js';
@@ -31,7 +30,6 @@ const _run_log_line_repo = new RunLogLineRepository();
 const _run_phase_repo_rs = new RunPhaseRepository();
 const _run_artifact_repo_rs = new RunArtifactRepository();
 const _dt_repo_rs = new DaemonTeamRepository();
-const _team_repo_rs = new TeamRepository();
 const _ws_repo_rs = new WorkspaceRepository();
 const _realm_member_repo_rs = new RealmMemberRepository();
 const _daemon_repo_rs = new DaemonRepository();
@@ -42,6 +40,7 @@ import { get_sequelize } from '../lib/sequelize.js';
 import { RealmService } from './realm.service.js';
 import { LogLineParser } from '../lib/log_line_parse.js';
 import { SlugFactory } from '../lib/slug.js';
+import { IdFactory } from '../lib/ids.js';
 import { QueryTypes } from 'sequelize';
 import { EventSubmitService } from './events_service.js';
 import type { EventType } from '../schemas/event_types.js';
@@ -477,6 +476,14 @@ export class RunService {
         ];
     }
 
+    /** `@scope/slug` of a run's team (its daemon's install), kept on the run when it is created (S4.3). */
+    private static async _team_label_of(team_id: string): Promise<string | null> {
+        const team = await _dt_repo_rs.find_by_id_any(team_id, { attributes: ['scope_id', 'slug'] });
+        if (!team) return null;
+        const scope = await _scope_repo_rs.find_by_id(String(team.scope_id));
+        return scope ? `@${scope.slug}/${team.slug}` : null;
+    }
+
     private static _enrich_run(r: any, scope_slug_by_id: Map<string, string> = new Map()) {
         const plain = r.toJSON();
         const team = plain.team;
@@ -495,7 +502,7 @@ export class RunService {
         const scope_slug = team?.scope_id ? (scope_slug_by_id.get(team.scope_id) ?? 'default') : 'default';
         return {
             ...plain,
-            team_label: team ? `@${scope_slug}/${team.slug}` : null,
+            team_label: plain.team_label ?? (team ? `@${scope_slug}/${team.slug}` : null),
             team_version: team?.version ?? null,
             workspace_name: ws?.name ?? ws?.path?.split('/').pop() ?? null,
             workspace_dir: ws?.path ?? null,
@@ -539,7 +546,6 @@ export class RunService {
             /** Runs of this team only. Narrows; the realm gate still applies. */
             team_id?: string;
             /** Runs of any install of this team (scope/slug, uninstalled included). Narrows. */
-            team?: { scope: string; slug: string };
             offset?: number;
             since_ms?: number;
             until_ms?: number;
@@ -576,25 +582,13 @@ export class RunService {
             where.workspace_id = filters.workspace_id;
         }
         if (filters?.team_id) {
-            where.team_id = filters.team_id;
-        }
-        if (filters?.team) {
-            // Runs carry the team's install id (one per daemon), not a published team id. Installs are found by
-            // their catalog team; only rows from before S4.2 that never matched one are found by name.
-            const catalog = await _team_repo_rs.find_by_name_and_scope(filters.team.slug, filters.team.scope);
-            const scope = await _scope_repo_rs.find_one_q({ where: { slug: filters.team.scope }, attributes: ['id'] });
-            const match = [
-                ...(catalog ? [{ team_id: String(catalog.id) }] : []),
-                ...(scope ? [{ team_id: null, scope_id: String(scope.id), slug: filters.team.slug }] : []),
-            ];
-            const installs = match.length > 0
-                ? await _dt_repo_rs.find_all_any({ where: { [Op.or]: match }, attributes: ['id'] })
-                : [];
-            if (installs.length === 0) return { runs: [], total: 0 };
-            const ids = installs.map((t) => String(t.id));
-            where.team_id = filters.team_id
-                ? (ids.includes(filters.team_id) ? filters.team_id : '__none__')
-                : { [Op.in]: ids };
+            // A catalog team (PLAN-team-bundle S4.3): runs of every daemon's install of it, uninstalled ones
+            // included; a daemon team id names its own runs. By id only.
+            const installs = await _dt_repo_rs.find_all_any({
+                where: { [Op.or]: [{ team_id: filters.team_id }, { id: filters.team_id }] },
+                attributes: ['id'],
+            });
+            where.team_id = { [Op.in]: [...new Set([filters.team_id, ...installs.map((t) => String(t.id))])] };
         }
         // Realm gate (S5): every filter — realm_id, daemon_id, workspace_id,
         // parent_run_id, team_id — stays inside the realms the caller can see
@@ -799,12 +793,12 @@ export class RunService {
     }
 
     /**
-     * Resolve public.team_versions row for a team: explicit version_id
-     * (must belong to team_id) or latest semver. Returns null when the
-     * team has no published versions (local-only catalog).
+     * The version a run's team ran (PLAN-team-bundle S4.3): a run's `team_id` is its daemon's `daemon_teams` row,
+     * whose catalog team and installed `version_id` say which version. `version_id` (one already stamped) wins
+     * when it is that team's. Null when the row has no catalog team or version (rows from before S4.2).
      */
     private static async _resolve_team_version(
-        team_id: string,
+        run_team_id: string,
         version_id?: string | null,
     ): Promise<{
         id: string;
@@ -818,9 +812,11 @@ export class RunService {
             );
             const { version_content } = await import('./version_content.js');
             const repo = new TeamVersionRepository();
-            const ref = version_id?.trim()
-                ? await repo.find_by_id(version_id.trim()).then((row) => (row && row.team_id === team_id ? { id: row.id, version: row.version } : null))
-                : await repo.find_latest_ref(team_id);
+            const slot = await _dt_repo_rs.find_by_id_any(run_team_id, { attributes: ['team_id', 'version_id'] });
+            const team_id = slot?.team_id ?? null;
+            const wanted = version_id?.trim() || slot?.version_id || null;
+            if (!team_id || !wanted) return null;
+            const ref = await repo.find_by_id(wanted).then((row) => (row && row.team_id === team_id ? { id: row.id, version: row.version } : null));
             if (!ref) return null;
             // What the version's files say (PLAN-team-bundle S1.4b).
             const content = await version_content(ref.id);
@@ -848,7 +844,7 @@ export class RunService {
     }
 
     /**
-     * On first create: stamp team_version_id (latest) and seed phase rows.
+     * On first create: stamp team_version_id (the version its daemon has installed) and seed phase rows.
      * Replaces daemon `/v1/runs/phases/create_many`.
      */
     private static async _stamp_version_and_seed(
@@ -1124,6 +1120,7 @@ export class RunService {
             org_id,
             workspace_id: resolved_workspace_id,
             team_id,
+            team_label: await RunService._team_label_of(team_id),
             daemon_id: opts?.daemon_id ?? null,
             realm_id,
             state: 'running',
@@ -2385,7 +2382,7 @@ export class RunService {
      * Bulk-insert streaming events from a daemon and fan out to the
      * in-process event bus for SSE delivery.
      *
-     * Returns the count of inserted events and the auto-assigned IDs.
+     * Returns the count of inserted events and their IDs.
      */
     static async ingest_events(
         run_id: string,
@@ -2403,9 +2400,11 @@ export class RunService {
         if (events.length === 0) return { count: 0, ids: [] };
 
         const sq = get_sequelize();
-        const ids: string[] = [];
+        // Ids are minted here like every other model row; the column's DB default is only set
+        // by the int-to-UUID migration, so a schema created without it would reject a NULL id.
+        const ids = events.map(() => IdFactory.new_id());
 
-        // Bulk insert via a single multi-row INSERT with RETURNING id.
+        // Bulk insert via a single multi-row INSERT.
         const values_parts: string[] = [];
         const replacements: Record<string, unknown> = {
             run_id,
@@ -2413,12 +2412,14 @@ export class RunService {
 
         for (let i = 0; i < events.length; i++) {
             const e = events[i]!;
+            const id_key = `id_${i}`;
             const payload_key = `payload_${i}`;
             const ts_key = `ts_${i}`;
             const et_key = `et_${i}`;
             const ph_key = `ph_${i}`;
             const ag_key = `ag_${i}`;
 
+            replacements[id_key] = ids[i];
             replacements[et_key] = e.event_type;
             replacements[ph_key] = e.phase ?? null;
             replacements[ag_key] = e.agent ?? null;
@@ -2426,19 +2427,15 @@ export class RunService {
             replacements[ts_key] = e.created_at;
 
             values_parts.push(
-                `(:run_id, :${et_key}, :${ph_key}, :${ag_key}, :${payload_key}, :${ts_key})`,
+                `(:${id_key}, :run_id, :${et_key}, :${ph_key}, :${ag_key}, :${payload_key}, :${ts_key})`,
             );
         }
 
         const query = `INSERT INTO cliq."team_run_events"
-            ("run_id", "event_type", "phase", "agent", "payload_json", "created_at")
-            VALUES ${values_parts.join(', ')}
-            RETURNING "id"`;
+            ("id", "run_id", "event_type", "phase", "agent", "payload_json", "created_at")
+            VALUES ${values_parts.join(', ')}`;
 
-        const [rows] = await sq.query(query, { replacements }) as [Array<{ id: string }>, unknown];
-        for (const row of rows) {
-            ids.push(String(row.id));
-        }
+        await sq.query(query, { replacements });
 
         // Fan out to SSE subscribers via the in-process event bus.
         const { publish_run_event } = await import('./run_event_bus.js');
