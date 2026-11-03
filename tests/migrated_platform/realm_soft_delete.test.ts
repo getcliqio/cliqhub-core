@@ -7,6 +7,7 @@ import {
 	open_test_control_plane_store,
 	postgres_reachable,
 } from './helpers/control_plane_store.js';
+import { make_daemon_team_row } from './helpers/daemon_team_row.js';
 import {
 	Daemon,
 	Realm,
@@ -18,7 +19,6 @@ import { HubEvent } from '../../src/models/hub_event.model.js';
 import { ApiError } from '../../src/lib/api_error.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { ScopeService } from '../../src/services/control_scope_service.js';
-import { TeamService } from '../../src/services/teams_install_service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
 import { TokenRepository } from '../../src/repositories/token_repository.js';
 import { User } from '../../src/models/user.model.js';
@@ -78,7 +78,7 @@ beforeAll(async () => {
 	await open_test_control_plane_store();
 
 	const scope = await ScopeService.add(`soft-del-scope-${Date.now()}`);
-	const team = await TeamService.create(scope.id, `soft-del-team-${Date.now()}`, '1.0', null, '{}');
+	const team = await make_daemon_team_row(scope.id, `soft-del-team-${Date.now()}`, '1.0', null, '{}');
 	fixture_team_id = team.get('id') as string;
 	const { record } = await WorkspaceService.upsert_by_path(`/tmp/soft-del-ws-${Date.now()}`);
 	fixture_workspace_id = record.id;

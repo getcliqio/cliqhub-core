@@ -3,20 +3,13 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 
 import { TeamService } from '../../src/services/teams_install_service.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
+import { make_daemon_team_row } from './helpers/daemon_team_row.js';
 import { Daemon, DaemonTeam, WorkspaceTeam } from '../../src/models/index.js';
 import { Scope } from '../../src/models/index.js';
 import { randomUUID } from 'node:crypto';
 
 const has_postgres = await postgres_reachable();
 
-/** A daemon_teams row for these reads (rows are written by the hub's install, PLAN-team-bundle S4.2). */
-async function make_row(scope_id: string, slug: string, version: string | null, description: string | null, manifest: string, deps: { daemon_id?: string | null } = {}) {
-    const now = Date.now();
-    return DaemonTeam.create({
-        id: randomUUID(), daemon_id: deps.daemon_id ?? null, scope_id, slug, version, description, manifest,
-        dockerfile: null, dependencies: null, created_at: now, updated_at: now,
-    } as never);
-}
 
 const uid = () => `test-team-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -81,8 +74,8 @@ describe.skipIf(!has_postgres)('TeamService.list', () => {
     it('returns teams ordered by slug ASC', async () => {
         const slug_b = `b-${uid()}`;
         const slug_a = `a-${uid()}`;
-        await make_row(scope_id, slug_b, '1.0', null, manifest);
-        await make_row(scope_id, slug_a, '1.0', null, manifest);
+        await make_daemon_team_row(scope_id, slug_b, '1.0', null, manifest);
+        await make_daemon_team_row(scope_id, slug_a, '1.0', null, manifest);
 
         const result = await TeamService.list(scope_id);
         const slugs = result.map((t) => t.slug);
@@ -91,7 +84,7 @@ describe.skipIf(!has_postgres)('TeamService.list', () => {
 
     it('lists all teams when scope_id is omitted', async () => {
         const slug = uid();
-        await make_row(scope_id, slug, null, null, manifest);
+        await make_daemon_team_row(scope_id, slug, null, null, manifest);
 
         const result = await TeamService.list();
         expect(result.length).toBeGreaterThanOrEqual(1);
@@ -99,7 +92,7 @@ describe.skipIf(!has_postgres)('TeamService.list', () => {
 
     it('ignores empty scope_ids array filter', async () => {
         const slug = uid();
-        await make_row(scope_id, slug, null, null, manifest);
+        await make_daemon_team_row(scope_id, slug, null, null, manifest);
 
         const result = await TeamService.list([]);
         expect(result.some((t) => t.slug === slug)).toBe(true);
@@ -109,7 +102,7 @@ describe.skipIf(!has_postgres)('TeamService.list', () => {
 describe.skipIf(!has_postgres)('TeamService.get', () => {
     it('returns team by scope_id and slug', async () => {
         const slug = uid();
-        await make_row(scope_id, slug, '1.0', 'a test team', manifest);
+        await make_daemon_team_row(scope_id, slug, '1.0', 'a test team', manifest);
 
         const team = await TeamService.get(scope_id, slug);
         expect(team.slug).toBe(slug);
@@ -125,7 +118,7 @@ describe.skipIf(!has_postgres)('TeamService.get', () => {
 describe.skipIf(!has_postgres)('TeamService.get_by_id', () => {
     it('returns team by primary key', async () => {
         const slug = uid();
-        const created = await make_row(scope_id, slug, null, null, manifest);
+        const created = await make_daemon_team_row(scope_id, slug, null, null, manifest);
         const id = created.id;
 
         const team = await TeamService.get_by_id(id);
@@ -141,7 +134,7 @@ describe.skipIf(!has_postgres)('TeamService.get_by_id', () => {
 describe.skipIf(!has_postgres)('TeamService.update', () => {
     it('updates manifest and version', async () => {
         const slug = uid();
-        await make_row(scope_id, slug, '1.0', null, manifest);
+        await make_daemon_team_row(scope_id, slug, '1.0', null, manifest);
 
         const new_manifest = JSON.stringify({ phases: [{ name: 'build' }] });
         const updated = await TeamService.update(scope_id, slug, {
@@ -162,7 +155,7 @@ describe.skipIf(!has_postgres)('TeamService.update', () => {
 describe.skipIf(!has_postgres)('TeamService.remove', () => {
     it('removes existing team and returns true', async () => {
         const slug = uid();
-        await make_row(scope_id, slug, null, null, manifest);
+        await make_daemon_team_row(scope_id, slug, null, null, manifest);
 
         const removed = await TeamService.remove(scope_id, slug);
         expect(removed).toBe(true);
@@ -180,7 +173,7 @@ describe.skipIf(!has_postgres)('TeamService.remove', () => {
 describe.skipIf(!has_postgres)('TeamService.find', () => {
     it('returns team when present', async () => {
         const slug = uid();
-        await make_row(scope_id, slug, null, null, manifest);
+        await make_daemon_team_row(scope_id, slug, null, null, manifest);
 
         const found = await TeamService.find(scope_id, slug);
         expect(found).not.toBeNull();
@@ -193,7 +186,7 @@ describe.skipIf(!has_postgres)('TeamService.find', () => {
 
     it('filters by daemon_id when provided', async () => {
         const slug = uid();
-        await make_row(scope_id, slug, null, null, manifest, { daemon_id });
+        await make_daemon_team_row(scope_id, slug, null, null, manifest, { daemon_id });
 
         const found = await TeamService.find(scope_id, slug, { daemon_id });
         expect(found).not.toBeNull();
@@ -204,7 +197,7 @@ describe.skipIf(!has_postgres)('TeamService.find', () => {
 describe.skipIf(!has_postgres)('TeamService.list with daemon filter', () => {
     it('filters teams by daemon_id', async () => {
         const slug = uid();
-        await make_row(scope_id, slug, null, null, manifest, { daemon_id });
+        await make_daemon_team_row(scope_id, slug, null, null, manifest, { daemon_id });
 
         const result = await TeamService.list(scope_id, { daemon_id });
         expect(result.some((t) => t.slug === slug)).toBe(true);
@@ -218,8 +211,8 @@ describe.skipIf(!has_postgres)('TeamService.count_by_scope', () => {
     });
 
     it('returns correct count after creating teams', async () => {
-        await make_row(scope_id, uid(), null, null, manifest);
-        await make_row(scope_id, uid(), null, null, manifest);
+        await make_daemon_team_row(scope_id, uid(), null, null, manifest);
+        await make_daemon_team_row(scope_id, uid(), null, null, manifest);
 
         const count = await TeamService.count_by_scope(scope_id);
         expect(count).toBe(2);

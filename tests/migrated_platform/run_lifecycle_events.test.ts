@@ -19,13 +19,13 @@ import { randomUUID } from 'node:crypto';
 import { RunService } from '../../src/services/run.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { ScopeService } from '../../src/services/control_scope_service.js';
-import { TeamService } from '../../src/services/teams_install_service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
 import {
     close_test_control_plane_store,
     open_test_control_plane_store,
     postgres_reachable,
 } from './helpers/control_plane_store.js';
+import { make_daemon_team_row } from './helpers/daemon_team_row.js';
 import {
     Daemon,
     HubEvent,
@@ -51,7 +51,7 @@ beforeAll(async () => {
 
     const scope = await ScopeService.add(`lc-scope-${uid()}`);
     scope_id = scope.id;
-    const team = await TeamService.create(scope_id, `lc-team-${uid()}`, '1.0', null, '{}');
+    const team = await make_daemon_team_row(scope_id, `lc-team-${uid()}`, '1.0', null, '{}');
     team_id = team.get('id') as string;
     const { record } = await WorkspaceService.upsert_by_path(`/tmp/lc-ws-${uid()}`);
     workspace_id = record.id;

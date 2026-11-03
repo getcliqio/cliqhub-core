@@ -8,10 +8,10 @@ import { randomUUID } from 'node:crypto';
 
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
+import { make_daemon_team_row } from './helpers/daemon_team_row.js';
 import { Daemon, RealmMember, Run } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { ScopeService } from '../../src/services/control_scope_service.js';
-import { TeamService } from '../../src/services/teams_install_service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
 
 const has_postgres = await postgres_reachable();
@@ -32,7 +32,7 @@ describe.skipIf(!has_postgres)('realms/get counts and sorting by them', () => {
         process.env.CLIQ_BFF_LOG_LEVEL = 'error';
         await open_test_control_plane_store();
         const scope = await ScopeService.add(`${prefix}-scope`);
-        const team = await TeamService.create(scope.id, `${prefix}-team`, '1.0', null, '{}');
+        const team = await make_daemon_team_row(scope.id, `${prefix}-team`, '1.0', null, '{}');
         const { record } = await WorkspaceService.upsert_by_path(`/tmp/${prefix}-ws`);
         const run = (realm_id: string, state: string) => Run.create({
             run_id: randomUUID(), workspace_id: record.id, team_id: team.get('id') as string, daemon_id: null, realm_id,

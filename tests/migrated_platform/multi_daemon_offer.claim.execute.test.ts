@@ -15,6 +15,7 @@ import {
     open_test_control_plane_store,
     postgres_reachable,
 } from './helpers/control_plane_store.js';
+import { make_daemon_team_row } from './helpers/daemon_team_row.js';
 import * as outbox from '../../src/services/command_outbox.service.js';
 import {
     Daemon,
@@ -27,7 +28,6 @@ import { DispatchService } from '../../src/services/dispatch.service.js';
 import { QueueService } from '../../src/services/queue.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { ScopeService } from '../../src/services/control_scope_service.js';
-import { TeamService } from '../../src/services/teams_install_service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
 
 const has_postgres = await postgres_reachable();
@@ -118,7 +118,7 @@ describe.skipIf(!has_postgres)('multi-daemon offer + claim + execute (Slice 3)',
         const scope = await ScopeService.add(`m3-scope-${uid()}`);
         scope_id = scope.id;
         const team_slug = `m3-team-${uid()}`;
-        const registry_team = await TeamService.create(
+        const registry_team = await make_daemon_team_row(
             scope.id,
             team_slug,
             '1.0.0',
@@ -153,7 +153,7 @@ describe.skipIf(!has_postgres)('multi-daemon offer + claim + execute (Slice 3)',
             // Install the team on this daemon so dispatch_claimed_run can
             // resolve `team_id` (a registry UUID) to a per-daemon Team row.
             // Mirrors what a real install flow writes.
-            await TeamService.create(
+            await make_daemon_team_row(
                 scope.id,
                 team_slug,
                 '1.0.0',

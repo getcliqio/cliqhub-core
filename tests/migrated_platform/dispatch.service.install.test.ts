@@ -34,7 +34,8 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
     let realm_id: string;
     let d1: string;
     let d2: string;
-    let d_out: string;        // a daemon in no realm
+    let d_out: string;        // a daemon in another realm, which doesn't run the team
+    let other_realm_id: string;
     const catalog_ids: string[] = [];
     /** Spy on outbox enqueue — install now goes through the durable outbox. */
     const mock_enqueue = vi.fn();
@@ -71,6 +72,7 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
         realm_id = realm.id;
         await RealmTeamListService.add(realm_id, user_id, { team_id });
 
+        other_realm_id = (await RealmService.create(user_id, `inst2-${uid()}`.slice(0, 40), 'Other Realm')).id;
         d1 = uid();
         d2 = uid();
         d_out = uid();
@@ -90,7 +92,7 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
                 created_at: Date.now(),
                 last_registered_at: Date.now(),
             });
-            if (id !== d_out) await RealmService.upsert_daemon_member(realm_id, id);
+            await RealmService.upsert_daemon_member(id === d_out ? other_realm_id : realm_id, id);
         }
     });
 
@@ -102,8 +104,8 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
     afterAll(async () => {
         if (!has_postgres) return;
         vi.restoreAllMocks();
-        await RealmMember.destroy({ where: { realm_id } });
-        await Realm.destroy({ where: { id: realm_id } });
+        await RealmMember.destroy({ where: { realm_id: [realm_id, other_realm_id] } });
+        await Realm.destroy({ where: { id: [realm_id, other_realm_id] } });
         await Daemon.destroy({ where: { id: d1 } });
         await Daemon.destroy({ where: { id: [d2, d_out] } });
         await TeamVersion.destroy({ where: { team_id: catalog_ids } });

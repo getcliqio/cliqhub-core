@@ -3,9 +3,9 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 
 import { RunService } from '../../src/services/run.service.js';
 import { ScopeService } from '../../src/services/control_scope_service.js';
-import { TeamService } from '../../src/services/teams_install_service.js';
 import { WorkspaceService } from '../../src/services/workspace.service.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
+import { make_daemon_team_row } from './helpers/daemon_team_row.js';
 import { Daemon, Run, RunEvent, RunLog, RunLogLine, RunPhase, RunArtifact } from '../../src/models/index.js';
 import { randomUUID } from 'node:crypto';
 import { QueryTypes } from 'sequelize';
@@ -37,7 +37,7 @@ beforeAll(async () => {
     const scope = await ScopeService.add(`run-test-scope-${uid()}`);
     scope_id = scope.id;
 
-    const team = await TeamService.create(scope_id, `run-test-team-${uid()}`, '1.0', null, '{}');
+    const team = await make_daemon_team_row(scope_id, `run-test-team-${uid()}`, '1.0', null, '{}');
     team_id = team.get('id') as string;
 
     const { record } = await WorkspaceService.upsert_by_path(`/tmp/run-test-ws-${uid()}`);
