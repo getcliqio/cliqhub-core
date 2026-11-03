@@ -3,7 +3,14 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { randomUUID } from 'node:crypto';
 
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
-import { publish_version } from './helpers/version_files.js';
+import { publish_version, test_package_storage } from './helpers/version_files.js';
+import { TeamsService } from '../../src/services/teams_service.js';
+import { TeamRepository } from '../../src/repositories/team_repository.js';
+import { TeamVersionRepository } from '../../src/repositories/team_version_repository.js';
+import { TagRepository } from '../../src/repositories/tag_repository.js';
+import { DownloadLogRepository } from '../../src/repositories/download_log_repository.js';
+import { ScopeRepository } from '../../src/repositories/scope_repository.js';
+import { AuditRepository } from '../../src/repositories/audit_repository.js';
 import {
     Daemon,
     Realm,
@@ -190,6 +197,39 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
             user_id,
             org_ids: [org_id],
         })).rejects.toThrow(/not both/);
+    });
+
+    // The daemon downloads what the install message names (teams/download, PLAN-team-bundle S4.2).
+    const teams = () => new TeamsService(
+        new TeamRepository() as any, new TeamVersionRepository() as any, new TagRepository() as any,
+        new DownloadLogRepository() as any, test_package_storage(), '/tmp/test',
+        new ScopeRepository() as any, new AuditRepository() as any,
+    );
+    /** A daemon token of a realm (what cliqd calls CliqHub with). */
+    const daemon_auth = (realm: string) => ({
+        user: { id: user_id, role: 'user', username: 'd' }, org_ids: [], org_slugs: [], scopes: [], member_scopes: [], publish_orgs: [],
+        auth_via: 'daemon_token', realm_id: realm,
+    }) as any;
+
+    it("download for a daemon the hub installed it on: the version's files and the daemon_team_id it keeps", async () => {
+        await DispatchService.install_team({ team_id, daemon_ids: [d1], user_id, org_ids: [org_id] });
+        const out = await teams().download(daemon_auth(realm_id), { team_id, version_id, daemon_id: d1 }) as any;
+        expect(out).toMatchObject({ version: '1.0.0', version_id, team_id, daemon_team_id: (await row_of(d1)).id });
+        expect(out.data_base64.length).toBeGreaterThan(0);
+        // By name too (cliq team install @x/foo): the same row.
+        const team = (await Team.findByPk(team_id, { raw: true })) as any;
+        const by_name = await teams().download(daemon_auth(realm_id), { name: team.name, scope: team.scope, daemon_id: d1 }) as any;
+        expect(by_name.daemon_team_id).toBe(out.daemon_team_id);
+    });
+
+    it("download for a daemon the hub hasn't installed it on is refused: add it to the realm first", async () => {
+        await expect(teams().download(daemon_auth(other_realm_id), { team_id, version_id, daemon_id: d_out }))
+            .rejects.toMatchObject({ status: 404, code: 'not_installable', message: expect.stringContaining('Add it to the realm first') });
+    });
+
+    it("download naming a daemon outside the caller's realm, or without a daemon token, is 401", async () => {
+        await expect(teams().download(daemon_auth(other_realm_id), { team_id, version_id, daemon_id: d1 })).rejects.toMatchObject({ status: 401 });
+        await expect(teams().download({ ...daemon_auth(realm_id), auth_via: 'pat' }, { team_id, version_id, daemon_id: d1 })).rejects.toMatchObject({ status: 401 });
     });
 
     /** A catalog team whose one phase is a Hug gate (PLAN-notifications-v2 B3). */

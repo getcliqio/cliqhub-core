@@ -1011,7 +1011,8 @@ export class TeamsService {
         const team = await this._team_repo.find_by_id(row.team_id!);
         return {
             filename: `${team?.name ?? row.slug}-${ver.version}.zip`, data_base64: data.toString('base64'),
-            version: ver.version, version_id: ver.id, team_id: row.team_id, daemon_team_id: row.id,
+            version: ver.version, version_id: ver.id, team_id: row.team_id,
+            scope: team?.scope ?? null, name: team?.name ?? row.slug, daemon_team_id: row.id,
         };
     }
 
