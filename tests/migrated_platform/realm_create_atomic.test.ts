@@ -11,6 +11,8 @@ import { close_test_control_plane_store, open_test_control_plane_store, postgres
 import { ApiToken, Org, OrgMember, Realm, RealmMember, User } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { InvitationsService } from '../../src/services/invitations_service.js';
+import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
+import { seed_all } from '../../src/lib/seed.js';
 import { use_test_link_env } from '../helpers/link_env.js';
 
 const has_postgres = await postgres_reachable();
@@ -29,6 +31,7 @@ describe.skipIf(!has_postgres)('realms/create: all or nothing', () => {
         // Invite links are encrypted at rest (TOKEN_ENCRYPTION_KEY) and point at the web app.
         restore_env = use_test_link_env();
         await open_test_control_plane_store();
+        await seed_all(); // hello-world is published, so a new realm gets it at its latest version
         const org = await Org.create({ slug: uid().slice(0, 30), display_name: 'Atomic', activated_at: new Date() } as any);
         org_id = org.get('id') as string;
         for (const [id, name] of [[teammate, 'tm'], [outsider, 'out']] as const) {
@@ -38,6 +41,12 @@ describe.skipIf(!has_postgres)('realms/create: all or nothing', () => {
         await OrgMember.create({ org_id, user_id: teammate, role: 'member', status: 'active' } as any);
     });
     afterEach(() => vi.restoreAllMocks());
+
+    /** The realm's list (realm_teams) is exactly hello-world, at a version. */
+    const hello_world_on = async (realm_id: string) => {
+        const entries = await RealmTeamListService.entries(realm_id);
+        return entries.length === 1 && entries[0].scope === 'cliq' && entries[0].slug === 'hello-world' && !!entries[0].version_id;
+    };
     afterAll(async () => { await close_test_control_plane_store(); restore_env(); });
 
     it('saves the realm, description, hello-world, people, invites and token together', async () => {
@@ -53,8 +62,7 @@ describe.skipIf(!has_postgres)('realms/create: all or nothing', () => {
         expect(realm.members_added).toEqual([{ user_id: teammate, role: 'operator' }]);
         expect(realm.invites).toEqual([expect.objectContaining({ email, role: 'member' })]);
         expect(realm.enroll_token?.token).toMatch(/\S{20,}/);
-        const row = (await Realm.findByPk(realm.id, { raw: true })) as any;
-        expect(row.team_list).toEqual([{ scope: 'cliq', slug: 'hello-world' }]);
+        expect(await hello_world_on(realm.id)).toBe(true);
         const members = await RealmMember.unscoped().findAll({ where: { realm_id: realm.id, member_type: 'user' }, raw: true }) as any[];
         expect(members.map((m) => [m.member_id === owner ? 'owner' : m.member_id === teammate ? 'teammate' : 'invitee', m.role, m.status]).sort())
             .toEqual([['invitee', 'member', 'pending'], ['owner', 'admin', 'active'], ['teammate', 'operator', 'active']].sort());
@@ -86,6 +94,6 @@ describe.skipIf(!has_postgres)('realms/create: all or nothing', () => {
         const realm = await RealmService.create(owner, slug, 'Plain', { org_id });
         expect(realm.description).toBeNull();
         expect(realm.enroll_token).toBeNull();
-        expect(((await Realm.findByPk(realm.id, { raw: true })) as any).team_list).toEqual([{ scope: 'cliq', slug: 'hello-world' }]);
+        expect(await hello_world_on(realm.id)).toBe(true);
     });
 });

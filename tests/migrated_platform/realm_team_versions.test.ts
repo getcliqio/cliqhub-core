@@ -66,7 +66,7 @@ describe.skipIf(!has_postgres)('the realm owns each team\'s version', () => {
 
         realm_id = (await RealmService.create(user_id, uid().slice(0, 40), 'Versions realm')).id;
         realm_ids.push(realm_id);
-        await Realm.update({ team_list: [] } as never, { where: { id: realm_id } });
+        await RealmTeamListService.remove(realm_id, user_id, { scope: 'cliq', slug: 'hello-world' }); // start with an empty list
 
         const daemon = async (status: 'online' | 'offline', alpha_version: string | null) => {
             const id = uid();
@@ -103,6 +103,13 @@ describe.skipIf(!has_postgres)('the realm owns each team\'s version', () => {
     });
 
     const alpha = () => ({ scope: scope_slug, slug: 'alpha' });
+
+    // The old JSON column, which this older migration rewrites (it runs before realm_teams_from_json moves the
+    // lists; nothing else reads the column since PLAN-team-bundle S4.1).
+    const set_json = (id: string, list: unknown[]) => get_sequelize().query(
+        `UPDATE cliq."realms" SET "team_list" = CAST(:list AS jsonb) WHERE "id" = :id`, { replacements: { id, list: JSON.stringify(list) } });
+    const json_of = async (id: string) => ((await get_sequelize().query(
+        `SELECT "team_list" FROM cliq."realms" WHERE "id" = :id`, { type: 'SELECT', replacements: { id } } as never)) as Array<{ team_list: unknown }>)[0].team_list;
 
     it('adding a team records the latest published version; asking for another moves the realm to it', async () => {
         let list = await RealmTeamListService.add(realm_id, user_id, alpha());
@@ -147,24 +154,24 @@ describe.skipIf(!has_postgres)('the realm owns each team\'s version', () => {
     it('migration: existing entries get a version (a valid one is kept); entries no daemon could install are dropped; once', async () => {
         const other = (await RealmService.create(user_id, uid().slice(0, 40), 'Migrated realm')).id;
         realm_ids.push(other);
-        await Realm.update({ team_list: [
+        await set_json(other, [
             { scope: scope_slug, slug: 'alpha' },
             { scope: scope_slug, slug: 'beta', version: '2.0.0' },
             { scope: scope_slug, slug: 'gone' },
-        ] } as never, { where: { id: other } });
+        ]);
 
         await Setting.destroy({ where: { key: REALM_TEAM_LIST_VERSIONS_MIGRATION_KEY } });
         await migrate_realm_team_list_versions(get_sequelize());
-        const list = (await Realm.findByPk(other, { raw: true }))!.team_list;
+        const list = await json_of(other);
         expect(list).toEqual([
             { scope: scope_slug, slug: 'alpha', version: '1.10.0' },
             { scope: scope_slug, slug: 'beta', version: '2.0.0' },
         ]);
 
         // Once: a later change is left alone.
-        await Realm.update({ team_list: [{ scope: scope_slug, slug: 'gone' }] } as never, { where: { id: other } });
+        await set_json(other, [{ scope: scope_slug, slug: 'gone' }]);
         await migrate_realm_team_list_versions(get_sequelize());
-        expect((await Realm.findByPk(other, { raw: true }))!.team_list).toEqual([{ scope: scope_slug, slug: 'gone' }]);
+        expect(await json_of(other)).toEqual([{ scope: scope_slug, slug: 'gone' }]);
         expect(await Setting.findByPk(REALM_TEAM_LIST_VERSIONS_MIGRATION_KEY)).toBeTruthy();
     });
 });

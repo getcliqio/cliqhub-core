@@ -12,6 +12,7 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
 import { Realm, RealmMember, Scope, Team, TeamVersion } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
+import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
 import { TeamsService } from '../../src/services/teams_service.js';
 import { TeamRepository } from '../../src/repositories/team_repository.js';
@@ -49,17 +50,20 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
         return team.id;
     }
     async function realm_with(owner: string, team: string): Promise<string> {
+        // The realm runs exactly this team and keep-me (realm_teams, PLAN-team-bundle S4.1).
         const r = await RealmService.create(owner, uid().slice(0, 40), 'Unpublish');
-        await Realm.update({ team_list: [{ scope: scope_slug, slug: team }, { scope: 'other', slug: 'keep-me' }] } as any, { where: { id: r.id } });
+        await RealmTeamListService.remove(r.id, owner, { scope: 'cliq', slug: 'hello-world' });
+        for (const slug of [team, 'keep-me']) await RealmTeamListService.add(r.id, owner, { scope: scope_slug, slug });
         return r.id;
     }
-    const list_of = async (realm_id: string) => ((await Realm.findByPk(realm_id, { raw: true })) as any).team_list as Array<{ scope: string; slug: string }>;
+    const list_of = async (realm_id: string) => (await RealmTeamListService.entries(realm_id)).map((e) => ({ scope: e.scope, slug: e.slug }));
     const visibility = async (id: string) => ((await Team.findByPk(id, { raw: true })) as any).visibility;
 
     beforeAll(async () => {
         process.env.CLIQ_BFF_LOG_LEVEL = 'error';
         await open_test_control_plane_store();
         await Scope.create({ id: randomUUID(), slug: scope_slug, display_name: 'Unpublish', owner_id: author, org_id: null, is_default: 0, created_at: new Date() } as any);
+        await team_named('keep-me'); // the other team on each realm, which unpublishing another team leaves alone
     });
     beforeEach(() => {
         uninstall.mockReset().mockResolvedValue({ daemons: [] });
@@ -77,7 +81,7 @@ describe.skipIf(!has_postgres)('teams/unpublish: off every realm, all or nothing
         const res = await service.unpublish(auth, { name: 'everywhere', scope: scope_slug });
         expect(res.status).toBe('draft');
         expect(res.uninstalled_from.map((r) => r.realm_id).sort()).toEqual([a, b].sort());
-        for (const r of [a, b]) expect(await list_of(r)).toEqual([{ scope: 'other', slug: 'keep-me' }]);
+        for (const r of [a, b]) expect(await list_of(r)).toEqual([{ scope: scope_slug, slug: 'keep-me' }]);
         expect(await visibility(id)).toBe('draft');
         expect(uninstall.mock.calls.map((c) => c[0].realm_id).sort()).toEqual([a, b].sort());
     });
