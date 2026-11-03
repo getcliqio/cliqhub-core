@@ -2,8 +2,8 @@
  * A version is its files (PLAN-team-bundle S1.4b): what it runs, its inputs and when to use it are read from its
  * team.yml, not from columns on the version row. These tests publish versions that way, into local storage.
  */
-import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 
 import { TeamVersion } from '../../../src/models/index.js';
@@ -13,10 +13,11 @@ import { team_file_content_type, write_team_file_objects } from '../../../src/se
 import { create_package_storage } from '../../../src/storage/package_storage.js';
 
 /**
- * The test database's file storage. A fixed folder, not a fresh one per run: the database keeps versions (the
- * built-ins are seeded once), and their files must still be there on the next run.
+ * The test database's file storage: `.test-packages/` in this repo (gitignored). It lives as long as `cliqhub_test`
+ * does: the database keeps versions (the built-ins are seeded once) and their files must still be there next run.
+ * Not under $TMPDIR, which can change between terminal sessions.
  */
-export const test_packages_path = path.join(os.tmpdir(), 'cliqhub_test-packages');
+export const test_packages_path = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../.test-packages');
 
 export const test_package_storage = () => create_package_storage({
     packages_path: test_packages_path, storage_backend: 'local',
