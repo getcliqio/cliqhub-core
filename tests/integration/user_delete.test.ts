@@ -100,7 +100,7 @@ describe.skipIf(!has_postgres)('users/delete (live Postgres)', () => {
                     const orgs = await M.Org.findAll({ where: { [Op.or]: [{ slug: u.username }, { owner_id: u.id }] }, attributes: ['id'], raw: true, transaction: t });
                     for (const o of orgs) await remove_org_rows({ id: String(o.id) }, t);
                     await M.Scope.destroy({ where: { owner_id: u.id }, transaction: t });
-                    for (const model of [M.ScopeMember, M.OrgMember, M.ApiToken, M.Draft]) {
+                    for (const model of [M.ScopeMember, M.OrgMember, M.ApiToken]) {
                         await (model as unknown as { destroy: (o: object) => Promise<number> }).destroy({ where: { user_id: u.id }, transaction: t });
                     }
                     await M.User.destroy({ where: { id: u.id }, transaction: t });
@@ -116,11 +116,10 @@ describe.skipIf(!has_postgres)('users/delete (live Postgres)', () => {
     it('soft-deletes the user and their account org, revokes access, and keeps history', async () => {
         const u = await signup(name('full'));
         const other = await signup(name('host'));
-        // A membership in another org and its realm, a draft, a pending invite sent.
+        // A membership in another org and its realm, a pending invite sent.
         await M.OrgMember.create({ org_id: other.org_id, user_id: u.id, role: 'member' } as never);
         const host_realm = (await alive_realms(other.org_id))[0];
         await M.RealmMember.create({ id: randomUUID(), realm_id: host_realm, member_type: 'user', member_id: u.id, role: 'member', created_at: Date.now() } as never);
-        await M.Draft.create({ user_id: u.id } as never);
         const invite = randomUUID();
         await M.AccountInvite.create({ id: invite, org_id: other.org_id, email: `x${stamp}@ud.test`, invited_by: u.id, token_hash: `h${stamp}`, role: 'member', status: 'pending', expires_at: new Date(Date.now() + 86_400_000) } as never);
         await post('/v1/orgs/get', u.token); // a login-path touch: ensure_personal_realm runs again
@@ -148,8 +147,7 @@ describe.skipIf(!has_postgres)('users/delete (live Postgres)', () => {
         expect(await M.ScopeMember.count({ where: { user_id: u.id } })).toBe(0);
         expect(await M.ApiToken.count({ where: { user_id: u.id, revoked_at: null } })).toBe(0);
         expect((await M.AccountInvite.findByPk(invite, { raw: true }))!.status).toBe('revoked');
-        // Kept: drafts, scopes, the other org.
-        expect(await M.Draft.count({ where: { user_id: u.id } })).toBe(1);
+        // Kept: scopes, the other org.
         expect(await M.Scope.count({ where: { slug: u.username } })).toBe(1);
         expect(await M.OrgMember.count({ where: { org_id: other.org_id, user_id: other.id, deleted_at: null } })).toBe(1);
         // The old token no longer works.

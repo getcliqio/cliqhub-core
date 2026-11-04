@@ -307,4 +307,9 @@ describe('teams/download by a daemon installing (PLAN-team-bundle S4.2)', () => 
         expect(await status('POST /v1/teams/download', 'omar', { team_id: 't-private', daemon_id: 'd-a1' })).toBe(404);
         expect(await status('POST /v1/teams/download', 'mia', { team_id: 't-private', daemon_id: 'd-a1' })).toBe(200);
     });
+    it('other team routes give a daemon naming its own daemon no pass', async () => {
+        for (const key of ['POST /v1/teams/get_by_id', 'POST /v1/teams/update', 'POST /v1/teams/delete', 'POST /v1/teams/unpublish']) {
+            expect(await status(key, 'daemon_a1', { team_id: 't-private', daemon_id: 'd-a1' })).toBe(404);
+        }
+    });
 });

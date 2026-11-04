@@ -243,7 +243,12 @@ const MATRIX: Record<string, Row> = {
     // teams (default team = Mia's private team)
     'POST /v1/teams/get_phases': { expect: TEAM_PRIVATE },
     'POST /v1/teams/get_versions': { expect: TEAM_PRIVATE },
-    'POST /v1/teams/download': { expect: TEAM_PRIVATE },
+    // The default body names daemon_a1 (realm A1): its realm's daemon tokens pass (the handler requires Core's
+    // install row), dB's is 401. Without daemon_id it is TEAM_PRIVATE (below).
+    'POST /v1/teams/download': { expect: '4Y444444Y1Y' },
+    'POST /v1/teams/files/upload': { expect: SIGNED_IN },
+    'POST /v1/teams/files/remove': { expect: TEAM_PRIVATE },
+    'POST /v1/teams/files/get': { expect: TEAM_PRIVATE },
     'POST /v1/teams/update': { expect: TEAM_PRIVATE },
     'POST /v1/teams/unpublish': { expect: TEAM_PRIVATE },
     'POST /v1/teams/delete': { expect: TEAM_PRIVATE },
@@ -304,8 +309,7 @@ describe.skipIf(!has_postgres)('authorization matrix (route policy, enforce mode
         expect(Object.keys(MATRIX).filter((k) => !ROUTE_POLICY[k])).toEqual([]);
     });
 
-    async function row_for(key: string, allow_pat = true): Promise<string> {
-        const row = MATRIX[key];
+    async function row_for(key: string, allow_pat = true, row: Row = MATRIX[key]): Promise<string> {
         const body = { ...default_body(seed), ...(row.body?.(seed) ?? {}) };
         const [method, path] = concrete_path(key, seed);
         let out = '';
@@ -323,6 +327,12 @@ describe.skipIf(!has_postgres)('authorization matrix (route policy, enforce mode
 
     it.each(Object.keys(MATRIX))('%s', async (key) => {
         expect(`${key}  ${await row_for(key)}`).toBe(`${key}  ${MATRIX[key].expect}`);
+    });
+
+    it('teams/download without daemon_id is the team read: no daemon pass', async () => {
+        const key = 'POST /v1/teams/download';
+        const row: Row = { expect: TEAM_PRIVATE, body: () => ({ daemon_id: undefined }) };
+        expect(`${key}  ${await row_for(key, true, row)}`).toBe(`${key}  ${TEAM_PRIVATE}`);
     });
 
     it('with ALLOW_PAT_DAEMON_WRITES off, user tokens cannot push daemon state', async () => {

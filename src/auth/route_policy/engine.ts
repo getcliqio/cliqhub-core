@@ -19,6 +19,7 @@ import type { AuthContext } from '../../schemas/auth_types.js';
 import { can_view_team, type TeamAccess } from '../access.js';
 import {
     LEVEL_RANK,
+    type DaemonRule,
     type FieldRef,
     type Level,
     type Policy,
@@ -359,7 +360,7 @@ export async function decide(policy: Policy, req: RequestLike, store: AccessStor
 
         case 'record': {
             const f = first_field(req, policy.from);
-            if (policy.record === 'team') return decide_team(store, req, f?.value);
+            if (policy.record === 'team') return decide_team(store, req, f?.value, policy.daemon);
             if (!signed) return deny(401, 'no_token');
             if (is_daemon(auth) && !policy.daemon) return deny(403, 'daemon_not_allowed');
             if (!f) return allow({}, `${policy.record} id missing; handler validates`);
@@ -411,11 +412,11 @@ function with_record(d: Decision, kind: RecordKind, id: string): Decision {
     return { ...d, access: { ...(d.access ?? {}), record: { kind, id } } };
 }
 
-async function decide_team(store: AccessStore, req: RequestLike, id: string | undefined): Promise<Decision> {
+async function decide_team(store: AccessStore, req: RequestLike, id: string | undefined, daemon: DaemonRule | undefined): Promise<Decision> {
     // A daemon installing a team (teams/download with daemon_id, PLAN-team-bundle S4.2): the daemon must be in the
     // token's realm, which fixes the tenancy; the handler then requires the row Core wrote when the hub installed
-    // that team and version on it. Anything else is 401.
-    const daemon_id = is_daemon(req.auth) ? (req.body as { daemon_id?: unknown } | undefined)?.daemon_id : undefined;
+    // that team and version on it. Anything else is 401. Only routes that allow daemons (`daemon`) take this branch.
+    const daemon_id = daemon && is_daemon(req.auth) ? (req.body as { daemon_id?: unknown } | undefined)?.daemon_id : undefined;
     if (typeof daemon_id === 'string' && daemon_id) {
         const daemon = await store.record('daemon', daemon_id, req);
         const realm_ids = daemon ? daemon.realm_ids ?? (daemon.realm_id ? [daemon.realm_id] : []) : [];

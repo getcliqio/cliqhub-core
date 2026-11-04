@@ -6,6 +6,8 @@
  *   3. Being assigned to the scope (scope_members) doesn't grant publishing → 403
  *   4. A default scope (@cliq) everyone sees doesn't grant publishing → 403
  *   5. Token permissions gate — PAT with teams:['read'] only → publish 403; with write → 200
+ *
+ * A publish turns the team's draft (its files, uploaded first) into the version (PLAN-team-bundle S1.3b).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -16,6 +18,7 @@ setup_sequelize_mocks();
 import request from 'supertest';
 import { TEST_PAT_PLAINTEXT } from '../helpers/pat_auth.js';
 import crypto from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 import express from 'express';
 import { create_auth_middleware } from '../../src/middleware/auth_middleware.js';
@@ -61,6 +64,8 @@ const mock_storage = {
     read: vi.fn().mockResolvedValue(Buffer.from('zip-data')),
     delete: vi.fn().mockResolvedValue(undefined),
 };
+/** The draft's files: its team.yml (set per publish by `with_draft`). */
+const file_repo = { list_by_version: vi.fn().mockResolvedValue([]) };
 
 const app = express();
 app.use(express.json());
@@ -75,7 +80,7 @@ const teams_service = new TeamsService(
     repos.team_repo as any, repos.version_repo as any,
     repos.tag_repo as any,
     repos.download_log_repo as any, mock_storage as any, '/tmp/test',
-    repos.scope_repo as any, repos.audit_repo as any,
+    repos.scope_repo as any, repos.audit_repo as any, file_repo as any,
 );
 const teams_ctrl = new TeamsController(teams_service);
 
@@ -110,10 +115,40 @@ const CLIQ_SCOPE = {
     visibility: 'public', owner_id: null, org_id: hub_legacy_uuid(2),
 };
 
-const PUBLISH_BODY = {
-    name: 'my-agent', bump: 'patch',
-    data_base64: Buffer.from('fake-zip').toString('base64'),
-};
+const TEAM_ID = hub_legacy_uuid(99);
+const DRAFT_ID = hub_legacy_uuid(100);
+
+const PUBLISH_BODY = { name: 'my-agent', version: '1.0.0', version_id: DRAFT_ID };
+
+/**
+ * `@scope/my-agent` exists (written by `author_id`, still a draft unless `visibility` says otherwise) and has an open
+ * draft holding a team.yml that already names its scope and the version being published.
+ */
+function with_draft(scope: string, team: { author_id?: string; visibility?: string } = {}): void {
+    repos.team_repo.find_by_name_and_scope.mockResolvedValueOnce({
+        id: TEAM_ID, name: 'my-agent', scope, author_id: team.author_id ?? ALICE_USER_ID, visibility: team.visibility ?? 'draft',
+        description: '', license: 'MIT',
+    });
+    const yml = Buffer.from(`name: "@${scope}/my-agent"\nversion: "1.0.0"\ndescription: test\nphases: []\n`, 'utf8');
+    file_repo.list_by_version.mockResolvedValueOnce([{
+        id: hub_legacy_uuid(101), version_id: DRAFT_ID, team_id: TEAM_ID, path: 'team.yml', name: 'team.yml',
+        size: yml.length, sha256: createHash('sha256').update(yml).digest('hex'), content_type: 'text/yaml', storage_key: 'k/team.yml',
+    }]);
+    mock_storage.read.mockResolvedValueOnce(yml);
+}
+
+// Draft lookups the publish makes (the shared mock repos predate drafts).
+Object.assign(repos.version_repo, {
+    find_draft: vi.fn(),
+    publish_draft: vi.fn(),
+    find_highest_version: vi.fn(),
+});
+const version_repo = repos.version_repo as typeof repos.version_repo & Record<'find_draft' | 'publish_draft' | 'find_highest_version', ReturnType<typeof vi.fn>>;
+function stub_drafts(): void {
+    version_repo.find_draft.mockResolvedValue({ id: DRAFT_ID, team_id: TEAM_ID, status: 'draft' });
+    version_repo.publish_draft.mockResolvedValue(true);
+    version_repo.find_highest_version.mockResolvedValue(null);
+}
 
 function pat_prefix(plaintext = TEST_PAT_PLAINTEXT): string {
     return crypto.createHash('sha256').update(plaintext).digest('hex').slice(0, 16);
@@ -164,32 +199,29 @@ const BEARER = `Bearer ${TEST_PAT_PLAINTEXT}`;
 describe('publish — teams.publish in the scope\'s org (PLAN-team-visibility §3.3)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        stub_drafts();
         granted.clear();
         repos.scope_repo.find_by_slug.mockImplementation(async (slug: string) =>
             ({ alice: ALICE_SCOPE, acme: ACME_ORG_SCOPE, cliq: CLIQ_SCOPE } as Record<string, unknown>)[slug] ?? null);
     });
 
-    const publish_new = async (scope: string) => {
-        repos.team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
-        repos.team_repo.create.mockResolvedValueOnce(hub_legacy_uuid(99));
-        repos.version_repo.create.mockResolvedValueOnce(hub_legacy_uuid(100));
+    const publish_draft = async (scope: string) => {
+        with_draft(scope);
         return request(app).post('/v1/teams/publish').set('Authorization', BEARER).send({ ...PUBLISH_BODY, scope });
     };
 
     it('200: an org role with teams.publish publishes into the org\'s scope', async () => {
         stub_auth({ org_memberships: [{ org_id: ACME_ORG_ID, slug: 'acme' }], org_scopes: [ACME_ORG_SCOPE] });
         granted.add(`${ACME_ORG_ID}|${ALICE_USER_ID}|teams.publish`);
-        expect((await publish_new('acme')).status).toBe(200);
+        const res = await publish_draft('acme');
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(version_repo.publish_draft).toHaveBeenCalledWith(DRAFT_ID, expect.objectContaining({ version: '1.0.0' }), expect.anything());
     });
 
     it('200: anyone with teams.publish there updates a team someone else wrote', async () => {
         stub_auth({ org_memberships: [{ org_id: ACME_ORG_ID, slug: 'acme' }], org_scopes: [ACME_ORG_SCOPE] });
         granted.add(`${ACME_ORG_ID}|${ALICE_USER_ID}|teams.publish`);
-        repos.team_repo.find_by_name_and_scope.mockResolvedValueOnce({
-            id: hub_legacy_uuid(98), name: 'my-agent', scope: 'acme', author_id: hub_legacy_uuid(77), visibility: 'public',
-        });
-        repos.version_repo.find_by_team_and_version.mockResolvedValueOnce(null);
-        repos.version_repo.create.mockResolvedValueOnce(hub_legacy_uuid(100));
+        with_draft('acme', { author_id: hub_legacy_uuid(77), visibility: 'public' });
         const res = await request(app).post('/v1/teams/publish').set('Authorization', BEARER).send({ ...PUBLISH_BODY, scope: 'acme' });
         expect(res.status, JSON.stringify(res.body)).toBe(200);
     });
@@ -217,6 +249,7 @@ describe('publish — teams.publish in the scope\'s org (PLAN-team-visibility §
 describe('publish — token permissions (teams grant)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        stub_drafts();
         // A legacy personal scope with no org: its owner publishes.
         repos.scope_repo.find_by_slug.mockImplementation(async (slug: string) => (slug === 'alice' ? ALICE_SCOPE : null));
     });
@@ -240,9 +273,7 @@ describe('publish — token permissions (teams grant)', () => {
             owned_scopes: [ALICE_SCOPE],
             permissions: { access: { teams: ['read', 'write'] } },
         });
-        repos.team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
-        repos.team_repo.create.mockResolvedValueOnce(hub_legacy_uuid(99));
-        repos.version_repo.create.mockResolvedValueOnce(hub_legacy_uuid(100));
+        with_draft('alice');
 
         const res = await request(app)
             .post('/v1/teams/publish')
@@ -268,9 +299,7 @@ describe('publish — token permissions (teams grant)', () => {
     it('200: PAT with empty permissions ({}) gets full member access by default', async () => {
         // Empty permissions = not frozen → falls back to member default (teams: read+write)
         stub_auth({ owned_scopes: [ALICE_SCOPE], permissions: {} });
-        repos.team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
-        repos.team_repo.create.mockResolvedValueOnce(hub_legacy_uuid(99));
-        repos.version_repo.create.mockResolvedValueOnce(hub_legacy_uuid(100));
+        with_draft('alice');
 
         const res = await request(app)
             .post('/v1/teams/publish')

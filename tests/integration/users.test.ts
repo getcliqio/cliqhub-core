@@ -20,7 +20,7 @@ import { UsersService } from '../../src/services/users_service.js';
 import { UsersController } from '../../src/controllers/users_controller.js';
 import { TokensController } from '../../src/controllers/tokens_controller.js';
 import { error_handler } from '../../src/middleware/error_handler.js';
-import { User, ApiToken, Scope, Team, Draft, OrgMember, Org } from '../../src/models/index.js';
+import { User, ApiToken, Scope, Team, OrgMember, Org } from '../../src/models/index.js';
 import type { EnvConfig } from '../../src/config/env.js';
 
 const SECRET = 'test-secret';
@@ -237,7 +237,6 @@ describe('POST /v1/users/get_by_id', () => {
         vi.mocked(Scope.count).mockResolvedValueOnce(3 as any);
         vi.mocked(Team.count).mockResolvedValueOnce(5 as any);
         vi.mocked(ApiToken.count).mockResolvedValueOnce(1 as any);
-        vi.mocked(Draft.count).mockResolvedValueOnce(0 as any);
         vi.mocked(OrgMember.findAll).mockResolvedValueOnce([] as any);
 
         const res = await request(app)

@@ -213,7 +213,7 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     // ── Teams ───────────────────────────────────────────────────────
     'POST /v1/teams/get_phases': record('team', 'body.team_id', 'view'),
     'POST /v1/teams/get_versions': record('team', ['body.team_id', 'body.name'], 'view'),
-    'POST /v1/teams/download': record('team', ['body.team_id', 'body.name'], 'view'),
+    'POST /v1/teams/download': record('team', ['body.team_id', 'body.name'], 'view', { daemon: 'read', handler: "with daemon_id: a daemon of the token's realm that the hub installed the team on" }),
     'POST /v1/teams/create': signed_in({ handler: "teams.publish in the scope's org (PLAN-team-visibility §3.3)" }),
     'POST /v1/teams/build': signed_in(),
     'POST /v1/teams/update': record('team', ['body.team_id', 'body.name'], 'view', { handler: "teams.publish in the scope's org, whoever wrote it" }),
