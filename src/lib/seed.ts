@@ -88,19 +88,37 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
         dockerfile?: string; dependencies?: string;
     }
 
-    const llm_inputs = (default_model: string, needs_fs = false) => ({
+    /*
+     * Workspace access (PLAN-hug-llm-files §4.1): an API agent's file tools reach the files people sent
+     * in Hugs always and the whole workspace only with `workspace_access`; `needs_filesystem` is its old
+     * name, still read. A CLI agent always works in the whole workspace: it keeps `needs_filesystem`
+     * (accepted, no effect) so existing teams still pass.
+     */
+    const workspace_inputs = (cli: boolean) => (cli
+        ? { needs_filesystem: { type: 'boolean', required: false, default: true, description: 'No effect: a CLI agent always works in the whole workspace (accepted so existing teams still pass)' } }
+        : {
+            workspace_access: { type: 'boolean', required: false, default: false, description: "Whether the model's file tools reach the whole workspace (the files people sent in Hugs are always readable)" },
+            needs_filesystem: { type: 'boolean', required: false, description: "Deprecated: the old name of workspace_access, still read when that isn't set" },
+        });
+
+    const llm_inputs = (default_model: string, cli = false) => ({
         role: { type: 'string', required: true, description: 'Instructions for the agent' },
         model: { type: 'string', required: false, default: default_model, description: 'LLM model to use' },
         temperature: { type: 'number', required: false, description: 'Sampling temperature' },
         max_turns: { type: 'number', required: false, description: 'Maximum conversation turns' },
-        needs_filesystem: { type: 'boolean', required: false, default: needs_fs, description: 'Needs workspace filesystem access' },
+        ...workspace_inputs(cli),
     });
 
-    const llm_optional_settings = (default_model: string, needs_fs = false) => ([
+    const llm_optional_settings = (default_model: string, cli = false) => ([
         { key: 'model', description: 'LLM model to use', default: default_model },
         { key: 'temperature', description: 'Sampling temperature' },
         { key: 'max_turns', description: 'Maximum conversation turns' },
-        { key: 'needs_filesystem', description: 'Needs workspace filesystem access', default: needs_fs },
+        ...(cli
+            ? [{ key: 'needs_filesystem', description: 'No effect: a CLI agent always works in the whole workspace', default: true }]
+            : [
+                { key: 'workspace_access', description: "Whether the model's file tools reach the whole workspace", default: false },
+                { key: 'needs_filesystem', description: 'Deprecated: the old name of workspace_access' },
+            ]),
     ]);
 
     const builtin_dockerfile = 'FROM ghcr.io/sapshah/cliq-runtime:latest\n# Built-in agent.\n# No additional build steps.';
@@ -112,28 +130,28 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
     const builtins: BuiltinDef[] = [
         { name: 'exec', agent_type: 'exec', description: 'Execute shell commands sequentially', version: '1.0.0', capabilities: ['phase:standard'],
           inputs: { commands: { type: 'command[]', required: true, description: 'Shell commands to execute' } }, dockerfile: builtin_dockerfile },
-        { name: 'cursor', agent_type: 'llm', description: 'Cursor AI agent', version: '1.0.0', capabilities: ['phase:standard', 'phase:gate'],
+        { name: 'cursor', agent_type: 'llm', description: 'Cursor AI agent', version: '1.0.1', capabilities: ['phase:standard', 'phase:gate'],
           settings: { required: [{ key: 'api_key', description: 'Cursor API key' }], optional: llm_optional_settings('claude-sonnet-4-20250514', true) }, binaries: ['agent'],
           inputs: { ...llm_inputs('claude-sonnet-4-20250514', true), task: runtime_task },
           dockerfile: cli_dockerfile('cursor', 'npm install -g @anthropic-ai/cursor'), dependencies: cli_deps('cursor', 'npm install -g @anthropic-ai/cursor') },
-        { name: 'claude-code', agent_type: 'llm', description: 'Claude Code agent', version: '1.0.0', capabilities: ['phase:standard', 'phase:gate'],
+        { name: 'claude-code', agent_type: 'llm', description: 'Claude Code agent', version: '1.0.1', capabilities: ['phase:standard', 'phase:gate'],
           settings: { required: [{ key: 'api_key', description: 'Anthropic API key' }], optional: llm_optional_settings('claude-sonnet-4-20250514', true) }, binaries: ['claude'],
           inputs: { ...llm_inputs('claude-sonnet-4-20250514', true), task: runtime_task },
           dockerfile: cli_dockerfile('claude', 'npm install -g @anthropic-ai/claude-code'), dependencies: cli_deps('claude', 'npm install -g @anthropic-ai/claude-code') },
-        { name: 'claude-api', agent_type: 'llm', description: 'Claude API agent', version: '1.0.0', capabilities: ['phase:standard', 'phase:gate'],
+        { name: 'claude-api', agent_type: 'llm', description: 'Claude API agent', version: '1.1.0', capabilities: ['phase:standard', 'phase:gate'],
           settings: { required: [{ key: 'api_key', description: 'Anthropic API key' }], optional: llm_optional_settings('claude-sonnet-4-20250514') },
           inputs: { ...llm_inputs('claude-sonnet-4-20250514'), task: runtime_task }, dockerfile: builtin_dockerfile },
-        { name: 'gemini', agent_type: 'llm', description: 'Gemini agent', version: '1.0.0', capabilities: ['phase:standard', 'phase:gate'],
+        { name: 'gemini', agent_type: 'llm', description: 'Gemini agent', version: '1.0.1', capabilities: ['phase:standard', 'phase:gate'],
           settings: { required: [{ key: 'api_key', description: 'Google API key' }], optional: llm_optional_settings('gemini-2.5-pro', true) }, binaries: ['gemini'],
           inputs: { ...llm_inputs('gemini-2.5-pro', true), task: runtime_task },
           dockerfile: cli_dockerfile('gemini', 'npm install -g @anthropic-ai/gemini'), dependencies: cli_deps('gemini', 'npm install -g @anthropic-ai/gemini') },
-        { name: 'gemini-api', agent_type: 'llm', description: 'Gemini API agent', version: '1.0.0', capabilities: ['phase:standard', 'phase:gate'],
+        { name: 'gemini-api', agent_type: 'llm', description: 'Gemini API agent', version: '1.1.0', capabilities: ['phase:standard', 'phase:gate'],
           settings: { required: [{ key: 'api_key', description: 'Google API key' }], optional: llm_optional_settings('gemini-3.8-flash') },
           inputs: { ...llm_inputs('gemini-3.8-flash'), task: runtime_task }, dockerfile: builtin_dockerfile },
-        { name: 'openai-api', agent_type: 'llm', description: 'OpenAI API agent', version: '1.0.0', capabilities: ['phase:standard', 'phase:gate'],
+        { name: 'openai-api', agent_type: 'llm', description: 'OpenAI API agent', version: '1.1.0', capabilities: ['phase:standard', 'phase:gate'],
           settings: { required: [{ key: 'api_key', description: 'OpenAI API key' }], optional: llm_optional_settings('gpt-4o') },
           inputs: { ...llm_inputs('gpt-4o'), task: runtime_task }, dockerfile: builtin_dockerfile },
-        { name: 'codex', agent_type: 'llm', description: 'Codex agent', version: '1.0.0', capabilities: ['phase:standard', 'phase:gate'],
+        { name: 'codex', agent_type: 'llm', description: 'Codex agent', version: '1.0.1', capabilities: ['phase:standard', 'phase:gate'],
           settings: { required: [{ key: 'api_key', description: 'OpenAI API key' }], optional: llm_optional_settings('gpt-4.1', true) }, binaries: ['codex'],
           inputs: { ...llm_inputs('gpt-4.1', true), task: runtime_task },
           dockerfile: cli_dockerfile('codex', 'npm install -g @openai/codex'), dependencies: cli_deps('codex', 'npm install -g @openai/codex') },

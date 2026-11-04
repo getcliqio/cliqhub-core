@@ -13,8 +13,9 @@ import { seed_all } from '../../src/lib/seed.js';
 const has_postgres = await postgres_reachable();
 
 type Inputs = Record<string, { required?: boolean; required_unless?: string[] }>;
-const inputs_of = async (name: string): Promise<Inputs> => {
-    const row = await AgentCatalog.findOne({ where: { name, is_system: true }, raw: true });
+/** The inputs of an agent's catalog row — of `version` when given (an older row can sit beside it). */
+const inputs_of = async (name: string, version?: string): Promise<Inputs> => {
+    const row = await AgentCatalog.findOne({ where: { name, is_system: true, ...(version ? { version } : {}) }, raw: true });
     return ((row?.manifest ?? {}) as { inputs?: Inputs }).inputs ?? {};
 };
 
@@ -36,6 +37,24 @@ describe.skipIf(!has_postgres)('built-in agent catalog seed', () => {
         ['team', ['team']],
     ])('%s declares the same inputs as its manifest in cliq-agents', async (name, keys) => {
         expect(Object.keys(await inputs_of(name)).sort()).toEqual(keys);
+    });
+
+    const API = ['max_turns', 'model', 'needs_filesystem', 'role', 'task', 'temperature', 'workspace_access'];
+    const CLI = ['max_turns', 'model', 'needs_filesystem', 'role', 'task', 'temperature'];
+    it.each([
+        ['claude-api', '1.1.0', API], ['openai-api', '1.1.0', API], ['gemini-api', '1.1.0', API],
+        ['claude-code', '1.0.1', CLI], ['codex', '1.0.1', CLI], ['cursor', '1.0.1', CLI], ['gemini', '1.0.1', CLI],
+    ])('%s %s declares the same inputs as its manifest in cliq-agents (PLAN-hug-llm-files §6)', async (name, version, keys) => {
+        const row = await AgentCatalog.findOne({ where: { name, is_system: true, version }, raw: true });
+        expect(row, `${name} ${version} seeded`).not.toBeNull();
+        expect(Object.keys(await inputs_of(name, version)).sort()).toEqual(keys);
+    });
+
+    it('API agents: workspace_access off by default; needs_filesystem its deprecated name, without a default', async () => {
+        const inputs = (await inputs_of('claude-api', '1.1.0')) as Record<string, { default?: unknown; description?: string }>;
+        expect(inputs['workspace_access']).toMatchObject({ required: false, default: false });
+        expect(inputs['needs_filesystem']).not.toHaveProperty('default');
+        expect(inputs['needs_filesystem']!.description).toMatch(/^Deprecated/);
     });
 
     it('a connector needs sources or target_entries (one of them); action is required', async () => {
