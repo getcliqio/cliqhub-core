@@ -1193,6 +1193,23 @@ export class RunService {
         return rows[0].realm_id;
     }
 
+    /**
+     * Fail a run that is still live (running / awaiting input) — never one that already ended (PLAN-team-bundle S5.7:
+     * the safety net for a run its daemon refused or never accepted).
+     */
+    static async fail_if_live(run_id: string, error: string): Promise<boolean> {
+        log.debug('fail_if_live', { run_id });
+        const [count] = await _run_repo_rs.update_where(
+            { run_id, state: { [Op.in]: ['running', 'awaiting_input'] } } as any,
+            { state: 'failed', completed_at: Date.now(), error, lease_expires_at: null } as any,
+        );
+        if (count === 0) return false;
+        await this._emit_lifecycle(run_id, 'run.failed' as EventType, { error });
+        const { HugsService } = await import('./hugs.service.js');
+        await HugsService.cancel_for_run(run_id).catch(() => {});
+        return true;
+    }
+
     static async complete(run_id: string, state: 'completed' | 'failed' | 'cancelled' | 'crashed', error?: string) {
         log.debug('complete', { run_id, state });
         // Gate on `state != target` so re-reporting the same terminal

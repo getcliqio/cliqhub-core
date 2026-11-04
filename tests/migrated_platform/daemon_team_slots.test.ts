@@ -143,6 +143,20 @@ describe.skipIf(!has_postgres)('daemon team rows: children of realm teams', () =
         expect(runs.find((r: { run_id: string }) => r.run_id === run_id)?.team_label).toBe(`@${scope_slug}/${t.name}`);
     });
 
+    it('fail_if_live fails a live run with the reason, and never one that already ended (S5.7, P17)', async () => {
+        const d = await new_daemon();
+        const t = await realm_team();
+        const id = await hub_install(d, t);
+        const live = await RunService.create(workspace_id, id, { daemon_id: d });
+        const ended = await RunService.create(workspace_id, id, { daemon_id: d });
+        await RunService.complete(ended, 'completed');
+
+        expect(await RunService.fail_if_live(live, "The daemon didn't start this run: manifest_yaml: Required")).toBe(true);
+        expect(await Run.findByPk(live, { raw: true })).toMatchObject({ state: 'failed', error: "The daemon didn't start this run: manifest_yaml: Required" });
+        expect(await RunService.fail_if_live(ended, 'late')).toBe(false);
+        expect(await Run.findByPk(ended, { raw: true })).toMatchObject({ state: 'completed', error: null });
+    });
+
     it('two daemons, same team: two rows', async () => {
         const [d1, d2] = [await new_daemon(), await new_daemon()];
         const t = await realm_team();

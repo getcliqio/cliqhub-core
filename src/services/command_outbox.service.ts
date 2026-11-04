@@ -205,7 +205,7 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
             // retry indefinitely — generating noise and wasting cycles.
             // A daemon that comes back will re-register and get a fresh
             // public_url; any commands it missed are stale by then anyway.
-            await _increment_attempts(entry.tx_id, 'no_public_url');
+            await _note_failure(entry, 'no_public_url');
             log.warn('deliver_skip_no_url', {
                 tx_id: entry.tx_id,
                 daemon_id: entry.daemon_id,
@@ -294,7 +294,7 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
         }
 
         if (retryable) {
-            await _increment_attempts(entry.tx_id, error_msg);
+            await _note_failure(entry, error_msg);
         } else {
             // Permanent failure — exhaust attempts.
             await sq.query(
@@ -303,6 +303,7 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
                  WHERE "tx_id" = :tx_id`,
                 { replacements: { tx_id: entry.tx_id, error: error_msg }, type: QueryTypes.UPDATE },
             );
+            await fail_refused_execute(entry, error_msg);
             log.warn('command_permanent_failure', {
                 tx_id: entry.tx_id,
                 daemon_id: entry.daemon_id,
@@ -317,10 +318,10 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
         const is_transport = _is_transient_error(err);
 
         if (is_transport) {
-            await _increment_attempts(entry.tx_id, error_msg);
+            await _note_failure(entry, error_msg);
         } else {
             // Unexpected error — increment but log loud.
-            await _increment_attempts(entry.tx_id, error_msg);
+            await _note_failure(entry, error_msg);
             log.error('command_deliver_error', {
                 tx_id: entry.tx_id,
                 daemon_id: entry.daemon_id,
@@ -335,6 +336,41 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
  * queue by bumping created_at. This ensures a failing entry doesn't
  * starve newer entries of batch slots.
  */
+/**
+ * A delivery that failed (retryable): count it, and when that was the last try (no deliver_until window left), the
+ * command has failed for good — a run it was meant to start is failed too (P17).
+ */
+async function _note_failure(entry: PendingEntry, error: string): Promise<void> {
+    await _increment_attempts(entry.tx_id, error);
+    // Numbers come back from Postgres as strings (see _deliver_entry): coerce before comparing.
+    const until = entry.deliver_until === null ? null : Number(entry.deliver_until);
+    const out_of_tries = Number(entry.attempts) + 1 >= Number(entry.max_attempts) && (until === null || until <= Date.now());
+    if (out_of_tries) await fail_refused_execute(entry, error);
+}
+
+/**
+ * A command to start a run that has failed for good — delivery gave up, or the daemon acked it `error`
+ * (PLAN-team-bundle S5.7, P17): the run is marked failed with the daemon's reason, so it doesn't look started
+ * forever. Only a run that is still live is touched (a daemon that reported the outcome itself wins).
+ */
+export async function fail_refused_execute(command: { endpoint: string; payload: string | Record<string, unknown> }, reason: string): Promise<void> {
+    if (command.endpoint !== '/v1/execute') return;
+    let run_id: string | null = null;
+    try {
+        const payload = typeof command.payload === 'string' ? JSON.parse(command.payload) as { run_id?: unknown } : command.payload;
+        if (typeof payload.run_id === 'string' && payload.run_id.trim()) run_id = payload.run_id.trim();
+    } catch {
+        return; // payload not JSON — no run to fail
+    }
+    if (!run_id) return;
+    const { RunService } = await import('./run.service.js');
+    try {
+        await RunService.fail_if_live(run_id, `The daemon didn't start this run: ${reason}`);
+    } catch (err) {
+        log.warn('refused_run_fail_failed', { run_id, error: err instanceof Error ? err.message : String(err) });
+    }
+}
+
 async function _increment_attempts(tx_id: string, error: string): Promise<void> {
     const sq = get_sequelize();
     await sq.query(

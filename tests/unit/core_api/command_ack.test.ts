@@ -9,7 +9,7 @@ import type { Request, Response, NextFunction } from 'express';
 // ── Mocks ────────────────────────────────────────────────────────────
 
 // In-memory command_outbox rows.
-const _outbox = new Map<string, { tx_id: string; daemon_id?: string; acked_at: number | null; ack_status: string | null }>();
+const _outbox = new Map<string, { tx_id: string; daemon_id?: string; acked_at: number | null; ack_status: string | null; endpoint?: string; payload?: string }>();
 
 vi.mock('../../../src/db/control_plane_store.js', () => ({
     get_control_plane_store: vi.fn(() => ({
@@ -55,7 +55,10 @@ vi.mock('../../../src/services/realm.service.js', () => ({
     RealmService: { assert_daemon_in_realm: vi.fn(async () => undefined) },
 }));
 
+vi.mock('../../../src/services/command_outbox.service.js', () => ({ fail_refused_execute: vi.fn(async () => undefined) }));
+
 import { CommandAckController } from '../../../src/controllers/command_ack_controller.js';
+import { fail_refused_execute } from '../../../src/services/command_outbox.service.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -177,6 +180,17 @@ describe('CommandAckController.ack_command', () => {
 
         expect(res._status).toBe(200);
         expect(_outbox.get('cmd-3')!.ack_status).toBe('error');
+    });
+
+    it('an error ack of an /v1/execute fails its run with the reason; an ok ack does not (S5.7, P17)', async () => {
+        _outbox.set('cmd-x', { tx_id: 'cmd-x', daemon_id: 'd-1', acked_at: null, ack_status: null, endpoint: '/v1/execute', payload: '{"run_id":"run-x"}' });
+        await CommandAckController.ack_command(mock_req({ tx_id: 'ack-x', command_tx_id: 'cmd-x', daemon_id: 'd-1', status: 'error', error: 'manifest_yaml: Required' }), mock_res(), vi.fn());
+        expect(fail_refused_execute).toHaveBeenCalledWith(expect.objectContaining({ endpoint: '/v1/execute', payload: '{"run_id":"run-x"}' }), 'manifest_yaml: Required');
+
+        vi.mocked(fail_refused_execute).mockClear();
+        _outbox.set('cmd-y', { tx_id: 'cmd-y', daemon_id: 'd-1', acked_at: null, ack_status: null, endpoint: '/v1/execute', payload: '{"run_id":"run-y"}' });
+        await CommandAckController.ack_command(mock_req({ tx_id: 'ack-y', command_tx_id: 'cmd-y', daemon_id: 'd-1', status: 'ok' }), mock_res(), vi.fn());
+        expect(fail_refused_execute).not.toHaveBeenCalled();
     });
 
     it('rejects invalid body (missing required fields)', async () => {

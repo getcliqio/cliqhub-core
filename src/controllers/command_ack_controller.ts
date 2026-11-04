@@ -6,6 +6,7 @@
  */
 
 import { ApiError } from '../lib/api_error.js';
+import { fail_refused_execute } from '../services/command_outbox.service.js';
 import { RealmService } from '../services/realm.service.js';
 import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -45,10 +46,10 @@ export class CommandAckController {
 
             // Check if the command exists.
             const [rows] = await store.sequelize.query(
-                `SELECT tx_id, daemon_id, acked_at FROM cliq.command_outbox WHERE tx_id = ?`,
+                `SELECT tx_id, daemon_id, acked_at, endpoint, payload FROM cliq.command_outbox WHERE tx_id = ?`,
                 { replacements: [body.command_tx_id] },
             );
-            const command = (rows as Array<{ tx_id: string; daemon_id: string; acked_at: number | null }>)[0];
+            const command = (rows as Array<{ tx_id: string; daemon_id: string; acked_at: number | null; endpoint: string; payload: string | Record<string, unknown> }>)[0];
 
             // A daemon may only ack commands addressed to it.
             if (command && command.daemon_id !== body.daemon_id) {
@@ -86,6 +87,9 @@ export class CommandAckController {
                     ],
                 },
             );
+
+            // A daemon refusing a run it was sent (P17): the run fails with its reason instead of looking started.
+            if (body.status === 'error') await fail_refused_execute(command, body.error ?? 'refused');
 
             log.info('command_acked', {
                 command_tx_id: body.command_tx_id,

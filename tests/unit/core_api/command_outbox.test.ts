@@ -29,6 +29,7 @@ vi.mock('../../../src/services/run.service.js', () => ({
     RunService: {
         append_log: vi.fn(async () => undefined),
         log_size: vi.fn(async () => 0),
+        fail_if_live: vi.fn(async () => true),
     },
 }));
 
@@ -45,6 +46,7 @@ vi.mock('../../../src/services/dispatch_auth.service.js', () => ({
 }));
 
 import { Daemon } from '../../../src/models/index.js';
+import { RunService } from '../../../src/services/run.service.js';
 import { RealmService } from '../../../src/services/realm.service.js';
 import {
     command_outbox_enqueue,
@@ -203,6 +205,50 @@ describe('command_outbox.service', () => {
             // Should exhaust max_attempts.
             const [update_sql] = mock_query.mock.calls[1];
             expect(update_sql).toContain('"attempts" = "max_attempts"');
+        });
+
+        // P17 (PLAN-team-bundle S5.7): a run its daemon refuses, or never accepts, fails instead of looking started.
+        const execute_entry = (attempts: number, max_attempts = 5) => ({
+            tx_id: 'tx-x', daemon_id: 'd-1', endpoint: '/v1/execute',
+            payload: JSON.stringify({ tx_id: 'tx-x', run_id: 'run-x' }),
+            // Strings, as Postgres returns them; tried long ago, so no backoff holds it back.
+            attempts: String(attempts), max_attempts: String(max_attempts), created_at: String(Date.now() - 86_400_000), deliver_until: null,
+        });
+        const daemon_answers = (status: number, body?: unknown) => {
+            vi.mocked(Daemon.findByPk).mockResolvedValue({ id: 'd-1', public_url: 'http://localhost:9999', status: 'online' } as never);
+            vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status, text: async () => (body ? JSON.stringify(body) : '') }));
+        };
+
+        it('an /v1/execute the daemon refuses for good (4xx) fails its run with the reason (S5.7)', async () => {
+            vi.mocked(RunService.fail_if_live).mockClear();
+            mock_query.mockResolvedValueOnce([execute_entry(0)]).mockResolvedValue([1]);
+            daemon_answers(400, { ok: false, error: { code: 'PAYLOAD_INVALID', message: 'manifest_yaml: Required' } });
+            await _test_poll_cycle();
+            expect(RunService.fail_if_live).toHaveBeenCalledWith('run-x', expect.stringContaining("The daemon didn't start this run"));
+        });
+
+        it('an /v1/execute with tries left keeps its run (S5.7)', async () => {
+            vi.mocked(RunService.fail_if_live).mockClear();
+            mock_query.mockResolvedValueOnce([execute_entry(1)]).mockResolvedValue([1]);
+            daemon_answers(503);
+            await _test_poll_cycle();
+            expect(RunService.fail_if_live).not.toHaveBeenCalled();
+        });
+
+        it('an /v1/execute on its last try fails its run (S5.7)', async () => {
+            vi.mocked(RunService.fail_if_live).mockClear();
+            mock_query.mockResolvedValueOnce([execute_entry(4)]).mockResolvedValue([1]);
+            daemon_answers(503);
+            await _test_poll_cycle();
+            expect(RunService.fail_if_live).toHaveBeenCalledWith('run-x', expect.stringContaining("The daemon didn't start this run"));
+        });
+
+        it('another command failing never touches a run (S5.7)', async () => {
+            vi.mocked(RunService.fail_if_live).mockClear();
+            mock_query.mockResolvedValueOnce([{ ...execute_entry(0), endpoint: '/v1/uninstall' }]).mockResolvedValue([1]);
+            daemon_answers(404);
+            await _test_poll_cycle();
+            expect(RunService.fail_if_live).not.toHaveBeenCalled();
         });
 
         it('skips delivery when daemon has no public_url, bumps created_at to unblock the FIFO batch', async () => {
