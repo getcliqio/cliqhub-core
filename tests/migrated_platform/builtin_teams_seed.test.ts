@@ -52,9 +52,19 @@ describe.skipIf(!has_postgres)('built-in hello-world', () => {
         for (const builtin of BUILTIN_TEAMS) {
             const team = (await Team.findOne({ where: { scope: builtin.scope, name: builtin.name }, raw: true }))!;
             const [row] = await TeamVersion.findAll({ where: { team_id: team.id, version: builtin.version }, raw: true });
-            expect(row && (await content_of(row.id)).manifest_yaml, `${builtin.name}@${builtin.version}`).toBe(builtin.manifest_yaml);
-            await expect(assert_team_lints(yaml.load(builtin.manifest_yaml) as never), builtin.name).resolves.toBeUndefined();
+            const manifest_yaml = builtin.bundle.files['team.yml']!;
+            expect(row && (await content_of(row.id)).manifest_yaml, `${builtin.name}@${builtin.version}`).toBe(manifest_yaml);
+            await expect(assert_team_lints(yaml.load(manifest_yaml) as never), builtin.name).resolves.toBeUndefined();
         }
+    });
+
+    it('hello-hug is a built-in (PLAN-team-bundle S6, P19): seeded with its files and listed', async () => {
+        await seed_all();
+        const team = (await Team.findOne({ where: { scope: 'cliq', name: 'hello-hug' }, raw: true }))!;
+        expect(team).toMatchObject({ visibility: 'public', listed: 1 });
+        const [row] = await TeamVersion.findAll({ where: { team_id: team.id, version: '1.1.0' }, raw: true });
+        const content = await content_of(row.id);
+        expect(content.manifest_yaml).toContain('artifacts: [greeting.txt]');
     });
 
     it('hug-example 2.0.0: the gate attaches plan.md and asks for the guest list as a CSV file; the next phase runs cliq hug files', async () => {

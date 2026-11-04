@@ -32,14 +32,18 @@ import { InAppNotificationService } from './in_app_notification.service.js';
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import type { Transaction } from 'sequelize';
+import { BUILTIN_TEAMS as SDK_BUILTIN_TEAMS } from '@getcliqio/cliq-sdk';
 
 const log = get_logger('realm-team-list');
 
 /** A team on a realm: its ids, and its names as labels. */
 export type RealmTeamEntry = RealmTeamRow;
 
-/** The built-in teams every new realm starts with (at their latest published version). */
-const BUILTIN_TEAMS: Array<{ scope: string; slug: string }> = [{ scope: 'cliq', slug: 'hello-world' }];
+/**
+ * The built-in teams every new realm starts with, at their latest published version: cliq-sdk's `BUILTIN_TEAMS`
+ * (hello-world, hug-example, hello-hug — PLAN-team-bundle S6), the same ones CliqHub seeds and cliqd installs.
+ */
+const BUILTIN_TEAMS: Array<{ scope: string; slug: string }> = SDK_BUILTIN_TEAMS.map((t) => ({ scope: t.scope, slug: t.name }));
 
 const key_of = (e: { scope: string | null; slug: string }) => `${e.scope ?? ''}/${e.slug}`;
 

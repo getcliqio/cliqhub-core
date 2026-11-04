@@ -42,10 +42,11 @@ describe.skipIf(!has_postgres)('realms/create: all or nothing', () => {
     });
     afterEach(() => vi.restoreAllMocks());
 
-    /** The realm's list (realm_teams) is exactly hello-world, at a version. */
+    /** The realm's list (realm_teams) is exactly the built-ins (hello-world, hug-example, hello-hug — S6), each at a version. */
     const hello_world_on = async (realm_id: string) => {
         const entries = await RealmTeamListService.entries(realm_id);
-        return entries.length === 1 && entries[0].scope === 'cliq' && entries[0].slug === 'hello-world' && !!entries[0].version_id;
+        const names = entries.filter((e) => e.scope === 'cliq' && !!e.version_id).map((e) => e.slug).sort();
+        return entries.length === 3 && names.join(',') === 'hello-hug,hello-world,hug-example';
     };
     afterAll(async () => { await close_test_control_plane_store(); restore_env(); });
 

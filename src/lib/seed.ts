@@ -396,7 +396,7 @@ async function seed_teams(): Promise<void> {
     // @cliq belongs to the cliq org once there is one (PLAN-team-visibility §5.3).
     await attach_cliq_scope(get_sequelize());
 
-    // The built-in teams (cliq-sdk `BUILTIN_TEAMS`: hello-world, hug-example) — the same ones cliqd
+    // The built-in teams (cliq-sdk `BUILTIN_TEAMS`: hello-world, hug-example, hello-hug) — the same ones cliqd
     // installs on a new daemon, from one source. A version is added when it is missing and never
     // changed after (a version is fixed; new content ships as a new version). Its files come from the
     // startup backfill, which runs right after (PLAN-team-bundle S1.4a).
@@ -426,7 +426,8 @@ async function seed_teams(): Promise<void> {
             log.warn('builtin_version_not_seeded', { team: label, version: builtin.version, reason: 'no storage yet' });
             continue;
         }
-        const files: Record<string, string> = { 'team.yml': builtin.manifest_yaml, ...(builtin.readme ? { 'README.md': builtin.readme } : {}) };
+        // Its files are its bundle (PLAN-team-bundle S6): team.yml, README.md.
+        const files = builtin.bundle.files;
         const rows = await write_team_file_objects(storage, team.id, Object.entries(files).map(([p, text]) => ({
             path: p, content_type: team_file_content_type(p), data: Buffer.from(text, 'utf8'),
         })));
