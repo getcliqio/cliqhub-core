@@ -266,13 +266,14 @@ export class RealmTeamListService {
         const team = await RealmTeamListService.team(ref.team_id);
         const { version_id, version } = await RealmTeamListService.resolve_by_id(team, ref.version_id);
         const existing = await _realm_team_repo.find(realm_id, team.id);
+        // Its sub-team tree, resolved now (S8) — also when the version stays: adding a team again takes its sub-teams'
+        // newer versions ("sub-team updates"). A tree that can't be resolved refuses the add, before anything changes.
+        const tree = await resolve_realm_tree({ team_id: team.id, version_id, scope: team.scope, slug: team.slug });
+        await get_sequelize().transaction(async (t) => {
+            if (existing?.version_id !== version_id) await _realm_team_repo.put(realm_id, team.id, version_id, t);
+            await _realm_team_repo.replace_tree(realm_id, team.id, tree, t);
+        });
         if (existing?.version_id !== version_id) {
-            // Its sub-team tree, resolved now (S8): a tree that can't be resolved refuses the add, before anything changes.
-            const tree = await resolve_realm_tree({ team_id: team.id, version_id, scope: team.scope, slug: team.slug });
-            await get_sequelize().transaction(async (t) => {
-                await _realm_team_repo.put(realm_id, team.id, version_id, t);
-                await _realm_team_repo.replace_tree(realm_id, team.id, tree, t);
-            });
             log.info(`team list ${existing ? 'version' : 'add'}: realm=${realm_id} team=${key_of(team)} version=${version}`);
             void import('./mesh_lifecycle.service.js')
                 .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
