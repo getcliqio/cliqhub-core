@@ -6,6 +6,7 @@
 
 import request from 'supertest';
 import type { Express } from 'express';
+import type { Server } from 'node:http';
 
 /** The link token inside an `invite_url` (`<PUBLIC_APP_URL>/invite/<token>`). */
 export function token_from_invite_url(invite_url: string | null | undefined): string {
@@ -55,7 +56,7 @@ export async function invite_to_realm_and_accept(
  *
  * @throws Error when the accept fails.
  */
-export async function accept_invite_url(app: Express, invitee_token: string, invite_url: string | null): Promise<void> {
+export async function accept_invite_url(app: Express | Server, invitee_token: string, invite_url: string | null): Promise<void> {
     const accepted = await request(app).post('/v1/invitations/accept').set('Authorization', `Bearer ${invitee_token}`)
         .send({ token: token_from_invite_url(invite_url), decision: 'accept' });
     if (accepted.status !== 200) throw new Error(`accept: ${accepted.status} ${JSON.stringify(accepted.body)}`);

@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import type { Express } from 'express';
+import type { Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { Op, QueryTypes } from 'sequelize';
 
@@ -26,12 +26,13 @@ import { open_live_hub_app, close_live_hub_app } from '../migrated_platform/help
 import { accept_invite_url } from '../helpers/invite_links.js';
 import { use_test_link_env } from '../helpers/link_env.js';
 import { remove_org_rows } from '../helpers/remove_org_rows.js';
+import { on_loopback, close_server } from '../helpers/loopback.js';
 
 const has_postgres = await postgres_reachable();
 const password = 'password123';
 
 describe.skipIf(!has_postgres)('users/delete (live Postgres)', () => {
-    let app: Express;
+    let app: Server;
     let M: typeof import('../../src/models/index.js');
     let sq: import('sequelize').Sequelize;
     const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 4)}`;
@@ -84,7 +85,7 @@ describe.skipIf(!has_postgres)('users/delete (live Postgres)', () => {
     beforeAll(async () => {
         restore_link_env = use_test_link_env();
         const live = await open_live_hub_app();
-        app = live.app;
+        app = await on_loopback(live.app);
         M = await import('../../src/models/index.js');
         sq = (await import('../../src/db/sequelize.js')).get_sequelize();
         root = await signup(name('root'));
@@ -107,6 +108,7 @@ describe.skipIf(!has_postgres)('users/delete (live Postgres)', () => {
                 });
             } catch { /* best effort */ }
         }
+        await close_server(app);
         await close_live_hub_app();
         restore_link_env?.();
     }, 300_000);

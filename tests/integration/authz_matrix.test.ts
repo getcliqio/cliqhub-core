@@ -16,11 +16,13 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import express, { type Express } from 'express';
+import type { Server } from 'node:http';
 import request from 'supertest';
 
 import { postgres_reachable } from '../migrated_platform/helpers/control_plane_store.js';
 import { open_live_hub_app, close_live_hub_app } from '../migrated_platform/helpers/live_hub_app.js';
 import { seed_authz, CALLERS, type Seed, type Caller } from '../helpers/authz_seed.js';
+import { on_loopback, close_server } from '../helpers/loopback.js';
 import { create_auth_middleware } from '../../src/middleware/auth_middleware.js';
 import { create_route_policy_middleware } from '../../src/middleware/enforce_route_policy.js';
 import { SequelizeAccessStore } from '../../src/auth/route_policy/store.js';
@@ -275,12 +277,15 @@ function concrete_path(key: string, s: Seed): [string, string] {
 
 describe.skipIf(!has_postgres)('authorization matrix (route policy, enforce mode)', () => {
     let seed: Seed;
-    let app: Express;
-    let pat_off_app: Express;
+    // Served on 127.0.0.1 (see loopback.ts): thousands of requests here, so a port another listener holds would show.
+    let live_server: Server;
+    let app: Server;
+    let pat_off_app: Server;
 
     beforeAll(async () => {
         const live = await open_live_hub_app();
-        seed = await seed_authz(live.app);
+        live_server = await on_loopback(live.app);
+        seed = await seed_authz(live_server);
 
         const build = (allow_pat_daemon_writes: boolean): Express => {
             const a = express();
@@ -295,12 +300,13 @@ describe.skipIf(!has_postgres)('authorization matrix (route policy, enforce mode
             a.use((_req, res) => { res.status(200).json({ ok: true, reached: true }); });
             return a;
         };
-        app = build(true);
-        pat_off_app = build(false);
+        app = await on_loopback(build(true));
+        pat_off_app = await on_loopback(build(false));
     }, 300_000);
 
     afterAll(async () => {
         await seed?.cleanup();
+        await Promise.all([close_server(app), close_server(pat_off_app), close_server(live_server)]);
         await close_live_hub_app();
     }, 300_000);
 

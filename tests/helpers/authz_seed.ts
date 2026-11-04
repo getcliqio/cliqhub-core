@@ -15,6 +15,7 @@
 
 import request from 'supertest';
 import type { Express } from 'express';
+import type { Server } from 'node:http';
 import { Op } from 'sequelize';
 import { randomUUID } from 'node:crypto';
 
@@ -62,7 +63,7 @@ export interface Seed {
 
 const password = 'password123';
 
-export async function seed_authz(app: Express): Promise<Seed> {
+export async function seed_authz(app: Express | Server): Promise<Seed> {
     const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
     const usernames: string[] = [];
     const now = Date.now();
