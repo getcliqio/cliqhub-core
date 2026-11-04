@@ -305,6 +305,25 @@ export class RealmTeamListService {
         return _realm_team_repo.tree(realm_id, team_id);
     }
 
+    /**
+     * "Sub-team updates" (S8): for each team on a realm, how many unpinned calls in its tree have a newer published
+     * version than the one the realm resolved — they're used once the team is added again.
+     *
+     * @returns Catalog team id → count (teams with no tree aren't in the map).
+     */
+    static async sub_team_updates(realm_id: string): Promise<Map<string, number>> {
+        const rows = await _realm_team_repo.realm_trees(realm_id);
+        const latest = await _team_version_repo_rtl.find_latest_refs([...new Set(rows.map((r) => r.team_id))]);
+        const counts = new Map<string, number>();
+        for (const r of rows) {
+            if (!counts.has(r.root_team_id)) counts.set(r.root_team_id, 0);
+            const unpinned = /^@[^/@\s]+\/[^/@\s]+$/.test(r.ref);
+            const newest = latest.get(r.team_id);
+            if (unpinned && newest && newest.id !== r.version_id) counts.set(r.root_team_id, counts.get(r.root_team_id)! + 1);
+        }
+        return counts;
+    }
+
     /** Whether a daemon may download a version as part of a realm team's tree it has installed (S8). */
     static async in_daemon_tree(daemon_id: string, version_id: string): Promise<boolean> {
         return _realm_team_repo.in_daemon_tree(daemon_id, version_id);

@@ -403,6 +403,8 @@ export const TeamData = z.object({
         .describe('Human-readable coverage summary (e.g. "2/3 daemons")'),
     online_stale: z.number().int().nullable().optional()
         .describe('Realm mode: online daemons not on the realm\'s version of this team (older, or not installed); null when the team isn\'t on the realm\'s list'),
+    sub_team_updates: z.number().int().nullable().optional()
+        .describe('Realm mode: sub-teams this team calls without a pinned version that have a newer published version than the one the realm resolved (PLAN-team-bundle S8); null when the team isn\'t on the realm\'s list'),
     current_daemon_ids: z.array(z.string()).optional()
         .describe('Realm mode: daemons (any status) that have the realm\'s version of this team installed'),
     missing_agents: z.array(z.string()).optional()

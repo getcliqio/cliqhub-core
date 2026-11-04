@@ -21,6 +21,8 @@ const CATALOG = {
     ],
 };
 const REALM_ORG: Record<string, string> = { r1: 'org-1', r2: 'org-1', r3: 'org-2' };
+/** Resolved sub-team trees, by realm (S8). */
+const TREES: Record<string, Array<{ root_team_id: string; parent_version_id: string; ref: string; team_id: string; version_id: string }>> = {};
 
 const db = { rows: [] as Row[] };
 const label = (team_id: string, version_id: string) => {
@@ -52,6 +54,7 @@ vi.mock('../../../src/repositories/realm_team_repository.js', () => ({
         // Sub-team trees (S8): none of these teams calls one.
         async replace_tree() {}
         async tree() { return []; }
+        async realm_trees(realm_id: string) { return TREES[realm_id] ?? []; }
         async take_off_everywhere(team_id: string) {
             const ids = db.rows.filter((r) => r.team_id === team_id).map((r) => r.realm_id);
             db.rows = db.rows.filter((r) => r.team_id !== team_id);
@@ -76,6 +79,9 @@ vi.mock('../../../src/repositories/team_version_repository.js', () => ({
         async find_current_by_team_and_version(team_id: string, version: string) { return CATALOG.versions.find((v) => v.team_id === team_id && v.version === version) ?? null; }
         async find_latest_ref(team_id: string) { return CATALOG.versions.filter((v) => v.team_id === team_id).at(-1) ?? null; }
         async find_current_by_id(id: string) { return CATALOG.versions.find((v) => v.id === id) ?? null; }
+        async find_latest_refs(team_ids: string[]) {
+            return new Map(team_ids.map((id) => [id, CATALOG.versions.filter((v) => v.team_id === id).at(-1)!]).filter(([, v]) => v));
+        }
     },
 }));
 vi.mock('../../../src/repositories/realm_repository.js', () => ({
@@ -178,4 +184,17 @@ describe('RealmTeamListService over realm_teams', () => {
         expect(db.rows.map((r) => r.team_id)).toEqual(['t-hello']);
         expect(slots.updates).toEqual([{ where: { team_id: 't-claims' }, set: expect.objectContaining({ uninstalled_at: expect.any(Number) }) }]);
     });
+
+    it('sub-team updates: unpinned calls whose team has a newer published version than the tree has (S8)', async () => {
+        TREES.r1 = [
+            { root_team_id: 't-hello', parent_version_id: 'v-h1', ref: '@acme/claims', team_id: 't-claims', version_id: 'v-c1' },
+            { root_team_id: 't-hello', parent_version_id: 'v-h1', ref: '@acme/claims@1.0.0', team_id: 't-claims', version_id: 'v-c1' },
+            { root_team_id: 't-other', parent_version_id: 'v-x', ref: '@acme/claims', team_id: 't-claims', version_id: 'v-c2' },
+        ];
+        const updates = await RealmTeamListService.sub_team_updates('r1');
+        expect(Object.fromEntries(updates)).toEqual({ 't-hello': 1, 't-other': 0 });
+        expect((await RealmTeamListService.sub_team_updates('r2')).size).toBe(0);
+        delete TREES.r1;
+    });
 });
+

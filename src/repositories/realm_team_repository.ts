@@ -109,6 +109,16 @@ export class RealmTeamRepository {
         );
     }
 
+    /** Every call in the trees of a realm's teams, with the realm team's catalog team. */
+    async realm_trees(realm_id: string): Promise<Array<RealmTeamTreeRow & { root_team_id: string }>> {
+        return get_sequelize().query<RealmTeamTreeRow & { root_team_id: string }>(
+            `SELECT rt."team_id" AS "root_team_id", s."parent_version_id", s."ref", s."team_id", s."version_id"
+             FROM cliq."realm_team_sub_teams" s JOIN cliq."realm_teams" rt ON rt."id" = s."realm_team_id"
+             WHERE rt."realm_id" = :realm_id ORDER BY s."position"`,
+            { type: QueryTypes.SELECT, replacements: { realm_id } },
+        );
+    }
+
     /** Whether a version is in the tree of a realm team installed on this daemon (it may download it). */
     async in_daemon_tree(daemon_id: string, version_id: string): Promise<boolean> {
         const rows = await get_sequelize().query<{ one: number }>(
