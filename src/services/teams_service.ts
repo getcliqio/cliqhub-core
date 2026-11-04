@@ -4,7 +4,7 @@ import { assert_access, assert_admin_access } from '../auth/assert_grant.js';
 import { require_permission } from '../auth/permissions.js';
 
 import yaml from 'js-yaml';
-import { dependencies_problems, derive_version_content, normalize_tags, compute_next_version, parse_team_yml_text } from './package_parser.js';
+import { dependencies_problems, derive_version_content, normalize_tags, parse_team_yml_text } from './package_parser.js';
 import type { ParsedTeamYml } from './package_parser.js';
 import { SemVer } from '../lib/semver.js';
 import { SLUG_PATTERN } from '../config/env.js';
@@ -30,7 +30,7 @@ import { ScopeRepository as ScopeRepoClass } from '../repositories/scope_reposit
 
 import { get_logger } from '../lib/log.js';
 import { escape_like } from '../lib/search.js';
-import { is_bundle_path, lint_team, MAX_BUNDLE_FILES, MAX_BUNDLE_UNPACKED, pack_bundle, TEAM_YML, unknown_paths, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
+import { is_bundle_path, lint_team, MAX_BUNDLE_FILES, MAX_BUNDLE_UNPACKED, pack_bundle, set_identity, TEAM_YML, TeamIdentityError, unknown_paths, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
 import { AgentCatalog } from '../models/agent_catalog.model.js';
 import { Team } from '../models/team.model.js';
 import { TeamVersionRepository as TeamVersionRepoClass } from '../repositories/team_version_repository.js';
@@ -217,11 +217,13 @@ export class TeamsService {
      * named. Each file gets an id, its bytes go to `teams/<team_id>/files/<file_id>` (never overwritten), and
      * all the rows are written in one transaction, replacing paths the draft already has.
      *
+     * A new draft can name the published version it starts from (`based_on_version_id`, PLAN-team-bundle S3).
+     *
      * @throws ApiError 422 for a path that isn't a team path, a path twice, or a draft over 10 MB / 1000 files;
-     *   404 for a draft that isn't this team's open draft.
+     *   404 for a draft that isn't this team's open draft, or a `based_on_version_id` that isn't one of its versions.
      */
     async upload_files(auth: AuthContext, params: {
-        team_id: string; version_id?: string;
+        team_id: string; version_id?: string; based_on_version_id?: string;
         files: Array<{ path: string; content_type: string; data: Buffer }>;
     }): Promise<{ version_id: string; files: Array<{ id: string; path: string; size: number; sha256: string }> }> {
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -237,8 +239,11 @@ export class TeamsService {
         if (params.version_id) {
             const draft = await this._version_repo.find_draft(params.version_id);
             if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (a published version can\'t change)', 404);
+        } else if (params.based_on_version_id) {
+            const base = await this._version_repo.find_by_id(params.based_on_version_id);
+            if (!base || base.team_id !== team.id) throw new ApiError('not_found', `Version ${params.based_on_version_id} isn't one of this team's versions`, 404);
         }
-        const out = await this._store_files(team.id, params.version_id, params.files);
+        const out = await this._store_files(team.id, params.version_id, params.files, params.version_id ? undefined : params.based_on_version_id);
         log.info('team_files_uploaded', { team_id: team.id, version_id: out.version_id, files: out.files.length });
         return out;
     }
@@ -248,7 +253,7 @@ export class TeamsService {
      * each file gets an id and its bytes go to storage first, then all rows are written in one transaction,
      * replacing paths the draft has, and the draft is marked saved.
      */
-    private async _store_files(team_id: string, draft_id: string | undefined, files: Array<{ path: string; content_type: string; data: Buffer }>) {
+    private async _store_files(team_id: string, draft_id: string | undefined, files: Array<{ path: string; content_type: string; data: Buffer }>, based_on_version_id?: string) {
         const paths = files.map((f) => f.path);
         const kept = draft_id ? (await this._file_repo.list_by_version(draft_id)).filter((r) => !paths.includes(r.path)) : [];
         const total = kept.reduce((n, r) => n + r.size, 0) + files.reduce((n, f) => n + f.data.length, 0);
@@ -259,7 +264,7 @@ export class TeamsService {
         const rows = await write_team_file_objects(this._storage, team_id, files);
         let version_id = draft_id;
         await get_sequelize().transaction(async (t) => {
-            if (!version_id) version_id = await this._version_repo.create_draft(team_id, t);
+            if (!version_id) version_id = await this._version_repo.create_draft(team_id, t, based_on_version_id);
             for (const r of rows) r.version_id = version_id;
             if (rows.length) await this._file_repo.replace_paths(version_id, rows, t);
             await this._version_repo.touch_draft(version_id, t);
@@ -476,7 +481,12 @@ export class TeamsService {
         const fork_count = await this._team_repo.count_forks(team.id);
         // Only people who can edit the team see its open draft (the builder reopens it from its files).
         const open_draft = permissions.can_edit ? await this._version_repo.find_open_draft(team.id) : null;
-        const draft = open_draft ? { version_id: open_draft.id, saved_at: open_draft.saved_at } : null;
+        const based_on = open_draft?.based_on_version_id ? await this._version_repo.find_by_id(open_draft.based_on_version_id) : null;
+        const draft = open_draft ? {
+            version_id: open_draft.id, saved_at: open_draft.saved_at,
+            // The published version it started from ("Draft · based on 1.2.0"), when it did.
+            based_on: based_on ? { version_id: based_on.id, version: based_on.version } : null,
+        } : null;
 
         const raw_manifest = content?.manifest_yaml || null;
 
@@ -525,7 +535,8 @@ export class TeamsService {
         const latest = rows.length > 0 ? rows[0].version : null;
         return {
             name: params.name, scope, latest,
-            versions: rows.map((r) => ({ version: r.version, changelog: r.changelog || null, published_at: r.published_at, is_latest: r.version === latest })),
+            // Each version's id: what realms/add_team takes (PLAN-team-bundle S4.1).
+            versions: rows.map((r) => ({ id: r.id, version: r.version, changelog: r.changelog || null, published_at: r.published_at, is_latest: r.version === latest })),
         };
     }
 
@@ -582,6 +593,8 @@ export class TeamsService {
     async create(auth: AuthContext, params: {
         name: string; scope: string; description?: string;
         forked_from?: { team_id: string; version?: string };
+        /** The visibility the new team is meant for; a fork of a private team checks it here (and again at publish). */
+        visibility?: 'public' | 'private';
     }) {
         log.debug('create', { name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -595,6 +608,7 @@ export class TeamsService {
         if (existing) throw new ApiError('conflict', `Team @${params.scope}/${params.name} already exists`, 409);
 
         const origin = params.forked_from ? await this._fork_origin(auth, params.forked_from) : null;
+        if (origin) await this._assert_fork_visibility(auth, origin.team_id, params.visibility ?? 'private');
         const description = params.description || origin?.description || '';
         const label = `@${params.scope}/${params.name}`;
         const seed: Record<string, string> = origin
@@ -667,12 +681,12 @@ export class TeamsService {
         const scope = team.scope ?? '';
         const slug = team.name;
         const sq = get_sequelize();
-        const has_team = `EXISTS (SELECT 1 FROM jsonb_array_elements(r."team_list") e
-                           WHERE e->>'slug' = :slug AND NULLIF(e->>'scope', '') IS NOT DISTINCT FROM NULLIF(:scope, ''))`;
-        const realms = await sq.query<{ id: string; slug: string }>(
-            `SELECT r."id", r."slug" FROM cliq."realms" r WHERE NOT r."deleted" AND ${has_team} ORDER BY r."slug"`,
-            { replacements: { slug, scope }, type: QueryTypes.SELECT },
-        );
+        // The live realms that run it, through the realm list's service (PLAN-team-bundle S4.1).
+        const on_realms = await RealmTeamListService.realms_with(team.id);
+        const realms = on_realms.length ? await sq.query<{ id: string; slug: string }>(
+            `SELECT r."id", r."slug" FROM cliq."realms" r WHERE NOT r."deleted" AND r."id" IN (:ids) ORDER BY r."slug"`,
+            { replacements: { ids: on_realms }, type: QueryTypes.SELECT },
+        ) : [];
 
         // Pre-flight: the caller must be able to remove it from every one of them.
         const [{ ROUTE_POLICY }, { decide }, { SequelizeAccessStore }] = await Promise.all([
@@ -683,7 +697,7 @@ export class TeamsService {
         const blocked: Array<{ realm_id: string; realm_slug: string }> = [];
         let hidden = 0;
         for (const r of realms) {
-            const d = await decide(policy, { method: 'POST', path: '/v1/realms/remove_team', body: { realm_id: r.id, scope, slug }, auth }, store, { allow_pat_daemon_writes: false });
+            const d = await decide(policy, { method: 'POST', path: '/v1/realms/remove_team', body: { realm_id: r.id, team_id: team.id }, auth }, store, { allow_pat_daemon_writes: false });
             if (d.allow) continue;
             if (d.status === 404) hidden += 1; else blocked.push({ realm_id: r.id, realm_slug: r.slug });
         }
@@ -697,16 +711,7 @@ export class TeamsService {
         }
 
         await sq.transaction(async (t) => {
-            if (realms.length) {
-                await sq.query(
-                    `UPDATE cliq."realms" r SET "team_list" = COALESCE((
-                         SELECT jsonb_agg(e) FROM jsonb_array_elements(r."team_list") e
-                          WHERE NOT (e->>'slug' = :slug AND NULLIF(e->>'scope', '') IS NOT DISTINCT FROM NULLIF(:scope, ''))
-                     ), '[]'::jsonb), "updated_at" = :now
-                     WHERE r."id" IN (:ids)`,
-                    { replacements: { slug, scope, now: Date.now(), ids: realms.map((r) => r.id) }, transaction: t },
-                );
-            }
+            if (realms.length) await RealmTeamListService.take_off_realms(team.id, realms.map((r) => r.id), t);
             await this._team_repo.update_visibility_and_listed(team.id, 'draft', 0, t);
         });
 
@@ -741,7 +746,7 @@ export class TeamsService {
 
     async publish(auth: AuthContext, params: {
         name?: string; scope?: string; team_id?: string;
-        version?: string; bump?: 'patch' | 'minor' | 'major';
+        version?: string;
         changelog?: string; description?: string; license?: string;
         tags?: string[]; visibility?: 'public' | 'private';
         version_id?: string;
@@ -761,9 +766,13 @@ export class TeamsService {
         if (!SLUG_PATTERN.test(name)) throw new ApiError('invalid_params', 'Team name must be lowercase letters, numbers, and hyphens, starting with a letter', 422);
 
         const scope = params.scope !== undefined ? (params.scope || null) : (team ? team.scope : null);
+        // A team's scope is fixed and always set (PLAN-team-bundle S2): no moving it, no team without one.
+        if (team && scope !== team.scope) {
+            throw new ApiError('scope_mismatch', `@${team.scope}/${team.name} is in @${team.scope}, not @${scope ?? '(none)'}: a team can't change scope (fork it into the other scope instead)`, 409);
+        }
+        if (!scope) throw new ApiError('invalid_params', 'A scope is required: name the team @scope/name in team.yml, or pass --scope', 422);
         // `teams.publish` in the scope's org, for a new team or anyone's (PLAN-team-visibility §3.3).
         const scope_row = await this._assert_can_publish(auth, scope);
-        if (team && team.scope !== scope) await this._assert_can_publish(auth, team.scope);
 
         if (!team) team = await this._team_repo.find_by_name_and_scope(name, scope);
 
@@ -771,12 +780,17 @@ export class TeamsService {
         const visibility: 'public' | 'private' = params.visibility
             ?? (team && team.visibility !== 'draft' ? team.visibility as 'public' | 'private' : 'private');
         const visibility_was = team && team.visibility !== 'draft' ? team.visibility : null;
+        if (team?.forked_from_team_id) await this._assert_fork_visibility(auth, team.forked_from_team_id, visibility);
 
         // Status-only republish: list the team again without a new version.
         if (!params.version_id) {
             if (!team) throw new ApiError('invalid_params', 'files are required for new teams', 422);
             const latest = await this._version_repo.find_latest_version(team.id);
             if (!latest) throw new ApiError('invalid_params', 'files are required when the team has no versions', 422);
+            // Only the latest version is re-listed; a new number needs its files (cliq 1.15.10 and older send none).
+            if (params.version && params.version !== latest) {
+                throw new ApiError('files_required', `Version ${params.version} needs its files: upload them and publish the draft (on cliq 1.15.10 or older, upgrade cliq and publish again)`, 422);
+            }
             if (params.tags && params.tags.length > 20) throw new ApiError('invalid_params', 'Maximum 20 tags allowed', 422);
             // Publishing (or re-listing) the latest version: its team.yml gets the same check as a new package.
             const row = await this._version_repo.find_by_team_and_version(team.id, latest);
@@ -804,16 +818,16 @@ export class TeamsService {
                 name: team.name,
                 scope: team.scope,
                 version: latest,
+                version_id: row?.id ?? null,
                 status: 'published' as const,
                 listed: true,
                 visibility,
             };
         }
 
-        if (!params.version && !params.bump) {
-            throw new ApiError('invalid_params', 'Either version or bump (patch|minor|major) is required', 422);
-        }
-        if (params.version && !SEMVER_PATTERN.test(params.version)) {
+        // Every publish names its version (PLAN-team-bundle S2): no bump, no automatic number.
+        if (!params.version) throw new ApiError('invalid_params', 'version is required (e.g. 1.0.0)', 422);
+        if (!SEMVER_PATTERN.test(params.version)) {
             throw new ApiError('invalid_params', 'Version must be valid semver (e.g. 1.0.0)', 422);
         }
 
@@ -825,6 +839,20 @@ export class TeamsService {
         const draft = await this._version_repo.find_draft(params.version_id);
         if (!draft || draft.team_id !== team.id) throw new ApiError('not_found', 'Draft not found (upload the files first: teams/files/upload)', 404);
         const files = await this._read_version_files(draft.id);
+        // The stored team.yml says what is published: its scope and version are set to the team's and this one.
+        if (files[TEAM_YML] !== undefined) {
+            let with_identity: string;
+            try {
+                with_identity = set_identity(files[TEAM_YML], { scope: team.scope ?? undefined, version: params.version });
+            } catch (err) {
+                if (err instanceof TeamIdentityError) throw new ApiError('invalid_package', err.message, 422);
+                throw err;
+            }
+            if (with_identity !== files[TEAM_YML]) {
+                await this._store_files(team.id, draft.id, [{ path: TEAM_YML, content_type: 'text/yaml', data: Buffer.from(with_identity, 'utf8') }]);
+                files[TEAM_YML] = with_identity;
+            }
+        }
         const { team_yml } = await check_team_files(files);
         // The same derivation every read uses (PLAN-team-bundle S1.4b); the version's content is its files.
         const { workflow } = derive_version_content(files);
@@ -837,22 +865,18 @@ export class TeamsService {
         /** Validate HUG gate phases have mandatory review.reviewers. */
         validate_hug_reviewer_groups(workflow);
 
-        let resolved_version = params.version;
-        if (!resolved_version && params.bump) {
-            const latest = team ? await this._version_repo.find_latest_version(team.id) : null;
-            resolved_version = compute_next_version(latest, params.bump);
-        }
-        if (!resolved_version) throw new ApiError('invalid_params', 'Could not determine version', 422);
+        const resolved_version = params.version;
 
         if (team) {
             const existing_ver = await this._version_repo.find_by_team_and_version(team.id, resolved_version);
             if (existing_ver) throw new ApiError('conflict', `Version ${resolved_version} already exists`, 409);
 
-            const current_max = await this._version_repo.find_latest_version(team.id);
+            // Higher than every number used so far, withdrawn versions included.
+            const current_max = await this._version_repo.find_highest_version(team.id);
             if (current_max && SemVer.compare(resolved_version, current_max) < 0) {
                 throw new ApiError(
                     'invalid_params',
-                    `Version ${resolved_version} is older than the current latest (${current_max}). Publish a version >= ${current_max}.`,
+                    `Version ${resolved_version} is older than ${current_max}, the highest version so far (withdrawn ones count): publish a higher version (cliq team publish <dir> --version x.y.z)`,
                     422,
                 );
             }
@@ -884,6 +908,7 @@ export class TeamsService {
             name,
             scope,
             version: resolved_version,
+            version_id: draft.id,
             status: 'published' as const,
             listed: true,
             visibility,
@@ -991,6 +1016,7 @@ export class TeamsService {
         return { deleted: true };
     }
 
+    /** Withdraw a published version (the route keeps its name, `teams/delete_version`). */
     async delete_version(auth: AuthContext, params: { name: string; scope?: string; version: string }) {
         log.debug('delete_version', { name: params.name, scope: params.scope, version: params.version });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
@@ -1003,32 +1029,30 @@ export class TeamsService {
         const ver = await this._version_repo.find_id_and_package(team.id, params.version);
         if (!ver) throw new ApiError('not_found', `Version ${params.version} not found`, 404);
 
-        await this._version_repo.delete_by_id(ver.id);
-        const key = stored_key(ver.package_path ?? '');
-        if (this._storage && key) await this._storage.delete(key);
-        return { deleted: true, version: params.version };
-    }
-
-    async rename_team(auth: AuthContext, params: { name: string; scope: string; new_name: string }) {
-        log.debug('rename_team', { name: params.name, scope: params.scope, new_name: params.new_name });
-        if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
-        assert_access(auth, 'teams', 'write');
-        const new_name = (params.new_name || '').trim().toLowerCase();
-        if (!new_name || !SLUG_PATTERN.test(new_name)) throw new ApiError('invalid_params', 'Name must be lowercase alphanumeric with hyphens (e.g. my-team)', 422);
-        if (new_name === params.name) throw new ApiError('invalid_params', 'New name is the same as the current name', 422);
-
-        const team = await this._team_repo.find_by_name_and_scope(params.name, params.scope);
-        if (!team) throw new ApiError('not_found', 'Team not found', 404);
-        await this._assert_can_publish(auth, team.scope);
-
-        const existing = await this._team_repo.find_by_name_and_scope(new_name, params.scope);
-        if (existing) throw new ApiError('conflict', `Team @${params.scope}/${new_name} already exists`, 409);
-
-        await this._team_repo.update_name(team.id, new_name);
-        return { id: team.id, name: new_name, scope: params.scope };
+        // Withdraw, not delete (PLAN-team-bundle S2): out of "latest", lists and installs by name; its files and zip
+        // stay so runs and installed trees that use it keep working; its number can't be published again.
+        if (!(await this._version_repo.withdraw(ver.id))) throw new ApiError('conflict', `Version ${params.version} is already withdrawn`, 409);
+        return { withdrawn: true, version: params.version };
     }
 
     // ─── Private helpers ────────────────────────────────────────────
+
+    /**
+     * A fork of a private team may be public only for someone who can publish in the origin's scope
+     * (PLAN-team-bundle S2): otherwise its content would leave the scope that keeps it private.
+     *
+     * @throws ApiError 403 when the fork would be public and the caller can't publish in the origin's scope.
+     */
+    private async _assert_fork_visibility(auth: AuthContext, origin_team_id: string, visibility: 'public' | 'private'): Promise<void> {
+        if (visibility !== 'public') return;
+        const origin = await this._team_repo.find_by_id(origin_team_id);
+        if (!origin || origin.visibility !== 'private') return;
+        try {
+            await this._assert_can_publish(auth, origin.scope);
+        } catch {
+            throw new ApiError('forbidden', `@${origin.scope}/${origin.name} is private: its fork can be public only for someone who can publish in @${origin.scope}`, 403);
+        }
+    }
 
     /**
      * The team version a new team is forked from: the caller must be able to
@@ -1201,7 +1225,7 @@ export class TeamsService {
         const sequelize = get_sequelize();
         const [versions, teams, forks] = await Promise.all([
             sequelize.query<{ team_id: string; id: string; version: string }>(
-                'SELECT "team_id", "id", "version" FROM cliq."team_versions" WHERE "team_id" IN (:ids) AND "status" = \'published\'',
+                'SELECT "team_id", "id", "version" FROM cliq."team_versions" WHERE "team_id" IN (:ids) AND "status" = \'published\' AND "withdrawn_at" IS NULL',
                 { replacements: { ids }, type: QueryTypes.SELECT },
             ),
             sequelize.query<{ id: string; updated_at: Date | string | null }>(

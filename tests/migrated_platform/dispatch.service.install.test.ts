@@ -3,6 +3,7 @@ import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { randomUUID } from 'node:crypto';
 
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
+import { publish_version } from './helpers/version_files.js';
 import {
     Daemon,
     Realm,
@@ -180,11 +181,10 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
             author_id: user_id, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
         } as any);
         catalog_ids.push(team.id);
-        await TeamVersion.create({
-            id: randomUUID(), team_id: team.id, version: '1.0.0', changelog: '', package_path: '/tmp/x.zip',
-            workflow_json: JSON.stringify({ phases: [{ name: 'human-review', type: 'gate', agent: 'hug', ...(review ? { review } : {}) }] }),
-            manifest_yaml: '', readme: '', capability_json: '{}', agents_json: '{}', roles_json: '[]', tools: '[]', published_at: new Date(),
-        } as any);
+        await publish_version(team.id, '1.0.0', {
+            name: `@${scope!.slug}/${name}`,
+            phases: [{ name: 'human-review', type: 'gate', agent: 'hug', ...(review ? { review } : {}) }],
+        });
         return `${scope!.slug}/${name}`;
     }
 

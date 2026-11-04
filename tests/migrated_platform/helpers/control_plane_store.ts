@@ -11,6 +11,8 @@ import {
     init_sequelize,
 } from '../../../src/db/sequelize.js';
 import { assert_not_dev_database, test_database_url } from '../../test_database.js';
+import { clear_version_content_cache, init_version_content } from '../../../src/services/version_content.js';
+import { test_package_storage } from './version_files.js';
 
 /** Local-only test database. Never the dev DB or a shared/prod DATABASE_URL from .env. */
 export const database_url = test_database_url;
@@ -68,6 +70,9 @@ export async function open_test_control_plane_store(): Promise<void> {
     assert_test_database_url(database_url);
     const sequelize = init_sequelize(database_url);
     init_models(sequelize);
+    // Versions are their files (PLAN-team-bundle S1.4b): content is read from this storage, as the server's container sets up.
+    init_version_content(test_package_storage());
+    clear_version_content_cache();
     await move_registry_to_cliq_schema(sequelize);
     await sequelize.sync();
     await migrate_hub_schema(sequelize);

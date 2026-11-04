@@ -3,6 +3,7 @@
  * and public card /send with realm bearer.
  */
 
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
@@ -245,7 +246,7 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
         const add = await request(app)
             .post('/v1/realms/add_team')
             .set('Authorization', bearer(token))
-            .send({ realm_id, scope: 'cliq', slug: 'test-team' });
+            .send({ realm_id, team_id });
         expect(add.status, JSON.stringify(add.body)).toBe(200);
         if (!existing) {
             await TeamVersion.destroy({ where: { team_id } });
@@ -270,7 +271,7 @@ describe.skipIf(!has_postgres)('realm a2a + mesh lifecycle e2e', () => {
         await request(app)
             .post('/v1/realms/add_team')
             .set('Authorization', bearer(token))
-            .send({ realm_id, scope: 'cliq', slug: 'other-team' });
+            .send({ realm_id, team_id: randomUUID() }); // not in the catalog: refused, so no skills change
 
         await new Promise((r) => setTimeout(r, 300));
         expect(mesh_calls.re_register).toBe(before);

@@ -1,6 +1,10 @@
 import { DataTypes, type Sequelize } from 'sequelize';
 import { BaseModel } from './base_model.js';
 
+/**
+ * A team on a realm, by name, as the realm routes answer it. The list itself is `cliq.realm_teams` (by id), read
+ * only through `RealmTeamListService` (PLAN-team-bundle S4.1); the old `realms.team_list` column is no longer used.
+ */
 export interface TeamListEntry {
     scope: string;
     slug: string;
@@ -19,8 +23,6 @@ export class Realm extends BaseModel {
     declare created_by: string;
     /** Owning org — all realm data lives within this org boundary. */
     declare org_id: string;
-    /** Declarative set of teams auto-installed on realm daemons. */
-    declare team_list: TeamListEntry[];
     declare a2a_enabled: boolean;
     declare a2a_bearer_token_hash: string | null;
     declare a2a_bearer_token_prefix: string | null;
@@ -44,7 +46,6 @@ export class Realm extends BaseModel {
             owner_user_id: { type: DataTypes.TEXT, allowNull: false },
             created_by: { type: DataTypes.TEXT, allowNull: false },
             org_id: { type: DataTypes.UUID, allowNull: false },
-            team_list: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
             a2a_enabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
             a2a_bearer_token_hash: { type: DataTypes.TEXT, allowNull: true, defaultValue: null },
             a2a_bearer_token_prefix: { type: DataTypes.TEXT, allowNull: true, defaultValue: null },
@@ -80,7 +81,6 @@ export type RealmAttributes = {
     owner_user_id: string;
     created_by: string;
     org_id: string;
-    team_list: TeamListEntry[];
     a2a_enabled: boolean;
     a2a_bearer_token_hash: string | null;
     a2a_bearer_token_prefix: string | null;
@@ -96,7 +96,6 @@ export type RealmAttributes = {
 
 export type RealmCreationAttributes = Omit<
     RealmAttributes,
-    | 'team_list'
     | 'deleted'
     | 'deleted_at'
     | 'org_id'
@@ -108,7 +107,6 @@ export type RealmCreationAttributes = Omit<
     | 'mesh_providers'
     | 'mesh_status'
 > & {
-    team_list?: TeamListEntry[];
     deleted?: boolean;
     deleted_at?: number | null;
     org_id?: string;

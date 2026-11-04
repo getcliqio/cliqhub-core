@@ -1137,6 +1137,10 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."team_versions" ALTER COLUMN "version" DROP NOT NULL`);
     await run(`ALTER TABLE cliq."team_versions" ALTER COLUMN "published_at" DROP NOT NULL`);
     await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "saved_at" TIMESTAMPTZ`);
+    // A withdrawn version (PLAN-team-bundle S2): out of "latest", lists and installs by name; readable by id; number kept.
+    await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "withdrawn_at" TIMESTAMPTZ`);
+    // The published version a draft was started from (PLAN-team-bundle S3): the builder's "Draft · based on 1.2.0".
+    await run(`ALTER TABLE cliq."team_versions" ADD COLUMN IF NOT EXISTS "based_on_version_id" UUID`);
     // The old content columns (PLAN-team-bundle S1.5): nothing writes them any more, so while they exist they
     // take no value; team_files_only drops them once every version's files are checked against them.
     for (const c of ['workflow_json', 'manifest_yaml', 'readme', 'capability_json', 'agents_json', 'roles_json', 'dependencies_yaml', 'cliq_version', 'tools']) {
@@ -1161,6 +1165,20 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
         )`);
     await run(`CREATE UNIQUE INDEX IF NOT EXISTS "team_files_version_path" ON cliq."team_files" ("version_id", "path")`);
     await run(`CREATE INDEX IF NOT EXISTS "team_files_team" ON cliq."team_files" ("team_id")`);
+
+    // realm_teams (PLAN-team-bundle S4.1): the teams a realm runs, one version each, by id. Replaces the
+    // realms.team_list JSON names; only RealmTeamListService reads or writes it (a guard test enforces that).
+    await run(`
+        CREATE TABLE IF NOT EXISTS cliq."realm_teams" (
+            "id" UUID PRIMARY KEY,
+            "realm_id" TEXT NOT NULL REFERENCES cliq."realms" ("id") ON DELETE CASCADE,
+            "team_id" UUID NOT NULL REFERENCES cliq."teams" ("id") ON DELETE CASCADE,
+            "version_id" UUID NOT NULL REFERENCES cliq."team_versions" ("id") ON DELETE CASCADE,
+            "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+            "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`);
+    await run(`CREATE UNIQUE INDEX IF NOT EXISTS "realm_teams_realm_team" ON cliq."realm_teams" ("realm_id", "team_id")`);
+    await run(`CREATE INDEX IF NOT EXISTS "realm_teams_team" ON cliq."realm_teams" ("team_id")`);
 
     // Org team library: teams an org has taken on (from the marketplace or its own
     // scopes). A team joins the org before any of the org's realms can add it.

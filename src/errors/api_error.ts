@@ -15,6 +15,8 @@ const STATUS_MAP: Record<string, number> = {
     not_active: 409,
     expired: 410,
     invalid_params: 422,
+    scope_mismatch: 409,
+    files_required: 422,
     rate_limited: 429,
     storage_not_configured: 503,
 };

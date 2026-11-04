@@ -1,5 +1,5 @@
 /**
- * Teams routes — catalog CRUD, versioning, publish/unpublish, install/uninstall, download, rename, and builder build.
+ * Teams routes — catalog CRUD, versioning, publish/unpublish, install/uninstall, download, and builder build.
  *
  * POST   /v1/teams/get
  * POST   /v1/teams/get_by_id
@@ -12,7 +12,6 @@
  * POST   /v1/teams/download
  * POST   /v1/teams/delete
  * POST   /v1/teams/delete_version
- * POST   /v1/teams/rename
  * POST   /v1/teams/install
  * POST   /v1/teams/uninstall
  * POST   /v1/teams/build
@@ -42,7 +41,6 @@ export function register_teams_routes(
     router.post('/teams/files/get',    no_store, teams_controller.wrap(teams_controller.get_files));
     router.post('/teams/delete', teams_controller.wrap(teams_controller.delete_team));
     router.post('/teams/delete_version', teams_controller.wrap(teams_controller.delete_version));
-    router.post('/teams/rename', teams_controller.wrap(teams_controller.rename));
     router.post('/teams/install', teams_controller.wrap(teams_controller.install));
     router.post('/teams/uninstall', teams_controller.wrap(teams_controller.uninstall));
 

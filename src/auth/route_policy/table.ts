@@ -217,7 +217,6 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'POST /v1/teams/create': signed_in({ handler: "teams.publish in the scope's org (PLAN-team-visibility §3.3)" }),
     'POST /v1/teams/build': signed_in(),
     'POST /v1/teams/update': record('team', ['body.team_id', 'body.name'], 'view', { handler: "teams.publish in the scope's org, whoever wrote it" }),
-    'POST /v1/teams/rename': record('team', ['body.team_id', 'body.name'], 'view', { handler: "teams.publish in the scope's org, whoever wrote it" }),
     'POST /v1/teams/publish': signed_in({ handler: "teams.publish in the scope's org, whoever wrote it; new teams have no record yet" }),
     // Team files (PLAN-team-bundle §2.6). Upload is multipart, so its team_id is only known to the handler.
     'POST /v1/teams/files/upload': signed_in({ handler: "multipart: teams.publish in the team's scope, checked once the payload is read" }),

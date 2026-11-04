@@ -1,5 +1,6 @@
 /**
- * RealmTeamListService.sync_team — force overwrite of one team-list entry.
+ * RealmTeamListService.sync_team — force overwrite of one team-list entry. The list is `realm_teams` (by id,
+ * PLAN-team-bundle S4.1); the realm's row for the team says which version its daemons install.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -78,6 +79,20 @@ vi.mock('../../../src/services/in_app_notification.service.js', () => ({
     InAppNotificationService: { create: vi.fn() },
 }));
 
+// The realm's list (realm_teams) and the catalog, as the service reads them.
+const listed = { rows: [] as Array<{ realm_id: string; team_id: string; version_id: string; scope: string; slug: string; version: string }> };
+vi.mock('../../../src/repositories/realm_team_repository.js', () => ({
+    RealmTeamRepository: class {
+        async find(realm_id: string, team_id: string) { return listed.rows.find((r) => r.realm_id === realm_id && r.team_id === team_id) ?? null; }
+        async list(realm_id: string) { return listed.rows.filter((r) => r.realm_id === realm_id); }
+    },
+}));
+vi.mock('../../../src/repositories/team_repository.js', () => ({
+    TeamRepository: class {
+        async find_by_name_and_scope(name: string, scope: string) { return name === 'claims' && scope === 'acme' ? { id: 'team-claims' } : name === 'other' ? { id: 'team-other' } : null; }
+    },
+}));
+
 vi.mock('../../../src/lib/log.js', () => ({
     get_logger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
@@ -97,23 +112,23 @@ describe('RealmTeamListService.sync_team', () => {
             team_id: 'acme/claims',
             results: [{ daemon_id: 'd1', ok: true }],
         } as any);
+        vi.mocked(Realm.findByPk).mockResolvedValue({ id: 'rlm_1' } as any);
+        listed.rows = [{ realm_id: 'rlm_1', team_id: 'team-claims', version_id: 'v-1', scope: 'acme', slug: 'claims', version: '1.0.0' }];
     });
 
     it('force-installs a team that is on the realm list', async () => {
-        vi.mocked(Realm.findByPk).mockResolvedValue({
-            id: 'rlm_1',
-            team_list: [{ scope: 'acme', slug: 'claims' }],
-        } as any);
 
         const result = await RealmTeamListService.sync_team(
             'rlm_1',
             'user-1',
-            { scope: 'acme', slug: 'claims' },
+            'team-claims',
             ['org-1'],
         );
 
+        // the version on the realm's list
         expect(DispatchService.install_team).toHaveBeenCalledWith({
             team_id: 'acme/claims',
+            version: '1.0.0',
             realm_id: 'rlm_1',
             user_id: 'user-1',
             org_ids: ['org-1'],
@@ -125,23 +140,16 @@ describe('RealmTeamListService.sync_team', () => {
     });
 
     it('rejects teams that are not on the realm list', async () => {
-        vi.mocked(Realm.findByPk).mockResolvedValue({
-            id: 'rlm_1',
-            team_list: [{ scope: 'acme', slug: 'other' }],
-        } as any);
+        listed.rows = [{ realm_id: 'rlm_1', team_id: 'team-other', version_id: 'v-9', scope: 'acme', slug: 'other', version: '2.0.0' }];
 
         await expect(
-            RealmTeamListService.sync_team('rlm_1', 'user-1', { scope: 'acme', slug: 'claims' }),
+            RealmTeamListService.sync_team('rlm_1', 'user-1', 'team-claims'),
         ).rejects.toThrow(/not on this realm's team list/i);
 
         expect(DispatchService.install_team).not.toHaveBeenCalled();
     });
 
     it('includes effective agent settings when present', async () => {
-        vi.mocked(Realm.findByPk).mockResolvedValue({
-            id: 'rlm_1',
-            team_list: [{ scope: 'acme', slug: 'claims' }],
-        } as any);
         vi.mocked(RealmAgentSetting.findAll).mockResolvedValue([
             { agent_name: 'cursor', setting_key: 'api_key', setting_value: 'sk-realm' },
         ] as any);
@@ -149,7 +157,7 @@ describe('RealmTeamListService.sync_team', () => {
         await RealmTeamListService.sync_team(
             'rlm_1',
             'user-1',
-            { scope: 'acme', slug: 'claims' },
+            'team-claims',
         );
 
         expect(DispatchService.install_team).toHaveBeenCalledWith(
@@ -161,16 +169,12 @@ describe('RealmTeamListService.sync_team', () => {
     });
 
     it('returns per-daemon failure when install throws', async () => {
-        vi.mocked(Realm.findByPk).mockResolvedValue({
-            id: 'rlm_1',
-            team_list: [{ scope: 'acme', slug: 'claims' }],
-        } as any);
         vi.mocked(DispatchService.install_team).mockRejectedValue(new Error('all offline'));
 
         const result = await RealmTeamListService.sync_team(
             'rlm_1',
             'user-1',
-            { scope: 'acme', slug: 'claims' },
+            'team-claims',
         );
 
         expect(result.daemon_results).toEqual([

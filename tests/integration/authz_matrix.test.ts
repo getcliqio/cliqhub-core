@@ -245,7 +245,6 @@ const MATRIX: Record<string, Row> = {
     'POST /v1/teams/get_versions': { expect: TEAM_PRIVATE },
     'POST /v1/teams/download': { expect: TEAM_PRIVATE },
     'POST /v1/teams/update': { expect: TEAM_PRIVATE },
-    'POST /v1/teams/rename': { expect: TEAM_PRIVATE },
     'POST /v1/teams/unpublish': { expect: TEAM_PRIVATE },
     'POST /v1/teams/delete': { expect: TEAM_PRIVATE },
     'POST /v1/teams/delete_version': { expect: TEAM_PRIVATE },

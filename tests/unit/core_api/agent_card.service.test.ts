@@ -3,7 +3,7 @@ import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 
 vi.mock('../../../src/models/index.js', () => ({
     Realm: { findOne: vi.fn() },
-    Team: { findOne: vi.fn() },
+    Team: { findOne: vi.fn(), findByPk: vi.fn() },
     TeamVersion: { findOne: vi.fn() },
 }));
 
@@ -12,6 +12,11 @@ vi.mock('../../../src/services/version_content.js', () => ({
     version_content: vi.fn(async () => null),
     latest_version_content: vi.fn(async () => null),
     version_contents: vi.fn(async () => new Map()),
+}));
+
+// The realm's teams come from their service (PLAN-team-bundle S4.1), each with the version the realm runs.
+vi.mock('../../../src/services/realm_team_list.service.js', () => ({
+    RealmTeamListService: { entries: vi.fn(async () => []) },
 }));
 
 vi.mock('../../../src/services/realm_a2a.service.js', () => ({
@@ -30,7 +35,10 @@ import { AgentCardService } from '../../../src/services/agent_card.service.js';
 import { Realm } from '../../../src/models/index.js';
 import { Team as HubTeam } from '../../../src/models/index.js';
 import { RealmA2aService } from '../../../src/services/realm_a2a.service.js';
-import { latest_version_content } from '../../../src/services/version_content.js';
+import { version_content } from '../../../src/services/version_content.js';
+import { RealmTeamListService } from '../../../src/services/realm_team_list.service.js';
+
+const entry = (slug: string, team_id: string, version_id: string) => ({ id: `rt-${slug}`, realm_id: 'r1', team_id, version_id, scope: 'cliq', slug, version: '1.0.0' });
 
 describe('AgentCardService', () => {
     beforeEach(() => {
@@ -44,14 +52,11 @@ describe('AgentCardService', () => {
             slug: 'acme',
             name: 'Acme',
             deleted: false,
-            team_list: [
-                { scope: 'cliq', slug: 'hello-world' },
-                { scope: 'cliq', slug: 'gone' },
-            ],
         } as any);
+        vi.mocked(RealmTeamListService.entries).mockResolvedValue([entry('hello-world', hub_legacy_uuid(10), 'v-hello'), entry('gone', hub_legacy_uuid(11), 'v-gone')]);
         vi.mocked(RealmA2aService.is_enabled).mockResolvedValue(true);
 
-        vi.mocked(HubTeam.findOne)
+        vi.mocked(HubTeam.findByPk)
             .mockResolvedValueOnce({
                 id: hub_legacy_uuid(10),
                 name: 'hello-world',
@@ -59,7 +64,8 @@ describe('AgentCardService', () => {
             } as any)
             .mockResolvedValueOnce(null as any);
 
-        vi.mocked(latest_version_content).mockResolvedValue({
+        // the version the realm runs, not the team's latest
+        vi.mocked(version_content).mockResolvedValue({
             version_id: 'v1', version: '1.0.0',
             inputs: [{ name: 'message', type: 'string' }],
             use_when: ['greeting'],
@@ -77,6 +83,7 @@ describe('AgentCardService', () => {
         ]);
         expect(card.skills[0].metadata.use_when).toEqual(['greeting']);
         expect(card.skills[1].id).toBe('notify_member');
+        expect(version_content).toHaveBeenCalledWith('v-hello');
     });
 
     it('returns 404 when A2A disabled', async () => {
@@ -85,7 +92,6 @@ describe('AgentCardService', () => {
             slug: 'acme',
             name: 'Acme',
             deleted: false,
-            team_list: [],
         } as any);
         vi.mocked(RealmA2aService.is_enabled).mockResolvedValue(false);
 
@@ -103,12 +109,12 @@ describe('AgentCardService', () => {
     });
 
     it('omits unresolved team but still includes notify_member', async () => {
-        vi.mocked(HubTeam.findOne).mockResolvedValue(null as any);
+        vi.mocked(HubTeam.findByPk).mockResolvedValue(null as any);
+        vi.mocked(RealmTeamListService.entries).mockResolvedValue([entry('missing', hub_legacy_uuid(12), 'v-missing')]);
         const card = await AgentCardService.build_for_realm({
             id: 'r1',
             slug: 'acme',
             name: 'Acme',
-            team_list: [{ scope: 'cliq', slug: 'missing' }],
         });
         expect(card.skills.map((s) => s.id)).toEqual(['notify_member']);
     });

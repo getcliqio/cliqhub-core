@@ -62,16 +62,15 @@ async function derived_kind(org_id: string, team: { scope: string | null; visibi
     return null;
 }
 
+/** The realms (live, of the org) whose list has the team. Through the list's service (PLAN-team-bundle S4.1). */
 async function realms_with(org_id: string, scope: string | null, name: string): Promise<Array<{ realm_id: string; slug: string }>> {
-    const rows = await get_sequelize().query<{ id: string; slug: string }>(
-        `SELECT r."id", r."slug" FROM cliq."realms" r
-          WHERE r."org_id" = $1 AND NOT r."deleted"
-            AND EXISTS (SELECT 1 FROM jsonb_array_elements(r."team_list") e
-                         WHERE e->>'slug' = $2 AND NULLIF(e->>'scope', '') IS NOT DISTINCT FROM $3)
-          ORDER BY r."slug"`,
-        { bind: [org_id, name, scope], type: QueryTypes.SELECT },
-    );
-    return rows.map((r) => ({ realm_id: r.id, slug: r.slug }));
+    const team = await Team.findOne({ where: { name, scope }, attributes: ['id'], raw: true }) as { id: string } | null;
+    if (!team) return [];
+    const { RealmTeamListService } = await import('./realm_team_list.service.js');
+    const ids = await RealmTeamListService.realms_with(team.id, org_id);
+    if (!ids.length) return [];
+    const realms = await Realm.findAll({ where: { id: ids, deleted: false }, attributes: ['id', 'slug'], order: [['slug', 'ASC']], raw: true }) as Array<{ id: string; slug: string }>;
+    return realms.map((r) => ({ realm_id: r.id, slug: r.slug }));
 }
 
 export class OrgTeamsService {
@@ -105,10 +104,13 @@ export class OrgTeamsService {
               ORDER BY x."ord", x."added_at" DESC NULLS LAST, t."name"`,
             { bind: [org_id], type: QueryTypes.SELECT },
         );
-        const realms = await get_sequelize().query<{ id: string; slug: string; team_list: Array<{ scope?: string; slug?: string }> }>(
-            `SELECT "id", "slug", "team_list" FROM cliq."realms" WHERE "org_id" = $1 AND NOT "deleted" ORDER BY "slug"`,
+        const realms = await get_sequelize().query<{ id: string; slug: string }>(
+            `SELECT "id", "slug" FROM cliq."realms" WHERE "org_id" = $1 AND NOT "deleted" ORDER BY "slug"`,
             { bind: [org_id], type: QueryTypes.SELECT },
         );
+        // Each realm's teams, through the list's service (PLAN-team-bundle S4.1).
+        const { RealmTeamListService } = await import('./realm_team_list.service.js');
+        const on_realm = await RealmTeamListService.entries_for(realms.map((x) => x.id));
         const seen = new Set<string>();
         return rows
             .filter((r) => !seen.has(r.team_id) && seen.add(r.team_id) && can_read_team(auth, r))
@@ -116,7 +118,7 @@ export class OrgTeamsService {
                 team_id: r.team_id, scope: r.scope, name: r.name, kind: r.kind, own: r.kind === 'own',
                 added_at: r.added_at ? new Date(r.added_at).toISOString() : null, added_by: r.added_by,
                 realms: realms
-                    .filter((x) => (x.team_list ?? []).some((e) => e.slug === r.name && (e.scope || null) === r.scope))
+                    .filter((x) => (on_realm.get(x.id) ?? []).some((e) => e.team_id === r.team_id))
                     .map((x) => ({ realm_id: x.id, slug: x.slug })),
             }));
     }
@@ -178,8 +180,8 @@ export class OrgTeamsService {
             : UUID_RE.test(team_id) ? await Team.findByPk(team_id, { raw: true }) : null) as unknown as TeamRow | null;
         if (!team) return;
         if (realm_id) {
-            const realm = await Realm.findByPk(realm_id, { attributes: ['team_list'], raw: true }) as { team_list: Array<{ scope?: string; slug?: string }> | null } | null;
-            if ((realm?.team_list ?? []).some((e) => e.slug === team.name && (e.scope || null) === team.scope)) return;
+            const { RealmTeamListService } = await import('./realm_team_list.service.js');
+            if (await RealmTeamListService.has(realm_id, team.id)) return;
         }
         if (!can_read_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
     }
@@ -192,11 +194,12 @@ export class OrgTeamsService {
      * @throws ApiError 404 when the caller can't see the team; 403 `team_not_in_org` when it isn't on the list
      */
     static async ensure_for_realm(auth: AuthContext, realm_id: string, scope: string, slug: string): Promise<void> {
-        const realm = await Realm.findByPk(realm_id, { attributes: ['org_id', 'team_list'], raw: true }) as { org_id: string | null; team_list: Array<{ scope?: string; slug?: string }> | null } | null;
+        const realm = await Realm.findByPk(realm_id, { attributes: ['org_id'], raw: true }) as { org_id: string | null } | null;
         const team = await find_team({ scope, slug });
         // An unknown team is refused by the team list itself.
         if (!team) return;
-        const on_realm = (realm?.team_list ?? []).some((e) => e.slug === slug && (e.scope || null) === (scope || null));
+        const { RealmTeamListService } = await import('./realm_team_list.service.js');
+        const on_realm = await RealmTeamListService.has(realm_id, team.id);
         if (!on_realm && !can_read_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
         if (!realm?.org_id) return;
         if (await derived_kind(realm.org_id, team)) return;

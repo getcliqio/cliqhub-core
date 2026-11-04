@@ -1,12 +1,12 @@
 import { RealmRepository } from '../repositories/realm_repository.js';
 import { TeamRepository } from '../repositories/team_repository.js';
-import { latest_version_content } from './version_content.js';
+import { version_content } from './version_content.js';
 
 const _realm_repo_ac = new RealmRepository();
 const _team_repo_ac = new TeamRepository();
 import { ApiError } from '../lib/api_error.js';
 import { RealmA2aService } from './realm_a2a.service.js';
-import type { TeamListEntry } from '../models/realm.model.js';
+import type { RealmTeamEntry } from './realm_team_list.service.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('svc.agent_card');
@@ -81,14 +81,12 @@ function parse_capability(raw: string | null | undefined): {
     }
 }
 
-async function skill_from_team_entry(entry: TeamListEntry): Promise<A2a_skill | null> {
-    const hub_team = await _team_repo_ac.find_one_q({
-        where: { scope: entry.scope, name: entry.slug },
-    });
+async function skill_from_team_entry(entry: RealmTeamEntry): Promise<A2a_skill | null> {
+    const hub_team = await _team_repo_ac.find_by_id(entry.team_id);
     if (!hub_team) return null;
 
-    // The latest version's inputs, from its files (PLAN-team-bundle S1.4b).
-    const latest = await latest_version_content(hub_team.id);
+    // The inputs of the version the realm runs, from its files (PLAN-team-bundle S1.4b, S4.1).
+    const latest = await version_content(entry.version_id);
     if (!latest) return null;
 
     const capability = parse_capability(JSON.stringify({ inputs: latest.inputs, use_when: latest.use_when, not_for: latest.not_for }));
@@ -145,10 +143,11 @@ export class AgentCardService {
         slug: string;
         name: string;
         org_id?: string;
-        team_list: TeamListEntry[];
     }): Promise<A2a_agent_card> {
         log.debug('build_for_realm', { realm_id: realm.id, realm_slug: realm.slug });
-        const team_list = realm.team_list ?? [];
+        // The realm's teams through their service (PLAN-team-bundle S4.1).
+        const { RealmTeamListService } = await import('./realm_team_list.service.js');
+        const team_list = await RealmTeamListService.entries(realm.id);
         const skills: A2a_skill[] = [];
 
         for (const entry of team_list) {

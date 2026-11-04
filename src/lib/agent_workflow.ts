@@ -279,10 +279,14 @@ export class AgentWorkflow {
     ): Promise<Map<string, OrgAgentUsageRef[]>> {
         const sq = sequelize ?? get_sequelize();
 
-        const realms = await sq.query<{ id: string; team_list: Array<{ scope: string; slug: string }> }>(
-            `SELECT id, team_list FROM cliq.realms WHERE org_id = :org_id AND deleted = false`,
+        // The org's live realms and their teams, through the realm list's service (PLAN-team-bundle S4.1).
+        const realm_rows = await sq.query<{ id: string }>(
+            `SELECT id FROM cliq.realms WHERE org_id = :org_id AND deleted = false`,
             { type: QueryTypes.SELECT, replacements: { org_id } },
         );
+        const { RealmTeamListService } = await import('../services/realm_team_list.service.js');
+        const listed = await RealmTeamListService.entries_for(realm_rows.map((r) => r.id));
+        const realms = realm_rows.map((r) => ({ id: r.id, team_list: (listed.get(r.id) ?? []).map((e) => ({ scope: e.scope, slug: e.slug })) }));
 
         const scopes = await sq.query<{ slug: string }>(
             `SELECT slug FROM cliq.scopes WHERE org_id = :org_id`,
@@ -320,7 +324,7 @@ export class AgentWorkflow {
         const all = await sq.query<{ team_id: string; id: string; version: string }>(
             `SELECT v.team_id, v.id, v.version
              FROM cliq.team_versions v
-             WHERE v.team_id IN (:team_ids) AND v.status = 'published'`,
+             WHERE v.team_id IN (:team_ids) AND v.status = 'published' AND v.withdrawn_at IS NULL`,
             { type: QueryTypes.SELECT, replacements: { team_ids } },
         );
         // Usage counts each team's latest version: read just those from their files (PLAN-team-bundle S1.4b).

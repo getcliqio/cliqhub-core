@@ -12,8 +12,7 @@
  *   POST /v1/teams/unpublish       — revert to draft
  *   POST /v1/teams/download        — fetch package for a version
  *   POST /v1/teams/delete          — soft-delete team
- *   POST /v1/teams/delete_version  — remove specific version
- *   POST /v1/teams/rename          — rename within scope
+ *   POST /v1/teams/delete_version  — withdraw a version (number kept)
  *   POST /v1/teams/build           — AI builder actions (generate/validate/suggest/chat)
  *   POST /v1/teams/install         — fan-out install (daemon_ids XOR realm_id)
  *   POST /v1/teams/uninstall       — fan-out uninstall (daemon_id/daemon_ids XOR realm_id)
@@ -42,7 +41,7 @@ const _scope_repo_tc = new ScopeRepository();
 import type { TeamsService } from '../services/teams_service.js';
 import type { BuilderService } from '../services/builder_service.js';
 import type { ApiOkResponse, ApiRequest, PagedData } from '../types/api_response.js';
-import type { TeamData, TeamMutationData, TeamRenameData, TeamsGetVersionsData, TeamsGetPhasesData, TeamsInstallData, TeamsUninstallData } from '../schemas/team_types.js';
+import type { TeamData, TeamMutationData, TeamsGetVersionsData, TeamsGetPhasesData, TeamsInstallData, TeamsUninstallData } from '../schemas/team_types.js';
 import {
     TeamsGetInput,
     TeamsGetByIdInput,
@@ -55,7 +54,6 @@ import {
     TeamsDownloadInput,
     TeamsDeleteTeamInput,
     TeamsDeleteVersionInput,
-    TeamsRenameInput,
     TeamsInstallInput,
     TeamsUninstallInput,
     TEAM_CATALOG_SORT_KEYS,
@@ -208,6 +206,8 @@ export class TeamsController extends BaseController {
                 label: r.label,
                 scope: r.scope,
                 version: r.version,
+                // The realm's version, by id (PLAN-team-bundle S4.1): "Update them" re-installs it.
+                version_id: r.version_id,
                 origin: r.origin,
                 in_team_list: r.in_team_list,
                 installed_daemon_ids: r.installed_daemon_ids,
@@ -328,8 +328,7 @@ export class TeamsController extends BaseController {
     }
 
     /**
-     * Update draft manifest / description. Auto patch-bumps semver;
-     * pass `bump: minor|major` for larger increments.
+     * Change a team's description, or discard a draft.
      *
      * @param req - Body: {@link TeamsUpdateInput}
      * @param res - `{ ok: true, data: TeamMutationData }`
@@ -464,36 +463,20 @@ export class TeamsController extends BaseController {
     }
 
     /**
-     * Remove a specific published version. The team record is kept.
+     * Withdraw a published version (PLAN-team-bundle S2): hidden from "latest", lists and installs by name, still
+     * readable by id; its number can't be published again. The team record is kept.
      *
      * @param req - Body: {@link TeamsDeleteVersionInput}
-     * @param res - `{ ok: true, data: { deleted: boolean, version: string } }` — echoes removed version
+     * @param res - `{ ok: true, data: { withdrawn: true, version: string } }`
      */
     async delete_version(
-        req: ApiRequest<TeamsDeleteVersionInput, { deleted: boolean; version: string }>,
-        res: ApiOkResponse<{ deleted: boolean; version: string }>,
+        req: ApiRequest<TeamsDeleteVersionInput, { withdrawn: boolean; version: string }>,
+        res: ApiOkResponse<{ withdrawn: boolean; version: string }>,
     ): Promise<void> {
         log.debug('delete_version', { user_id: req.auth?.user?.id });
         const body = this.parse_body(TeamsDeleteVersionInput, req);
         const result = await this._teams_service.delete_version(req.auth!, body);
-        log.info('team_version_deleted', { scope: body.scope, name: body.name, version: body.version });
-        this.ok(res, result);
-    }
-
-    /**
-     * Rename a team within its scope. The old name is freed immediately.
-     *
-     * @param req - Body: {@link TeamsRenameInput}
-     * @param res - `{ ok: true, data: TeamRenameData }`
-     */
-    async rename(
-        req: ApiRequest<TeamsRenameInput, TeamRenameData>,
-        res: ApiOkResponse<TeamRenameData>,
-    ): Promise<void> {
-        log.debug('rename', { user_id: req.auth?.user?.id });
-        const body = this.parse_body(TeamsRenameInput, req);
-        const result = await this._teams_service.rename_team(req.auth!, body);
-        log.info('team_renamed', { scope: body.scope, name: body.name, new_name: body.new_name });
+        log.info('team_version_withdrawn', { scope: body.scope, name: body.name, version: body.version });
         this.ok(res, result);
     }
 

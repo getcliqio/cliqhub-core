@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
     normalize_tags,
-    compute_next_version,
     workflow_from_team_yml,
     enrich_required_inputs,
     dependencies_problems,
@@ -11,19 +10,6 @@ describe('normalize_tags', () => {
     it('normalizes, dedupes empties, and caps length/count', () => {
         expect(normalize_tags(['  Hello_World  ', 'AI!!', '', 'x'.repeat(60), 1 as unknown as string]))
             .toEqual(['hello-world', 'ai']);
-    });
-});
-
-describe('compute_next_version', () => {
-    it('starts at 1.0.0 when current is missing or invalid', () => {
-        expect(compute_next_version(null, 'patch')).toBe('1.0.0');
-        expect(compute_next_version('not-semver', 'minor')).toBe('1.0.0');
-    });
-
-    it('bumps major minor and patch', () => {
-        expect(compute_next_version('1.2.3', 'major')).toBe('2.0.0');
-        expect(compute_next_version('1.2.3', 'minor')).toBe('1.3.0');
-        expect(compute_next_version('1.2.3', 'patch')).toBe('1.2.4');
     });
 });
 

@@ -17,8 +17,10 @@ import type { Request, Response } from 'express';
 
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
+import { publish_version } from './helpers/version_files.js';
 import { Daemon, DaemonTeam, Realm, RealmMember, Scope, Team, TeamVersion } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
+import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
 import { TeamsService } from '../../src/services/teams_service.js';
 import { TeamsController } from '../../src/controllers/teams_controller.js';
@@ -43,6 +45,8 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
     let alpha_id: string;      // published, installed on d1
     let beta_id: string;       // published, on the roster, on no daemon
     let alpha_dt_id: string;   // alpha's daemon_teams row on d1
+    let gamma_dt_id: string;   // gamma's daemon_teams row on d2 (a CLI team)
+    const version_of: Record<string, string> = {};  // name@version → version id
     const mock_enqueue = vi.fn().mockResolvedValue({ tx_id: 'tx' });
 
     const teams_controller = () => new TeamsController(new TeamsService(
@@ -86,12 +90,9 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
                 id: randomUUID(), name, scope: scope_slug, description: `${name} team`,
                 author_id: user_id, license: 'MIT', visibility: 'public', listed, install_count: 0,
             } as any);
+            // Each version's use_when / not_for / inputs are in its team.yml.
             for (const [version, capability] of Object.entries(versions)) {
-                await TeamVersion.create({
-                    id: randomUUID(), team_id: team.id, version, changelog: '', package_path: '/tmp/x.zip',
-                    workflow_json: JSON.stringify({ phases: [] }), manifest_yaml: '', readme: '',
-                    capability_json: JSON.stringify(capability), agents_json: '{}', roles_json: '[]', tools: '[]', published_at: new Date(),
-                } as any);
+                version_of[`${name}@${version}`] = await publish_version(team.id, version, { name: `@${scope_slug}/${name}`, ...(capability as object), phases: [] });
             }
             return team.id;
         };
@@ -110,14 +111,10 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
 
         const realm = await RealmService.create(user_id, uid().slice(0, 40), 'Coverage Realm');
         realm_id = realm.id;
-        await Realm.update(
-            { team_list: [
-                { scope: scope_slug, slug: 'alpha', version: '1.0.0' },
-                { scope: scope_slug, slug: 'beta' },
-                { scope: scope_slug, slug: 'gamma' },
-            ] } as any,
-            { where: { id: realm_id } },
-        );
+        // The realm runs alpha at 1.0.0 and beta at its latest (realm_teams, PLAN-team-bundle S4.1). gamma was never
+        // published, so it can't be on the realm's list: it shows up because a daemon has it (a CLI team).
+        await RealmTeamListService.add(realm_id, user_id, { team_id: alpha_id, version_id: version_of['alpha@1.0.0'] });
+        await RealmTeamListService.add(realm_id, user_id, { team_id: beta_id });
 
         d1 = uid();
         d2 = uid();
@@ -135,6 +132,10 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
             manifest: 'name: alpha\n', dockerfile: null, dependencies: null, created_at: Date.now(), updated_at: Date.now(),
         });
         alpha_dt_id = dt.id;
+        gamma_dt_id = (await DaemonTeam.create({
+            id: randomUUID(), daemon_id: d2, scope_id, slug: 'gamma', version: '0.1.0', description: null,
+            manifest: 'name: gamma\n', dockerfile: null, dependencies: null, created_at: Date.now(), updated_at: Date.now(),
+        })).id;
     });
 
     afterAll(async () => {
@@ -154,7 +155,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
         const by = Object.fromEntries(rows.map((r) => [r.slug, r]));
 
         expect(by.alpha).toMatchObject({
-            scope: scope_slug, origin: 'hub', team_id: alpha_id,
+            scope: scope_slug, origin: 'hub', team_id: alpha_id, version_id: version_of['alpha@1.0.0'],
             sample_team_id: alpha_dt_id, installed_daemon_ids: [d1], in_team_list: true,
         });
         // On the roster, on no daemon: still installable by its catalog id.
@@ -162,8 +163,8 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
             scope: scope_slug, origin: 'hub', team_id: beta_id,
             sample_team_id: null, installed_daemon_ids: [],
         });
-        // Never published: nothing to install from.
-        expect(by.gamma).toMatchObject({ scope: scope_slug, origin: 'cli', team_id: null, sample_team_id: null });
+        // Never published, on a daemon only: no catalog id, not on the realm's list.
+        expect(by.gamma).toMatchObject({ scope: scope_slug, origin: 'cli', team_id: null, version_id: null, sample_team_id: gamma_dt_id, in_team_list: false });
     });
 
     it('rows say when to use a team: the realm version\'s use_when / not_for, required inputs, description', async () => {
@@ -187,7 +188,8 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
     it('teams/get realm mode: rows carry scope and the catalog id', async () => {
         const data = await call('get', { realm_id });
         const by = Object.fromEntries(data.items.map((t: any) => [t.slug, t]));
-        expect(by.alpha).toMatchObject({ id: alpha_id, scope: scope_slug, origin: 'hub' });
+        // The realm's version by id: what "Update them" sends back to realms/add_team.
+        expect(by.alpha).toMatchObject({ id: alpha_id, scope: scope_slug, origin: 'hub', version_id: version_of['alpha@1.0.0'] });
         expect(by.beta).toMatchObject({ id: beta_id, scope: scope_slug, origin: 'hub' });
         expect(by.gamma.id).toBeUndefined();
         expect(by.gamma.scope).toBe(scope_slug);
