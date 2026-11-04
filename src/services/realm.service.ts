@@ -1872,6 +1872,8 @@ export class RealmService {
             online_stale: number | null;
             /** Unpinned sub-teams with a newer published version than the realm's tree has (S8); null off the list. */
             sub_team_updates: number | null;
+            /** The realm's installed tree of this team (S9): every call, at any depth, with its version; empty off the list. */
+            sub_teams: Array<{ parent_version_id: string; ref: string; team_id: string; version_id: string; version: string }>;
             /** Daemons (any status) that have the realm's version installed; empty for a team not on the list. */
             current_daemon_ids: string[];
             sample_team_id: string | null;
@@ -1906,6 +1908,8 @@ export class RealmService {
         const realm_version_ids = new Map(team_list.map((e) => [`${e.scope}/${e.slug}`, e.version_id]));
         const updates_by_team = await RealmTeamListService.sub_team_updates(params.realm_id);
         const sub_team_updates = new Map(team_list.map((e) => [`${e.scope}/${e.slug}`, updates_by_team.get(e.team_id) ?? 0]));
+        const trees_by_team = await RealmTeamListService.installed_trees(params.realm_id);
+        const installed_trees = new Map(team_list.map((e) => [`${e.scope}/${e.slug}`, trees_by_team.get(e.team_id) ?? []]));
 
         // Daemons in realm — online count is the denominator for coverage.
         // Even with zero daemons we still surface realm.team_list rows below
@@ -2192,6 +2196,7 @@ export class RealmService {
                 version_id: realm_version_ids.get(key) ?? null,
                 online_stale,
                 sub_team_updates: sub_team_updates.get(key) ?? null,
+                sub_teams: installed_trees.get(key) ?? [],
                 current_daemon_ids: realm_version ? [...r.installed_daemon_ids].filter((d) => r.daemon_versions.get(d) === realm_version) : [],
                 sample_team_id: r.sample_team_id,
                 team_id: registry_id_by_key.get(key) ?? null,

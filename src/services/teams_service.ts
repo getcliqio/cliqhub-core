@@ -510,6 +510,8 @@ export class TeamsService {
             version_id: ver_row?.id ?? null,
             versions, roles,
             sub_teams,
+            /** Teams whose latest version calls this one, that the caller can read (S9). */
+            used_by: await this.used_by(auth, team.id),
             workflow: content?.workflow ?? { phases: [] },
             agents: content?.agents ?? {},
             readme: content?.readme ?? '', cliq_version: content?.cliq_version ?? null, tools: content?.tools ?? [],
@@ -1301,6 +1303,41 @@ export class TeamsService {
      * phases, version count, last update and fork count. One query per kind of
      * detail, not per team.
      */
+    /**
+     * The sub-team calls of each team's latest published version (PLAN-team-bundle S9: the Teams lists as trees).
+     *
+     * @param team_ids - The listed teams.
+     * @returns Team id → its latest version's calls (teams without any aren't in the map).
+     */
+    async latest_sub_teams(team_ids: string[]): Promise<Map<string, Array<{ phase: string; ref: string; team_id: string | null; pinned_version_id: string | null; may_call: boolean }>>> {
+        const latest = await this._version_repo.find_latest_refs(team_ids);
+        const team_of = new Map([...latest].map(([team_id, v]) => [v.id, team_id]));
+        const out = new Map<string, Array<{ phase: string; ref: string; team_id: string | null; pinned_version_id: string | null; may_call: boolean }>>();
+        for (const r of await this._sub_team_repo.list_by_versions([...team_of.keys()])) {
+            const team_id = team_of.get(r.version_id)!;
+            out.set(team_id, [...(out.get(team_id) ?? []), { phase: r.phase, ref: r.ref, team_id: r.team_id, pinned_version_id: r.pinned_version_id, may_call: r.may_call }]);
+        }
+        return out;
+    }
+
+    /**
+     * The teams whose latest published version calls this one, that the caller can read (S9 "used by").
+     *
+     * @param auth - The caller.
+     * @param team_id - The called team.
+     */
+    async used_by(auth: AuthContext, team_id: string): Promise<Array<{ id: string; scope: string | null; name: string; latest_version: string }>> {
+        const callers = await this._sub_team_repo.callers_of(team_id);
+        const latest = await this._version_repo.find_latest_refs([...new Set(callers.map((c) => c.team_id))]);
+        const out: Array<{ id: string; scope: string | null; name: string; latest_version: string }> = [];
+        for (const [caller_id, v] of latest) {
+            if (!callers.some((c) => c.team_id === caller_id && c.version_id === v.id)) continue;
+            const team = await this._team_repo.find_by_id(caller_id);
+            if (team && can_read_team(auth, team)) out.push({ id: team.id, scope: team.scope, name: team.name, latest_version: v.version });
+        }
+        return out.sort((a, b) => `${a.scope}/${a.name}`.localeCompare(`${b.scope}/${b.name}`));
+    }
+
     async catalog_details(rows: Array<{ id: string; latest_version: string | null; scope: string | null }>): Promise<Map<string, {
         phases: Array<{ name: string; type: string | null; agent: string | null }>;
         version_count: number; updated_at?: number; fork_count: number;

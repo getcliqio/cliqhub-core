@@ -177,6 +177,7 @@ function make_version_repo() {
         find_highest_version: vi.fn(),
         withdraw: vi.fn().mockResolvedValue(true),
         find_latest_ref: vi.fn().mockResolvedValue(null),
+        find_latest_refs: vi.fn().mockResolvedValue(new Map()),
         list_by_team_id: vi.fn().mockResolvedValue([]),
         create: vi.fn().mockResolvedValue(NEW_VERSION_ID),
         update_package_path: vi.fn().mockResolvedValue(undefined),
@@ -278,6 +279,9 @@ function make_sub_team_repo() {
         rows,
         list_by_version: vi.fn(async (version_id: string) => rows.filter((r) => r.version_id === version_id)),
         create_many: vi.fn(async (add: Array<Record<string, unknown>>) => { rows.push(...add); }),
+        list_by_versions: vi.fn(async (ids: string[]) => rows.filter((r) => ids.includes(r.version_id as string))),
+        /** Callers by version: S9's "used by" (the versions here are owned by `owner_of`). */
+        callers_of: vi.fn(async (team_id: string) => rows.filter((r) => r.team_id === team_id).map((r) => ({ version_id: r.version_id as string, team_id: (r.owner as string) ?? 'unknown' }))),
     };
 }
 
@@ -605,6 +609,32 @@ describe('TeamsService — get_by_id', () => {
         built.version_repo.find_by_team_and_version.mockResolvedValueOnce({ id: V, team_id: PUBLIC_TEAM.id, version: '1.0.0' });
         const result = await built.service.get_by_id(ALICE, { name: 'my-team', scope: 'alice' });
         expect(result.sub_teams).toEqual([{ phase: 'a', ref: '@alice/leaf@1.0.0', team_id: 'leaf-id', pinned_version_id: 'v1', may_call: false }]);
+    });
+
+    it('used_by: teams whose latest version calls this one, that the caller can read; an older version calling it doesn\'t count (S9)', async () => {
+        const sub_teams = make_sub_team_repo();
+        const built = build_service({ sub_team_repo: sub_teams });
+        const LEAF = { ...PUBLIC_TEAM, id: hub_legacy_uuid(80), name: 'leaf' };
+        const CALLER = { ...PUBLIC_TEAM, id: hub_legacy_uuid(81), name: 'caller' };
+        const OLD = { ...PUBLIC_TEAM, id: hub_legacy_uuid(82), name: 'old-caller' };
+        const HIDDEN = { ...PRIVATE_TEAM, id: hub_legacy_uuid(83), name: 'hidden-caller' };
+        sub_teams.rows.push(
+            { version_id: 'caller-v2', owner: CALLER.id, team_id: LEAF.id, ref: '@alice/leaf', phase: 'a', position: 0 },
+            { version_id: 'old-v1', owner: OLD.id, team_id: LEAF.id, ref: '@alice/leaf', phase: 'a', position: 0 },
+            { version_id: 'hidden-v1', owner: HIDDEN.id, team_id: LEAF.id, ref: '@alice/leaf', phase: 'a', position: 0 },
+        );
+        built.version_repo.find_latest_refs.mockResolvedValue(new Map([[CALLER.id, { id: 'caller-v2', version: '2.0.0' }], [OLD.id, { id: 'old-v2', version: '2.0.0' }], [HIDDEN.id, { id: 'hidden-v1', version: '1.0.0' }]]));
+        built.team_repo.find_by_id.mockImplementation(async (id: string) => [CALLER, OLD, HIDDEN].find((t) => t.id === id) ?? null);
+        expect(await built.service.used_by(BOB, LEAF.id)).toEqual([{ id: CALLER.id, scope: 'alice', name: 'caller', latest_version: '2.0.0' }]);
+    });
+
+    it('latest_sub_teams: each team\'s latest published version\'s calls (S9)', async () => {
+        const sub_teams = make_sub_team_repo();
+        const built = build_service({ sub_team_repo: sub_teams });
+        sub_teams.rows.push({ version_id: 'top-v2', position: 0, phase: 'a', ref: '@alice/leaf@1.0.0', team_id: 'leaf', pinned_version_id: 'leaf-v1', may_call: false });
+        built.version_repo.find_latest_refs.mockResolvedValue(new Map([['top', { id: 'top-v2', version: '2.0.0' }], ['solo', { id: 'solo-v1', version: '1.0.0' }]]));
+        const calls = await built.service.latest_sub_teams(['top', 'solo']);
+        expect(Object.fromEntries(calls)).toEqual({ top: [{ phase: 'a', ref: '@alice/leaf@1.0.0', team_id: 'leaf', pinned_version_id: 'leaf-v1', may_call: false }] });
     });
 
     it('returns not_found for missing team', async () => {

@@ -214,6 +214,8 @@ export class TeamsController extends BaseController {
                 online_stale: r.online_stale,
                 // Unpinned sub-teams with a newer published version than the realm's tree (S8).
                 sub_team_updates: r.sub_team_updates,
+                // The realm's installed tree (S9).
+                sub_teams: r.sub_teams,
                 current_daemon_ids: r.current_daemon_ids,
                 missing_agents: r.missing_agents,
                 last_run_at: r.last_run_at,
@@ -248,6 +250,10 @@ export class TeamsController extends BaseController {
             if (body.with_workflow && !body.mine) {
                 const extra = await this._teams_service.catalog_details(items.map((t) => ({ id: t.id ?? '', latest_version: t.latest_version ?? null, scope: t.scope })));
                 items = items.map((t) => ({ ...t, ...(extra.get(t.id ?? '') ?? {}) }));
+            }
+            if (body.with_sub_teams) {
+                const calls = await this._teams_service.latest_sub_teams(items.map((t) => t.id ?? '').filter(Boolean));
+                items = items.map((t) => ({ ...t, sub_teams: calls.get(t.id ?? '') ?? [] }));
             }
             this.ok(res, { items, total: r.total ?? items.length, offset, limit });
             return;

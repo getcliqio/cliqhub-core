@@ -94,6 +94,8 @@ export const TeamsGetInput = z.object({
     with_workflow: z.boolean().optional()
         .describe('Catalog mode: also return each team\'s latest workflow (phase name, type, agent), number of versions, '
             + 'last update and fork count'),
+    with_sub_teams: z.boolean().optional()
+        .describe('List modes: also return the sub-teams each team\'s latest published version calls (`sub_teams`, PLAN-team-bundle S9)'),
 });
 export type TeamsGetInput = z.infer<typeof TeamsGetInput>;
 
@@ -403,6 +405,17 @@ export const TeamData = z.object({
         .describe('Human-readable coverage summary (e.g. "2/3 daemons")'),
     online_stale: z.number().int().nullable().optional()
         .describe('Realm mode: online daemons not on the realm\'s version of this team (older, or not installed); null when the team isn\'t on the realm\'s list'),
+    sub_teams: z.array(z.object({
+        phase: z.string().optional().describe('The calling phase (list modes)'),
+        ref: z.string().describe('The ref as written: `@acme/leaf` or `@acme/leaf@1.0.0`'),
+        team_id: z.string().nullable().describe('The called team; null when it isn\'t on CliqHub'),
+        pinned_version_id: z.string().nullable().optional().describe('The pinned version (list modes); null for the latest'),
+        may_call: z.boolean().optional().describe('From a dynamic map\'s `teams:` list (list modes)'),
+        parent_version_id: z.string().optional().describe('Realm mode: the calling version in the installed tree'),
+        version_id: z.string().optional().describe('Realm mode: the version installed'),
+        version: z.string().optional().describe('Realm mode: that version\'s number'),
+    })).optional()
+        .describe('List modes with `with_sub_teams`: the calls of the team\'s latest published version. Realm mode: the realm\'s installed tree (every call, at any depth) — PLAN-team-bundle S9'),
     sub_team_updates: z.number().int().nullable().optional()
         .describe('Realm mode: sub-teams this team calls without a pinned version that have a newer published version than the one the realm resolved (PLAN-team-bundle S8); null when the team isn\'t on the realm\'s list'),
     current_daemon_ids: z.array(z.string()).optional()

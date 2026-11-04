@@ -1,5 +1,5 @@
 import type { Transaction } from 'sequelize';
-import { Op } from 'sequelize';
+import { Op, QueryTypes } from 'sequelize';
 import { TeamVersionSubTeam } from '../models/index.js';
 import { BaseRepository } from './base_repository.js';
 
@@ -33,6 +33,16 @@ export class TeamVersionSubTeamRepository extends BaseRepository<TeamVersionSubT
             raw: true,
         });
         return rows as unknown as SubTeamRow[];
+    }
+
+    /** The versions that call a team (any team, any version): who might use it (S9 "used by"). */
+    async callers_of(team_id: string): Promise<Array<{ version_id: string; team_id: string }>> {
+        const rows = await TeamVersionSubTeam.sequelize!.query(
+            `SELECT DISTINCT s."version_id", v."team_id" FROM cliq."team_version_sub_teams" s
+             JOIN cliq."team_versions" v ON v."id" = s."version_id" AND v."status" = 'published' WHERE s."team_id" = :team_id`,
+            { type: QueryTypes.SELECT, replacements: { team_id } },
+        );
+        return rows as Array<{ version_id: string; team_id: string }>;
     }
 
     /** Record a version's calls (at publish). */

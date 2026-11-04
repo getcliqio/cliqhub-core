@@ -325,6 +325,19 @@ export class RealmTeamListService {
         return counts;
     }
 
+    /**
+     * Each realm team's installed tree (S9: the realm's Teams page shows it as a tree): its calls, in order.
+     *
+     * @returns Catalog team id → its tree's calls (teams with no sub-teams aren't in the map).
+     */
+    static async installed_trees(realm_id: string): Promise<Map<string, Array<RealmTeamTreeRow & { version: string }>>> {
+        const out = new Map<string, Array<RealmTeamTreeRow & { version: string }>>();
+        for (const { root_team_id, ...row } of await _realm_team_repo.realm_trees(realm_id)) {
+            out.set(root_team_id, [...(out.get(root_team_id) ?? []), row]);
+        }
+        return out;
+    }
+
     /** Whether a daemon may download a version as part of a realm team's tree it has installed (S8). */
     static async in_daemon_tree(daemon_id: string, version_id: string): Promise<boolean> {
         return _realm_team_repo.in_daemon_tree(daemon_id, version_id);
