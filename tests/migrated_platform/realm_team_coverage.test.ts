@@ -205,7 +205,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
         });
         expect(result.results).toEqual([expect.objectContaining({ daemon_id: d2, ok: true })]);
         // Catalog ids only (S4.2): the daemon downloads the realm's version and gets its row id back.
-        expect(mock_enqueue).toHaveBeenCalledWith(d2, '/v1/install', { team_id: beta_id, version_id: version_of['beta@1.0.0'], agent_settings: undefined });
+        expect(mock_enqueue).toHaveBeenCalledWith(d2, '/v1/install', { team_id: beta_id, version_id: version_of['beta@1.0.0'], tree: [], agent_settings: undefined });
         const row = await DaemonTeam.findOne({ where: { daemon_id: d2, team_id: beta_id }, raw: true }) as any;
         expect(row).toMatchObject({ realm_team_id: (await RealmTeamListService.find(realm_id, beta_id))!.id, version: '1.0.0' });
     });
@@ -216,7 +216,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
             team_id: alpha_dt_id, daemon_ids: [d2], user_id, org_ids: [],
         });
         expect(result.results[0].ok).toBe(true);
-        expect(mock_enqueue).toHaveBeenCalledWith(d2, '/v1/install', { team_id: alpha_id, version_id: version_of['alpha@1.0.0'], agent_settings: undefined });
+        expect(mock_enqueue).toHaveBeenCalledWith(d2, '/v1/install', { team_id: alpha_id, version_id: version_of['alpha@1.0.0'], tree: [], agent_settings: undefined });
     });
 
     it('site-admin listed / scope filters return the teams with version_count', async () => {

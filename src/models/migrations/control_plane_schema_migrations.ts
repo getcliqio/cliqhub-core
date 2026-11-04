@@ -1221,10 +1221,14 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "team_id" UUID`);
     await run(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "realm_team_id" UUID`);
     await run(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "version_id" UUID`);
+    // A sub-team that came with a realm team's tree (PLAN-team-bundle S8): installed with that realm team, not as
+    // one of the realm's own.
+    await run(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "via_realm_team_id" UUID`);
     for (const [name, column, ref] of [
         ['daemon_teams_team_fk', 'team_id', 'teams'],
         ['daemon_teams_realm_team_fk', 'realm_team_id', 'realm_teams'],
         ['daemon_teams_version_fk', 'version_id', 'team_versions'],
+        ['daemon_teams_via_realm_team_fk', 'via_realm_team_id', 'realm_teams'],
     ] as const) {
         await run(`
             DO $$ BEGIN
@@ -1234,11 +1238,13 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
                 END IF;
             END $$`);
     }
-    // When its realm team goes (removed from the realm, realm deleted), the row is uninstalled, not left live.
+    // When its realm team goes (removed from the realm, realm deleted) — and, for a sub-team, the realm team it came
+    // with (S8) — the row is uninstalled, not left live.
     await run(`
         CREATE OR REPLACE FUNCTION cliq.daemon_teams_realm_team_gone() RETURNS trigger AS $$
         BEGIN
-            IF NEW."realm_team_id" IS NULL AND OLD."realm_team_id" IS NOT NULL AND NEW."uninstalled_at" IS NULL THEN
+            IF NEW."realm_team_id" IS NULL AND NEW."via_realm_team_id" IS NULL
+               AND (OLD."realm_team_id" IS NOT NULL OR OLD."via_realm_team_id" IS NOT NULL) AND NEW."uninstalled_at" IS NULL THEN
                 NEW."uninstalled_at" := (extract(epoch FROM now()) * 1000)::bigint;
                 NEW."updated_at" := NEW."uninstalled_at";
             END IF;
@@ -1246,8 +1252,19 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
         END $$ LANGUAGE plpgsql`);
     await run(`DROP TRIGGER IF EXISTS "daemon_teams_realm_team_gone" ON cliq."daemon_teams"`);
     await run(`
-        CREATE TRIGGER "daemon_teams_realm_team_gone" BEFORE UPDATE OF "realm_team_id" ON cliq."daemon_teams"
+        CREATE TRIGGER "daemon_teams_realm_team_gone" BEFORE UPDATE OF "realm_team_id", "via_realm_team_id" ON cliq."daemon_teams"
         FOR EACH ROW EXECUTE FUNCTION cliq.daemon_teams_realm_team_gone()`);
+    // A live row has its realm team, or (S8) the realm team it came with. The CHECK itself is first added by the
+    // one-time re-key (daemon_teams_to_realm_teams); a database that has the older one gets this one instead.
+    await run(`
+        DO $$ BEGIN
+            IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'daemon_teams_live_has_realm_team'
+                       AND pg_get_constraintdef(oid) NOT LIKE '%via_realm_team_id%') THEN
+                ALTER TABLE cliq."daemon_teams" DROP CONSTRAINT "daemon_teams_live_has_realm_team";
+                ALTER TABLE cliq."daemon_teams" ADD CONSTRAINT "daemon_teams_live_has_realm_team"
+                    CHECK ("uninstalled_at" IS NOT NULL OR "realm_team_id" IS NOT NULL OR "via_realm_team_id" IS NOT NULL);
+            END IF;
+        END $$`);
     // One live row per (daemon, catalog team); the old (daemon, scope, slug, version) unique index goes.
     await run(`
         DO $$ DECLARE i record; BEGIN

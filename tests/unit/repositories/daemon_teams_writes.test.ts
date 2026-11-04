@@ -1,7 +1,8 @@
 /**
- * A daemon's team rows are written in one place (PLAN-team-bundle S4.2): `TeamService.install_slot`, when the hub
- * installs a realm team onto a daemon. Nothing else creates `daemon_teams` rows, so Core never takes an id from a
- * daemon and never records a team that isn't a realm team.
+ * A daemon's team rows are written in two places: `TeamService.install_slot`, when the hub installs a realm team onto
+ * a daemon (PLAN-team-bundle S4.2), and `TeamService.install_tree_slots`, for the sub-teams that realm team's tree
+ * brings (S8). Nothing else creates `daemon_teams` rows, so Core never takes an id from a daemon and never records a
+ * team that didn't come from the realm.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -31,7 +32,7 @@ const CREATES: Array<[string, RegExp]> = [
     ['INSERT INTO daemon_teams', /INSERT\s+INTO\s+(?:cliq\.)?"?daemon_teams"?/i],
 ];
 
-describe('daemon_teams rows are created only by TeamService.install_slot', () => {
+describe('daemon_teams rows are created only by TeamService.install_slot / install_tree_slots', () => {
     it('no other code creates a row', () => {
         const offenders = sources(SRC)
             .filter((file) => !OWNERS.has(relative(SRC, file).split('\\').join('/')))
@@ -47,14 +48,17 @@ describe('daemon_teams rows are created only by TeamService.install_slot', () =>
         expect(offenders).toEqual([]);
     });
 
-    it('the slot service creates rows in install_slot only', () => {
+    it('the slot service creates rows in install_slot and install_tree_slots only', () => {
         const text = readFileSync(join(SRC, 'services/teams_install_service.ts'), 'utf8');
         const creates = [...text.matchAll(/_dt_repo_ti\.create_one\(/g)].length;
-        expect(creates).toBe(1);
-        const install_slot = text.slice(text.indexOf('static async install_slot('), text.indexOf('static async register_from_daemon('));
+        expect(creates).toBe(2);
+        const install_slot = text.slice(text.indexOf('static async install_slot('), text.indexOf('static async install_tree_slots('));
+        const tree_slots = text.slice(text.indexOf('static async install_tree_slots('), text.indexOf('static async register_from_daemon('));
         expect(install_slot).toContain('_dt_repo_ti.create_one(');
+        expect(tree_slots).toContain('_dt_repo_ti.create_one(');
         // The id is Core's, never one the caller passes in.
         expect(install_slot).toMatch(/const id = randomUUID\(\)/);
+        expect(tree_slots).toMatch(/create_one\(\{ id: randomUUID\(\)/);
     });
 
     it('the guard sees a create (each pattern matches what it is meant to)', () => {

@@ -153,6 +153,45 @@ export class TeamService {
     }
 
     /**
+     * The sub-teams a realm team's tree brings to a daemon (PLAN-team-bundle S8): each gets a daemon_teams row like a
+     * realm team's — the id the daemon keeps, the id its runs carry — tied to the realm team it came with
+     * (`via_realm_team_id`). A team the daemon already has (on the realm itself, or from another tree) keeps its
+     * row; one uninstalled before gets its id back. One row per team: its versions in the tree are stamped per run.
+     *
+     * @param daemon_id - The daemon.
+     * @param realm_team_id - The realm team whose tree this is.
+     * @param tree - The tree's calls (team and version each).
+     */
+    static async install_tree_slots(daemon_id: string, realm_team_id: string, tree: ReadonlyArray<{ team_id: string; version_id: string }>): Promise<void> {
+        const { TeamRepository } = await import('../repositories/team_repository.js');
+        const { TeamVersionRepository } = await import('../repositories/team_version_repository.js');
+        const teams = new TeamRepository();
+        const versions = new TeamVersionRepository();
+        const now = Date.now();
+        const firsts = new Map<string, string>(); // team → its first version in the tree
+        for (const node of tree) if (!firsts.has(node.team_id)) firsts.set(node.team_id, node.version_id);
+        for (const [team_id, version_id] of firsts) {
+            const live = await _dt_repo_ti.find_one_q({ where: { daemon_id, team_id } });
+            if (live) {
+                if (!live.realm_team_id && !live.via_realm_team_id) await live.update({ via_realm_team_id: realm_team_id, updated_at: now } as any);
+                continue;
+            }
+            const team = await teams.find_by_id(team_id);
+            const scope = team?.scope ? await _scope_repo_ti.find_one({ slug: team.scope } as any) : null;
+            const version = await versions.find_by_id(version_id);
+            if (!team || !scope || !version) continue; // gone since the tree was resolved: the daemon's download says so
+            const fields = {
+                team_id, via_realm_team_id: realm_team_id, realm_team_id: null, version_id, version: version.version,
+                scope_id: String(scope.id), slug: team.name, origin: 'hub', description: team.description ?? null,
+                manifest: '', uninstalled_at: null, updated_at: now,
+            };
+            const before = await _dt_repo_ti.find_one_any({ where: { daemon_id, team_id }, order: [['updated_at', 'DESC']] });
+            if (before) await before.update(fields as any);
+            else await _dt_repo_ti.create_one({ id: randomUUID(), daemon_id, ...fields, dockerfile: null, dependencies: null, created_at: now } as any);
+        }
+    }
+
+    /**
      * `daemons/register_teams` (PLAN-team-bundle S4.2): the daemon reports the teams it has by the id the hub gave
      * it (the row id). A team is kept only when the hub installed it on this daemon and its catalog team is on the
      * daemon's realm (`realm_teams`); its version is updated to what the daemon has. Anything else gets no id:
@@ -186,6 +225,15 @@ export class TeamService {
                 continue;
             }
             const realm_team = realm_teams.get(row.team_id);
+            // A sub-team that came with one of the realm's teams (S8): kept while that realm team is on the realm.
+            if (!realm_team && row.via_realm_team_id && [...realm_teams.values()].some((rt) => rt.id === row.via_realm_team_id)) {
+                const version = t.version ?? row.version;
+                const version_id = version === row.version ? row.version_id : await TeamService._version_id(row.team_id, version);
+                await row.update({ version, version_id, uninstalled_at: null, updated_at: Date.now() } as any);
+                kept.add(row.id);
+                out.push({ scope: t.scope, slug: t.slug, id: row.id });
+                continue;
+            }
             if (!realm_team) {
                 if (row.uninstalled_at == null) await TeamService._mark_uninstalled(row);
                 out.push({ scope: t.scope, slug: t.slug, id: null, reason: 'not_in_realm', error: `${label} isn't in this daemon's realm` });

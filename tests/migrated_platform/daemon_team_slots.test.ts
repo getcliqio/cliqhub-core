@@ -276,4 +276,68 @@ describe.skipIf(!has_postgres)('daemon team rows: children of realm teams', () =
         await Run.destroy({ where: { workspace_id: String(record.id) } });
         await Workspace.unscoped().destroy({ where: { id: String(record.id) } });
     });
+
+    // S8: sub-teams a realm team's tree brings get rows too, tied to that realm team.
+    describe('sub-teams from a realm team\'s tree (PLAN-team-bundle S8)', () => {
+        /** A published catalog team that is not on the realm. */
+        async function catalog_team(name = `sub-${uid()}`): Promise<{ team_id: string; name: string; v: string }> {
+            const team_id = (await Team.create({
+                id: randomUUID(), name, scope: scope_slug, description: name,
+                author_id: user_id, license: 'MIT', visibility: 'public', listed: 1, install_count: 0,
+            } as never)).id as string;
+            team_ids.push(team_id);
+            return { team_id, name, v: await publish_version(team_id, '1.0.0', { name: `@${scope_slug}/${name}`, phases: [] }) };
+        }
+
+        it('a sub-team gets a live row tied to the realm team it came with (no realm team of its own); a reinstall keeps it', async () => {
+            const d = await new_daemon();
+            const parent = await realm_team();
+            await hub_install(d, parent);
+            const rt = (await RealmTeamListService.find(realm_id, parent.team_id))!;
+            const leaf = await catalog_team();
+            await TeamService.install_tree_slots(d, rt.id, [{ team_id: leaf.team_id, version_id: leaf.v }]);
+            const rows = await DaemonTeam.unscoped().findAll({ where: { daemon_id: d, team_id: leaf.team_id }, raw: true }) as any[];
+            expect(rows).toHaveLength(1);
+            expect(rows[0]).toMatchObject({ realm_team_id: null, via_realm_team_id: rt.id, version_id: leaf.v, version: '1.0.0', slug: leaf.name, uninstalled_at: null });
+            await TeamService.install_tree_slots(d, rt.id, [{ team_id: leaf.team_id, version_id: leaf.v }]);
+            expect(await DaemonTeam.unscoped().count({ where: { daemon_id: d, team_id: leaf.team_id } })).toBe(1);
+        });
+
+        it('a sub-team that is also on the realm keeps its realm row', async () => {
+            const d = await new_daemon();
+            const parent = await realm_team();
+            const both = await realm_team();
+            await hub_install(d, parent);
+            const own = await hub_install(d, both);
+            const rt = (await RealmTeamListService.find(realm_id, parent.team_id))!;
+            await TeamService.install_tree_slots(d, rt.id, [{ team_id: both.team_id, version_id: both.v['1.0.0'] }]);
+            expect(await row(own)).toMatchObject({ realm_team_id: (await RealmTeamListService.find(realm_id, both.team_id))!.id, via_realm_team_id: null });
+        });
+
+        it('register_teams keeps a sub-team while the realm team it came with is on the realm', async () => {
+            const d = await new_daemon();
+            const parent = await realm_team();
+            const pid = await hub_install(d, parent);
+            const rt = (await RealmTeamListService.find(realm_id, parent.team_id))!;
+            const leaf = await catalog_team();
+            await TeamService.install_tree_slots(d, rt.id, [{ team_id: leaf.team_id, version_id: leaf.v }]);
+            const lid = ((await DaemonTeam.findOne({ where: { daemon_id: d, team_id: leaf.team_id }, raw: true })) as any).id;
+            const out = await TeamService.register_from_daemon(d, [report(pid, parent.name), report(lid, leaf.name)], true, await realm_teams());
+            expect(out.map((o) => o.id)).toEqual([pid, lid]);
+            expect(await row(lid)).toMatchObject({ uninstalled_at: null });
+        });
+
+        it('the realm team going uninstalls the sub-teams it brought', async () => {
+            const d = await new_daemon();
+            const parent = await realm_team();
+            await hub_install(d, parent);
+            const rt = (await RealmTeamListService.find(realm_id, parent.team_id))!;
+            const leaf = await catalog_team();
+            await TeamService.install_tree_slots(d, rt.id, [{ team_id: leaf.team_id, version_id: leaf.v }]);
+            const lid = ((await DaemonTeam.findOne({ where: { daemon_id: d, team_id: leaf.team_id }, raw: true })) as any).id;
+            await RealmTeamListService.remove(realm_id, user_id, parent.team_id);
+            expect(await row(lid)).toMatchObject({ via_realm_team_id: null, uninstalled_at: expect.anything() });
+        });
+    });
 });
+

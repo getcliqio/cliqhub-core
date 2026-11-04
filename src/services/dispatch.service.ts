@@ -567,8 +567,10 @@ export class DispatchService {
                 last_team_id = slot.id;
 
                 // Catalog ids only: the daemon downloads the version and gets its row id back (teams/download).
-                // Its sub-team tree as the realm resolved it (S8): the daemon downloads each version and runs exactly these.
+                // Its sub-team tree as the realm resolved it (S8): each sub-team gets this daemon's row (the id it keeps
+                // and its runs carry); the daemon downloads each version and runs exactly these.
                 const tree = await RealmTeamListService.tree(realm_id!, hub_team.id);
+                await TeamService.install_tree_slots(daemon.id, realm_team.id, tree);
                 await command_outbox_enqueue(daemon.id, '/v1/install', {
                     team_id: hub_team.id,
                     version_id: realm_team.version_id,

@@ -96,7 +96,7 @@ export async function daemon_teams_to_realm_teams(deps: { settings: SettingsRepo
             DO $$ BEGIN
                 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'daemon_teams_live_has_realm_team') THEN
                     ALTER TABLE cliq."daemon_teams" ADD CONSTRAINT "daemon_teams_live_has_realm_team"
-                        CHECK ("uninstalled_at" IS NOT NULL OR "realm_team_id" IS NOT NULL);
+                        CHECK ("uninstalled_at" IS NOT NULL OR "realm_team_id" IS NOT NULL OR "via_realm_team_id" IS NOT NULL);
                 END IF;
             END $$`);
         return { duplicates_uninstalled, linked, uninstalled };

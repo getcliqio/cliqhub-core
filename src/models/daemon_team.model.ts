@@ -30,8 +30,10 @@ export class DaemonTeam extends BaseModel {
     declare slug: string;
     /** The catalog team (`teams.id`). */
     declare team_id: string | null;
-    /** The realm team this install belongs to; null only once uninstalled. */
+    /** The realm team this install belongs to; null for a sub-team that only came with another's tree. */
     declare realm_team_id: string | null;
+    /** A sub-team (PLAN-team-bundle S8): the realm team whose tree brought it to this daemon. */
+    declare via_realm_team_id: string | null;
     /** The catalog version installed on this daemon (`team_versions.id`). */
     declare version_id: string | null;
     declare version: string | null;
@@ -54,6 +56,7 @@ export class DaemonTeam extends BaseModel {
             slug: { type: DataTypes.TEXT, allowNull: false },
             team_id: { type: DataTypes.UUID, allowNull: true },
             realm_team_id: { type: DataTypes.UUID, allowNull: true },
+            via_realm_team_id: { type: DataTypes.UUID, allowNull: true },
             version_id: { type: DataTypes.UUID, allowNull: true },
             version: { type: DataTypes.TEXT },
             origin: { type: DataTypes.TEXT, allowNull: true },

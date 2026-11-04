@@ -133,7 +133,7 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
         expect(row).toMatchObject({ team_id, version_id, realm_team_id: realm_team!.id, version: '1.0.0', origin: 'hub', uninstalled_at: null });
         expect(result.team_id).toBe(row.id);
         // The daemon downloads the version by these ids and gets its row id back (teams/download).
-        expect(mock_enqueue).toHaveBeenCalledWith(d1, '/v1/install', { team_id, version_id, agent_settings: undefined });
+        expect(mock_enqueue).toHaveBeenCalledWith(d1, '/v1/install', { team_id, version_id, tree: [], agent_settings: undefined });
     });
 
     it('installing again keeps the row and its id', async () => {
@@ -154,7 +154,7 @@ describe.skipIf(!has_postgres)('DispatchService.install_team (command outbox)', 
         const row = await row_of(d1);
         const result = await DispatchService.install_team({ team_id: row.id, daemon_ids: [d2], user_id, org_ids: [org_id] });
         expect(result.results[0].ok).toBe(true);
-        expect(mock_enqueue).toHaveBeenCalledWith(d2, '/v1/install', { team_id, version_id, agent_settings: undefined });
+        expect(mock_enqueue).toHaveBeenCalledWith(d2, '/v1/install', { team_id, version_id, tree: [], agent_settings: undefined });
     });
 
     it('enqueues install for each daemon_id', async () => {

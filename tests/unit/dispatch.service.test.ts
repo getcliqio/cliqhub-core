@@ -92,7 +92,7 @@ vi.mock('../../src/services/realm_team_list.service.js', () => ({
     RealmTeamListService: { find: vi.fn(), tree: vi.fn(async () => []) },
 }));
 vi.mock('../../src/services/teams_install_service.js', () => ({
-    TeamService: { install_slot: vi.fn(async () => ({ id: 'team-1', created: true })) },
+    TeamService: { install_slot: vi.fn(async () => ({ id: 'team-1', created: true })), install_tree_slots: vi.fn(async () => undefined) },
 }));
 
 vi.mock('../../src/services/run.service.js', () => ({
@@ -635,6 +635,7 @@ describe('DispatchService.install_team', () => {
         vi.mocked(RealmTeamListService.tree).mockResolvedValueOnce(tree);
         await DispatchService.install_team({ team_id: hub_legacy_uuid(1), user_id: 'user-1', daemon_ids: ['daemon-1'] });
         expect(mock_enqueue).toHaveBeenCalledWith('daemon-1', '/v1/install', expect.objectContaining({ tree }));
+        expect(TeamService.install_tree_slots).toHaveBeenCalledWith('daemon-1', REALM_TEAM.id, tree);
     });
 
     it("a daemon whose realm doesn't run the team gets nothing: add it to the realm first", async () => {
