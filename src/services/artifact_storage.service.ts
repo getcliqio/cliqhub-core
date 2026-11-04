@@ -15,7 +15,7 @@ import type { Readable } from 'node:stream';
 import { v4 as uuid_v4 } from 'uuid';
 import { FILE_SNIFF_BYTES, file_accept_problem } from '@getcliqio/cliq-sdk';
 
-import { R2Client, load_r2_config_from_env } from '../lib/r2_client.js';
+import { object_store_from_env, type ObjectStore } from '../lib/local_object_store.js';
 import { StoredArtifactRepository } from '../repositories/stored_artifact_repository.js';
 import { RunArtifactRepository } from '../repositories/run_artifact_repository.js';
 import type { StoredArtifactAttributes } from '../models/stored_artifact.model.js';
@@ -27,13 +27,14 @@ import { public_a2a_base_url } from '../mesh/settings_util.js';
 const log = get_logger('svc.artifact_storage');
 
 export class ArtifactStorageService {
-    private readonly _r2: R2Client;
+    /** R2 in production; local disk on a CliqHub without it (the dev stack, PLAN-team-bundle S6). */
+    private readonly _r2: ObjectStore;
     private readonly _repo: StoredArtifactRepository;
     private readonly _records: RunArtifactRepository;
     private readonly _max_size_mb: number;
 
-    constructor(opts?: { r2?: R2Client; repo?: StoredArtifactRepository; records?: RunArtifactRepository; max_size_mb?: number }) {
-        this._r2 = opts?.r2 ?? new R2Client(load_r2_config_from_env());
+    constructor(opts?: { r2?: ObjectStore; repo?: StoredArtifactRepository; records?: RunArtifactRepository; max_size_mb?: number }) {
+        this._r2 = opts?.r2 ?? object_store_from_env();
         this._repo = opts?.repo ?? new StoredArtifactRepository();
         this._records = opts?.records ?? new RunArtifactRepository();
         this._max_size_mb = opts?.max_size_mb ?? parseInt(process.env.CLIQ_ARTIFACT_MAX_MB || '50', 10);
