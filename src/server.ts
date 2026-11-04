@@ -80,6 +80,11 @@ async function main() {
     await daemon_teams_to_realm_teams({ settings: container.settings_repo })
         .catch((err: unknown) => log.error('daemon_teams_to_realm_teams_failed', { error: err instanceof Error ? err.message : String(err) }));
 
+    // Once (S8): sub-team calls of versions published before S8, and every realm team's tree.
+    const { sub_teams_backfill } = await import('./models/migrations/sub_teams_backfill.js');
+    await sub_teams_backfill({ settings: container.settings_repo })
+        .catch((err: unknown) => log.error('sub_teams_backfill_failed', { error: err instanceof Error ? err.message : String(err) }));
+
     const app = create_app(container);
 
     start_run_reaper();

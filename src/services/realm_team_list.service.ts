@@ -15,7 +15,9 @@ import { ScopeRepository } from '../repositories/scope_repository.js';
 import { TeamRepository } from '../repositories/team_repository.js';
 import { TeamVersionRepository } from '../repositories/team_version_repository.js';
 import { OrgAgentSettingRepository } from '../repositories/org_agent_setting_repository.js';
-import { RealmTeamRepository, type RealmTeamRow } from '../repositories/realm_team_repository.js';
+import { RealmTeamRepository, type RealmTeamRow, type RealmTeamTreeRow } from '../repositories/realm_team_repository.js';
+import { get_sequelize } from '../lib/sequelize.js';
+import { resolve_realm_tree } from './realm_team_tree.js';
 
 const _realm_repo_rtl = new RealmRepository();
 const _dt_repo_rtl = new DaemonTeamRepository();
@@ -265,7 +267,12 @@ export class RealmTeamListService {
         const { version_id, version } = await RealmTeamListService.resolve_by_id(team, ref.version_id);
         const existing = await _realm_team_repo.find(realm_id, team.id);
         if (existing?.version_id !== version_id) {
-            await _realm_team_repo.put(realm_id, team.id, version_id);
+            // Its sub-team tree, resolved now (S8): a tree that can't be resolved refuses the add, before anything changes.
+            const tree = await resolve_realm_tree({ team_id: team.id, version_id, scope: team.scope, slug: team.slug });
+            await get_sequelize().transaction(async (t) => {
+                await _realm_team_repo.put(realm_id, team.id, version_id, t);
+                await _realm_team_repo.replace_tree(realm_id, team.id, tree, t);
+            });
             log.info(`team list ${existing ? 'version' : 'add'}: realm=${realm_id} team=${key_of(team)} version=${version}`);
             void import('./mesh_lifecycle.service.js')
                 .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
@@ -291,6 +298,37 @@ export class RealmTeamListService {
             }
         }
         if (added.length) log.info(`seeded builtin teams into realm=${realm_id}: ${added.join(', ')}`);
+    }
+
+    /** A realm team's sub-team tree, as resolved when the realm added (or moved) it (S8). */
+    static async tree(realm_id: string, team_id: string): Promise<RealmTeamTreeRow[]> {
+        return _realm_team_repo.tree(realm_id, team_id);
+    }
+
+    /** Whether a daemon may download a version as part of a realm team's tree it has installed (S8). */
+    static async in_daemon_tree(daemon_id: string, version_id: string): Promise<boolean> {
+        return _realm_team_repo.in_daemon_tree(daemon_id, version_id);
+    }
+
+    /**
+     * Resolve every realm team's tree now (the S8 backfill). One that can't be resolved is logged and left empty.
+     *
+     * @returns How many were resolved and how many failed.
+     */
+    static async resolve_all_trees(): Promise<{ resolved: number; failed: number }> {
+        let resolved = 0;
+        let failed = 0;
+        for (const rt of await _realm_team_repo.list_all()) {
+            try {
+                const tree = await resolve_realm_tree({ team_id: rt.team_id, version_id: rt.version_id, scope: rt.scope, slug: rt.slug });
+                await _realm_team_repo.replace_tree(rt.realm_id, rt.team_id, tree);
+                resolved += 1;
+            } catch (err) {
+                failed += 1;
+                log.warn('realm_team_tree_unresolved', { realm_id: rt.realm_id, team: key_of(rt), error: err instanceof Error ? err.message : String(err) });
+            }
+        }
+        return { resolved, failed };
     }
 
     /** Remove a single team from the list. Idempotent. */

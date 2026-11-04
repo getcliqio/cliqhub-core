@@ -535,10 +535,10 @@ export class DispatchService {
         // row (its id is what the daemon keeps) and the daemon downloads that version by id.
         const { RealmTeamListService } = await import('./realm_team_list.service.js');
         const { validate_hug_reviewer_groups } = await import('./teams_service.js');
-        const plan: Array<{ daemon: Daemon; realm_team: RealmTeamEntry | null }> = [];
+        const plan: Array<{ daemon: Daemon; realm_id: string | null; realm_team: RealmTeamEntry | null }> = [];
         for (const daemon of targets) {
             const realm_id = input.realm_id ?? await DispatchService._realm_of_daemon(daemon.id);
-            plan.push({ daemon, realm_team: realm_id ? await RealmTeamListService.find(realm_id, hub_team.id) : null });
+            plan.push({ daemon, realm_id, realm_team: realm_id ? await RealmTeamListService.find(realm_id, hub_team.id) : null });
         }
         // What each version's files say (PLAN-team-bundle S1.4b); a Hug gate without reviewers can't be installed.
         const contents = new Map<string, VersionContent>();
@@ -552,7 +552,7 @@ export class DispatchService {
 
         const results: InstallDaemonResult[] = [];
         let last_team_id = '';
-        for (const { daemon, realm_team } of plan) {
+        for (const { daemon, realm_id, realm_team } of plan) {
             try {
                 if (!realm_team) throw ApiError.bad_request(`${label} isn't on this daemon's realm. Add it to the realm first.`);
                 const content = contents.get(realm_team.version_id)!;
@@ -567,9 +567,12 @@ export class DispatchService {
                 last_team_id = slot.id;
 
                 // Catalog ids only: the daemon downloads the version and gets its row id back (teams/download).
+                // Its sub-team tree as the realm resolved it (S8): the daemon downloads each version and runs exactly these.
+                const tree = await RealmTeamListService.tree(realm_id!, hub_team.id);
                 await command_outbox_enqueue(daemon.id, '/v1/install', {
                     team_id: hub_team.id,
                     version_id: realm_team.version_id,
+                    tree,
                     agent_settings: input.agent_settings,
                     ...(input.force ? { force: true } : {}),
                 });

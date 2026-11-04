@@ -1012,6 +1012,9 @@ export class TeamsService {
             ? await dt_repo.find_one_q({ where: { id: params.daemon_team_id, daemon_id: params.daemon_id } })
             : team_id ? await dt_repo.find_one_q({ where: { daemon_id: params.daemon_id, team_id } }) : null;
         if (!row) {
+            // A sub-team (S8): a version in the tree of a realm team this daemon has installed comes with its parent.
+            const sub = team_id && params.version_id ? await this._sub_team_download(params.daemon_id, team_id, params.version_id) : null;
+            if (sub) return sub;
             throw new ApiError('not_installable', 'This team isn\'t available for installation on this daemon. Add it to the realm first.', 404);
         }
         // The version (PLAN-team-bundle S5.3): any published version of that team the daemon asks for by id (a run
@@ -1031,6 +1034,25 @@ export class TeamsService {
             filename: `${team?.name ?? row.slug}-${ver.version}.zip`, data_base64: data.toString('base64'),
             version: ver.version, version_id: ver.id, team_id: row.team_id,
             scope: team?.scope ?? null, name: team?.name ?? row.slug, daemon_team_id: row.id,
+        };
+    }
+
+    /**
+     * A sub-team version for a daemon (PLAN-team-bundle S8): served when it's in the resolved tree of a realm team
+     * the daemon has installed. There is no daemon_teams row for it (`daemon_team_id` null): it isn't a realm team.
+     */
+    private async _sub_team_download(daemon_id: string, team_id: string, version_id: string) {
+        const { RealmTeamListService } = await import('./realm_team_list.service.js');
+        if (!(await RealmTeamListService.in_daemon_tree(daemon_id, version_id))) return null;
+        const ver = await this._version_repo.find_package_by_id(version_id);
+        if (!ver || ver.team_id !== team_id) return null;
+        const data = await this._version_zip(team_id, ver.id, ver.package_path);
+        if (!data) throw new ApiError('internal', `Package archive missing for v${ver.version}. It may need to be republished.`, 500);
+        const team = await this._team_repo.find_by_id(team_id);
+        return {
+            filename: `${team?.name ?? 'team'}-${ver.version}.zip`, data_base64: data.toString('base64'),
+            version: ver.version, version_id: ver.id, team_id,
+            scope: team?.scope ?? null, name: team?.name ?? null, daemon_team_id: null,
         };
     }
 

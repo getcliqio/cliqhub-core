@@ -1197,6 +1197,23 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`CREATE INDEX IF NOT EXISTS "team_version_sub_teams_version" ON cliq."team_version_sub_teams" ("version_id")`);
     await run(`CREATE INDEX IF NOT EXISTS "team_version_sub_teams_team" ON cliq."team_version_sub_teams" ("team_id")`);
 
+    // realm_team_sub_teams (PLAN-team-bundle S8): a realm team's sub-team tree, resolved once when the realm adds
+    // (or moves) the team, so every daemon in the realm installs the same versions. One row per call: the calling
+    // version, the ref as written, and the team and version it resolved to. Goes with its realm team.
+    await run(`
+        CREATE TABLE IF NOT EXISTS cliq."realm_team_sub_teams" (
+            "id" UUID PRIMARY KEY,
+            "realm_team_id" UUID NOT NULL REFERENCES cliq."realm_teams" ("id") ON DELETE CASCADE,
+            "position" INTEGER NOT NULL,
+            "parent_version_id" UUID NOT NULL REFERENCES cliq."team_versions" ("id") ON DELETE CASCADE,
+            "ref" TEXT NOT NULL,
+            "team_id" UUID NOT NULL REFERENCES cliq."teams" ("id") ON DELETE CASCADE,
+            "version_id" UUID NOT NULL REFERENCES cliq."team_versions" ("id") ON DELETE CASCADE,
+            "created_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`);
+    await run(`CREATE INDEX IF NOT EXISTS "realm_team_sub_teams_realm_team" ON cliq."realm_team_sub_teams" ("realm_team_id")`);
+    await run(`CREATE INDEX IF NOT EXISTS "realm_team_sub_teams_version" ON cliq."realm_team_sub_teams" ("version_id")`);
+
     // daemon_teams is a child of a realm team (PLAN-team-bundle S4.2): the catalog team, the realm team it was
     // installed from, the version installed. Uninstalled rows stay (runs point at them), so the columns are
     // nullable; a live row needs its realm team — that CHECK is added by the one-time re-key

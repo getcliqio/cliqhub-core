@@ -56,6 +56,7 @@ vi.mock('../../../src/models/index.js', () => ({
     WorkspaceTeam: {},
     WorkspaceSecret: {},
     TeamVersion: {},
+    TeamVersionSubTeam: {},
     Review: {},
     ReviewMessage: {},
     HugDelivery: {},

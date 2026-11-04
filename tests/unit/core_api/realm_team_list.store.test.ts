@@ -49,12 +49,21 @@ vi.mock('../../../src/repositories/realm_team_repository.js', () => ({
         async take_off_realms(team_id: string, realm_ids: string[]) {
             db.rows = db.rows.filter((r) => !(r.team_id === team_id && realm_ids.includes(r.realm_id)));
         }
+        // Sub-team trees (S8): none of these teams calls one.
+        async replace_tree() {}
+        async tree() { return []; }
         async take_off_everywhere(team_id: string) {
             const ids = db.rows.filter((r) => r.team_id === team_id).map((r) => r.realm_id);
             db.rows = db.rows.filter((r) => r.team_id !== team_id);
             return ids;
         }
     },
+}));
+vi.mock('../../../src/repositories/team_version_sub_team_repository.js', () => ({
+    TeamVersionSubTeamRepository: class { async list_by_version() { return []; } },
+}));
+vi.mock('../../../src/lib/sequelize.js', () => ({
+    get_sequelize: () => ({ transaction: async (fn: (t: unknown) => unknown) => fn({}) }),
 }));
 vi.mock('../../../src/repositories/team_repository.js', () => ({
     TeamRepository: class {

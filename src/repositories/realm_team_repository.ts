@@ -14,6 +14,17 @@ export interface RealmTeamRow {
     version: string;
 }
 
+/** One call in a realm team's resolved sub-team tree (PLAN-team-bundle S8). */
+export interface RealmTeamTreeRow {
+    /** The calling version (the realm team's own, or a sub-team's). */
+    parent_version_id: string;
+    /** As written: `@acme/leaf`, `@acme/leaf@1.0.0`. */
+    ref: string;
+    /** The team and version the call resolved to when the realm added the team. */
+    team_id: string;
+    version_id: string;
+}
+
 /** The SELECT every read shares: the row and the names its ids point at. */
 const ROWS = `
     SELECT rt."id", rt."realm_id", rt."team_id", rt."version_id",
@@ -32,6 +43,11 @@ export class RealmTeamRepository {
     async list(realm_id: string): Promise<RealmTeamRow[]> {
         return get_sequelize().query<RealmTeamRow>(`${ROWS} WHERE rt."realm_id" = :realm_id ORDER BY t."scope", t."name"`,
             { type: QueryTypes.SELECT, replacements: { realm_id } });
+    }
+
+    /** Every realm's teams (one-time passes). */
+    async list_all(): Promise<RealmTeamRow[]> {
+        return get_sequelize().query<RealmTeamRow>(`${ROWS} ORDER BY rt."realm_id", t."scope", t."name"`, { type: QueryTypes.SELECT });
     }
 
     /** Several realms' teams. */
@@ -67,6 +83,41 @@ export class RealmTeamRepository {
              ON CONFLICT ("realm_id", "team_id") DO UPDATE SET "version_id" = EXCLUDED."version_id", "updated_at" = now()`,
             { replacements: { id: randomUUID(), realm_id, team_id, version_id }, transaction },
         );
+    }
+
+    /** Replace a realm team's sub-team tree (in the caller's transaction, with the `put` it belongs to). */
+    async replace_tree(realm_id: string, team_id: string, rows: RealmTeamTreeRow[], transaction?: Transaction): Promise<void> {
+        const sq = get_sequelize();
+        const realm_team = `(SELECT "id" FROM cliq."realm_teams" WHERE "realm_id" = :realm_id AND "team_id" = :team_id)`;
+        await sq.query(`DELETE FROM cliq."realm_team_sub_teams" WHERE "realm_team_id" = ${realm_team}`, { replacements: { realm_id, team_id }, transaction });
+        for (const [position, r] of rows.entries()) {
+            await sq.query(
+                `INSERT INTO cliq."realm_team_sub_teams" ("id", "realm_team_id", "position", "parent_version_id", "ref", "team_id", "version_id", "created_at")
+                 VALUES (:id, ${realm_team}, :position, :parent_version_id, :ref, :sub_team_id, :version_id, now())`,
+                { replacements: { id: randomUUID(), realm_id, team_id, position, parent_version_id: r.parent_version_id, ref: r.ref, sub_team_id: r.team_id, version_id: r.version_id }, transaction },
+            );
+        }
+    }
+
+    /** A realm team's sub-team tree, in the order it was resolved. */
+    async tree(realm_id: string, team_id: string): Promise<RealmTeamTreeRow[]> {
+        return get_sequelize().query<RealmTeamTreeRow>(
+            `SELECT s."parent_version_id", s."ref", s."team_id", s."version_id"
+             FROM cliq."realm_team_sub_teams" s JOIN cliq."realm_teams" rt ON rt."id" = s."realm_team_id"
+             WHERE rt."realm_id" = :realm_id AND rt."team_id" = :team_id ORDER BY s."position"`,
+            { type: QueryTypes.SELECT, replacements: { realm_id, team_id } },
+        );
+    }
+
+    /** Whether a version is in the tree of a realm team installed on this daemon (it may download it). */
+    async in_daemon_tree(daemon_id: string, version_id: string): Promise<boolean> {
+        const rows = await get_sequelize().query<{ one: number }>(
+            `SELECT 1 AS "one" FROM cliq."realm_team_sub_teams" s
+             JOIN cliq."daemon_teams" dt ON dt."realm_team_id" = s."realm_team_id"
+             WHERE dt."daemon_id" = :daemon_id AND dt."uninstalled_at" IS NULL AND s."version_id" = :version_id LIMIT 1`,
+            { type: QueryTypes.SELECT, replacements: { daemon_id, version_id } },
+        );
+        return rows.length > 0;
     }
 
     /** Take a team off a realm; false when it wasn't on it. */

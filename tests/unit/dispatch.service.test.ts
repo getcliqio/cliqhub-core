@@ -89,7 +89,7 @@ vi.mock('../../src/models/index.js', () => ({
 // A daemon installs a team only from its realm's list (PLAN-team-bundle S4.2).
 const REALM_TEAM = { id: 'rt-1', realm_id: 'realm-1', team_id: hub_legacy_uuid(1), version_id: 'v-1', scope: 'my-scope', slug: 'my-team', version: '1.0.0' };
 vi.mock('../../src/services/realm_team_list.service.js', () => ({
-    RealmTeamListService: { find: vi.fn() },
+    RealmTeamListService: { find: vi.fn(), tree: vi.fn(async () => []) },
 }));
 vi.mock('../../src/services/teams_install_service.js', () => ({
     TeamService: { install_slot: vi.fn(async () => ({ id: 'team-1', created: true })) },
@@ -625,9 +625,16 @@ describe('DispatchService.install_team', () => {
         expect(result.results).toHaveLength(1);
         expect(result.results[0].ok).toBe(true);
 
-        // Catalog ids only: the daemon downloads the version and gets its row id back (S4.2).
-        expect(mock_enqueue).toHaveBeenCalledWith('daemon-1', '/v1/install', { team_id: hub_legacy_uuid(1), version_id: 'v-1', agent_settings: undefined });
+        // Catalog ids only: the daemon downloads the version and gets its row id back (S4.2); and its sub-team tree (S8).
+        expect(mock_enqueue).toHaveBeenCalledWith('daemon-1', '/v1/install', { team_id: hub_legacy_uuid(1), version_id: 'v-1', tree: [], agent_settings: undefined });
         expect(TeamService.install_slot).toHaveBeenCalledWith(expect.objectContaining({ daemon_id: 'daemon-1', realm_team: REALM_TEAM, slug: 'my-team' }));
+    });
+
+    it('sends the realm team\'s resolved sub-team tree with the install (PLAN-team-bundle S8)', async () => {
+        const tree = [{ parent_version_id: 'v-1', ref: '@acme/leaf@1.0.0', team_id: 'leaf', version_id: 'leaf-v1' }];
+        vi.mocked(RealmTeamListService.tree).mockResolvedValueOnce(tree);
+        await DispatchService.install_team({ team_id: hub_legacy_uuid(1), user_id: 'user-1', daemon_ids: ['daemon-1'] });
+        expect(mock_enqueue).toHaveBeenCalledWith('daemon-1', '/v1/install', expect.objectContaining({ tree }));
     });
 
     it("a daemon whose realm doesn't run the team gets nothing: add it to the realm first", async () => {
