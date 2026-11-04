@@ -17,6 +17,8 @@ import type { AuditRepository } from '../repositories/audit_repository.js';
 import type { PackageStorage } from '../storage/package_storage.js';
 import { stored_key, version_zip_key } from '../storage/package_storage.js';
 import { TeamFileRepository } from '../repositories/team_file_repository.js';
+import { TeamVersionSubTeamRepository } from '../repositories/team_version_sub_team_repository.js';
+import { sub_team_rows } from './team_sub_teams.js';
 import { read_team_files, write_team_file_objects } from './team_file_objects.js';
 import { latest_version_content, version_content, version_contents } from './version_content.js';
 import type { AuthContext } from '../schemas/auth_types.js';
@@ -209,6 +211,7 @@ export class TeamsService {
         private _scope_repo?: ScopeRepository,
         private _audit_repo?: AuditRepository,
         private _file_repo: TeamFileRepository = new TeamFileRepository(),
+        private _sub_team_repo: TeamVersionSubTeamRepository = new TeamVersionSubTeamRepository(),
     ) {}
 
     // ─── Team files (PLAN-team-bundle §2.2 / §2.6) ───
@@ -490,6 +493,9 @@ export class TeamsService {
         } : null;
 
         const raw_manifest = content?.manifest_yaml || null;
+        // The teams this version calls (S8), as recorded at publish: phase, ref, team, pinned version, may-call.
+        const sub_teams = ver_row ? (await this._sub_team_repo.list_by_version(ver_row.id))
+            .map(({ phase, ref, team_id, pinned_version_id, may_call }) => ({ phase, ref, team_id, pinned_version_id, may_call })) : [];
 
         return {
             id: team.id,
@@ -503,6 +509,7 @@ export class TeamsService {
             /** The version shown (its files: `teams/files/get`); null when the team has none. */
             version_id: ver_row?.id ?? null,
             versions, roles,
+            sub_teams,
             workflow: content?.workflow ?? { phases: [] },
             agents: content?.agents ?? {},
             readme: content?.readme ?? '', cliq_version: content?.cliq_version ?? null, tools: content?.tools ?? [],
@@ -884,6 +891,9 @@ export class TeamsService {
         }
 
 
+        // The sub-teams it calls (S8): a pinned version must be one the publisher can see; checked before anything changes.
+        const sub_teams = await sub_team_rows(auth, draft.id, (team_yml as { phases?: unknown }).phases, { teams: this._team_repo, versions: this._version_repo });
+
         const published_team_id = team.id;
         await get_sequelize().transaction(async (t) => {
             const effective_team_id = team.id;
@@ -894,6 +904,7 @@ export class TeamsService {
 
             const flipped = await this._version_repo.publish_draft(draft.id, { version: resolved_version!, changelog: params.changelog || '' }, t);
             if (!flipped) throw new ApiError('conflict', 'That draft was published or discarded meanwhile', 409);
+            await this._sub_team_repo.create_many(sub_teams, t);
 
             if (tags) {
                 await this._tag_repo.delete_by_team_id(effective_team_id, t);

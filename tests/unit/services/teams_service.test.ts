@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { Op } from 'sequelize';
 import { TeamsService, team_query_where } from '../../../src/services/teams_service.js';
+import { Team } from '../../../src/models/team.model.js';
 import { ALICE, BOB, ORG_ADMIN, UNAUTHED, SITE_ADMIN } from '../../helpers/fixtures.js';
 import { unpack_bundle } from '@getcliqio/cliq-sdk';
 
@@ -98,6 +99,7 @@ vi.mock('../../../src/models/index.js', () => ({
     RealmInvite: { findOne: vi.fn(), create: vi.fn() },
     TeamVersion: {},
     TeamFile: {},
+    TeamVersionSubTeam: {},
     WorkspaceTeam: {},
     Workspace: {},
     ScopeMember: {},
@@ -269,6 +271,16 @@ function make_file_repo() {
     };
 }
 
+/** team_version_sub_teams in memory (PLAN-team-bundle S8). */
+function make_sub_team_repo() {
+    const rows: Array<Record<string, unknown>> = [];
+    return {
+        rows,
+        list_by_version: vi.fn(async (version_id: string) => rows.filter((r) => r.version_id === version_id)),
+        create_many: vi.fn(async (add: Array<Record<string, unknown>>) => { rows.push(...add); }),
+    };
+}
+
 function build_service(overrides: {
     team_repo?: ReturnType<typeof make_team_repo>;
     version_repo?: ReturnType<typeof make_version_repo>;
@@ -279,6 +291,7 @@ function build_service(overrides: {
     scope_repo?: ReturnType<typeof make_scope_repo>;
     audit_repo?: ReturnType<typeof make_audit_repo>;
     file_repo?: ReturnType<typeof make_file_repo>;
+    sub_team_repo?: ReturnType<typeof make_sub_team_repo>;
 } = {}) {
     const team_repo = overrides.team_repo ?? make_team_repo();
     const version_repo = overrides.version_repo ?? make_version_repo();
@@ -288,6 +301,7 @@ function build_service(overrides: {
         overrides.download_log_repo as any, overrides.storage as any,
         overrides.packages_path, overrides.scope_repo as any, overrides.audit_repo as any,
         (overrides.file_repo ?? make_file_repo()) as any,
+        (overrides.sub_team_repo ?? make_sub_team_repo()) as any,
     );
     return { service, team_repo, version_repo, tag_repo };
 }
@@ -581,6 +595,18 @@ describe('TeamsService — get_by_id', () => {
         expect(result).not.toHaveProperty('team_json');
     });
 
+    it('returns the shown version\'s sub-teams as recorded at publish (PLAN-team-bundle S8)', async () => {
+        const sub_teams = make_sub_team_repo();
+        const built = build_service({ sub_team_repo: sub_teams });
+        const V = hub_legacy_uuid(70);
+        sub_teams.rows.push({ version_id: V, position: 0, phase: 'a', ref: '@alice/leaf@1.0.0', team_id: 'leaf-id', pinned_version_id: 'v1', may_call: false });
+        built.team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
+        built.version_repo.list_by_team_id.mockResolvedValueOnce([{ id: V, version: '1.0.0' }]);
+        built.version_repo.find_by_team_and_version.mockResolvedValueOnce({ id: V, team_id: PUBLIC_TEAM.id, version: '1.0.0' });
+        const result = await built.service.get_by_id(ALICE, { name: 'my-team', scope: 'alice' });
+        expect(result.sub_teams).toEqual([{ phase: 'a', ref: '@alice/leaf@1.0.0', team_id: 'leaf-id', pinned_version_id: 'v1', may_call: false }]);
+    });
+
     it('returns not_found for missing team', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(null);
         await expect(service.get_by_id(ALICE, { name: 'ghost' })).rejects.toThrow('Team not found');
@@ -756,6 +782,62 @@ describe('TeamsService — publish', () => {
 
     it('returns 401 when unauthenticated', async () => {
         await expect(service.publish(UNAUTHED, { name: 'my-team', scope: 'alice', version: '1.0.0', version_id: DRAFT })).rejects.toThrow('Authentication required');
+    });
+
+    describe('sub-teams (PLAN-team-bundle S8)', () => {
+        const LEAF = { ...PUBLIC_TEAM, id: hub_legacy_uuid(50), name: 'leaf', scope: 'alice' };
+        const HIDDEN = { ...PRIVATE_TEAM, id: hub_legacy_uuid(51), name: 'hidden', scope: 'other' };
+        const LEAF_V1 = { id: hub_legacy_uuid(60), team_id: LEAF.id, version: '1.0.0', withdrawn_at: null };
+        const LEAF_OLD = { id: hub_legacy_uuid(61), team_id: LEAF.id, version: '0.9.0', withdrawn_at: new Date() };
+        let sub_teams: ReturnType<typeof make_sub_team_repo>;
+
+        beforeEach(() => {
+            sub_teams = make_sub_team_repo();
+            const built = build_service({ storage, packages_path: '/tmp/packages', file_repo: files, sub_team_repo: sub_teams });
+            service = built.service;
+            team_repo = built.team_repo;
+            version_repo = Object.assign(built.version_repo, {
+                find_draft: vi.fn().mockResolvedValue({ id: DRAFT, team_id: PUBLIC_TEAM.id }),
+                publish_draft: vi.fn().mockResolvedValue(true),
+            });
+            // The lint's sub-team input check reads a called team's inputs (none known here).
+            vi.spyOn(Team, 'findOne').mockResolvedValue(null);
+            const teams: Record<string, unknown> = { 'alice/my-team': PUBLIC_TEAM, 'alice/leaf': LEAF, 'other/hidden': HIDDEN };
+            team_repo.find_by_name_and_scope.mockImplementation(async (name: string, scope: string) => teams[`${scope}/${name}`] ?? null);
+            version_repo.find_by_team_and_version.mockImplementation(async (team_id: string, version: string) =>
+                [LEAF_V1, LEAF_OLD].find((v) => v.team_id === team_id && v.version === version) ?? null);
+        });
+
+        const with_phases = (phases: string) => stage({ ...FILES, 'team.yml': `name: "@alice/my-team"\nversion: "2.0.0"\nphases:\n${phases}` });
+        const call = (name: string, ref: string) => `  - name: ${name}\n    type: team\n    team: "${ref}"\n`;
+
+        it('records each call: a pin with its version, an unpinned ref (even to a team not on CliqHub), a map\'s teams: as may-call', async () => {
+            with_phases(call('a', '@alice/leaf@1.0.0') + call('b', '@alice/leaf') + call('c', '@alice/not-yet')
+                + "  - name: each\n    type: map\n    over: '{{inputs.items}}'\n    team: '{{item.team}}'\n    teams: ['@alice/leaf']\n");
+            await publish();
+            expect(sub_teams.rows).toEqual([
+                { version_id: DRAFT, position: 0, phase: 'a', ref: '@alice/leaf@1.0.0', team_id: LEAF.id, pinned_version_id: LEAF_V1.id, may_call: false },
+                { version_id: DRAFT, position: 1, phase: 'b', ref: '@alice/leaf', team_id: LEAF.id, pinned_version_id: null, may_call: false },
+                { version_id: DRAFT, position: 2, phase: 'c', ref: '@alice/not-yet', team_id: null, pinned_version_id: null, may_call: false },
+                { version_id: DRAFT, position: 3, phase: 'each', ref: '@alice/leaf', team_id: LEAF.id, pinned_version_id: null, may_call: true },
+            ]);
+            expect(sub_teams.create_many).toHaveBeenCalledWith(expect.any(Array), expect.anything());
+        });
+
+        it('refuses a pin to a version that does not exist, is withdrawn, or is in a team the publisher can\'t see — before anything changes', async () => {
+            for (const ref of ['@alice/leaf@9.9.9', '@alice/leaf@0.9.0', '@other/hidden@1.0.0', '@alice/gone@1.0.0']) {
+                with_phases(call('a', ref));
+                await expect(publish()).rejects.toMatchObject({ code: 'sub_team_version_not_found', status: 422, message: expect.stringContaining(ref) });
+            }
+            expect(version_repo.publish_draft).not.toHaveBeenCalled();
+            expect(sub_teams.rows).toEqual([]);
+        });
+
+        it('a bad ref in teams: is refused (the team lint names it)', async () => {
+            with_phases("  - name: each\n    type: map\n    over: '{{inputs.items}}'\n    team: '{{item.team}}'\n    teams: ['not a ref']\n");
+            await expect(publish()).rejects.toMatchObject({ status: 422, message: expect.stringContaining('not a ref') });
+            expect(version_repo.publish_draft).not.toHaveBeenCalled();
+        });
     });
 
     it('returns 422 for invalid team name', async () => {

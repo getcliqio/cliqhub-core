@@ -1180,6 +1180,23 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     await run(`CREATE UNIQUE INDEX IF NOT EXISTS "realm_teams_realm_team" ON cliq."realm_teams" ("realm_id", "team_id")`);
     await run(`CREATE INDEX IF NOT EXISTS "realm_teams_team" ON cliq."realm_teams" ("team_id")`);
 
+    // team_version_sub_teams (PLAN-team-bundle S8): each sub-team call in a published version, by id (not a JSON
+    // column). Written at publish; the called team and pinned version stay null when they're gone.
+    await run(`
+        CREATE TABLE IF NOT EXISTS cliq."team_version_sub_teams" (
+            "id" UUID PRIMARY KEY,
+            "version_id" UUID NOT NULL REFERENCES cliq."team_versions" ("id") ON DELETE CASCADE,
+            "position" INTEGER NOT NULL,
+            "phase" TEXT NOT NULL,
+            "ref" TEXT NOT NULL,
+            "team_id" UUID REFERENCES cliq."teams" ("id") ON DELETE SET NULL,
+            "pinned_version_id" UUID REFERENCES cliq."team_versions" ("id") ON DELETE SET NULL,
+            "may_call" BOOLEAN NOT NULL DEFAULT false,
+            "created_at" TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`);
+    await run(`CREATE INDEX IF NOT EXISTS "team_version_sub_teams_version" ON cliq."team_version_sub_teams" ("version_id")`);
+    await run(`CREATE INDEX IF NOT EXISTS "team_version_sub_teams_team" ON cliq."team_version_sub_teams" ("team_id")`);
+
     // daemon_teams is a child of a realm team (PLAN-team-bundle S4.2): the catalog team, the realm team it was
     // installed from, the version installed. Uninstalled rows stay (runs point at them), so the columns are
     // nullable; a live row needs its realm team — that CHECK is added by the one-time re-key

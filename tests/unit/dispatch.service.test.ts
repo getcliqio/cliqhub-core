@@ -36,6 +36,7 @@ vi.mock('../../src/models/index.js', () => ({
     Team: { findByPk: vi.fn(), findOne: vi.fn() },
     TeamVersion: { findOne: vi.fn(), findAll: vi.fn() },
     TeamFile: { findAll: vi.fn() },
+    TeamVersionSubTeam: {},
     RealmMember: { findOne: vi.fn() },
     Realm: {},
     RealmAgentSetting: {},

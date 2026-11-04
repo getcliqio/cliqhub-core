@@ -21,6 +21,7 @@ vi.mock('../../../src/models/index.js', () => ({
             && (Array.isArray(where.team_id) ? where.team_id.includes(v.team_id) : v.team_id === where.team_id))),
     },
     TeamFile: {},
+    TeamVersionSubTeam: {},
 }));
 vi.mock('../../../src/repositories/team_file_repository.js', () => ({
     TeamFileRepository: class { async list_by_version(id: string) { state.reads++; return state.rows.filter((r) => r.version_id === id); } },

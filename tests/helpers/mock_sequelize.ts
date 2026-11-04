@@ -169,6 +169,7 @@ export function setup_sequelize_mocks() {
             Team: make_model(),
             TeamVersion: make_model(),
             TeamFile: make_model(),
+            TeamVersionSubTeam: make_model(),
             NotificationChannel: make_model(),
             NotificationRule: make_model(),
             NotificationSubscription: make_model(),
