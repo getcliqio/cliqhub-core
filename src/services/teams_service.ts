@@ -1208,8 +1208,10 @@ export class TeamsService {
      */
     private async _assert_can_publish(auth: AuthContext, scope: string | null, permission = 'teams.publish') {
         const row = scope ? await (this._scope_repo ?? _scope_repo_ts).find_by_slug(scope) : null;
-        if (auth.user!.role === 'admin') return row;
+        // The scope must exist for everyone: a site admin skips the permission check below, not this one — a team in a
+        // scope with no row can't be installed (the realm's install resolves the scope like every other path).
         if (!row) throw new ApiError(scope ? 'not_found' : 'forbidden', scope ? `Scope '@${scope}' not found` : 'A team needs a scope', scope ? 404 : 403);
+        if (auth.user!.role === 'admin') return row;
         if (!row.org_id) {
             if (row.owner_id === auth.user!.id) return row;
             throw new ApiError('forbidden', `You can't publish to @${scope}`, 403);

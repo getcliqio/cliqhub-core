@@ -78,7 +78,8 @@ vi.mock('../../../src/models/index.js', () => ({
         findAll: vi.fn().mockResolvedValue([]),
         findOne: vi.fn().mockImplementation(async (q: { where?: { slug?: string } }) => {
             const slug = q?.where?.slug;
-            return slug ? { id: `s-${slug}`, slug, org_id: `org-${slug}`, owner_id: null } : null;
+            // `nowhere` has no scope row (a scope nobody created).
+            return slug && slug !== 'nowhere' ? { id: `s-${slug}`, slug, org_id: `org-${slug}`, owner_id: null } : null;
         }),
     },
     OrgMember: {
@@ -878,6 +879,15 @@ describe('TeamsService — publish', () => {
         await expect(service.publish(ALICE, { name: 'my-team', scope: 'bob', version: '1.0.0', version_id: DRAFT }))
             .rejects.toMatchObject({ status: 403, message: "Publishing to @bob needs 'teams.publish' in its org" });
         await expect(service.publish(ALICE, { name: 'my-team', scope: 'cliq', version: '1.0.0', version_id: DRAFT })).rejects.toMatchObject({ status: 403 });
+    });
+
+    it('a scope must exist, for a site admin too: they skip the permission check, not this one', async () => {
+        await expect(service.publish(SITE_ADMIN, { name: 'my-team', scope: 'nowhere', version: '1.0.0', version_id: DRAFT }))
+            .rejects.toMatchObject({ status: 404, message: "Scope '@nowhere' not found" });
+        expect(version_repo.publish_draft).not.toHaveBeenCalled();
+        // An existing scope of another org: a site admin may publish there.
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce({ ...PUBLIC_TEAM, scope: 'bob' });
+        await expect(service.publish(SITE_ADMIN, { name: 'my-team', scope: 'bob', version: '2.0.0', version_id: DRAFT })).resolves.toMatchObject({ status: 'published' });
     });
 
     it('returns 403 when PAT grant lacks teams write', async () => {
