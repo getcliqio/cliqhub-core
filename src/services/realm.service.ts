@@ -1882,6 +1882,8 @@ export class RealmService {
             origin: 'hub' | 'cli';
             in_team_list: boolean;
             last_run_at: number | null;
+            /** The most recent run started directly (no parent run): not as another team's sub-team. */
+            last_direct_run_at: number | null;
             /** Agent names referenced by this team's workflow that are not registered in the org. */
             missing_agents: string[];
             /** What the team is for, from the catalog; null for CLI-installed teams. */
@@ -2045,14 +2047,17 @@ export class RealmService {
         }
         const published_set = new Set(registry_id_by_key.keys());
 
-        // Last run timestamp per team — MAX(started_at) grouped by team_id.
+        // Last run timestamp per team — MAX(started_at) grouped by team_id: every run, and the runs started
+        // directly (no parent run: not run as another team's sub-team).
         const last_run_map = new Map<string, number>();
+        const last_direct_run_map = new Map<string, number>();
         if (all_team_ids.length > 0 && daemon_ids.length > 0) {
             try {
-                const last_runs = await _run_repo.find_all_q({
+                const last_started = async (direct_only: boolean) => await _run_repo.find_all_q({
                     where: {
                         team_id: { [Op.in]: all_team_ids },
                         daemon_id: { [Op.in]: daemon_ids },
+                        ...(direct_only ? { parent_run_id: { [Op.is]: null } } : {}),
                     },
                     attributes: [
                         'team_id',
@@ -2060,9 +2065,13 @@ export class RealmService {
                     ],
                     group: ['team_id'],
                     raw: true,
-                }) as unknown as Array<{ team_id: string; last_started_at: number | null }>;
-                for (const r of last_runs) {
-                    if (r.last_started_at) last_run_map.set(r.team_id, r.last_started_at);
+                }) as unknown as Array<{ team_id: string; last_started_at: number | string | null }>;
+                const [all_runs, direct_runs] = await Promise.all([last_started(false), last_started(true)]);
+                for (const r of all_runs) {
+                    if (r.last_started_at) last_run_map.set(r.team_id, Number(r.last_started_at));
+                }
+                for (const r of direct_runs) {
+                    if (r.last_started_at) last_direct_run_map.set(r.team_id, Number(r.last_started_at));
                 }
             } catch (err) {
                 log.debug('run_table_unavailable', { error: err instanceof Error ? err.message : String(err) });
@@ -2179,6 +2188,7 @@ export class RealmService {
             const origin: 'hub' | 'cli' = published_set.has(key) ? 'hub' : 'cli';
             const coverage_label = _coverage_label(installed_count, online_daemon_count);
             const last_run_at = r.sample_team_id ? (last_run_map.get(r.sample_team_id) ?? null) : null;
+            const last_direct_run_at = r.sample_team_id ? (last_direct_run_map.get(r.sample_team_id) ?? null) : null;
             const realm_version = realm_versions.get(key) ?? null;
             // Of the daemons online now, those not on the realm's version (offline ones aren't counted).
             const online_stale = team_list_set.has(key)
@@ -2203,6 +2213,7 @@ export class RealmService {
                 origin,
                 in_team_list: team_list_set.has(key),
                 last_run_at,
+                last_direct_run_at,
                 missing_agents: missing_agents_map.get(key) ?? [],
                 description: description_by_key.get(key) ?? null,
                 ...(capability_map.get(key) ?? { use_when: [], not_for: [], required_inputs: [] }),

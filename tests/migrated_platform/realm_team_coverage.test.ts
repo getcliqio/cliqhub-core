@@ -18,11 +18,12 @@ import type { Request, Response } from 'express';
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
 import { publish_version } from './helpers/version_files.js';
-import { Daemon, DaemonTeam, Realm, RealmMember, Scope, Team, TeamVersion } from '../../src/models/index.js';
+import { Daemon, DaemonTeam, Realm, RealmMember, Run, Scope, Team, TeamVersion } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
 import { DispatchService } from '../../src/services/dispatch.service.js';
 import { TeamsService } from '../../src/services/teams_service.js';
+import { WorkspaceService } from '../../src/services/workspace.service.js';
 import { TeamsController } from '../../src/controllers/teams_controller.js';
 import { TeamRepository } from '../../src/repositories/team_repository.js';
 import { TeamVersionRepository } from '../../src/repositories/team_version_repository.js';
@@ -143,6 +144,7 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
 
     afterAll(async () => {
         vi.restoreAllMocks();
+        await Run.destroy({ where: { team_id: [alpha_dt_id, gamma_dt_id] } });
         await DaemonTeam.unscoped().destroy({ where: { scope_id } });
         await RealmMember.destroy({ where: { realm_id } });
         await Realm.destroy({ where: { id: realm_id } });
@@ -186,6 +188,21 @@ describe.skipIf(!has_postgres)('realm team coverage + catalog install', () => {
     it('search matches what a team is for, not only its name', async () => {
         const { rows } = await RealmService.list_team_coverage({ realm_id, query: 'failed item' }, user_id);
         expect(rows.map((r) => r.slug)).toEqual(['alpha']);
+    });
+
+    it('teams/get realm mode: last_run_at is any run; last_direct_run_at only runs with no parent run (not as a sub-team)', async () => {
+        const { record: ws } = await WorkspaceService.upsert_by_path(`/tmp/${scope_slug}-ws`);
+        const run = (team_id: string, daemon_id: string, started_at: number, parent_run_id: string | null) => Run.create({
+            run_id: randomUUID(), workspace_id: ws.id, team_id, daemon_id, realm_id, parent_run_id, started_at, state: 'completed',
+        } as any);
+        const parent = await run(alpha_dt_id, d1, 1_000, null);
+        await run(alpha_dt_id, d1, 2_000, parent.run_id);   // alpha again, as a sub-team of that run
+        await run(gamma_dt_id, d2, 3_000, parent.run_id);   // gamma only ever as a sub-team
+        const data = await call('get', { realm_id });
+        const by = Object.fromEntries(data.items.map((t: any) => [t.slug, t]));
+        expect(by.alpha).toMatchObject({ last_run_at: 2_000, last_direct_run_at: 1_000 });
+        expect(by.gamma).toMatchObject({ last_run_at: 3_000, last_direct_run_at: null });
+        expect(by.beta).toMatchObject({ last_run_at: null, last_direct_run_at: null });
     });
 
     it('teams/get realm mode: rows carry scope and the catalog id', async () => {

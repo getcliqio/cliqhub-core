@@ -219,6 +219,7 @@ export class TeamsController extends BaseController {
                 current_daemon_ids: r.current_daemon_ids,
                 missing_agents: r.missing_agents,
                 last_run_at: r.last_run_at,
+                last_direct_run_at: r.last_direct_run_at,
                 sample_team_id: r.sample_team_id,
                 ...(r.description ? { description: r.description } : {}),
                 use_when: r.use_when,
