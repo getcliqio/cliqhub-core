@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { hub_legacy_uuid } from '../../../src/lib/hub_legacy_uuid.js';
 import { Op } from 'sequelize';
-import { TeamsService, team_query_where } from '../../../src/services/teams_service.js';
+import { TeamsService, team_query_where, publish_description } from '../../../src/services/teams_service.js';
 import { Team } from '../../../src/models/team.model.js';
 import { ALICE, BOB, ORG_ADMIN, UNAUTHED, SITE_ADMIN } from '../../helpers/fixtures.js';
 import { unpack_bundle } from '@getcliqio/cliq-sdk';
@@ -978,6 +978,18 @@ describe('TeamsService — publish', () => {
         expect(EventSubmitService.submit).not.toHaveBeenCalled();
     });
 
+    it("a description that is only a YAML block marker (cliq < 1.15.16) is ignored: team.yml's is stored", async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValue(PUBLIC_TEAM);
+        for (const marker of ['>-', '>', '|', '|+', ' >2- ']) {
+            team_repo.update.mockClear();
+            await publish({ description: marker });
+            expect(team_repo.update.mock.calls[0]![1], marker).toBe('test');
+        }
+        team_repo.update.mockClear();
+        await publish({ description: '> 5% faster' });
+        expect(team_repo.update.mock.calls[0]![1]).toBe('> 5% faster');
+    });
+
     it("changing a published team's visibility raises team.visibility_changed", async () => {
         const { EventSubmitService } = await import('../../../src/services/events_service.js');
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
@@ -1350,5 +1362,15 @@ describe('TeamsService — unpublish', () => {
         expect(result.status).toBe('draft');
         expect(result.listed).toBe(false);
         expect(audit_repo.create).toHaveBeenCalled();
+    });
+});
+
+describe('publish_description', () => {
+    it('drops a bare YAML block marker and keeps real text', () => {
+        for (const marker of ['>', '>-', '>+', '|', '|-', '|2', '|2-', '>-2', '  >-  ']) expect(publish_description(marker), marker).toBeUndefined();
+        expect(publish_description(undefined)).toBeUndefined();
+        expect(publish_description('')).toBe('');
+        expect(publish_description('> quoted')).toBe('> quoted');
+        expect(publish_description('Reviews loans')).toBe('Reviews loans');
     });
 });

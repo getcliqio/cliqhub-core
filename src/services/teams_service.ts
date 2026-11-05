@@ -46,6 +46,17 @@ function team_status(visibility: string): 'draft' | 'published' {
     return visibility === 'draft' ? 'draft' : 'published';
 }
 
+/** A YAML block-scalar header on its own (`>`, `>-`, `|+`, `|2`…): what cliq before 1.15.16 sent as a description. */
+const BLOCK_MARKER = /^\s*[>|][+-]?[1-9]?[+-]?\s*$/;
+
+/**
+ * The publish request's description, or undefined when it is missing or only a YAML block marker (older cliqd read
+ * team.yml line by line), so team.yml's parsed description is used instead.
+ */
+export function publish_description(description: string | undefined): string | undefined {
+    return description === undefined || BLOCK_MARKER.test(description) ? undefined : description;
+}
+
 /**
  * `manifest_yaml` with its top-level `name:` set to `name` (added at the top
  * when missing); the rest of the text, comments included, is kept as is.
@@ -764,6 +775,7 @@ export class TeamsService {
         log.debug('publish', { team_id: params.team_id, name: params.name, scope: params.scope });
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
+        params = { ...params, description: publish_description(params.description) };
 
         let team = null as Awaited<ReturnType<TeamRepository['find_by_id']>>;
         if (params.team_id) {
