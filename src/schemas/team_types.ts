@@ -428,6 +428,8 @@ export const TeamData = z.object({
         .describe('Whether this team is in the realm team list'),
     last_run_at: z.number().nullable().optional()
         .describe('Timestamp of the most recent run of this team in the realm (unix ms)'),
+    last_direct_run_at: z.number().nullable().optional()
+        .describe('Realm mode: the most recent run started directly — no parent run, so not as another team\'s sub-team (unix ms)'),
     slug: z.string().optional()
         .describe('Team slug (alias for name used in daemon/realm context)'),
     label: z.string().optional()
