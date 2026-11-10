@@ -61,6 +61,8 @@ export class Hug extends BaseModel {
     declare hug_sha256: string | null;
     /** Plain text where the frontend can't be (notifications, the inbox). */
     declare summary: string | null;
+    /** The requester's latest status line while open (`hug.progress` activity) — informational. */
+    declare progress: string | null;
     /** The hug's params (checked by its definition; never read by Core). */
     declare params: Record<string, unknown>;
     /** Upload slots: the top-level answer keys that may carry uploads. */
@@ -94,6 +96,7 @@ export class Hug extends BaseModel {
             hug_name: { type: DataTypes.TEXT, allowNull: true },
             hug_sha256: { type: DataTypes.TEXT, allowNull: true },
             summary: { type: DataTypes.TEXT, allowNull: true },
+            progress: { type: DataTypes.TEXT, allowNull: true },
             params: { type: DataTypes.JSONB, allowNull: false, defaultValue: {} },
             files: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },
             attachments: { type: DataTypes.JSONB, allowNull: false, defaultValue: [] },

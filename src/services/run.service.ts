@@ -2493,8 +2493,29 @@ export class RunService {
         if (types.has('phase.resumed')) {
             await this.resume(run_id).catch(() => {});
         }
+        // A Hug's status line (PLAN-hug-widgets §6.1): the latest per Hug in this batch, written onto the Hug.
+        if (types.has('hug.progress')) await this._hug_progress(run_id, daemon_id, events);
 
         return { count: events.length, ids };
+    }
+
+    /** `hug.progress` events: each Hug's latest line goes onto it (best effort — the line is informational). */
+    private static async _hug_progress(run_id: string, daemon_id: string | null, events: ReadonlyArray<{ event_type: string; payload_json?: string | null }>): Promise<void> {
+        const latest = new Map<string, string | null>();
+        for (const e of events) {
+            if (e.event_type !== 'hug.progress' || !e.payload_json) continue;
+            try {
+                const p = JSON.parse(e.payload_json) as { hug_id?: unknown; progress?: unknown };
+                if (typeof p.hug_id === 'string') latest.set(p.hug_id, typeof p.progress === 'string' ? p.progress : null);
+            } catch {
+                // A malformed payload: nothing to show for it.
+            }
+        }
+        const { HugsService } = await import('./hugs.service.js');
+        for (const [hug_id, progress] of latest) {
+            await HugsService.set_progress(run_id, daemon_id, hug_id, progress)
+                .catch((err: unknown) => log.warn('hug_progress_failed', { run_id, hug_id, error: err instanceof Error ? err.message : String(err) }));
+        }
     }
 
     /**

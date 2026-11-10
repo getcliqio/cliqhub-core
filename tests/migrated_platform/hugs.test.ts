@@ -253,25 +253,32 @@ describe.skipIf(!has_postgres)('Hugs (Core)', () => {
 			await expect(open({}, { run_id: `run-${uid()}`, hug_id })).rejects.toMatchObject({ status_code: 409 });
 		});
 
-		it('unused bundles are swept (built-ins too); those of open or recently closed Hugs and new ones stay', async () => {
+		it('unused bundles are swept (built-ins too); those of open or recently closed Hugs, new ones and just-resolved ones stay', async () => {
 			const day = 24 * 60 * 60 * 1000;
 			const stored = async (name: string) => {
 				const { sha256 } = await HugBundlesService.store(bundle_of(name, `<!-- ${uid()} -->`), null);
-				await HugBundle.update({ created_at: new Date(Date.now() - 2 * day) }, { where: { sha256 } });
+				await HugBundle.update({ created_at: new Date(Date.now() - 2 * day), last_used_at: new Date(Date.now() - 2 * day) }, { where: { sha256 } });
 				return sha256;
 			};
 			const unused = await stored('sweep-unused');
 			const old_closed = await stored('sweep-old');
 			const recent_closed = await stored('sweep-recent');
+			const old_open = await stored('sweep-open');
 			const builtin = await stored('form');
 			const fresh = (await HugBundlesService.store(bundle_of('sweep-fresh', `<!-- ${uid()} -->`), null)).sha256;
+			// Old, but a Hug being opened just resolved it (its row isn't written yet): it stays.
+			const resolving = await stored('sweep-resolving');
+			await HugBundlesService.resolve({ name: 'sweep-resolving', sha256: resolving }, { may_upload: false, realm_id: 'r' });
 			for (const [sha256, days] of [[old_closed, 100], [recent_closed, 10]] as const) {
 				const { hug_id } = await open({ hug: { name: 'x', sha256: RELEASE_SHA } });
 				await Hug.update({ hug_sha256: sha256, status: 'closed', closed_at: new Date(Date.now() - days * day) }, { where: { id: hug_id } });
 			}
+			// An open Hug keeps its bundle however old both are.
+			const { hug_id: open_id } = await open({ hug: { name: 'x', sha256: RELEASE_SHA } });
+			await Hug.update({ hug_sha256: old_open, created_at: new Date(Date.now() - 200 * day) }, { where: { id: open_id } });
 			expect(await HugBundlesService.sweep_unused()).toBe(3);
-			const left = (await HugBundle.findAll({ where: { sha256: [unused, old_closed, recent_closed, builtin, fresh] }, raw: true })).map((b) => b.sha256);
-			expect(left.sort()).toEqual([recent_closed, fresh].sort());
+			const left = (await HugBundle.findAll({ where: { sha256: [unused, old_closed, recent_closed, old_open, builtin, fresh, resolving] }, raw: true })).map((b) => b.sha256);
+			expect(left.sort()).toEqual([recent_closed, old_open, fresh, resolving].sort());
 			expect(await HugBundlesService.get_file(unused, 'index.html')).toBeNull();
 			expect(await HugBundlesService.get_file(recent_closed, 'index.html')).not.toBeNull();
 		});
@@ -316,6 +323,46 @@ describe.skipIf(!has_postgres)('Hugs (Core)', () => {
 			expect(HugsRespondInput.safeParse({ hug_id, values: { big: 'x'.repeat(257 * 1024) } }).success).toBe(false);
 			expect(HugsRespondInput.safeParse({ hug_id, values: {}, summary: 'two\nlines' }).success).toBe(false);
 			expect(HugsRespondInput.safeParse({ hug_id, values: {}, summary: 'x'.repeat(121) }).success).toBe(false);
+		});
+
+		it('the requester\'s status line (§6.1 progress): only the Hug\'s own daemon sets it, only while open; the latest in a batch wins', async () => {
+			const { hug_id } = await open();
+			const run_id = (await Hug.findByPk(hug_id, { raw: true }))!.run_id;
+			await HugsService.set_progress(run_id, 'daemon-2', hug_id, 'from another daemon');
+			expect((await HugsService.get(hug_id)).progress).toBeNull();
+			const { RunService } = await import('../../src/services/run.service.js');
+			const ev = (progress: string | null) => ({ event_type: 'hug.progress', payload_json: JSON.stringify({ hug_id, progress }) });
+			await (RunService as unknown as { _hug_progress: (r: string, d: string, e: unknown[]) => Promise<void> })
+				._hug_progress(run_id, 'daemon-1', [ev('first'), { event_type: 'phase.progress', payload_json: '{}' }, ev("1 answer couldn't be used;\n  waiting")]);
+			expect((await HugsService.get(hug_id)).progress).toBe("1 answer couldn't be used; waiting");
+			await HugsService.set_progress(run_id, 'daemon-1', hug_id, null);
+			expect((await HugsService.get(hug_id)).progress).toBeNull();
+			await HugsService.set_progress(run_id, 'daemon-1', hug_id, 'waiting for product');
+			await HugsService.close({ hug_id, outcome: 'done', daemon_id: 'daemon-1' });
+			expect((await HugsService.get(hug_id)).progress).toBeNull();     // ended: no line
+			await HugsService.set_progress(run_id, 'daemon-1', hug_id, 'too late');
+			expect((await Hug.findByPk(hug_id, { raw: true }))!.progress).toBe('waiting for product');
+		});
+
+		it('notifications carry the summaries: the Hug\'s where its page can\'t be shown, the answer\'s for "Ann responded: …" (§3.1, §3.2)', async () => {
+			const { NotificationFanOutService } = await import('../../src/notifications/fan_out.service.js');
+			const { EventSubmitService } = await import('../../src/services/events_service.js');
+			const opened = vi.spyOn(NotificationFanOutService, 'deliver_to_channels');
+			const submitted = vi.spyOn(EventSubmitService, 'submit');
+			try {
+				const { hug_id } = await open();
+				const sent = opened.mock.calls.at(-1)![1] as { message: string; payload: Record<string, unknown> };
+				expect(sent.message).toBe(`${SPEC.summary}\n\nOpen: ${sent.payload['hug_url']}`);
+				expect(sent.payload).toMatchObject({ hug_id, summary: SPEC.summary });
+
+				await HugsService.respond({ hug_id, user_id: OWNER, values: { release: 'autumn' }, summary: 'autumn' });
+				const responded = submitted.mock.calls.map((c) => c[0]).find((e) => e.type === 'hug.responded')!;
+				expect(responded.message).toMatch(/ responded: autumn$/);
+				expect(responded.payload).toMatchObject({ hug_id, summary: 'autumn' });
+			} finally {
+				opened.mockRestore();
+				submitted.mockRestore();
+			}
 		});
 
 		it('file references only under upload slots (422 invalid_values elsewhere); a slot takes only file references, one unless multiple', async () => {

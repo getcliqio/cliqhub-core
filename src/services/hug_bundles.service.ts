@@ -23,16 +23,20 @@ export const BUNDLE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 /** A bundle stored this recently is never swept (its Hug may still be opening). */
 const SWEEP_GRACE_MS = 24 * 60 * 60 * 1000;
 
+/** Every extension a bundle may carry (cliq-sdk's TEXT_EXTENSIONS), with the type it is served as. */
 const CONTENT_TYPES: Record<string, string> = {
     html: 'text/html; charset=utf-8',
+    htm: 'text/html; charset=utf-8',
     js: 'text/javascript; charset=utf-8',
     mjs: 'text/javascript; charset=utf-8',
+    cjs: 'text/javascript; charset=utf-8',
     css: 'text/css; charset=utf-8',
     json: 'application/json; charset=utf-8',
     map: 'application/json; charset=utf-8',
     svg: 'image/svg+xml; charset=utf-8',
     txt: 'text/plain; charset=utf-8',
     md: 'text/markdown; charset=utf-8',
+    webmanifest: 'application/manifest+json; charset=utf-8',
 };
 
 let storage: PackageStorage | null = null;
@@ -94,7 +98,8 @@ export class HugBundlesService {
     }
 
     /**
-     * Check and store a bundle (idempotent by hash).
+     * Check and store a bundle (idempotent by hash). Hugs get their bundles through {@link resolve}; this is for tests
+     * and tooling that need one stored directly.
      *
      * @throws 422 `BUNDLE_INVALID` `{ problems }`
      */
@@ -116,11 +121,12 @@ export class HugBundlesService {
 
     /**
      * Delete bundles no Hug needs: none open and none closed within {@link BUNDLE_RETENTION_MS}. Bundles
-     * stored in the last day stay. Returns how many went.
+     * stored or resolved in the last day stay — a Hug being opened has resolved its bundle (`last_used_at`) before
+     * its row exists, so the sweep can't delete it in between. Returns how many went.
      */
     static async sweep_unused(now = new Date()): Promise<number> {
         const [rows] = await get_sequelize().query(`SELECT b."sha256" FROM cliq."hug_bundles" b
-            WHERE b."created_at" < :grace
+            WHERE b."created_at" < :grace AND COALESCE(b."last_used_at", b."created_at") < :grace
               AND NOT EXISTS (SELECT 1 FROM cliq."hugs" h WHERE h."hug_sha256" = b."sha256"
                   AND (h."status" = 'open' OR COALESCE(h."closed_at", h."created_at") > :keep_after))`, {
             replacements: { grace: new Date(now.getTime() - SWEEP_GRACE_MS), keep_after: new Date(now.getTime() - BUNDLE_RETENTION_MS) },

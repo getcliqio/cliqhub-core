@@ -2382,6 +2382,7 @@ const HUGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hugs" (
     "hug_name"          TEXT,
     "hug_sha256"        TEXT,
     "summary"           TEXT,
+    "progress"          TEXT,
     "params"            JSONB NOT NULL DEFAULT '{}'::jsonb,
     "files"             JSONB NOT NULL DEFAULT '[]'::jsonb,
     "attachments"       JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -2525,6 +2526,7 @@ export async function migrate_hug_widgets(sq: Sequelize): Promise<void> {
         ADD COLUMN IF NOT EXISTS "hug_name" TEXT,
         ADD COLUMN IF NOT EXISTS "hug_sha256" TEXT,
         ADD COLUMN IF NOT EXISTS "summary" TEXT,
+        ADD COLUMN IF NOT EXISTS "progress" TEXT,
         ADD COLUMN IF NOT EXISTS "files" JSONB NOT NULL DEFAULT '[]'::jsonb,
         ADD COLUMN IF NOT EXISTS "attachments" JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await sq.query(`ALTER TABLE cliq."hug_responses" ADD COLUMN IF NOT EXISTS "summary" TEXT`);

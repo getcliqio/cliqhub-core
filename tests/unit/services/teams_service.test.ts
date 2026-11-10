@@ -1036,6 +1036,13 @@ describe('TeamsService — publish', () => {
         expect(version_repo.publish_draft).not.toHaveBeenCalled();
     });
 
+    it("a binary file in a team hug's dist/ is refused at publish — a bundle is text (PLAN-hug-widgets §4.1, §15)", async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValue(PUBLIC_TEAM);
+        stage({ ...FILES, 'hugs/review-batch/dist/hug.json': '{"name":"review-batch"}', 'hugs/review-batch/dist/logo.png': '\u0089PNG\r\n\u001a\n\u0000\u0000' });
+        await expect(publish()).rejects.toMatchObject({ status: 422, details: { paths: ['hugs/review-batch/dist/logo.png'] } });
+        expect(version_repo.publish_draft).not.toHaveBeenCalled();
+    });
+
     it('a stored file that does not match its record stops the publish', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
         objects.set(files.rows[0].storage_key as string, Buffer.from('tampered'));

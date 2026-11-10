@@ -85,6 +85,8 @@ export interface HugData {
      *  before hugs, which the page shows in its simple fallback view. */
     hug: { name: string; sha256: string } | null;
     summary: string | null;
+    /** The requester's latest status line while the Hug is open ("1 answer couldn't be used; …"); null otherwise. */
+    progress: string | null;
     /** The hug's params (never read by Core). */
     params: Record<string, unknown>;
     /** Upload slots: the top-level answer keys that may carry uploads. */
@@ -221,7 +223,7 @@ export class HugsService {
         const hug_url = hug_url_for(id);
         await HugsService._notify_opened({
             hug_id: id, hug_url, realm_id: input.realm_id, org_id, run_id: input.run_id, phase: input.phase,
-            daemon_id: input.daemon_id, title: spec.title, actor_id: input.actor_id,
+            daemon_id: input.daemon_id, title: spec.title, summary: spec.summary ?? null, actor_id: input.actor_id,
             channel_ids: [...new Set(resolved.destinations.map((d) => d.channel_id))],
         });
         for (const p of not_sent_to) {
@@ -295,6 +297,7 @@ export class HugsService {
             title: hug.title,
             hug: hug.hug_name && hug.hug_sha256 ? { name: hug.hug_name, sha256: hug.hug_sha256 } : null,
             summary: hug.summary,
+            progress: hug.status === 'open' ? hug.progress ?? null : null,
             params: hug.params,
             files: hug.files ?? [],
             attachments: hug.attachments ?? [],
@@ -369,7 +372,10 @@ export class HugsService {
             return { row, data, seq };
         });
 
-        await HugsService._notify(hug, 'hug.responded', { responder: response.data.responder.name });
+        // The answer in one line, from its hug (PLAN-hug-widgets §3.2): "Ann responded: 2 of 3 OK".
+        const who = response.data.responder.name;
+        await HugsService._notify(hug, 'hug.responded', { responder: who, ...(summary ? { summary } : {}) }, undefined,
+            summary ? `${who} responded: ${summary}` : `${who} responded`);
         log.info('hug_responded', { hug_id: hug.id, seq: response.seq, responder: input.user_id });
         return { response_id: response.row.id, seq: response.seq };
     }
@@ -507,8 +513,22 @@ export class HugsService {
         });
     }
 
-    /** A notification event to the Hug's channels (or the given ones). Best effort. */
-    private static async _notify(hug: Hug, type: 'hug.responded' | 'hug.closed' | 'hug.expired' | 'hug.reminded', extra: Record<string, unknown>, channel_ids?: string[]): Promise<void> {
+    /**
+     * The requester's status line for an open Hug (PLAN-hug-widgets §6.1 `progress`), from a `hug.progress` run activity
+     * event. Informational: written only for a Hug of `run_id` that `daemon_id` opened and that is still open; anything
+     * else is ignored.
+     */
+    static async set_progress(run_id: string, daemon_id: string | null, hug_id: string, progress: string | null): Promise<void> {
+        if (!daemon_id) return;
+        const line = progress?.replace(/\s+/g, ' ').trim().slice(0, 200) || null;
+        await Hug.update({ progress: line }, { where: { id: hug_id, run_id, daemon_id, status: 'open' } });
+    }
+
+    /** A notification event to the Hug's channels (or the given ones), with its text when given. Best effort. */
+    private static async _notify(
+        hug: Hug, type: 'hug.responded' | 'hug.closed' | 'hug.expired' | 'hug.reminded', extra: Record<string, unknown>,
+        channel_ids?: string[], message?: string,
+    ): Promise<void> {
         try {
             const ids = channel_ids ?? [...new Set((await HugDelivery.findAll({ where: { hug_id: hug.id }, attributes: ['channel_id'], raw: true })).map((d) => d.channel_id))];
             await EventSubmitService.submit({
@@ -518,6 +538,7 @@ export class HugsService {
                 phase: hug.phase,
                 daemon_id: hug.daemon_id,
                 payload: { hug_id: hug.id, hug_url: hug_url_for(hug.id), title: hug.title, ...extra },
+                ...(message ? { message } : {}),
                 target_channels: ids,
             });
         } catch (err) {
@@ -528,7 +549,7 @@ export class HugsService {
     /** Post the new Hug straight to its channels — not an event, so no rule can match it (B4.5). */
     private static async _notify_opened(input: {
         hug_id: string; hug_url: string; realm_id: string; org_id: string; run_id: string; phase: string;
-        daemon_id: string; title: string; actor_id: string | null; channel_ids: string[];
+        daemon_id: string; title: string; summary: string | null; actor_id: string | null; channel_ids: string[];
     }): Promise<void> {
         try {
             const { NotificationFanOutService } = await import('../notifications/fan_out.service.js');
@@ -543,9 +564,10 @@ export class HugsService {
                 phase: input.phase,
                 daemon_id: input.daemon_id,
                 title: input.title,
-                message: `Your input is needed for a run. Open: ${input.hug_url}`,
+                // The Hug's summary is the text for where its page can't be (PLAN-hug-widgets §3.1).
+                message: input.summary ? `${input.summary}\n\nOpen: ${input.hug_url}` : `Your input is needed for a run. Open: ${input.hug_url}`,
                 severity: 'info',
-                payload: { hug_id: input.hug_id, hug_url: input.hug_url },
+                payload: { hug_id: input.hug_id, hug_url: input.hug_url, ...(input.summary ? { summary: input.summary } : {}) },
                 actor_id: input.actor_id,
                 created_at: now.getTime(),
                 notifications: 'deferred',
