@@ -23,6 +23,7 @@ import {
 	postgres_reachable,
 } from './helpers/control_plane_store.js';
 import { HugsService } from '../../src/services/hugs.service.js';
+import { hug_bundle_hash } from '@getcliqio/cliq-sdk';
 import { RealmService } from '../../src/services/realm.service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
 import { NotificationFanOutService } from '../../src/notifications/fan_out.service.js';
@@ -79,6 +80,13 @@ async function eventually<T>(fn: () => Promise<T> | T, ms = 3000): Promise<T> {
 	}
 }
 
+/** A minimal hug bundle (sent with each create; Core stores it once). */
+const ASK_BUNDLE = {
+	'hug.json': JSON.stringify({ name: 'ask', title: 'Ask', sdk_version: '0.1.0' }),
+	'index.html': '<!doctype html><p>ask</p>',
+	'definition.mjs': 'export default {};',
+};
+
 /** Open a Hug that asks `channel` (posted straight to it, PLAN-hug-requests); returns its id. */
 async function hug_to(channel: string): Promise<string> {
 	const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Hugs', { org_id: ORG });
@@ -86,7 +94,8 @@ async function hug_to(channel: string): Promise<string> {
 	await RealmMember.create({ id: `${realm.id}:${KAI}`, realm_id: realm.id, member_type: 'user', member_id: KAI, role: 'member', created_at: Date.now() } as never);
 	const created = await HugsService.create({
 		run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id, phase: 'human-review', iteration: 0,
-		spec: { template: 'form', title: 'Approve the release', params: { prompt: 'Approve?' }, channels: [channel], expires_in_min: 60 },
+		spec: { hug: { name: 'ask', sha256: hug_bundle_hash(ASK_BUNDLE) }, title: 'Approve the release', summary: 'Approve?', channels: [channel], expires_in_min: 60 },
+		bundle: ASK_BUNDLE, may_upload_bundle: true,
 		actor_id: ORG,
 	});
 	return created.hug_id;

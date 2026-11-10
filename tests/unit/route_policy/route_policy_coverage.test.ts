@@ -65,6 +65,7 @@ describe('route policy coverage', () => {
             "by_body(body.reset_token ? public : signed_in) POST /internal/users/change_password",
             "public GET /a2a/o/:org/r/:slug/.well-known/agent-card.json",
             "public GET /v1/health",
+            "public POST /v1/hug_bundles/get_file",
             "public POST /v1/integrations/jira/disconnect_workspace",
             "public POST /v1/integrations/jira/get_workspaces",
             "public POST /v1/integrations/jira/register_workspace",

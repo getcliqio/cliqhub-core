@@ -26,6 +26,7 @@ import { OrgsController } from './controllers/orgs_controller.js';
 import { InvitationsController } from './controllers/invitations_controller.js';
 import { BuilderService } from './services/builder_service.js';
 import { HostedLlmAdapter } from './services/llm/hosted_adapter.js';
+import { init_hug_bundle_storage } from './services/hug_bundles.service.js';
 import { create_package_storage, type PackageStorage } from './storage/package_storage.js';
 import { init_version_content } from './services/version_content.js';
 import { AuditRepository } from './repositories/audit_repository.js';
@@ -125,6 +126,8 @@ export async function create_container(config: EnvConfig): Promise<Container> {
     });
     // Team version content is read from the version's files in this storage (PLAN-team-bundle S1.4b).
     init_version_content(storage);
+    // Hug bundles live in the same storage, under hug-bundles/<sha256>/ (PLAN-hug-widgets §11.1).
+    init_hug_bundle_storage(storage);
 
     const audit_repo = new AuditRepository();
     const settings_repo = new SettingsRepository();

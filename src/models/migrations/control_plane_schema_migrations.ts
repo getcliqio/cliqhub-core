@@ -1442,6 +1442,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_person_settings_seed(sq);
     await migrate_hugs(sq);
     await migrate_hug_templates(sq);
+    await migrate_hug_widgets(sq);
     await migrate_team_visibility(sq);
 }
 
@@ -2378,9 +2379,12 @@ const HUGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hugs" (
     "realm_id"          TEXT NOT NULL,
     "org_id"            UUID NOT NULL,
     "title"             TEXT NOT NULL,
-    "template"          TEXT NOT NULL,
-    "template_version"  INTEGER NOT NULL,
+    "hug_name"          TEXT,
+    "hug_sha256"        TEXT,
+    "summary"           TEXT,
     "params"            JSONB NOT NULL DEFAULT '{}'::jsonb,
+    "files"             JSONB NOT NULL DEFAULT '[]'::jsonb,
+    "attachments"       JSONB NOT NULL DEFAULT '[]'::jsonb,
     "channels"          TEXT[] NOT NULL,
     "status"            TEXT NOT NULL DEFAULT 'open',
     "outcome"           TEXT,
@@ -2411,6 +2415,7 @@ const HUG_RESPONSES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hug_responses"
     "responder_user_id"  UUID NOT NULL,
     "via_channels"       TEXT[] NOT NULL,
     "values"             JSONB NOT NULL,
+    "summary"            TEXT,
     "seq"                INTEGER NOT NULL,
     "created_at"         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at"         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2425,6 +2430,17 @@ const HUG_EVENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hug_events" (
     "payload"     JSONB NOT NULL DEFAULT '{}'::jsonb,
     "created_at"  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY ("hug_id", "seq")
+)`;
+
+/** Hug bundles, stored once by hash; files in package storage `hug-bundles/<sha256>/` (PLAN-hug-widgets §11.1). */
+const HUG_BUNDLES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hug_bundles" (
+    "sha256"        TEXT PRIMARY KEY,
+    "name"          TEXT NOT NULL,
+    "size_bytes"    INTEGER NOT NULL,
+    "file_count"    INTEGER NOT NULL,
+    "realm_id"      TEXT,
+    "created_at"    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    "last_used_at"  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )`;
 
 /**
@@ -2452,6 +2468,7 @@ export async function migrate_hugs_before_sync(sq: Sequelize): Promise<void> {
     await sq.query(HUG_DELIVERIES_TABLE_SQL);
     await sq.query(HUG_RESPONSES_TABLE_SQL);
     await sq.query(HUG_EVENTS_TABLE_SQL);
+    await sq.query(HUG_BUNDLES_TABLE_SQL);
 }
 
 /**
@@ -2493,6 +2510,50 @@ export async function migrate_hug_templates(sq: Sequelize): Promise<void> {
             WHERE "comment" IS NOT NULL AND ("values"->'comment') IS NULL`);
         await q(`ALTER TABLE cliq."hug_responses" DROP COLUMN IF EXISTS "comment"`);
         _mig_log.info('hug_templates_migrated', { cancelled: cancelled.length });
+    });
+}
+
+/**
+ * Hugs open with a hug — a named frontend and its bundle (PLAN-hug-widgets §11.1, §11.3). Idempotent: adds the
+ * envelope's columns and `hug_bundles`; then, once (while `hugs.template` exists), the cut-over: open Hugs opened
+ * before hugs (no `hug_name`) are cancelled, each with a `cancelled` event for its daemon's catch-up, and the
+ * `template` / `template_version` columns are dropped. Past pre-hug Hugs keep their rows (shown without a hug).
+ */
+export async function migrate_hug_widgets(sq: Sequelize): Promise<void> {
+    if (sq.getDialect() !== 'postgres') return;
+    await sq.query(`ALTER TABLE cliq."hugs"
+        ADD COLUMN IF NOT EXISTS "hug_name" TEXT,
+        ADD COLUMN IF NOT EXISTS "hug_sha256" TEXT,
+        ADD COLUMN IF NOT EXISTS "summary" TEXT,
+        ADD COLUMN IF NOT EXISTS "files" JSONB NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS "attachments" JSONB NOT NULL DEFAULT '[]'::jsonb`);
+    await sq.query(`ALTER TABLE cliq."hug_responses" ADD COLUMN IF NOT EXISTS "summary" TEXT`);
+    await sq.query(HUG_BUNDLES_TABLE_SQL);
+    await sq.query(`CREATE INDEX IF NOT EXISTS "hugs_hug_sha256_idx" ON cliq."hugs" ("hug_sha256")`);
+    await cut_over_to_hugs(sq);
+}
+
+/** Why a pre-hug Hug that was still open ended (its outcome and its `cancelled` event's reason). */
+export const HUG_CUTOVER_REASON = 'Hugs moved to hugs — update cliq';
+
+/** The Step 10 cut-over (PLAN-hug-widgets §11.3): once, while `hugs.template` exists; one transaction. */
+async function cut_over_to_hugs(sq: Sequelize): Promise<void> {
+    const [cols] = await sq.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_schema = 'cliq' AND table_name = 'hugs' AND column_name = 'template'`,
+    ) as [Array<{ column_name: string }>, unknown];
+    if (cols.length === 0) return;
+    await sq.transaction(async (t) => {
+        const [cancelled] = await sq.query(`UPDATE cliq."hugs"
+            SET "status" = 'cancelled', "outcome" = :outcome, "closed_at" = NOW(), "next_remind_at" = NULL, "last_seq" = "last_seq" + 1
+            WHERE "status" = 'open' AND "hug_name" IS NULL RETURNING "id", "last_seq"`,
+        { replacements: { outcome: `cancelled: ${HUG_CUTOVER_REASON}` }, transaction: t }) as [Array<{ id: string; last_seq: number }>, unknown];
+        for (const h of cancelled) {
+            await sq.query(`INSERT INTO cliq."hug_events" ("hug_id", "seq", "type", "payload", "created_at")
+                VALUES (:id, :seq, 'cancelled', jsonb_build_object('reason', CAST(:reason AS TEXT)), NOW())`,
+            { replacements: { id: h.id, seq: h.last_seq, reason: HUG_CUTOVER_REASON }, transaction: t });
+        }
+        await sq.query(`ALTER TABLE cliq."hugs" DROP COLUMN IF EXISTS "template", DROP COLUMN IF EXISTS "template_version"`, { transaction: t });
+        _mig_log.info('hugs_cut_over', { cancelled: cancelled.length });
     });
 }
 

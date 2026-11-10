@@ -37,7 +37,9 @@ describe('migrate_hugs_before_sync', () => {
         const { sq, sql } = fake(['hug_id']);
         await migrate_hugs_before_sync(sq);
         expect(sql.some((q) => q.includes('RENAME COLUMN'))).toBe(false);
-        expect(sql.filter((q) => q.startsWith('CREATE TABLE IF NOT EXISTS cliq."hug'))).toHaveLength(4);
+        // hugs, hug_deliveries, hug_responses, hug_events, and hug_bundles (PLAN-hug-widgets Step 7).
+        expect(sql.filter((q) => q.startsWith('CREATE TABLE IF NOT EXISTS cliq."hug')).map((q) => q.match(/cliq\."([a-z_]+)"/)![1]))
+            .toEqual(['hugs', 'hug_deliveries', 'hug_responses', 'hug_events', 'hug_bundles']);
     });
 
     it('the Hug tables carry their constraints (sync from the models would not)', async () => {

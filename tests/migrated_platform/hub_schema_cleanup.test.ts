@@ -149,7 +149,7 @@ describe.skipIf(!has_postgres)('hub schema cleanup (boot)', () => {
         }
         const hug = await Hug.create({
             id: randomUUID(), run_id: live_run, phase: 'p', daemon_id: 'd', realm_id: realm.id, org_id: stale_org_id,
-            title: 't', template: 'form', template_version: 1, params: {}, channels: ['c'], status: 'open', expires_at: new Date(Date.now() + 3_600_000),
+            title: 't', params: {}, channels: ['c'], status: 'open', expires_at: new Date(Date.now() + 3_600_000),
         } as never);
         const notif = await InAppNotification.create({
             id: randomUUID(), event: 'run.failed', realm_id: realm.id, org_id: stale_org_id, created_at: Date.now(),

@@ -1,23 +1,25 @@
 /**
  * Hugs — Core's side of the one protocol for asking people (PLAN-hug-requests §6).
  *
- * Core stores a Hug, resolves its channels and notifies the people they reach, authorizes
- * responses and has the Hug's template check them (PLAN-hug-templates), keeps the requester's event stream (numbered per Hug) and delivers
- * each event to the daemon that opened it, expires Hugs and sends their reminders. It never
- * interprets a value: what a response means, and when the requester has heard enough, is the
- * requester's business.
+ * Core stores a Hug (its envelope — which hug and bundle, title, summary, upload slots, attachments;
+ * PLAN-hug-widgets §11.1), resolves its channels and notifies the people they reach, authorizes
+ * responses, keeps the requester's event stream (numbered per Hug) and delivers each event to the
+ * daemon that opened it, expires Hugs and sends their reminders. It never interprets `params` or a
+ * response's `values` (the hug's definition checks them, in the frontend and in the agent): it checks
+ * only their size, and that uploads sit under the Hug's upload slots.
  */
 
 import { randomUUID } from 'node:crypto';
 import { Op, type Transaction } from 'sequelize';
-import { HugSpecSchema, type FileValue, type RequestedInput } from '@getcliqio/cliq-sdk';
-import { resolve_template, type HugTemplate } from '@getcliqio/cliq-sdk/hug-templates';
+import type { FileValue } from '@getcliqio/cliq-sdk';
 
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import { get_sequelize } from '../db/sequelize.js';
 import { Hug, HugDelivery, HugEventRow, HugResponse, Realm, StoredArtifact, User } from '../models/index.js';
-import type { HugNotSentTo } from '../models/hug.model.js';
+import type { HugAttachmentRow, HugFileSlotRow, HugNotSentTo } from '../models/hug.model.js';
+import { HugEnvelopeSchema, type HugEnvelope } from '../schemas/hug_types.js';
+import { HugBundlesService } from './hug_bundles.service.js';
 import type { HugEventType } from '../models/hug.model.js';
 import { visible_realm_ids } from '../auth/route_policy/visible.js';
 import { no_channel_message, raise_unknown_channel } from '../notifications/unknown_channel.js';
@@ -43,8 +45,12 @@ export interface CreateHugInput {
     realm_id: string;
     phase: string;
     iteration: number;
-    /** The agent's HugSpec, validated here (it comes from the daemon unchanged). */
+    /** The Hug's envelope, validated here (it comes from the daemon unchanged). */
     spec: unknown;
+    /** The hug's bundle (path → text), sent on the retry after `BUNDLE_MISSING`. */
+    bundle?: Record<string, string>;
+    /** Whether the caller may upload a bundle (a daemon of the Hug's realm). */
+    may_upload_bundle?: boolean;
     actor_id: string | null;
 }
 
@@ -53,8 +59,10 @@ export interface HugResponseData {
     response_id: string;
     responder: { user_id: string; name: string };
     via: string[];
-    /** The answer, as the template's keys. */
+    /** The answer, as the hug's keys. */
     values: Record<string, unknown>;
+    /** The answer in one line, from the frontend (absent when it gave none). */
+    summary?: string;
     responded_at: string;
 }
 
@@ -73,11 +81,16 @@ export interface HugData {
     org_slug: string | null;
     daemon_id: string;
     title: string;
-    /** The template's name and the version this Hug resolved to (the page renders by these). */
-    template: string;
-    template_version: number;
-    /** The template's params. */
+    /** The hug it was opened with and its bundle (the page renders it by these); null for a Hug opened
+     *  before hugs, which the page shows in its simple fallback view. */
+    hug: { name: string; sha256: string } | null;
+    summary: string | null;
+    /** The hug's params (never read by Core). */
     params: Record<string, unknown>;
+    /** Upload slots: the top-level answer keys that may carry uploads. */
+    files: HugFileSlotRow[];
+    /** Run files the frontend may read. */
+    attachments: HugAttachmentRow[];
     channels: string[];
     status: string;
     outcome: string | null;
@@ -88,6 +101,12 @@ export interface HugData {
     /** People its channels reach who may not see it, so it wasn't sent to them (name and channel). */
     not_sent_to: Array<{ name: string; channel: string }>;
     responses: HugResponseData[];
+    /**
+     * What the person reading it may do — the rule `respond` applies, so the page offers an answer only when Core
+     * would take one: open (and not past its expiry) and reaching them ({@link HugsService.channels_reaching}).
+     * `via` is the channels that reached them. Null for a daemon.
+     */
+    viewer: { can_answer: boolean; via: string[] } | null;
 }
 
 /** One event of a Hug's requester stream. */
@@ -123,14 +142,7 @@ export class HugsService {
      * 422), store it with one delivery row per destination, and notify those channels directly.
      */
     static async create(input: CreateHugInput): Promise<{ hug_id: string; hug_url: string }> {
-        const parsed = HugSpecSchema.safeParse(input.spec);
-        if (!parsed.success) {
-            throw ApiError.unprocessable(`Invalid Hug: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'spec'}: ${i.message}`).join('; ')}`, 'invalid_hug');
-        }
-        const spec = parsed.data;
-        const template = resolve_template(spec.template)!;
-        const params = template.check_params(spec.params);
-        if (!params.ok) throw ApiError.unprocessable(`Invalid Hug: ${params.problems.join('; ')}`, 'invalid_hug');
+        const spec = parse_envelope(input.spec);
         if (spec.expires_in_min === undefined) throw ApiError.unprocessable('expires_in_min is required — every Hug expires', 'invalid_hug');
 
         if (input.hug_id) {
@@ -145,7 +157,10 @@ export class HugsService {
         if (!realm?.org_id) throw ApiError.not_found('Realm not found');
         const org_id = String(realm.org_id);
 
-        await HugsService._check_context_artifacts(params.value['context'], input.run_id);
+        await HugsService._check_attachments(spec.attachments, input.run_id);
+        const hug_sha256 = await HugBundlesService.resolve(spec.hug, {
+            bundle: input.bundle, may_upload: input.may_upload_bundle ?? false, realm_id: input.realm_id,
+        });
 
         const channels = [...new Set((spec.channels ?? []).map((c) => c.trim()).filter(Boolean))];
         const raise = (name: string | null) => raise_unknown_channel({
@@ -180,9 +195,12 @@ export class HugsService {
                 realm_id: input.realm_id,
                 org_id,
                 title: spec.title,
-                template: template.name,
-                template_version: template.version,
-                params: params.value,
+                hug_name: spec.hug.name,
+                hug_sha256,
+                summary: spec.summary ?? null,
+                params: spec.params,
+                files: spec.files,
+                attachments: spec.attachments,
                 channels,
                 status: 'open',
                 outcome: null,
@@ -243,15 +261,22 @@ export class HugsService {
         return not_sent_to;
     }
 
-    /** One Hug with its responses. */
-    static async get(hug_id: string): Promise<HugData> {
+    /**
+     * One Hug with its responses, and — for a person — whether they may answer it.
+     *
+     * @param viewer_user_id - the person reading it; null for a daemon (no `viewer`)
+     */
+    static async get(hug_id: string, viewer_user_id: string | null = null): Promise<HugData> {
         const hug = await Hug.findByPk(hug_id);
         if (!hug) throw ApiError.not_found('Hug not found');
-        const [runs, realms, responses] = await Promise.all([
+        const [runs, realms, responses, via] = await Promise.all([
             load_run_info_map([hug.run_id]),
             load_realm_info_map([hug.realm_id]),
             HugsService._responses(hug.id),
+            viewer_user_id ? HugsService.channels_reaching(hug, viewer_user_id) : Promise.resolve(null),
         ]);
+        let answerable = true;
+        try { assert_answerable(hug); } catch { answerable = false; }
         const run = runs.get(hug.run_id);
         const realm = realms.get(hug.realm_id);
         return {
@@ -268,9 +293,11 @@ export class HugsService {
             org_slug: realm?.org_slug ?? null,
             daemon_id: hug.daemon_id,
             title: hug.title,
-            template: hug.template,
-            template_version: hug.template_version,
+            hug: hug.hug_name && hug.hug_sha256 ? { name: hug.hug_name, sha256: hug.hug_sha256 } : null,
+            summary: hug.summary,
             params: hug.params,
+            files: hug.files ?? [],
+            attachments: hug.attachments ?? [],
             channels: hug.channels,
             status: hug.status,
             outcome: hug.outcome,
@@ -280,6 +307,7 @@ export class HugsService {
             last_reminded_at: hug.last_reminded_at ? hug.last_reminded_at.toISOString() : null,
             not_sent_to: (hug.not_sent_to ?? []).map((p) => ({ name: p.name, channel: p.channel })),
             responses,
+            viewer: via === null ? null : { can_answer: answerable && via.length > 0, via },
         };
     }
 
@@ -297,15 +325,17 @@ export class HugsService {
     /**
      * Submit or replace a person's response. The Hug must be open and not past `expires_at` (410
      * even when the sweep hasn't run yet); the person must have been reached through its channels;
-     * the Hug's template must accept the values. File values must be this person's uploads for this
-     * Hug and input. The response, its `response` event and the delivery to the daemon are
+     * Core checks only the answer's envelope (size, a one-line summary, uploads only under the Hug's
+     * upload slots, each this person's upload for this Hug and slot); the hug's definition checks the
+     * values (in the frontend, and again in the agent). The response, its `response` event and the delivery to the daemon are
      * written in one transaction that holds the Hug's row, so a `close` or expiry can't slip in
      * between the check and the write, and no response is stored without its delivery.
      */
     static async respond(input: {
         hug_id: string;
         user_id: string;
-        values: unknown;
+        values: Record<string, unknown>;
+        summary?: string;
     }): Promise<{ response_id: string; seq: number }> {
         const hug = await Hug.findByPk(input.hug_id);
         if (!hug) throw ApiError.not_found('Hug not found');
@@ -314,24 +344,23 @@ export class HugsService {
         const via = await HugsService.channels_reaching(hug, input.user_id);
         if (via.length === 0) throw ApiError.forbidden('This Hug was not sent to you, or you cannot view runs in its realm');
 
-        const template = template_of(hug);
-        const checked = template.check_answer(hug.params, input.values);
-        if (!checked.ok) throw ApiError.unprocessable(checked.problems.join('; '), 'invalid_values');
-        const values = { ...checked.value };
-        const inputs = [...template.inputs(hug.params)];
+        const values = { ...input.values };
+        const slots = hug.files ?? [];
+        assert_files_only_in_slots(values, slots);
+        const summary = input.summary?.trim() || null;
 
         const response = await get_sequelize().transaction(async (t) => {
             const locked = await Hug.findByPk(hug.id, { transaction: t, lock: t.LOCK.UPDATE });
             if (!locked) throw ApiError.not_found('Hug not found');
             assert_answerable(locked);
-            await HugsService._attach_files(hug, inputs, values, input.user_id, t);
+            await HugsService._attach_files(hug, slots, values, input.user_id, t);
             const seq = await append_seq(hug.id, t);
             const now = new Date();
             const existing = await HugResponse.findOne({ where: { hug_id: hug.id, responder_user_id: input.user_id }, transaction: t });
             const row = existing
-                ? await existing.update({ via_channels: via, values, seq, updated_at: now }, { transaction: t })
+                ? await existing.update({ via_channels: via, values, summary, seq, updated_at: now }, { transaction: t })
                 : await HugResponse.create({
-                    id: randomUUID(), hug_id: hug.id, responder_user_id: input.user_id, via_channels: via, values,
+                    id: randomUUID(), hug_id: hug.id, responder_user_id: input.user_id, via_channels: via, values, summary,
                     seq, created_at: now, updated_at: now,
                 }, { transaction: t });
             const data = await response_data(row);
@@ -532,25 +561,28 @@ export class HugsService {
         return Promise.all(rows.map(response_data));
     }
 
-    /** Every `artifact` block of the params' `context` must name a ready stored artifact of this run (§6.5). */
-    private static async _check_context_artifacts(raw: unknown, run_id: string): Promise<void> {
-        const context = (Array.isArray(raw) ? raw : []) as ReadonlyArray<{ type: string; artifact_id?: string }>;
-        const ids = [...new Set(context.filter((b) => b.type === 'artifact').map((b) => b.artifact_id!))];
+    /** Every attachment must be a ready stored artifact of this run (§6.5). */
+    private static async _check_attachments(attachments: readonly HugAttachmentRow[], run_id: string): Promise<void> {
+        const ids = [...new Set(attachments.map((a) => a.artifact_id))];
         if (ids.length === 0) return;
         const found = await StoredArtifact.findAll({ where: { id: { [Op.in]: ids }, run_id, status: 'ready' }, attributes: ['id'], raw: true });
         const missing = ids.filter((id) => !found.some((f) => f.id === id));
-        if (missing.length > 0) throw ApiError.unprocessable(`Context artifact not found in this run: ${missing.join(', ')}`, 'invalid_hug');
+        if (missing.length > 0) throw ApiError.unprocessable(`Attachment not found in this run: ${missing.join(', ')}`, 'invalid_hug');
     }
 
     /**
-     * Turn each file input's `{ artifact_id }` references into full file values, checking they are
-     * this person's uploads for this Hug and input (and still within the input's limits), and mark
+     * Turn each upload slot's `{ artifact_id }` references into full file values, checking they are
+     * this person's uploads for this Hug and slot (and still within the slot's limits), and mark
      * them ready (§6.6.3).
      */
-    private static async _attach_files(hug: Hug, inputs: RequestedInput[], values: Record<string, unknown>, user_id: string, t: Transaction): Promise<void> {
-        for (const input of inputs) {
-            if (input.type !== 'file' || values[input.name] === undefined || values[input.name] === null) continue;
-            const refs = (input.multiple ? values[input.name] : [values[input.name]]) as Array<{ artifact_id: string }>;
+    private static async _attach_files(hug: Hug, slots: readonly HugFileSlotRow[], values: Record<string, unknown>, user_id: string, t: Transaction): Promise<void> {
+        for (const input of slots) {
+            if (values[input.name] === undefined || values[input.name] === null) continue;
+            const raw = values[input.name];
+            if (Array.isArray(raw) && !input.multiple) {
+                throw ApiError.unprocessable(`${input.name}: takes one file`, 'HUG_FILE_INVALID');
+            }
+            const refs = (Array.isArray(raw) ? raw : [raw]) as Array<{ artifact_id: string }>;
             const ids = refs.map((r) => r.artifact_id);
             const rows = await StoredArtifact.findAll({ where: { id: { [Op.in]: ids } }, transaction: t });
             const files: FileValue[] = ids.map((id) => {
@@ -564,7 +596,7 @@ export class HugsService {
                 return { artifact_id: row.id, name: row.name, size: Number(row.size_bytes), content_type: row.mime_type, sha256: row.sha256 ?? '' };
             });
             await StoredArtifact.update({ status: 'ready' }, { where: { id: { [Op.in]: ids } }, transaction: t });
-            values[input.name] = input.multiple ? files : files[0];
+            values[input.name] = Array.isArray(raw) ? files : files[0];
         }
     }
 
@@ -583,15 +615,49 @@ export class HugsService {
 }
 
 /**
- * The template a Hug was opened with (the version it resolved to then).
+ * A Hug's envelope, checked.
  *
- * @throws ApiError 500 when that template version no longer exists — never expected: versions stay
- *   as long as Hugs use them
+ * @throws ApiError 422 `invalid_hug` — a pre-hug (`template`) spec from an older cliq, or an invalid envelope
  */
-export function template_of(hug: Pick<Hug, 'id' | 'template' | 'template_version'>): HugTemplate {
-    const template = resolve_template(`${hug.template}@${hug.template_version}`);
-    if (!template) throw ApiError.internal(`Hug ${hug.id} uses an unknown template ${hug.template}@${hug.template_version}`);
-    return template;
+function parse_envelope(raw: unknown): HugEnvelope {
+    if (raw && typeof raw === 'object' && 'template' in raw) {
+        throw ApiError.unprocessable('This Hug uses templates, which this CliqHub no longer takes — update cliq', 'invalid_hug');
+    }
+    const parsed = HugEnvelopeSchema.safeParse(raw);
+    if (!parsed.success) {
+        throw ApiError.unprocessable(`Invalid Hug: ${parsed.error.issues.map((i) => `${i.path.join('.') || 'spec'}: ${i.message}`).join('; ')}`, 'invalid_hug');
+    }
+    return parsed.data;
+}
+
+/** Whether `v` looks like a file reference (`{ artifact_id }`). */
+function is_file_ref(v: unknown): boolean {
+    return !!v && typeof v === 'object' && !Array.isArray(v) && typeof (v as { artifact_id?: unknown }).artifact_id === 'string';
+}
+
+/**
+ * A file reference may only be the value (or a list of them) of a top-level key that is one of the
+ * Hug's upload slots; a slot's value is only file references.
+ *
+ * @throws ApiError 422 `invalid_values` / `HUG_FILE_INVALID`
+ */
+export function assert_files_only_in_slots(values: Record<string, unknown>, slots: readonly HugFileSlotRow[]): void {
+    const slot_names = new Set(slots.map((s) => s.name));
+    const stray: string[] = [];
+    const walk = (v: unknown, path: string): void => {
+        if (is_file_ref(v)) { stray.push(path); return; }
+        if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
+        else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`);
+    };
+    for (const [key, v] of Object.entries(values)) {
+        if (!slot_names.has(key)) { walk(v, key); continue; }
+        if (v === null || v === undefined) continue;
+        const items = Array.isArray(v) ? v : [v];
+        if (!items.every(is_file_ref)) throw ApiError.unprocessable(`${key}: an upload slot takes file references ({ artifact_id }) only`, 'HUG_FILE_INVALID');
+    }
+    if (stray.length > 0) {
+        throw ApiError.unprocessable(`File references are allowed only under the Hug's upload slots — found at ${stray.slice(0, 5).join(', ')}`, 'invalid_values');
+    }
 }
 
 /** 404/409/410 unless the Hug can still take a response — the clock counts, not just the status. */
@@ -635,6 +701,7 @@ async function response_data(row: HugResponse): Promise<HugResponseData> {
         responder: { user_id: row.responder_user_id, name: user?.display_name?.trim() || user?.username || row.responder_user_id },
         via: row.via_channels,
         values: row.values,
+        ...(row.summary ? { summary: row.summary } : {}),
         responded_at: row.updated_at.toISOString(),
     };
 }

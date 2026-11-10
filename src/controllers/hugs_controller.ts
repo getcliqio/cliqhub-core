@@ -8,13 +8,16 @@
  *   POST /v1/hugs/get_by_id   one Hug with its responses
  *   POST /v1/hugs/respond     a person submits or replaces their response
  *
- * Files for `file` inputs are uploaded through `/v1/artifacts/upload` (§6.6). There is no chat.
+ *   POST /v1/hug_bundles/get_file  one file of a stored hug bundle (public; PLAN-hug-widgets §11.1)
+ *
+ * Files for upload slots are uploaded through `/v1/artifacts/upload` (§6.6). There is no chat.
  */
 
 import { BaseController } from './base_controller.js';
 import { get_logger } from '../lib/log.js';
 import { ApiError } from '../lib/api_error.js';
 import { HugsService } from '../services/hugs.service.js';
+import { HugBundlesService } from '../services/hug_bundles.service.js';
 import { HugPendingService } from '../services/hug_pending.service.js';
 import { RealmService } from '../services/realm.service.js';
 import { Run } from '../models/index.js';
@@ -26,6 +29,7 @@ import {
     HugsGetEventsInput,
     HugsGetInput,
     HugsRespondInput,
+    HugBundlesGetFileInput,
 } from '../schemas/hug_types.js';
 
 type HugsFields = Record<string, unknown>;
@@ -36,10 +40,11 @@ const log = get_logger('ctrl.hugs');
 export class HugsController extends BaseController {
     /**
      * POST /v1/hugs/create — open a Hug. The run must live in the realm, and a daemon token may
-     * only name a daemon of that realm.
+     * only name a daemon of that realm. Only such a daemon may send the hug's bundle.
      *
      * @param req - Body: {@link HugsCreateInput}
-     * @param res - 201 `{ ok: true, data: { hug_id, hug_url } }`
+     * @param res - 201 `{ ok: true, data: { hug_id, hug_url } }`; 409 `BUNDLE_MISSING` `{ sha256 }` — retry
+     *   with `bundle`; 422 `BUNDLE_INVALID` `{ problems }`; 403 `BUNDLE_REJECTED`
      */
     async create(req: FlatApiRequest<HugsCreateInput, HugsFields>, res: FlatApiOkResponse<HugsFields>): Promise<void> {
         const body = this.parse_body(HugsCreateInput, req);
@@ -55,6 +60,8 @@ export class HugsController extends BaseController {
             phase: body.phase,
             iteration: body.iteration,
             spec: body.spec,
+            bundle: body.bundle?.files,
+            may_upload_bundle: req.auth?.auth_via === 'daemon_token',
             actor_id: req.auth?.user?.id ?? null,
         });
         res.status(201).json({ ok: true, data });
@@ -106,14 +113,16 @@ export class HugsController extends BaseController {
     }
 
     /**
-     * POST /v1/hugs/get_by_id — one Hug with its responses.
+     * POST /v1/hugs/get_by_id — one Hug with its responses, and for a person `viewer: { can_answer, via }`
+     * (whether `respond` would take their answer now; a daemon gets `viewer: null`).
      *
      * @param req - Body: {@link HugsGetByIdInput}
      * @param res - `{ ok: true, data: HugData }`
      */
     async get_by_id(req: FlatApiRequest<HugsGetByIdInput, HugsFields>, res: FlatApiOkResponse<HugsFields>): Promise<void> {
         const body = this.parse_body(HugsGetByIdInput, req);
-        const data = await HugsService.get(body.hug_id);
+        const viewer = req.auth?.auth_via === 'daemon_token' ? null : req.auth?.user?.id?.trim() || null;
+        const data = await HugsService.get(body.hug_id, viewer);
         res.json({ ok: true, data });
     }
 
@@ -127,8 +136,25 @@ export class HugsController extends BaseController {
         const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
         const body = this.parse_body(HugsRespondInput, req);
-        const data = await HugsService.respond({ hug_id: body.hug_id, user_id, values: body.values });
+        const data = await HugsService.respond({ hug_id: body.hug_id, user_id, values: body.values, summary: body.summary });
         log.info('hug_response_submitted', { hug_id: body.hug_id });
         res.json({ ok: true, data });
+    }
+
+    /**
+     * POST /v1/hug_bundles/get_file — one file of a stored hug bundle: its bytes, with its content type.
+     * Public: a bundle is the hug author's built code, holds no Hug data and is named by its sha256.
+     *
+     * @param req - Body: {@link HugBundlesGetFileInput}
+     * @param res - the file's bytes; 404 when the bundle or file isn't stored
+     */
+    async get_bundle_file(req: FlatApiRequest<HugBundlesGetFileInput, HugsFields>, res: FlatApiOkResponse<HugsFields>): Promise<void> {
+        const body = this.parse_body(HugBundlesGetFileInput, req);
+        const file = await HugBundlesService.get_file(body.sha256, body.path);
+        if (!file) throw ApiError.not_found('Bundle file not found');
+        res.setHeader('Content-Type', file.content_type);
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        (res as unknown as { send: (b: Buffer) => void }).send(file.body);
     }
 }

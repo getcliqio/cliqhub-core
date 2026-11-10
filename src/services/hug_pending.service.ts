@@ -24,6 +24,8 @@ export interface HugListItem {
     hug_id: string;
     hug_url: string;
     title: string;
+    /** The Hug's plain-text summary (the inbox shows it; the frontend isn't loaded there). */
+    summary: string | null;
     realm_id: string;
     realm_name: string | null;
     realm_slug: string | null;
@@ -86,6 +88,7 @@ export class HugPendingService {
                     hug_id: row.id,
                     hug_url: hug_url_for(row.id),
                     title: row.title,
+                    summary: row.summary ?? null,
                     realm_id: row.realm_id,
                     realm_name: realm?.realm_name ?? null,
                     realm_slug: realm?.realm_slug ?? null,

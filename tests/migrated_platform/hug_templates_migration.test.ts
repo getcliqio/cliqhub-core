@@ -8,7 +8,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
-import { migrate_hug_templates } from '../../src/models/migrations/control_plane_schema_migrations.js';
+import { migrate_hug_templates, migrate_hug_widgets } from '../../src/models/migrations/control_plane_schema_migrations.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
 
 const has_postgres = await postgres_reachable();
@@ -32,7 +32,7 @@ describe.skipIf(!has_postgres)('Hug templates migration', () => {
     async function old_schema(): Promise<void> {
         await q(`ALTER TABLE cliq."hugs" ADD COLUMN IF NOT EXISTS "prompt" TEXT, ADD COLUMN IF NOT EXISTS "context" JSONB NOT NULL DEFAULT '[]'::jsonb,
                  ADD COLUMN IF NOT EXISTS "requested_inputs" JSONB, ADD COLUMN IF NOT EXISTS "ui" JSONB`);
-        await q(`ALTER TABLE cliq."hugs" ALTER COLUMN "template" DROP NOT NULL, ALTER COLUMN "template_version" DROP NOT NULL`);
+        await q(`ALTER TABLE cliq."hugs" ADD COLUMN IF NOT EXISTS "template" TEXT, ADD COLUMN IF NOT EXISTS "template_version" INTEGER`);
         await q(`ALTER TABLE cliq."hug_responses" ADD COLUMN IF NOT EXISTS "comment" TEXT`);
     }
 
@@ -79,5 +79,14 @@ describe.skipIf(!has_postgres)('Hug templates migration', () => {
         await migrate_hug_templates(get_sequelize());
         const [again] = await q(`SELECT "last_seq" FROM cliq."hugs" WHERE "id" = :id`, { id: open }) as [Array<{ last_seq: number }>, unknown];
         expect(again[0]!.last_seq).toBe(2);
+
+        // Then the switch to hugs (PLAN-hug-widgets §11.3): the envelope's columns, and the template columns gone.
+        await migrate_hug_widgets(get_sequelize());
+        const [after] = await q(`SELECT column_name, is_nullable FROM information_schema.columns WHERE table_schema = 'cliq' AND table_name = 'hugs'
+            AND column_name IN ('template', 'template_version', 'hug_name', 'hug_sha256', 'summary', 'files', 'attachments') ORDER BY column_name`);
+        expect(after).toEqual([
+            { column_name: 'attachments', is_nullable: 'NO' }, { column_name: 'files', is_nullable: 'NO' }, { column_name: 'hug_name', is_nullable: 'YES' },
+            { column_name: 'hug_sha256', is_nullable: 'YES' }, { column_name: 'summary', is_nullable: 'YES' },
+        ]);
     });
 });

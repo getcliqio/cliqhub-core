@@ -49,7 +49,7 @@ import { RealmDispatchKey } from './realm_dispatch_key.model.js';
 import { RealmDispatchQueue } from './realm_dispatch_queue.model.js';
 import { Realm } from './realm.model.js';
 import { RealmMember } from './realm_member.model.js';
-import { Hug, HugDelivery, HugEventRow, HugResponse } from './hug.model.js';
+import { Hug, HugBundle, HugDelivery, HugEventRow, HugResponse } from './hug.model.js';
 import { Run } from './run.model.js';
 import { RunArtifact } from './run_artifact.model.js';
 import { RunEvent } from './run_event.model.js';
@@ -78,7 +78,7 @@ export {
     NotificationChannel, NotificationRule, NotificationSubscription, NotificationPersonSetting,
     RealmA2aSetting, RealmAgentSetting, RealmDispatchKey, RealmDispatchQueue,
     Realm, RealmMember,
-    Hug, HugDelivery, HugEventRow, HugResponse,
+    Hug, HugBundle, HugDelivery, HugEventRow, HugResponse,
     Run, RunArtifact, RunEvent, RunLog, RunLogLine, RunPhase, RunSpan,
     StoredArtifact, WebhookDelivery,
     Workspace, WorkspaceSecret, WorkspaceTeam,
@@ -144,6 +144,7 @@ export function init_models(sequelize: Sequelize): void {
     HugDelivery.register(sequelize);
     HugResponse.register(sequelize);
     HugEventRow.register(sequelize);
+    HugBundle.register(sequelize);
     RealmAgentSetting.register(sequelize);
     AgentCatalog.register(sequelize);
     NotificationRule.register(sequelize);

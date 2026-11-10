@@ -1104,6 +1104,14 @@ describe('TeamsService — team files (S1.3b)', () => {
         expect(storage.write).toHaveBeenCalledTimes(3);
     });
 
+    it("a team's hugs travel as their built dist/ only: hugs/<name>/dist/** is accepted, a hug's source refused (PLAN-hug-widgets §11.1)", async () => {
+        const dist = (path: string) => ({ path, content_type: 'text/plain', data: Buffer.from('x') });
+        const out = await service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [yml, dist('hugs/review-batch/dist/hug.json'), dist('hugs/review-batch/dist/assets/main.js')] });
+        expect(out.files.map((f) => f.path)).toEqual(['team.yml', 'hugs/review-batch/dist/hug.json', 'hugs/review-batch/dist/assets/main.js']);
+        await expect(service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [yml, dist('hugs/review-batch/src/main.ts'), dist('hugs/review-batch/hug.ts')] }))
+            .rejects.toMatchObject({ status: 422, details: { paths: ['hugs/review-batch/src/main.ts', 'hugs/review-batch/hug.ts'] } });
+    });
+
     it('a published version (or another team\'s draft) cannot take files', async () => {
         version_repo.find_draft.mockResolvedValueOnce(null);
         await expect(service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, version_id: DRAFT, files: [yml] })).rejects.toMatchObject({ status: 404 });

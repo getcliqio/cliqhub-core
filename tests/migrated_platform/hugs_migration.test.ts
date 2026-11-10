@@ -16,7 +16,7 @@ import {
 } from './helpers/control_plane_store.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
 import { HUGS_MIGRATION_KEY, migrate_hugs } from '../../src/models/migrations/control_plane_schema_migrations.js';
-import { NotificationPersonSetting, NotificationRule, OrgRole, Setting } from '../../src/models/index.js';
+import { NotificationPersonSetting, NotificationRule, Org, OrgRole, Setting } from '../../src/models/index.js';
 import { RealmService } from '../../src/services/realm.service.js';
 
 const has_postgres = await postgres_reachable();
@@ -41,6 +41,8 @@ describe.skipIf(!has_postgres)('migrate_hugs', () => {
 		await sq.query(`CREATE TABLE IF NOT EXISTS cliq."reviews" ("id" TEXT PRIMARY KEY)`);
 		await sq.query(`CREATE TABLE IF NOT EXISTS cliq."review_notifications" ("id" TEXT PRIMARY KEY, "review_id" TEXT REFERENCES cliq."reviews"("id"))`);
 		await sq.query(`CREATE TABLE IF NOT EXISTS cliq."review_chat_messages" ("id" TEXT PRIMARY KEY)`);
+		// Its own org (for the role) and person, so the test runs on any test database, and again.
+		const org = await Org.create({ slug: `mh-${uid()}`.slice(0, 40), display_name: 'Migrate', activated_at: new Date() } as never);
 		const realm = await RealmService.create(hub_legacy_uuid(1), `mh-${uid()}`.slice(0, 40), 'Migrate');
 		const now = Date.now();
 		const rule = (event: string) => NotificationRule.create({
@@ -50,12 +52,12 @@ describe.skipIf(!has_postgres)('migrate_hugs', () => {
 		const renamed = await rule('hug.review_responded');
 		const resumed = await rule('phase.inputs_supplied');
 		const routing = await rule('hug.routing_requested');
-		const person = hub_legacy_uuid(77_001);
+		const person = randomUUID();
 		const setting = (event: string) => NotificationPersonSetting.create({ id: randomUUID(), user_id: person, scope: 'my_runs', event, state: 'on', created_at: now, updated_at: now });
 		await setting('phase.input_required');
 		await setting('phase.inputs_supplied');
 		const role = await OrgRole.create({
-			id: randomUUID(), org_id: hub_legacy_uuid(1), slug: `r-${uid()}`.slice(0, 40), name: 'Custom',
+			id: randomUUID(), org_id: org.id, slug: `r-${uid()}`.slice(0, 40), name: 'Custom',
 			permissions: ['reviews.view', 'reviews.verdict', 'teams.inputs', 'runs.view'], is_system: false, is_default: false, created_at: new Date(),
 		} as never);
 		await Setting.destroy({ where: { key: HUGS_MIGRATION_KEY } });

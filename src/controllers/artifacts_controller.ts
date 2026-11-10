@@ -30,7 +30,7 @@ import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { ApiError } from '../errors/api_error.js';
 import { Hug, StoredArtifact } from '../models/index.js';
-import { assert_answerable, HugsService, template_of } from '../services/hugs.service.js';
+import { assert_answerable, HugsService } from '../services/hugs.service.js';
 import type { UploadTarget } from '../services/artifact_storage.service.js';
 import { get_logger } from '../lib/log.js';
 
@@ -150,7 +150,7 @@ export class ArtifactsController extends BaseController {
 
 // ─── Helpers ─────────────────────────────────────────────────────────
 
-/** The upload target for a responder's file: the Hug must be open, reach them, and have this `file` input. */
+/** The upload target for a responder's file: the Hug must be open, reach them, and have this upload slot. */
 async function hug_upload_target(hug_id: string, requested_input: string | undefined, user_id: string | null): Promise<UploadTarget> {
     if (!user_id) throw new ApiError('forbidden', 'Only a person can upload a file for a Hug', 403);
     if (!requested_input) throw new ApiError('invalid_request', 'requested_input is required with hug_id', 400);
@@ -158,9 +158,9 @@ async function hug_upload_target(hug_id: string, requested_input: string | undef
     if (!hug) throw new ApiError('not_found', 'Hug not found', 404);
     assert_answerable(hug);
     if ((await HugsService.channels_reaching(hug, user_id)).length === 0) throw new ApiError('forbidden', 'This Hug was not sent to you', 403);
-    const input = template_of(hug).inputs(hug.params).find((i) => i.name === requested_input);
-    if (!input || input.type !== 'file') {
-        throw new ApiError('HUG_FILE_INVALID', `'${requested_input}' is not a file input of this Hug`, 422);
+    const input = (hug.files ?? []).find((slot) => slot.name === requested_input);
+    if (!input) {
+        throw new ApiError('HUG_FILE_INVALID', `'${requested_input}' is not an upload slot of this Hug`, 422);
     }
     const pending_count = await StoredArtifact.count({ where: { hug_id, uploaded_by: user_id, status: 'pending' } });
     return {

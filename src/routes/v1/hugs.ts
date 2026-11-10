@@ -7,6 +7,7 @@
  * POST /v1/hugs/get
  * POST /v1/hugs/get_by_id
  * POST /v1/hugs/respond
+ * POST /v1/hug_bundles/get_file  (public; PLAN-hug-widgets §11.1)
  */
 import type { Router } from 'express';
 import { with_dedup } from '../../middleware/inbound_dedup.js';
@@ -22,4 +23,5 @@ export function register_hugs_routes(router: Router): void {
     router.post('/hugs/get', hugs.wrap(hugs.get));
     router.post('/hugs/get_by_id', hugs.wrap(hugs.get_by_id));
     router.post('/hugs/respond', hugs.wrap(hugs.respond));
+    router.post('/hug_bundles/get_file', hugs.wrap(hugs.get_bundle_file));
 }
