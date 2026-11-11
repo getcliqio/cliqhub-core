@@ -34,7 +34,11 @@ export interface HugListItem {
     run_name: string | null;
     team: string | null;
     phase: string;
+    /** Which round of its phase this Hug is (0 for the first): a gate sent back asks again as the next one. */
+    iteration: number;
     status: string;
+    /** How it ended, in the requester's words ("Rejected by Ann"), or null while open. */
+    outcome: string | null;
     /** Whether this person has already responded. */
     responded: boolean;
     /** Epoch ms. */
@@ -79,33 +83,38 @@ export class HugPendingService {
             HugResponse.findAll({ where: { hug_id: { [Op.in]: rows.map((r) => r.id) }, responder_user_id: user_id }, attributes: ['hug_id'], raw: true }),
         ]);
         const responded = new Set(mine.map((m) => m.hug_id));
-        return {
-            total,
-            hugs: rows.map((row) => {
-                const run = runs.get(row.run_id);
-                const realm = realms.get(row.realm_id);
-                return {
-                    hug_id: row.id,
-                    hug_url: hug_url_for(row.id),
-                    title: row.title,
-                    summary: row.summary ?? null,
-                    realm_id: row.realm_id,
-                    realm_name: realm?.realm_name ?? null,
-                    realm_slug: realm?.realm_slug ?? null,
-                    org_slug: realm?.org_slug ?? null,
-                    run_id: row.run_id,
-                    run_name: run?.run_name ?? null,
-                    team: resolve_team(run),
-                    phase: row.phase,
-                    status: row.status,
-                    responded: responded.has(row.id),
-                    created_at: row.created_at.getTime(),
-                    expires_at: row.expires_at.getTime(),
-                    closed_at: row.closed_at ? row.closed_at.getTime() : null,
-                    last_reminded_at: row.last_reminded_at ? row.last_reminded_at.getTime() : null,
-                };
-            }),
+        return { total, hugs: rows.map((row) => list_item(row, runs, realms, responded)) };
+    }
+
+    /**
+     * A run's Hugs, in the order they opened (`hugs/get { run_id }`): every round of every phase, whoever they were
+     * sent to — seen like the run (the route checks `runs.view` on it), as `hugs/get_by_id` does. Default: any status.
+     */
+    static async list_for_run(opts: {
+        user_id: string;
+        run_id: string;
+        statuses?: string[];
+        limit?: number;
+        offset?: number;
+    }): Promise<{ hugs: HugListItem[]; total: number }> {
+        log.debug('list_for_run', { user_id: opts.user_id, run_id: opts.run_id });
+        const limit = Math.min(Math.max(1, opts.limit ?? 50), 100);
+        const offset = Math.max(0, opts.offset ?? 0);
+        const where = {
+            run_id: opts.run_id,
+            ...(opts.statuses?.length ? { status: { [Op.in]: opts.statuses } } : {}),
         };
+        const [total, rows] = await Promise.all([
+            Hug.count({ where }),
+            Hug.findAll({ where, order: [['created_at', 'ASC'], ['id', 'ASC']], limit, offset }),
+        ]);
+        const [runs, realms, mine] = await Promise.all([
+            load_run_info_map(rows.map((r) => r.run_id)),
+            load_realm_info_map(rows.map((r) => r.realm_id)),
+            HugResponse.findAll({ where: { hug_id: { [Op.in]: rows.map((r) => r.id) }, responder_user_id: opts.user_id }, attributes: ['hug_id'], raw: true }),
+        ]);
+        const responded = new Set(mine.map((m) => m.hug_id));
+        return { total, hugs: rows.map((row) => list_item(row, runs, realms, responded)) };
     }
 
     /** How many open Hugs are waiting on a person — addressed to them, not yet answered by them (sidebar badge). */
@@ -134,6 +143,39 @@ export class HugPendingService {
  * they have `runs.view`, combined with `extra`; with `unanswered`, not those they've responded to.
  * Null when nothing can match.
  */
+/** A Hug row as a list item, with its run and realm names and whether the caller has responded. */
+function list_item(
+    row: Hug,
+    runs: Awaited<ReturnType<typeof load_run_info_map>>,
+    realms: Awaited<ReturnType<typeof load_realm_info_map>>,
+    responded: ReadonlySet<string>,
+): HugListItem {
+    const run = runs.get(row.run_id);
+    const realm = realms.get(row.realm_id);
+    return {
+        hug_id: row.id,
+        hug_url: hug_url_for(row.id),
+        title: row.title,
+        summary: row.summary ?? null,
+        realm_id: row.realm_id,
+        realm_name: realm?.realm_name ?? null,
+        realm_slug: realm?.realm_slug ?? null,
+        org_slug: realm?.org_slug ?? null,
+        run_id: row.run_id,
+        run_name: run?.run_name ?? null,
+        team: resolve_team(run),
+        phase: row.phase,
+        iteration: row.iteration ?? 0,
+        status: row.status,
+        outcome: row.outcome ?? null,
+        responded: responded.has(row.id),
+        created_at: row.created_at.getTime(),
+        expires_at: row.expires_at.getTime(),
+        closed_at: row.closed_at ? row.closed_at.getTime() : null,
+        last_reminded_at: row.last_reminded_at ? row.last_reminded_at.getTime() : null,
+    };
+}
+
 async function reachable_where(
     user_id: string,
     extra: Record<string | symbol, unknown>,

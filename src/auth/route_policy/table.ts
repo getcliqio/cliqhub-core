@@ -80,7 +80,10 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     // ── Lists: realm or org filter checked here, rest scoped in the service ──
     'POST /v1/realms/get': scope({ org: { from: ORG, perm: 'member' }, otherwise: 'none' }),
     'POST /v1/daemons/get': scope({ realm: { from: REALM, level: 'view', perm: 'daemons.view' }, org: { from: ORG, perm: 'daemons.view' }, otherwise: 'none' }),
-    'POST /v1/hugs/get': scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, org: { from: ORG, perm: 'runs.view' }, otherwise: 'none', handler: 'only Hugs addressed to the caller, in realms where they have runs.view' }),
+    // With run_id: that run's Hugs, seen like the run (runs.view on its realm). Else the caller's own Hugs.
+    'POST /v1/hugs/get': by_body('body.run_id',
+        record('run', 'body.run_id', 'view', { perm: 'runs.view' }),
+        scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, org: { from: ORG, perm: 'runs.view' }, otherwise: 'none', handler: 'only Hugs addressed to the caller, in realms where they have runs.view' })),
     'POST /v1/runs/get': scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, org: { from: ORG, perm: 'runs.view' }, otherwise: 'none', handler: 'other filters stay inside visible realms (S5)' }),
     'POST /v1/runs/get_logs': scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, otherwise: 'none', handler: 'run_ids / daemon_ids filtered to visible realms' }),
     'POST /v1/workspaces/get': scope({ realm: { from: REALM, level: 'view' }, otherwise: 'none' }),

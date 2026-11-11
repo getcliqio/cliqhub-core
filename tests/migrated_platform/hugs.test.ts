@@ -33,6 +33,7 @@ import { HugBundlesService } from '../../src/services/hug_bundles.service.js';
 import { HugsRespondInput } from '../../src/schemas/hug_types.js';
 import { hug_bundle_hash } from '@getcliqio/cliq-sdk';
 import { HugPendingService } from '../../src/services/hug_pending.service.js';
+import { HugsGetInput } from '../../src/schemas/hug_types.js';
 import { ArtifactsController } from '../../src/controllers/artifacts_controller.js';
 import { RealmService } from '../../src/services/realm.service.js';
 import { REALM_MEMBERS_CHANNEL_NAME } from '../../src/notifications/defaults.js';
@@ -643,6 +644,25 @@ describe.skipIf(!has_postgres)('Hugs (Core)', () => {
 			expect((await HugPendingService.list_for_user({ user_id: OUTSIDER, realm_id })).hugs).toEqual([]);
 			const closed = await HugPendingService.list_for_user({ user_id: OWNER, realm_id, statuses: ['closed'] });
 			expect(closed.hugs.map((h) => h.hug_id)).toEqual([b.hug_id]);
+		});
+		it("a run's Hugs (hugs/get { run_id }): every round of every phase, oldest first, any status, with iteration and outcome", async () => {
+			const run_id = `run-${uid()}`;
+			const round1 = await open({}, { run_id, phase: 'review', iteration: 0 });
+			await HugsService.close({ hug_id: round1.hug_id, outcome: 'Rejected by Ann', daemon_id: 'daemon-1' });
+			const round2 = await open({}, { run_id, phase: 'review', iteration: 1 });
+			const other = await open({}, { run_id: `run-${uid()}` });   // another run: not listed
+			const { hugs, total } = await HugPendingService.list_for_run({ user_id: OWNER, run_id });
+			expect(total).toBe(2);
+			expect(hugs.map((h) => [h.hug_id, h.phase, h.iteration, h.status, h.outcome])).toEqual([
+				[round1.hug_id, 'review', 0, 'closed', 'Rejected by Ann'],
+				[round2.hug_id, 'review', 1, 'open', null],
+			]);
+			expect(hugs.some((h) => h.hug_id === other.hug_id)).toBe(false);
+			expect((await HugPendingService.list_for_run({ user_id: OWNER, run_id, statuses: ['open'] })).hugs.map((h) => h.hug_id)).toEqual([round2.hug_id]);
+			// The inbox rows carry the round too.
+			expect((await HugPendingService.list_for_user({ user_id: OWNER, realm_id })).hugs.find((h) => h.hug_id === round2.hug_id)?.iteration).toBe(1);
+			expect(HugsGetInput.safeParse({ run_id }).success).toBe(true);
+			expect(HugsGetInput.safeParse({}).success).toBe(false);
 		});
 	});
 });

@@ -73,14 +73,16 @@ export const HugBundleUploadSchema = z.object({
 
 /** POST /v1/hugs/get — the caller's Hugs (inbox). Org-scoped list requires org_id; never invented from a header. */
 export const HugsGetInput = z.object({
+    /** One run's Hugs, every round of every phase, oldest first (any status unless `statuses`); seen like the run. */
+    run_id: z.string().min(1).optional(),
     realm_id: z.string().optional(),
     org_id: z.string().uuid().optional().describe('Organization UUID. Required when listing without realm_id.'),
-    /** Status values to include. Defaults to ['open']. */
+    /** Status values to include. Defaults to ['open'] (with `run_id`: every status). */
     statuses: z.array(z.enum(['open', 'closed', 'expired', 'cancelled'])).optional(),
     limit: z.number().int().positive().optional(),
     offset: z.number().int().nonnegative().optional(),
 }).superRefine((v, ctx) => {
-    if (v.realm_id?.trim() || v.org_id) return;
+    if (v.run_id || v.realm_id?.trim() || v.org_id) return;
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'org_id is required when listing Hugs without realm_id', path: ['org_id'] });
 });
 export type HugsGetInput = z.infer<typeof HugsGetInput>;

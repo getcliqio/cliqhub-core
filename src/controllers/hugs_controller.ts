@@ -97,7 +97,7 @@ export class HugsController extends BaseController {
     }
 
     /**
-     * POST /v1/hugs/get — the caller's Hugs.
+     * POST /v1/hugs/get — the caller's Hugs; with `run_id`, that run's Hugs (every round, oldest first).
      *
      * @param req - Body: {@link HugsGetInput}
      * @param res - `{ ok: true, data: { items, total, offset, limit } }`
@@ -106,9 +106,12 @@ export class HugsController extends BaseController {
         const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
         const body = this.parse_body(HugsGetInput, req);
-        const result = await HugPendingService.list_for_user({
-            user_id, realm_id: body.realm_id, org_id: body.org_id, statuses: body.statuses, limit: body.limit, offset: body.offset,
-        });
+        // With run_id: that run's Hugs (every round), seen like the run; else the caller's own Hugs.
+        const result = body.run_id
+            ? await HugPendingService.list_for_run({ user_id, run_id: body.run_id, statuses: body.statuses, limit: body.limit, offset: body.offset })
+            : await HugPendingService.list_for_user({
+                user_id, realm_id: body.realm_id, org_id: body.org_id, statuses: body.statuses, limit: body.limit, offset: body.offset,
+            });
         res.json({ ok: true, data: { items: result.hugs, total: result.total, offset: body.offset ?? 0, limit: body.limit ?? 50 } });
     }
 
