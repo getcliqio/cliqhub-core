@@ -1444,6 +1444,53 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_hug_templates(sq);
     await migrate_hug_widgets(sq);
     await migrate_team_visibility(sq);
+    await migrate_realm_team_delivery(sq);
+}
+
+/** `cliq.settings` key marking the one-time confirmation of existing daemon team rows (PLAN-realm-team-delivery). */
+export const REALM_TEAM_DELIVERY_MIGRATION_KEY = 'migrate.realm_team_delivery_2026_11';
+
+/**
+ * PLAN-realm-team-delivery step 1: a hub-installed daemon team row is pending (`confirmed_at` null) until the daemon
+ * confirms it — its install ack or its roster. Every boot (idempotent): the columns. Once (keyed): every row
+ * installed at the time is confirmed (`confirmed_at = updated_at`) — they are on their daemons today — so only pushes
+ * made after this deploy start pending. Repeating the backfill would confirm pushes still in flight, hence the key.
+ */
+export async function migrate_realm_team_delivery(sq: Sequelize): Promise<void> {
+    try {
+        await sq.query(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "confirmed_at" BIGINT`);
+        await sq.query(`ALTER TABLE cliq."daemon_teams" ADD COLUMN IF NOT EXISTS "install_error" TEXT`);
+    } catch (err) {
+        _mig_log.warn('realm_team_delivery_columns_failed', { error: err instanceof Error ? err.message : String(err) });
+        return;
+    }
+    try {
+        const [settings] = await sq.query(`SELECT to_regclass('cliq.settings') AS s`, { type: QueryTypes.SELECT }) as Array<{ s: string | null }>;
+        if (!settings?.s) {
+            _mig_log.info('realm_team_delivery_backfill_deferred', { reason: 'cliq.settings not created yet' });
+            return;
+        }
+        const done = await sq.query(`SELECT 1 FROM cliq."settings" WHERE "key" = :key`,
+            { replacements: { key: REALM_TEAM_DELIVERY_MIGRATION_KEY }, type: QueryTypes.SELECT });
+        if (done.length > 0) return;
+        // The backfill and its key together: a backfill without its key would run again and confirm pushes in flight.
+        const confirmed = await sq.transaction(async (transaction) => {
+            const [, meta] = await sq.query(
+                `UPDATE cliq."daemon_teams" SET "confirmed_at" = "updated_at"
+                 WHERE "uninstalled_at" IS NULL AND "confirmed_at" IS NULL`,
+                { transaction },
+            ) as [unknown, { rowCount?: number } | number];
+            await sq.query(
+                `INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW())
+                 ON CONFLICT ("key") DO NOTHING`,
+                { replacements: { key: REALM_TEAM_DELIVERY_MIGRATION_KEY, value: new Date().toISOString() }, transaction },
+            );
+            return typeof meta === 'number' ? meta : meta?.rowCount ?? null;
+        });
+        _mig_log.info('realm_team_delivery_backfilled', { confirmed });
+    } catch (err) {
+        _mig_log.warn('realm_team_delivery_backfill_failed', { error: err instanceof Error ? err.message : String(err) });
+    }
 }
 
 /** `cliq.settings` key marking the one-time email backfill as done. */

@@ -4,7 +4,12 @@
  * daemon reports teams by that id, and Core never takes an id from a daemon. Uninstall keeps the row (runs keep
  * their team) and a reinstall gets the same id back; when its realm team goes, the row is uninstalled.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { QueryTypes } from 'sequelize';
+import { settle_install_command } from '../../src/services/command_outbox.service.js';
+import { DispatchService } from '../../src/services/dispatch.service.js';
+import { InAppNotificationService } from '../../src/services/in_app_notification.service.js';
+import { migrate_realm_team_delivery, REALM_TEAM_DELIVERY_MIGRATION_KEY } from '../../src/models/migrations/control_plane_schema_migrations.js';
 import { randomUUID } from 'node:crypto';
 import { hub_legacy_uuid } from '../../src/lib/hub_legacy_uuid.js';
 import { RunService } from '../../src/services/run.service.js';
@@ -15,7 +20,7 @@ import { RealmService } from '../../src/services/realm.service.js';
 import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
 import { publish_version } from './helpers/version_files.js';
-import { Daemon, DaemonTeam, Realm, RealmMember, Run, Scope, Team, TeamVersion, Workspace } from '../../src/models/index.js';
+import { Daemon, DaemonTeam, Realm, RealmMember, RealmTeam, Run, Scope, Team, TeamVersion, Workspace } from '../../src/models/index.js';
 
 const has_postgres = await postgres_reachable();
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -194,12 +199,163 @@ describe.skipIf(!has_postgres)('daemon team rows: children of realm teams', () =
         expect((await row(id)).uninstalled_at).not.toBeNull();
     });
 
+    describe('delivery (PLAN-realm-team-delivery): a push is pending until the daemon confirms it', () => {
+        it("a complete roster never undoes a push in flight — the 2026-11-12 race: slot A pushed, the daemon's empty roster, slot B pushed", async () => {
+            const d = await new_daemon();
+            const a = await realm_team();
+            const b = await realm_team();
+            const slot_a = await hub_install(d, a);
+            await TeamService.register_from_daemon(d, [], true, await realm_teams());
+            const slot_b = await hub_install(d, b);
+            expect((await row(slot_a)).uninstalled_at).toBeNull();
+            expect((await row(slot_b)).uninstalled_at).toBeNull();
+            expect((await row(slot_a)).confirmed_at).toBeNull();
+        });
+
+        it('a complete roster still uninstalls a confirmed team the daemon no longer has (a real local uninstall)', async () => {
+            const d = await new_daemon();
+            const t = await realm_team();
+            const id = await hub_install(d, t);
+            await TeamService.register_from_daemon(d, [report(id, t.name)], true, await realm_teams());
+            expect((await row(id)).confirmed_at).not.toBeNull();
+            await TeamService.register_from_daemon(d, [], true, await realm_teams());
+            expect((await row(id)).uninstalled_at).not.toBeNull();
+        });
+
+        it('pushing again (a re-sync, a new version) makes the slot pending again until the daemon confirms', async () => {
+            const d = await new_daemon();
+            const t = await realm_team();
+            const id = await hub_install(d, t);
+            await TeamService.register_from_daemon(d, [report(id, t.name)], true, await realm_teams());
+            expect(await hub_install(d, t)).toBe(id);
+            expect((await row(id)).confirmed_at).toBeNull();
+        });
+
+        /** The `/v1/install` command the hub sent for this push. */
+        const install_cmd = (d: string, t: { team_id: string; v: Record<string, string> }, version = '1.0.0') =>
+            ({ daemon_id: d, endpoint: '/v1/install', payload: JSON.stringify({ team_id: t.team_id, version_id: t.v[version] }) });
+
+        it("the daemon's ok ack confirms the push", async () => {
+            const d = await new_daemon();
+            const t = await realm_team();
+            const id = await hub_install(d, t);
+            await settle_install_command(install_cmd(d, t), { ok: true });
+            expect((await row(id)).confirmed_at).not.toBeNull();
+            expect((await row(id)).uninstalled_at).toBeNull();
+        });
+
+        it("the daemon's error ack uninstalls the push, keeps its reason and tells the realm's owners", async () => {
+            const notify = vi.spyOn(InAppNotificationService, 'create_from_payload').mockResolvedValue(undefined as never);
+            try {
+                const d = await new_daemon();
+                const t = await realm_team();
+                const id = await hub_install(d, t);
+                await settle_install_command(install_cmd(d, t), { ok: false, reason: "Phase 'plan' has role roles/plan.md, which isn't one of the team's files" });
+                expect((await row(id)).uninstalled_at).not.toBeNull();
+                expect((await row(id)).install_error).toContain('roles/plan.md');
+                expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+                    event: 'realm.team_list.install_failed', realm_id, daemon_id: d,
+                    title: `@${scope_slug}/${t.name} didn't install`, message: expect.stringContaining('roles/plan.md'),
+                }));
+            } finally {
+                notify.mockRestore();
+            }
+        });
+
+        it('delivery giving up clears the pending push ("never delivered")', async () => {
+            const d = await new_daemon();
+            const t = await realm_team();
+            const id = await hub_install(d, t);
+            await settle_install_command(install_cmd(d, t), { ok: false, reason: 'install never delivered: fetch failed' });
+            expect((await row(id)).uninstalled_at).not.toBeNull();
+            expect((await row(id)).install_error).toBe('install never delivered: fetch failed');
+        });
+
+        it("an ack of an older push doesn't settle a newer one; a late error doesn't undo what the roster confirmed", async () => {
+            const d = await new_daemon();
+            const t = await realm_team(undefined, ['1.0.0', '1.1.0']);
+            const id = await hub_install(d, t);
+            // The realm moves to 1.1.0 and pushes again: the 1.0.0 command's ack is stale.
+            await RealmTeamListService.add(realm_id, user_id, { team_id: t.team_id, version_id: t.v['1.1.0'] }).catch(async () => {
+                await RealmTeam.update({ version_id: t.v['1.1.0'], version: '1.1.0' } as never, { where: { realm_id, team_id: t.team_id } });
+            });
+            await hub_install(d, t);
+            await settle_install_command(install_cmd(d, t, '1.0.0'), { ok: true });
+            expect((await row(id)).confirmed_at).toBeNull();
+            // The roster confirms 1.1.0, then a late error ack arrives for it: the row stays.
+            await TeamService.register_from_daemon(d, [report(id, t.name, '1.1.0')], true, await realm_teams());
+            await settle_install_command(install_cmd(d, t, '1.1.0'), { ok: false, reason: 'late' });
+            expect((await row(id)).uninstalled_at).toBeNull();
+        });
+
+        it('runs: only daemons that confirmed the team are eligible; with none, why (pending / failed / on no daemon)', async () => {
+            const dispatch = DispatchService as unknown as {
+                _daemon_ids_with_team(ref: string, ids: string[]): Promise<string[]>;
+                _why_no_daemon_has_team(ref: string, ids: string[], realm_id: string): Promise<string>;
+            };
+            const d1 = await new_daemon();
+            const d2 = await new_daemon();
+            const t = await realm_team();
+            const id1 = await hub_install(d1, t);
+            await hub_install(d2, t);
+            expect(await dispatch._daemon_ids_with_team(t.team_id, [d1, d2])).toEqual([]);
+            expect(await dispatch._why_no_daemon_has_team(t.team_id, [d1, d2], realm_id)).toMatch(/installed yet — install pending on /);
+            await settle_install_command(install_cmd(d1, t), { ok: true });
+            expect(await dispatch._daemon_ids_with_team(t.team_id, [d1, d2])).toEqual([d1]);
+            expect((await row(id1)).confirmed_at).not.toBeNull();
+
+            const notify = vi.spyOn(InAppNotificationService, 'create_from_payload').mockResolvedValue(undefined as never);
+            try {
+                const d3 = await new_daemon();
+                const u = await realm_team();
+                await hub_install(d3, u);
+                await settle_install_command(install_cmd(d3, u), { ok: false, reason: 'agent claude-code missing setting api_key' });
+                expect(await dispatch._why_no_daemon_has_team(u.team_id, [d3], realm_id))
+                    .toMatch(new RegExp(`@${scope_slug}/${u.name} installed — the install failed on .*: agent claude-code missing setting api_key`));
+            } finally {
+                notify.mockRestore();
+            }
+            const nowhere = await realm_team();
+            expect(await dispatch._why_no_daemon_has_team(nowhere.team_id, [d1], realm_id)).toMatch(/installed on no online daemon/);
+        });
+
+        it('the migration confirms what was installed at deploy, once (a later push stays pending)', async () => {
+            const d = await new_daemon();
+            const t = await realm_team();
+            const gone = await realm_team();
+            const id = await hub_install(d, t);
+            const old = await hub_install(d, gone);
+            await DaemonTeam.unscoped().update({ uninstalled_at: Date.now() } as never, { where: { id: old } });
+            const sq = DaemonTeam.sequelize!;
+            const saved = await sq.query(`SELECT "value" FROM cliq."settings" WHERE "key" = :key`, { replacements: { key: REALM_TEAM_DELIVERY_MIGRATION_KEY }, type: QueryTypes.SELECT }) as Array<{ value: string }>;
+            await sq.query(`DELETE FROM cliq."settings" WHERE "key" = :key`, { replacements: { key: REALM_TEAM_DELIVERY_MIGRATION_KEY } });
+            try {
+                await migrate_realm_team_delivery(sq);
+                expect((await row(id)).confirmed_at).not.toBeNull();
+                expect((await row(old)).confirmed_at).toBeNull();
+                // Keyed: a push after the migration isn't confirmed by running it again.
+                const later = await realm_team();
+                const pending = await hub_install(d, later);
+                await migrate_realm_team_delivery(sq);
+                expect((await row(pending)).confirmed_at).toBeNull();
+            } finally {
+                await sq.query(`DELETE FROM cliq."settings" WHERE "key" = :key`, { replacements: { key: REALM_TEAM_DELIVERY_MIGRATION_KEY } });
+                if (saved[0]) {
+                    await sq.query(`INSERT INTO cliq."settings" ("key", "value", "updated_at") VALUES (:key, :value, NOW())`,
+                        { replacements: { key: REALM_TEAM_DELIVERY_MIGRATION_KEY, value: saved[0].value } });
+                }
+            }
+        });
+    });
+
     it('uninstall keeps the row (runs keep their team); the hub installing again gets the same id back', async () => {
         const d = await new_daemon();
         const t = await realm_team();
         const id = await hub_install(d, t);
         const run_id = await RunService.create(workspace_id, id, { daemon_id: d });
-        // The daemon's whole roster no longer has it → uninstalled, not deleted.
+        // The daemon had it (its roster confirms the push), then its whole roster no longer has it → uninstalled, not
+        // deleted. (A pending push isn't undone by a roster: PLAN-realm-team-delivery, tested below.)
+        await TeamService.register_from_daemon(d, [report(id, t.name)], true, await realm_teams());
         await TeamService.register_from_daemon(d, [], true, await realm_teams());
         expect((await row(id)).uninstalled_at).not.toBeNull();
         expect(await DaemonTeam.findOne({ where: { daemon_id: d, team_id: t.team_id } })).toBeNull();

@@ -13,12 +13,14 @@ export async function make_daemon_team_row(
     version: string | null,
     description: string | null,
     manifest: string,
-    deps: { daemon_id?: string | null; team_id?: string | null; dockerfile?: string | null; dependencies?: string | null } = {},
+    deps: { daemon_id?: string | null; team_id?: string | null; dockerfile?: string | null; dependencies?: string | null; pending?: boolean } = {},
 ): Promise<DaemonTeam> {
     const now = Date.now();
     return DaemonTeam.create({
         id: randomUUID(), daemon_id: deps.daemon_id ?? null, team_id: deps.team_id ?? null, scope_id, slug, version,
         description, manifest,
+        // The team is on the daemon: confirmed (PLAN-realm-team-delivery); `pending` for a push not yet confirmed.
+        confirmed_at: deps.pending ? null : now,
         dockerfile: deps.dockerfile ?? null, dependencies: deps.dependencies ?? null, created_at: now, updated_at: now,
     } as never);
 }

@@ -45,6 +45,14 @@ export class DaemonTeam extends BaseModel {
     declare dependencies: string | null;
     /** When the team was removed from the daemon (ms); null while installed. */
     declare uninstalled_at: number | null;
+    /**
+     * When the daemon confirmed it has this version (ms: its install ack, or its roster) — PLAN-realm-team-delivery.
+     * Null while a push is in flight (pending): a `complete` roster leaves a pending row alone, and runs go only to
+     * daemons with a confirmed row.
+     */
+    declare confirmed_at: number | null;
+    /** Why the last push failed on the daemon (its ack error, or "never delivered"); null otherwise. */
+    declare install_error: string | null;
     declare created_at: number;
     declare updated_at: number;
 
@@ -65,6 +73,8 @@ export class DaemonTeam extends BaseModel {
             dockerfile: { type: DataTypes.TEXT },
             dependencies: { type: DataTypes.TEXT },
             uninstalled_at: { type: DataTypes.BIGINT, allowNull: true },
+            confirmed_at: { type: DataTypes.BIGINT, allowNull: true },
+            install_error: { type: DataTypes.TEXT, allowNull: true },
             created_at: { type: DataTypes.BIGINT, allowNull: false },
             updated_at: { type: DataTypes.BIGINT, allowNull: false },
         }, ModelConfig.table_options(sequelize, 'daemon_teams', {

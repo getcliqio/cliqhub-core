@@ -304,6 +304,7 @@ async function _deliver_entry(entry: PendingEntry): Promise<void> {
                 { replacements: { tx_id: entry.tx_id, error: error_msg }, type: QueryTypes.UPDATE },
             );
             await fail_refused_execute(entry, error_msg);
+            await settle_install_command(entry, { ok: false, reason: error_msg });
             log.warn('command_permanent_failure', {
                 tx_id: entry.tx_id,
                 daemon_id: entry.daemon_id,
@@ -345,7 +346,10 @@ async function _note_failure(entry: PendingEntry, error: string): Promise<void> 
     // Numbers come back from Postgres as strings (see _deliver_entry): coerce before comparing.
     const until = entry.deliver_until === null ? null : Number(entry.deliver_until);
     const out_of_tries = Number(entry.attempts) + 1 >= Number(entry.max_attempts) && (until === null || until <= Date.now());
-    if (out_of_tries) await fail_refused_execute(entry, error);
+    if (out_of_tries) {
+        await fail_refused_execute(entry, error);
+        await settle_install_command(entry, { ok: false, reason: `install never delivered: ${error}` });
+    }
 }
 
 /**
@@ -368,6 +372,33 @@ export async function fail_refused_execute(command: { endpoint: string; payload:
         await RunService.fail_if_live(run_id, `The daemon didn't start this run: ${reason}`);
     } catch (err) {
         log.warn('refused_run_fail_failed', { run_id, error: err instanceof Error ? err.message : String(err) });
+    }
+}
+
+/**
+ * An `/v1/install` command's outcome settles the daemon's row for that team (PLAN-realm-team-delivery steps 3–4):
+ * the daemon's ack (`ok` / `error`), or delivery giving up. Other commands: nothing. Best-effort — logged, never
+ * thrown (the ack and the outbox carry on).
+ */
+export async function settle_install_command(
+    command: { daemon_id: string; endpoint: string; payload: string | Record<string, unknown> },
+    outcome: { ok: true } | { ok: false; reason: string },
+): Promise<void> {
+    if (command.endpoint !== '/v1/install') return;
+    let payload: { team_id?: unknown; version_id?: unknown };
+    try {
+        payload = typeof command.payload === 'string' ? JSON.parse(command.payload) as typeof payload : command.payload;
+    } catch {
+        return; // payload not JSON — no team to settle
+    }
+    const team_id = typeof payload.team_id === 'string' ? payload.team_id : null;
+    if (!team_id) return;
+    const version_id = typeof payload.version_id === 'string' ? payload.version_id : null;
+    try {
+        const { TeamService } = await import('./teams_install_service.js');
+        await TeamService.settle_install({ daemon_id: command.daemon_id, team_id, version_id }, outcome);
+    } catch (err) {
+        log.warn('install_settle_failed', { daemon_id: command.daemon_id, team_id, error: err instanceof Error ? err.message : String(err) });
     }
 }
 

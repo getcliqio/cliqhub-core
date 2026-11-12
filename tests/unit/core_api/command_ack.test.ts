@@ -55,10 +55,10 @@ vi.mock('../../../src/services/realm.service.js', () => ({
     RealmService: { assert_daemon_in_realm: vi.fn(async () => undefined) },
 }));
 
-vi.mock('../../../src/services/command_outbox.service.js', () => ({ fail_refused_execute: vi.fn(async () => undefined) }));
+vi.mock('../../../src/services/command_outbox.service.js', () => ({ fail_refused_execute: vi.fn(async () => undefined), settle_install_command: vi.fn(async () => undefined) }));
 
 import { CommandAckController } from '../../../src/controllers/command_ack_controller.js';
-import { fail_refused_execute } from '../../../src/services/command_outbox.service.js';
+import { fail_refused_execute, settle_install_command } from '../../../src/services/command_outbox.service.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -191,6 +191,17 @@ describe('CommandAckController.ack_command', () => {
         _outbox.set('cmd-y', { tx_id: 'cmd-y', daemon_id: 'd-1', acked_at: null, ack_status: null, endpoint: '/v1/execute', payload: '{"run_id":"run-y"}' });
         await CommandAckController.ack_command(mock_req({ tx_id: 'ack-y', command_tx_id: 'cmd-y', daemon_id: 'd-1', status: 'ok' }), mock_res(), vi.fn());
         expect(fail_refused_execute).not.toHaveBeenCalled();
+    });
+
+    it('the ack of a pushed install settles the daemon\'s team row: ok confirms, error carries the reason (PLAN-realm-team-delivery)', async () => {
+        vi.mocked(settle_install_command).mockClear();
+        _outbox.set('cmd-i', { tx_id: 'cmd-i', daemon_id: 'd-1', acked_at: null, ack_status: null, endpoint: '/v1/install', payload: '{"team_id":"t-1","version_id":"v-1"}' });
+        await CommandAckController.ack_command(mock_req({ tx_id: 'ack-i', command_tx_id: 'cmd-i', daemon_id: 'd-1', status: 'ok' }), mock_res(), vi.fn());
+        expect(settle_install_command).toHaveBeenCalledWith(expect.objectContaining({ endpoint: '/v1/install', daemon_id: 'd-1' }), { ok: true });
+
+        _outbox.set('cmd-j', { tx_id: 'cmd-j', daemon_id: 'd-1', acked_at: null, ack_status: null, endpoint: '/v1/install', payload: '{"team_id":"t-1","version_id":"v-1"}' });
+        await CommandAckController.ack_command(mock_req({ tx_id: 'ack-j', command_tx_id: 'cmd-j', daemon_id: 'd-1', status: 'error', error: "This team isn't available for installation on this daemon." }), mock_res(), vi.fn());
+        expect(settle_install_command).toHaveBeenLastCalledWith(expect.objectContaining({ endpoint: '/v1/install' }), { ok: false, reason: "This team isn't available for installation on this daemon." });
     });
 
     it('rejects invalid body (missing required fields)', async () => {

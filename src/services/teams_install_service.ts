@@ -125,6 +125,9 @@ export class TeamService {
             description: input.description,
             manifest: input.manifest,
             uninstalled_at: null,
+            // Pending until the daemon confirms it (its install ack or its roster) — PLAN-realm-team-delivery.
+            confirmed_at: null,
+            install_error: null,
             updated_at: now,
         };
         // The installed row first, else the most recent uninstalled one: a reinstall gets its id back.
@@ -196,8 +199,9 @@ export class TeamService {
      * it (the row id). A team is kept only when the hub installed it on this daemon and its catalog team is on the
      * daemon's realm (`realm_teams`); its version is updated to what the daemon has. Anything else gets no id:
      * `unknown` (not a team the hub installed here — a local or CLI install stays in cliqd) or `not_in_realm` (the
-     * team is no longer on the realm: the row is marked uninstalled). With `complete`, the list is the daemon's
-     * whole roster: its other installed rows are marked uninstalled.
+     * team is no longer on the realm: the row is marked uninstalled). A team it reports is confirmed. With
+     * `complete`, the list is the daemon's whole roster: its other confirmed rows are marked uninstalled — not a
+     * pending one, whose push may still be on its way (PLAN-realm-team-delivery).
      */
     static async register_from_daemon(
         daemon_id: string,
@@ -229,7 +233,7 @@ export class TeamService {
             if (!realm_team && row.via_realm_team_id && [...realm_teams.values()].some((rt) => rt.id === row.via_realm_team_id)) {
                 const version = t.version ?? row.version;
                 const version_id = version === row.version ? row.version_id : await TeamService._version_id(row.team_id, version);
-                await row.update({ version, version_id, uninstalled_at: null, updated_at: Date.now() } as any);
+                await row.update({ version, version_id, uninstalled_at: null, confirmed_at: Date.now(), install_error: null, updated_at: Date.now() } as any);
                 kept.add(row.id);
                 out.push({ scope: t.scope, slug: t.slug, id: row.id });
                 continue;
@@ -252,6 +256,9 @@ export class TeamService {
                 ...(t.dockerfile ? { dockerfile: t.dockerfile } : {}),
                 ...(t.dependencies ? { dependencies: t.dependencies } : {}),
                 uninstalled_at: null,
+                // The daemon has it: confirmed (PLAN-realm-team-delivery).
+                confirmed_at: Date.now(),
+                install_error: null,
                 updated_at: Date.now(),
             } as any);
             kept.add(row.id);
@@ -259,9 +266,11 @@ export class TeamService {
         }
 
         if (complete) {
+            // The daemon's whole roster: a confirmed row it no longer reports is gone from it. A pending row (a push in
+            // flight — PLAN-realm-team-delivery) is left alone: the roster can predate the install; its ack settles it.
             const installed = await _dt_repo_ti.find_all_q({ where: { daemon_id } });
             for (const row of installed) {
-                if (!kept.has(row.id)) await TeamService._mark_uninstalled(row);
+                if (!kept.has(row.id) && row.confirmed_at != null) await TeamService._mark_uninstalled(row);
             }
         }
         return out;
@@ -337,6 +346,59 @@ export class TeamService {
      * Uninstall a slot: drop its workspace links and mark it uninstalled. The
      * row and its runs stay — runs keep their team, a reinstall keeps the id.
      */
+    /**
+     * A pushed install's outcome settles the daemon's row for that team (PLAN-realm-team-delivery steps 3–4): the
+     * daemon acked it `ok` → confirmed; it acked `error`, or delivery gave up → uninstalled with the reason kept, and
+     * the realm's owners told (in-app). Only the row of that push: a row since moved to another version, or already
+     * confirmed by the daemon's roster, is left as it is.
+     *
+     * @param install - The `/v1/install` command: its daemon and payload (`team_id` is the catalog team).
+     * @param outcome - `{ ok: true }`, or why it failed.
+     */
+    static async settle_install(
+        install: { daemon_id: string; team_id: string; version_id: string | null },
+        outcome: { ok: true } | { ok: false; reason: string },
+    ): Promise<void> {
+        const row = await _dt_repo_ti.find_one_q({ where: { daemon_id: install.daemon_id, team_id: install.team_id } });
+        if (!row) return;   // already uninstalled, or never pushed here
+        if (install.version_id && row.version_id && row.version_id !== install.version_id) return;   // a newer push replaced it
+        const now = Date.now();
+        if (outcome.ok) {
+            if (row.confirmed_at == null) await row.update({ confirmed_at: now, install_error: null, updated_at: now } as any);
+            return;
+        }
+        if (row.confirmed_at != null) return;   // the daemon has it (its roster said so): a late error doesn't undo that
+        await row.update({ install_error: outcome.reason } as any);
+        await TeamService._mark_uninstalled(row);
+        log.warn('daemon_team_install_failed', { daemon_id: install.daemon_id, team_id: install.team_id, version_id: install.version_id, reason: outcome.reason });
+        await TeamService._notify_install_failed(row, outcome.reason);
+    }
+
+    /** Tell the realm's owners (in-app) that a pushed team didn't install on a daemon. Best-effort. */
+    private static async _notify_install_failed(row: DaemonTeam, reason: string): Promise<void> {
+        try {
+            const { RealmTeam } = await import('../models/realm_team.model.js');
+            const { DaemonRepository } = await import('../repositories/daemon_repository.js');
+            const { InAppNotificationService } = await import('./in_app_notification.service.js');
+            const realm_team = row.realm_team_id ? await RealmTeam.findByPk(row.realm_team_id, { raw: true }) as { realm_id?: string } | null : null;
+            const daemon = row.daemon_id ? await new DaemonRepository().find_by_id(row.daemon_id) : null;
+            const daemon_name = daemon?.name ?? row.daemon_id ?? 'a daemon';
+            const scope = await _scope_repo_ti.find_by_id(row.scope_id).catch(() => null);
+            const team_ref = `@${(scope as { slug?: string } | null)?.slug ?? row.scope_id}/${row.slug}`;
+            await InAppNotificationService.create_from_payload({
+                event: 'realm.team_list.install_failed',
+                title: `${team_ref} didn't install`,
+                message: `Daemon ${daemon_name}: ${reason}`,
+                ...(realm_team?.realm_id ? { realm_id: realm_team.realm_id } : {}),
+                ...(row.daemon_id ? { daemon_id: row.daemon_id } : {}),
+                ...(daemon?.name ? { daemon_name: daemon.name } : {}),
+                severity: 'warning',
+            });
+        } catch (err) {
+            log.warn('daemon_team_install_failed_notify_failed', { daemon_team_id: row.id, error: err instanceof Error ? err.message : String(err) });
+        }
+    }
+
     private static async _mark_uninstalled(team: DaemonTeam): Promise<boolean> {
         const team_id = team.get('id') as string;
         const sequelize = get_sequelize();

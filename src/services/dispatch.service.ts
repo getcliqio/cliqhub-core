@@ -971,18 +971,22 @@ export class DispatchService {
                 team_id,
                 daemon_ids,
             );
-            if (eligible_daemon_ids.length > 0) {
-                const before = daemon_ids.length;
-                daemon_ids = eligible_daemon_ids;
-                log.info('offer_prefilter_team', {
-                    queue_item_id: item.id,
-                    realm_id: item.realm_id,
-                    team_id,
-                    online_count: before,
-                    eligible_count: daemon_ids.length,
-                });
+            if (eligible_daemon_ids.length === 0) {
+                // Only daemons that have confirmed the team get the run (PLAN-realm-team-delivery step 5): with none,
+                // fail now with why — never offer it to daemons that can't run it (they'd claim it and fail).
+                const why = await DispatchService._why_no_daemon_has_team(team_id, daemon_ids, item.realm_id);
+                log.warn('offer_skipped_no_daemon_has_team', { queue_item_id: item.id, realm_id: item.realm_id, team_id, online_count: daemon_ids.length });
+                const failed = await QueueService.set_results(item.id, { status: 'failed', error: why });
+                throw Object.assign(ApiError.bad_request(why), { queue_item: failed });
             }
-            // If no daemon has the team cached, fall through to offer all (backward compat).
+            log.info('offer_prefilter_team', {
+                queue_item_id: item.id,
+                realm_id: item.realm_id,
+                team_id,
+                online_count: daemon_ids.length,
+                eligible_count: eligible_daemon_ids.length,
+            });
+            daemon_ids = eligible_daemon_ids;
         }
 
         const daemons = await _daemon_repo.find_all(
@@ -1416,7 +1420,10 @@ export class DispatchService {
         return { workspace_id: id, workspace_path: '' };
     }
 
-    /** Daemons that have the team installed (ref: catalog id or daemon_teams id). */
+    /**
+     * Daemons that have the team installed and have confirmed it (ref: catalog id or daemon_teams id) — a push still
+     * in flight doesn't count (PLAN-realm-team-delivery step 5).
+     */
     private static async _daemon_ids_with_team(
         team_ref: string,
         daemon_ids: string[],
@@ -1427,10 +1434,37 @@ export class DispatchService {
         if (!catalog_id) return [];
 
         const rows = await _dt_repo.find_all(
-            { team_id: catalog_id, daemon_id: { [Op.in]: daemon_ids } } as any,
+            { team_id: catalog_id, daemon_id: { [Op.in]: daemon_ids }, confirmed_at: { [Op.ne]: null } } as any,
             { attributes: ['daemon_id'] },
         );
         return [...new Set(rows.map((r) => r.daemon_id).filter(Boolean) as string[])];
+    }
+
+    /**
+     * Why no online daemon of the realm can run this team (PLAN-realm-team-delivery step 5): an install still pending
+     * on one, the last install failed on one (its reason), or it's on no daemon at all.
+     */
+    private static async _why_no_daemon_has_team(team_ref: string, daemon_ids: string[], realm_id: string): Promise<string> {
+        const catalog_id = await DispatchService._catalog_team_id(team_ref);
+        const rows = catalog_id && daemon_ids.length
+            ? await (await import('../models/daemon_team.model.js')).DaemonTeam.unscoped().findAll({ where: { team_id: catalog_id, daemon_id: { [Op.in]: daemon_ids } }, raw: true }) as unknown as Array<{
+                daemon_id: string; slug: string; uninstalled_at: number | null; confirmed_at: number | null; install_error: string | null; updated_at: number;
+            }>
+            : [];
+        const label = rows[0] ? `@${await DispatchService._scope_slug_of(catalog_id!)}/${rows[0].slug}` : `team ${team_ref}`;
+        const names = async (ids: string[]) => (await Promise.all(ids.map(async (id) => (await _daemon_repo.find_by_id(id))?.name ?? id))).join(', ');
+        const pending = rows.filter((r) => r.uninstalled_at == null && r.confirmed_at == null);
+        if (pending.length) return `No daemon in this realm has ${label} installed yet — install pending on ${await names(pending.map((r) => r.daemon_id))}. Try again shortly.`;
+        const failed = rows.filter((r) => r.uninstalled_at != null && r.install_error).sort((a, b) => b.updated_at - a.updated_at)[0];
+        if (failed) return `No daemon in this realm has ${label} installed — the install failed on ${await names([failed.daemon_id])}: ${failed.install_error}`;
+        return `${label} is on realm ${realm_id}'s team list but installed on no online daemon — sync it to the realm's daemons and try again.`;
+    }
+
+    /** A catalog team's scope slug, for messages; the id when unknown. */
+    private static async _scope_slug_of(catalog_team_id: string): Promise<string> {
+        const { Team: TeamModel } = await import('../models/team.model.js');
+        const team = await TeamModel.findByPk(catalog_team_id, { attributes: ['scope'], raw: true }) as { scope?: string } | null;
+        return team?.scope ?? catalog_team_id;
     }
 
     /**
