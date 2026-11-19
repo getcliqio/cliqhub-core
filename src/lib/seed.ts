@@ -157,35 +157,37 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
           dockerfile: cli_dockerfile('codex', 'npm install -g @openai/codex'), dependencies: cli_deps('codex', 'npm install -g @openai/codex') },
         { name: 'curl', agent_type: 'connector', description: 'HTTP connector', version: '1.0.0', capabilities: ['phase:standard'],
           inputs: { sources: { type: 'source_entry[]', required: false }, target_entries: { type: 'target_entry[]', required: false } }, dockerfile: builtin_dockerfile },
-        // Keep in sync with cliq-agents/git/manifest.json (v1.1.1).
-        { name: 'git', agent_type: 'connector', description: 'Git finalization', version: '1.1.1', capabilities: ['phase:standard', 'notify'],
+        // Keep in sync with cliq-agents/git/manifest.json (v1.5.0).
+        { name: 'git', agent_type: 'connector', description: 'Git work on a checkout (branch, commit, push, checkout) and pull requests via GitHub or Bitbucket (create, comment); shallow-clone a repo into a folder (clone); keep a folder of clones current (sync_repos)', version: '1.5.0', capabilities: ['phase:standard', 'notify'],
           settings: {
             required: [
               { key: 'provider', description: 'Git hosting provider: github or bitbucket', default: 'github' },
               { key: 'github.token', description: 'GitHub personal access token (repo scope)', when: { provider: 'github' } },
-              { key: 'bitbucket.email', description: 'Bitbucket account email', when: { provider: 'bitbucket' } },
-              { key: 'bitbucket.api_token', description: 'Bitbucket API token / app password', when: { provider: 'bitbucket' } },
+              { key: 'bitbucket.api_token', description: 'Bitbucket token: a repository/workspace access token (ATCT…) or an Atlassian API token (ATAT…, also set bitbucket.email). App passwords (ATBB…) work for pull requests but not for git.', when: { provider: 'bitbucket' } },
               { key: 'bitbucket.workspace', description: 'Bitbucket workspace slug', when: { provider: 'bitbucket' } },
             ] as SE[],
             optional: [
+              { key: 'bitbucket.email', description: 'Email of the Atlassian account that made the token — needed for Atlassian API tokens (ATAT…), not for repository/workspace access tokens (ATCT…)', when: { provider: 'bitbucket' } },
               { key: 'github.base_branch', description: "Default PR base branch for GitHub repos (fallback when the open-pr phase does not pin one; further fallback to the remote's HEAD symref, then 'main')", default: 'main', when: { provider: 'github' } },
-              { key: 'github.remote', description: 'Git remote name', default: 'origin', when: { provider: 'github' } },
-              { key: 'github.pr_draft', description: 'Create PRs as drafts', default: false, when: { provider: 'github' } },
-              { key: 'bitbucket.base_url', description: 'Bitbucket API base URL', when: { provider: 'bitbucket' } },
+              { key: 'github.remote', description: 'Git remote name used to resolve the repo', default: 'origin', when: { provider: 'github' } },
+              { key: 'github.pr_draft', description: 'Create pull requests as drafts', default: false, when: { provider: 'github' } },
+              { key: 'bitbucket.base_url', description: 'Bitbucket API base URL', default: 'https://api.bitbucket.org/2.0', when: { provider: 'bitbucket' } },
               { key: 'bitbucket.base_branch', description: "Default PR base branch for Bitbucket repos (fallback when the open-pr phase does not pin one; further fallback to the remote's HEAD symref, then 'main')", when: { provider: 'bitbucket' } },
+              { key: 'commit.author_name', description: 'Author name for commits made by the commit action (when the machine has no git identity)' },
+              { key: 'commit.author_email', description: 'Author email for commits made by the commit action (when the machine has no git identity)' },
             ] as SE[],
           }, binaries: ['git'],
           inputs: {
-            action: { type: 'string', required: true, default: 'create_pr', description: "Git operation to perform (currently only 'create_pr')" },
+            action: { type: 'string', required: true, default: 'create_pr', description: 'Git operation: branch, commit, push, checkout, create_pr, pr_comment, sync_repos or clone' },
             project_dir: { type: 'string', required: false, description: 'Working tree the PR is opened from (defaults to process.cwd())' },
             base_branch: { type: 'string', required: false, description: "Destination branch for the PR (e.g. 'master', 'develop'). Overrides settings.<provider>.base_branch and the remote HEAD auto-detect; falls back to 'main' if none is available" },
             notify: { type: 'object', required: false, description: 'Pipeline lifecycle events this agent can handle (e.g. on_complete with action: create_pr)' },
           }, dockerfile: builtin_dockerfile,
           dependencies: '- name: git\n  install: apk add --no-cache git\n' },
-        // Keep in sync with cliq-agents/jira/manifest.json (v2.1.0).
+        // Keep in sync with cliq-agents/jira/manifest.json (v2.2.0).
         { name: 'jira', agent_type: 'connector',
           description: 'Jira connector — fetch issues/trees, create/update issues from a jobs list (markdown bodies, per-job type and status), comments, transitions by status name',
-          version: '2.1.0', capabilities: ['phase:standard', 'notify'],
+          version: '2.2.0', capabilities: ['phase:standard', 'notify'],
           settings: { required: [
             { key: 'base_url', description: 'Jira instance URL, e.g. https://yoursite.atlassian.net' },
             { key: 'email', description: 'Jira account email for authentication' },
