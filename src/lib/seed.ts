@@ -182,10 +182,10 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
             notify: { type: 'object', required: false, description: 'Pipeline lifecycle events this agent can handle (e.g. on_complete with action: create_pr)' },
           }, dockerfile: builtin_dockerfile,
           dependencies: '- name: git\n  install: apk add --no-cache git\n' },
-        // Keep in sync with cliq-agents/jira/manifest.json (v1.2.1).
+        // Keep in sync with cliq-agents/jira/manifest.json (v2.0.0).
         { name: 'jira', agent_type: 'connector',
-          description: 'Jira connector — fetch issues/trees, create/update Stories from dispatch.json, comments, transitions',
-          version: '1.2.1', capabilities: ['phase:standard', 'notify'],
+          description: 'Jira connector — fetch issues/trees, create/update Stories from a jobs list, comments, transitions by status name',
+          version: '2.0.0', capabilities: ['phase:standard', 'notify'],
           settings: { required: [
             { key: 'base_url', description: 'Jira instance URL, e.g. https://yoursite.atlassian.net' },
             { key: 'email', description: 'Jira account email for authentication' },
@@ -194,10 +194,10 @@ type SE = string | { key: string; description: string; default?: unknown; when?:
           inputs: {
             action: {
               type: 'string', required: true,
-              description: 'Jira operation: get_issue | get_issue_tree | get_comments | search | add_comment | transition | create_issue | update_issue | update_fields',
+              description: 'Jira operation: get_issue | get_issue_tree | check_bodies | get_comments | search | add_comment | transition | create_issue | update_issue | update_fields',
             },
             sources: { type: 'source_entry[]', required: false, required_unless: ['target_entries'], description: 'Jira resources to fetch (issues, trees, comments, search)' },
-            target_entries: { type: 'target_entry[]', required: false, required_unless: ['sources'], description: 'Jira resources to write (comments, transitions, dispatch.json create/update)' },
+            target_entries: { type: 'target_entry[]', required: false, required_unless: ['sources'], description: 'Jira resources to write (comments, transitions by status, Stories from jobs)' },
             notify: { type: 'object', required: false, description: 'Pipeline lifecycle events this agent can handle (e.g. on_escalate, on_complete)' },
           },
           dockerfile: builtin_dockerfile },
