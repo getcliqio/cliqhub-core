@@ -6,7 +6,7 @@
  */
 
 import { ApiError } from '../lib/api_error.js';
-import { fail_refused_execute, settle_install_command } from '../services/command_outbox.service.js';
+import { fail_refused_execute, record_refused_resume, settle_install_command } from '../services/command_outbox.service.js';
 import { RealmService } from '../services/realm.service.js';
 import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
@@ -90,6 +90,8 @@ export class CommandAckController {
 
             // A daemon refusing a run it was sent (P17): the run fails with its reason instead of looking started.
             if (body.status === 'error') await fail_refused_execute(command, body.error ?? 'refused');
+            // A refused resume: its reason goes on the run, so the run page shows why (not "Resume queued").
+            if (body.status === 'error') await record_refused_resume(command, body.error ?? 'refused');
             // A pushed install (PLAN-realm-team-delivery): `ok` confirms the daemon's row, `error` uninstalls it with
             // the daemon's reason and tells the realm's owners.
             await settle_install_command(command, body.status === 'ok' ? { ok: true } : { ok: false, reason: body.error ?? 'refused' });

@@ -55,10 +55,10 @@ vi.mock('../../../src/services/realm.service.js', () => ({
     RealmService: { assert_daemon_in_realm: vi.fn(async () => undefined) },
 }));
 
-vi.mock('../../../src/services/command_outbox.service.js', () => ({ fail_refused_execute: vi.fn(async () => undefined), settle_install_command: vi.fn(async () => undefined) }));
+vi.mock('../../../src/services/command_outbox.service.js', () => ({ fail_refused_execute: vi.fn(async () => undefined), record_refused_resume: vi.fn(async () => undefined), settle_install_command: vi.fn(async () => undefined) }));
 
 import { CommandAckController } from '../../../src/controllers/command_ack_controller.js';
-import { fail_refused_execute, settle_install_command } from '../../../src/services/command_outbox.service.js';
+import { fail_refused_execute, record_refused_resume, settle_install_command } from '../../../src/services/command_outbox.service.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -191,6 +191,14 @@ describe('CommandAckController.ack_command', () => {
         _outbox.set('cmd-y', { tx_id: 'cmd-y', daemon_id: 'd-1', acked_at: null, ack_status: null, endpoint: '/v1/execute', payload: '{"run_id":"run-y"}' });
         await CommandAckController.ack_command(mock_req({ tx_id: 'ack-y', command_tx_id: 'cmd-y', daemon_id: 'd-1', status: 'ok' }), mock_res(), vi.fn());
         expect(fail_refused_execute).not.toHaveBeenCalled();
+    });
+
+    it('an error ack of a /v1/resume notes the refusal on the run (the run page shows why)', async () => {
+        vi.mocked(record_refused_resume).mockClear();
+        _outbox.set('cmd-r', { tx_id: 'cmd-r', daemon_id: 'd-1', acked_at: null, ack_status: null, endpoint: '/v1/resume', payload: '{"run_id":"run-r","from_phase":"review"}' });
+        const reason = "Run is in state 'running' — can only resume a completed, failed, crashed or cancelled run";
+        await CommandAckController.ack_command(mock_req({ tx_id: 'ack-r', command_tx_id: 'cmd-r', daemon_id: 'd-1', status: 'error', error: reason }), mock_res(), vi.fn());
+        expect(record_refused_resume).toHaveBeenCalledWith(expect.objectContaining({ endpoint: '/v1/resume' }), reason);
     });
 
     it('the ack of a pushed install settles the daemon\'s team row: ok confirms, error carries the reason (PLAN-realm-team-delivery)', async () => {

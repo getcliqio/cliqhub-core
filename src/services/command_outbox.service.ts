@@ -376,6 +376,30 @@ export async function fail_refused_execute(command: { endpoint: string; payload:
 }
 
 /**
+ * A daemon refusing a `/v1/resume` (e.g. 409: it still has the run live): the reason goes on the run's
+ * recorded error, so the run page's "Why it failed" card says why the resume didn't happen instead of
+ * the page sitting on "Resume queued". Other commands: nothing. Best-effort — logged, never thrown.
+ */
+export async function record_refused_resume(command: { endpoint: string; payload: string | Record<string, unknown> }, reason: string): Promise<void> {
+    if (command.endpoint !== '/v1/resume') return;
+    let payload: { run_id?: unknown; from_phase?: unknown };
+    try {
+        payload = typeof command.payload === 'string' ? JSON.parse(command.payload) as typeof payload : command.payload;
+    } catch {
+        return; // payload not JSON — no run to note it on
+    }
+    const run_id = typeof payload.run_id === 'string' ? payload.run_id.trim() : '';
+    if (!run_id) return;
+    const from_phase = typeof payload.from_phase === 'string' ? payload.from_phase : '?';
+    const { RunService } = await import('./run.service.js');
+    try {
+        await RunService.note_refused_resume(run_id, from_phase, reason);
+    } catch (err) {
+        log.warn('refused_resume_note_failed', { run_id, error: err instanceof Error ? err.message : String(err) });
+    }
+}
+
+/**
  * An `/v1/install` command's outcome settles the daemon's row for that team (PLAN-realm-team-delivery steps 3–4):
  * the daemon's ack (`ok` / `error`), or delivery giving up. Other commands: nothing. Best-effort — logged, never
  * thrown (the ack and the outbox carry on).

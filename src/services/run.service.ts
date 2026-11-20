@@ -329,6 +329,9 @@ function lease_deadline(kind: 'running' | 'awaiting_input' = 'running'): number 
     return Date.now() + ttl;
 }
 
+/** Starts the line `note_refused_resume` puts on a run's error (the BFF's "Why it failed" card reads it). */
+export const REFUSED_RESUME_PREFIX = 'Resume from ';
+
 type RunInputs = Readonly<Record<string, unknown>>;
 
 function hydrate_inputs(raw: string | null): RunInputs {
@@ -1231,6 +1234,23 @@ export class RunService {
         const { HugsService } = await import('./hugs.service.js');
         await HugsService.cancel_for_run(run_id).catch(() => {});
         return true;
+    }
+
+    /**
+     * Put a refused resume's reason at the top of a stopped run's recorded error (an earlier refusal
+     * line is replaced, the original error kept below it). A run that is live again is left alone.
+     */
+    static async note_refused_resume(run_id: string, from_phase: string, reason: string): Promise<boolean> {
+        log.debug('note_refused_resume', { run_id, from_phase });
+        const run = await _run_repo_rs.find_by_id(run_id);
+        if (!run || !['completed', 'failed', 'crashed', 'cancelled'].includes(run.state as string)) return false;
+        const line = `${REFUSED_RESUME_PREFIX}'${from_phase}' refused by the daemon: ${reason}`;
+        const rest = String(run.error ?? '').split('\n').filter((l) => !l.startsWith(REFUSED_RESUME_PREFIX)).join('\n').trim();
+        const [count] = await _run_repo_rs.update_where(
+            { run_id, state: { [Op.in]: ['completed', 'failed', 'crashed', 'cancelled'] } } as any,
+            { error: rest ? `${line}\n${rest}` : line } as any,
+        );
+        return count > 0;
     }
 
     static async complete(run_id: string, state: 'completed' | 'failed' | 'cancelled' | 'crashed', error?: string) {

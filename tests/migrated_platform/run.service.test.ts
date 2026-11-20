@@ -438,6 +438,23 @@ describe.skipIf(!has_postgres)('RunService — State transitions', () => {
         });
     });
 
+    describe.skipIf(!has_postgres)('note_refused_resume', () => {
+        it('puts the refusal on top of a stopped run\'s error, replacing an earlier one; leaves live runs alone', async () => {
+            const run_id = await create_run();
+            await RunService.complete(run_id, 'crashed', 'run lease expired');
+
+            expect(await RunService.note_refused_resume(run_id, 'review', "Run is in state 'running'")).toBe(true);
+            expect((await RunService.get(run_id)).get('error')).toBe("Resume from 'review' refused by the daemon: Run is in state 'running'\nrun lease expired");
+
+            await RunService.note_refused_resume(run_id, 'build', 'missing artifact');
+            expect((await RunService.get(run_id)).get('error')).toBe("Resume from 'build' refused by the daemon: missing artifact\nrun lease expired");
+
+            const live = await create_run();
+            expect(await RunService.note_refused_resume(live, 'review', 'x')).toBe(false);
+            expect((await RunService.get(live)).get('error')).toBeNull();
+        });
+    });
+
     describe.skipIf(!has_postgres)('restart', () => {
         it('restarts a completed run', async () => {
             const run_id = await create_run();

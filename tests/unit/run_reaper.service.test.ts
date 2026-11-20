@@ -26,12 +26,18 @@ vi.mock('../../src/services/run.service.js', () => ({
     RunService: { _emit_lifecycle: emit_mock },
 }));
 
+const enqueue_mock = vi.fn().mockResolvedValue(undefined);
+vi.mock('../../src/services/command_outbox.service.js', () => ({
+    command_outbox_enqueue: (...args: unknown[]) => enqueue_mock(...args),
+}));
+
 import { _reap_for_tests, stop_run_reaper } from '../../src/services/run_reaper.service.js';
 
 describe('RunReaper action lease', () => {
     beforeEach(() => {
         query_mock.mockReset();
         find_all_mock.mockReset();
+        enqueue_mock.mockClear();
         find_all_mock.mockResolvedValue([]);
         // Slice 1.3 flipped reap_* helpers to UPDATE ... RETURNING run_id
         // executed as QueryTypes.SELECT, so the mock now yields an array
@@ -68,5 +74,23 @@ describe('RunReaper action lease', () => {
         const count = await _reap_for_tests();
         expect(count).toBe(4);
         expect(query_mock).toHaveBeenCalledTimes(3);
+    });
+
+    it('tells the daemon to cancel each lease-expired run, but not runs of stale daemons', async () => {
+        find_all_mock.mockResolvedValue([{ id: 'daemon-dead' }]);
+        query_mock
+            .mockResolvedValueOnce([{ run_id: 's1', daemon_id: 'daemon-dead' }])  // stale daemon — left to the daemon
+            .mockResolvedValueOnce([])                                            // orphaned daemons
+            .mockResolvedValueOnce([
+                { run_id: 'parent', daemon_id: 'd1' },
+                { run_id: 'child', daemon_id: 'd1' },
+                { run_id: 'no-daemon', daemon_id: null },
+            ]);
+
+        await _reap_for_tests();
+        expect(enqueue_mock.mock.calls).toEqual([
+            ['d1', '/v1/cancel', { run_id: 'parent', reason: 'run lease expired' }],
+            ['d1', '/v1/cancel', { run_id: 'child', reason: 'run lease expired' }],
+        ]);
     });
 });

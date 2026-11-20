@@ -7,9 +7,11 @@
  *
  * See DESIGN-control-message-reliability Phase 3.
  *
- * The daemon's local run state is unaffected — this only fixes the Hub's
- * mirror. If a run is falsely reaped, the daemon can overwrite with the
- * real terminal state via complete.
+ * For a stale daemon the daemon's local run state is left alone — this only
+ * fixes the Hub's mirror, and a daemon that comes back can overwrite it with
+ * the real terminal state via complete. For an expired lease the daemon is
+ * alive and still thinks the run is live (a resume then gets 409), so the
+ * reaper also sends it `/v1/cancel` for each reaped run.
  */
 
 import { Op, QueryTypes } from 'sequelize';
@@ -46,6 +48,7 @@ async function crash_and_emit(
     where_sql: string,
     replacements: Record<string, unknown>,
     error_message: string,
+    opts: { cancel_on_daemon?: boolean } = {},
 ): Promise<number> {
     const sequelize = get_sequelize();
     const rows = (await sequelize.query(
@@ -55,12 +58,12 @@ async function crash_and_emit(
              "error" = :error_message,
              "lease_expires_at" = NULL
          WHERE ${where_sql}
-         RETURNING "run_id"`,
+         RETURNING "run_id", "daemon_id"`,
         {
             replacements: { ...replacements, now: Date.now(), error_message },
             type: QueryTypes.SELECT,
         },
-    )) as unknown as Array<{ run_id: string }>;
+    )) as unknown as Array<{ run_id: string; daemon_id?: string | null }>;
 
     if (rows.length === 0) return 0;
 
@@ -79,7 +82,25 @@ async function crash_and_emit(
         }
     }
 
+    if (opts.cancel_on_daemon) await cancel_on_daemons(rows, error_message);
+
     return rows.length;
+}
+
+/**
+ * Tell each reaped run's daemon to stop it too, so the two sides agree (the daemon cancels the run's
+ * child runs with it). Best-effort, like the crash events: a failed enqueue mustn't stop the reaper.
+ */
+async function cancel_on_daemons(rows: ReadonlyArray<{ run_id: string; daemon_id?: string | null }>, reason: string): Promise<void> {
+    const { command_outbox_enqueue } = await import('./command_outbox.service.js');
+    for (const row of rows) {
+        if (!row.daemon_id) continue;
+        try {
+            await command_outbox_enqueue(row.daemon_id, '/v1/cancel', { run_id: row.run_id, reason });
+        } catch (err) {
+            log.warn('reaper_cancel_enqueue_failed', { run_id: row.run_id, error: err instanceof Error ? err.message : String(err) });
+        }
+    }
 }
 
 /** Runs on daemons that stopped heartbeating. */
@@ -131,6 +152,7 @@ async function reap_expired_leases(): Promise<number> {
            AND "lease_expires_at" < :now_lease`,
         { now_lease: Date.now() },
         'run lease expired',
+        { cancel_on_daemon: true },
     );
 }
 
