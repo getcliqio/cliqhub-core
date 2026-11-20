@@ -144,11 +144,9 @@ describe.skipIf(!has_postgres)('RunService — Core CRUD', () => {
             const created = await Run.findByPk(run_id);
             const lease = Number(created!.get('lease_expires_at'));
             expect(lease).toBeGreaterThan(Date.now());
-            // Running-lease TTL default is 60 min (bumped from 30 min in
-            // c10b90a to keep long-phase teams like w2-parser from being
-            // reaped mid-flight); use a 61-min bound to allow for a
-            // handful of ms of clock drift between create and assert.
-            expect(lease).toBeLessThan(Date.now() + 61 * 60 * 1000);
+            // Running-lease TTL default is 24h (was 60 min, which crashed parents
+            // waiting on a child's Hug); a 1-min margin allows for clock drift.
+            expect(lease).toBeLessThan(Date.now() + 24 * 60 * 60 * 1000 + 60 * 1000);
 
             await RunService.complete(run_id, 'completed');
             const done = await Run.findByPk(run_id);
@@ -393,6 +391,50 @@ describe.skipIf(!has_postgres)('RunService — State transitions', () => {
             await RunService.resume(run_id);
             run = await RunService.get(run_id);
             expect(run.get('state')).toBe('running');
+        });
+    });
+
+    describe.skipIf(!has_postgres)('lease — parents live as long as their children', () => {
+        const DAY = 24 * 60 * 60 * 1000;
+        const lease_of = async (id: string) => Number((await RunService.get(id)).get('lease_expires_at'));
+        const set_lease = (id: string, at: number) =>
+            get_sequelize().query('UPDATE cliq."team_runs" SET "lease_expires_at" = :at WHERE "run_id" = :id', { replacements: { id, at } });
+
+        it('a running run gets a 24h lease', async () => {
+            const run_id = await create_run();
+            expect(await lease_of(run_id)).toBeGreaterThan(Date.now() + DAY - 60_000);
+        });
+
+        it('a grandchild waiting on a Hug renews its parent and grandparent', async () => {
+            const top = await create_run();
+            const mid = await create_run({ parent_run_id: top, parent_phase: 'review' });
+            const leaf = await create_run({ parent_run_id: mid, parent_phase: 'check' });
+            // Two hours into the wait: the parents' old leases would have run out.
+            await set_lease(top, Date.now() - 1);
+            await set_lease(mid, Date.now() - 1);
+
+            await RunService.set_awaiting_input(leaf);
+
+            expect(await lease_of(top)).toBeGreaterThan(Date.now() + DAY - 60_000);
+            expect(await lease_of(mid)).toBeGreaterThan(Date.now() + DAY - 60_000);
+            expect((await RunService.get(top)).get('state')).toBe('running');
+        });
+
+        it('child progress never shortens a parent lease and leaves ended parents alone', async () => {
+            const parent = await create_run();
+            const child = await create_run({ parent_run_id: parent, parent_phase: 'build' });
+            const far = Date.now() + 3 * DAY;
+            await set_lease(parent, far);
+            await RunService.touch_lease(child);
+            expect(await lease_of(parent)).toBe(far);
+
+            const ended = await create_run();
+            const orphan = await create_run({ parent_run_id: ended, parent_phase: 'build' });
+            await RunService.complete(ended, 'failed', 'x');
+            await RunService.touch_lease(orphan);
+            const row = await RunService.get(ended);
+            expect(row.get('state')).toBe('failed');
+            expect(row.get('lease_expires_at')).toBeNull();
         });
     });
 

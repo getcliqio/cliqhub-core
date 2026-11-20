@@ -309,16 +309,15 @@ function _force_status_eligible(
 const MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024;
 
 /**
- * Default action lease for running runs (60 min). Env: RUN_LEASE_TTL_MS
+ * Default action lease for running runs (24h). Env: RUN_LEASE_TTL_MS
  *
- * Bumped from 30 → 60 min after w2-parser (and similar long-phase teams)
- * were being force-crashed at the 30-min mark. The lease is now also
- * refreshed on every event batch (see ingest_events → touch_lease), so
- * any phase that emits events (LLM output, tool calls, thinking) is
- * kept alive indefinitely. The 60-min TTL is only the fallback window
- * for silent phases (pure CPU/IO loops that stream nothing).
+ * The lease is refreshed on every event batch (see ingest_events → touch_lease),
+ * and a run whose daemon stops heartbeating is reaped separately ("daemon
+ * unresponsive"), so this TTL only bounds a run that is silent while its daemon
+ * is alive — e.g. a parent waiting on a child team, or a long CPU/IO step.
+ * 60 min crashed parser-pipeline runs whose review child waited on a Hug.
  */
-const RUN_LEASE_TTL_MS = parseInt(process.env.RUN_LEASE_TTL_MS ?? String(60 * 60 * 1000), 10);
+const RUN_LEASE_TTL_MS = parseInt(process.env.RUN_LEASE_TTL_MS ?? String(24 * 60 * 60 * 1000), 10);
 /** Longer lease while awaiting human/agent input (24h). Env: RUN_LEASE_AWAITING_TTL_MS */
 const RUN_LEASE_AWAITING_TTL_MS = parseInt(
     process.env.RUN_LEASE_AWAITING_TTL_MS ?? String(24 * 60 * 60 * 1000),
@@ -1172,9 +1171,33 @@ export class RunService {
         kind: 'running' | 'awaiting_input' = 'running',
     ): Promise<void> {
         log.debug('touch_lease', { run_id, kind });
+        const deadline = lease_deadline(kind);
         await _run_repo_rs.update_where(
             { run_id, state: { [Op.in]: ['running', 'awaiting_input'] } } as any,
-            { lease_expires_at: lease_deadline(kind) } as any,
+            { lease_expires_at: deadline } as any,
+        );
+        await this._extend_ancestor_leases(run_id, deadline);
+    }
+
+    /**
+     * A child run's progress keeps its parents alive: a parent waiting on a child phase emits
+     * nothing of its own, so without this its lease ran out while the child waited on a Hug.
+     * Only ever lengthens a parent's lease (GREATEST); live parents only. UNION stops on cycles.
+     */
+    private static async _extend_ancestor_leases(run_id: string, deadline: number): Promise<void> {
+        await get_sequelize().query(
+            `WITH RECURSIVE up(id) AS (
+                 SELECT "parent_run_id" FROM cliq."team_runs"
+                  WHERE "run_id" = :run_id AND "parent_run_id" IS NOT NULL
+                 UNION
+                 SELECT r."parent_run_id" FROM cliq."team_runs" r JOIN up ON r."run_id" = up.id
+                  WHERE r."parent_run_id" IS NOT NULL
+             )
+             UPDATE cliq."team_runs"
+                SET "lease_expires_at" = GREATEST(COALESCE("lease_expires_at", 0), :deadline)
+              WHERE "run_id" IN (SELECT id FROM up)
+                AND "state" IN ('running', 'awaiting_input')`,
+            { replacements: { run_id, deadline } },
         );
     }
 
@@ -1243,6 +1266,8 @@ export class RunService {
                 lease_expires_at: lease_deadline('awaiting_input'),
             } as any,
         );
+        // Its parents wait as long as it does.
+        await this._extend_ancestor_leases(run_id, lease_deadline('awaiting_input'));
     }
 
     static async resume(run_id: string) {
