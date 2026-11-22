@@ -86,6 +86,30 @@ export function public_app_url(): string {
     return raw.replace(/\/+$/, '');
 }
 
+/** getHugs, where Hugs live for orgs switched to it (PLAN-gethugs-integration.md): its API and cliqhub's partner token. */
+export interface GethugsConfig {
+    /** `GETHUGS_URL`: the getHugs API origin, no trailing slash (e.g. https://api.gethugs.ai). */
+    url: string;
+    /** `GETHUGS_PARTNER_TOKEN`: cliqhub's partner service token (`hugs_svc_…`). Only ever in `.env`; never logged. */
+    token: string;
+}
+
+/**
+ * getHugs' settings, read on each call: null when neither `GETHUGS_URL` nor `GETHUGS_PARTNER_TOKEN` is set (getHugs is
+ * off; every org stays on cliqhub's own Hugs).
+ *
+ * @throws Error when only one is set, the URL isn't http(s), or the token isn't a service token.
+ */
+export function gethugs_config(): GethugsConfig | null {
+    const url = process.env.GETHUGS_URL?.trim();
+    const token = process.env.GETHUGS_PARTNER_TOKEN?.trim();
+    if (!url && !token) return null;
+    if (!url || !token) throw new Error('Set both GETHUGS_URL and GETHUGS_PARTNER_TOKEN, or neither');
+    if (!/^https?:\/\/[^\s/]+(:\d+)?\/?$/.test(url)) throw new Error('GETHUGS_URL must be an http(s) origin, e.g. https://api.gethugs.ai');
+    if (!token.startsWith('hugs_svc_')) throw new Error('GETHUGS_PARTNER_TOKEN must be a getHugs service token (hugs_svc_…)');
+    return { url: url.replace(/\/+$/, ''), token };
+}
+
 export function load_env(): EnvConfig {
     const required = (key: string): string => {
         const val = process.env[key];

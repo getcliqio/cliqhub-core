@@ -531,6 +531,15 @@ export async function migrate_hub_schema(sequelize: Sequelize): Promise<void> {
     // password links, system notification rows, email delivery log.
     await migrate_identity_lifecycle(sequelize);
 
+    // Where each org's Hugs live (PLAN-gethugs-integration.md step 1): cliqhub's own until switched to getHugs.
+    await sequelize.query(`ALTER TABLE cliq.orgs ADD COLUMN IF NOT EXISTS hugs_provider TEXT NOT NULL DEFAULT 'cliqhub'`);
+    await sequelize.query(`
+        DO $$ BEGIN
+            ALTER TABLE cliq.orgs ADD CONSTRAINT orgs_hugs_provider_check CHECK (hugs_provider IN ('cliqhub', 'gethugs'));
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$
+    `);
+
     await align_org_with_realm(sequelize);
     await wire_scope_foreign_keys(sequelize);
     await drop_public_schema(sequelize);

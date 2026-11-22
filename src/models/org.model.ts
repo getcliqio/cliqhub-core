@@ -38,6 +38,8 @@ export class Org extends BaseModel {
     declare notifications_seeded_at: Date | null;
     /** Version of the default rules the org has (OrgSeedService.DEFAULTS_VERSION); null = seeded before versions (1). */
     declare notifications_seed_version: number | null;
+    /** Where the org's Hugs live: `cliqhub` (its own) or `gethugs` (PLAN-gethugs-integration.md). */
+    declare hugs_provider: 'cliqhub' | 'gethugs';
 
     static register(sequelize: Sequelize): void {
         Org.init({
@@ -59,6 +61,7 @@ export class Org extends BaseModel {
             activated_at: { type: DataTypes.DATE, allowNull: true },
             notifications_seeded_at: { type: DataTypes.DATE, allowNull: true },
             notifications_seed_version: { type: DataTypes.INTEGER, allowNull: true },
+            hugs_provider: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'cliqhub' },
         }, { sequelize, tableName: 'orgs', schema: 'cliq' });
     }
 }
