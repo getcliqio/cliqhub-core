@@ -184,7 +184,8 @@ async function template_for(partner: GethugsPartner, input: GethugsCreateInput, 
         let template_id: string;
         let version_id: string;
         if (existing) {
-            const added = await partner.site.call<{ version: { id: string } }>('templates/add_version', { org_id: g_org, id: existing.id, files, make_current: true });
+            // The reconcile owns which version is current (PLAN-gethugs-step8-4-cliqd.md); a run asks with its exact version.
+            const added = await partner.site.call<{ version: { id: string } }>('templates/add_version', { org_id: g_org, id: existing.id, files, make_current: false });
             template_id = existing.id;
             version_id = added.version.id;
         } else {

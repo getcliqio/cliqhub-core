@@ -5,7 +5,15 @@ import { Op } from 'sequelize';
 import { TeamsService, team_query_where, publish_description } from '../../../src/services/teams_service.js';
 import { Team } from '../../../src/models/team.model.js';
 import { ALICE, BOB, ORG_ADMIN, UNAUTHED, SITE_ADMIN } from '../../helpers/fixtures.js';
-import { unpack_bundle } from '@getcliqio/cliq-sdk';
+import { to_hug_file, unpack_bundle } from '@getcliqio/cliq-sdk';
+
+/** A `.hug` file getHugs accepts (PLAN-gethugs-step8-4-cliqd.md), for the hug `name`. */
+const hug_file = (name: string, json_name = name) => to_hug_file({
+    'hug.json': JSON.stringify({ name: json_name, title: 'Review', description: 'Asks', sdk_version: '1.2.0', definition: 'definition.mjs' }),
+    'index.html': '<!doctype html><script type="module" src="./main.js"></script>',
+    'main.js': 'console.log(1)',
+    'definition.mjs': 'export default {}',
+});
 
 // Version content is read from files (PLAN-team-bundle S1.4b); tests give it per case.
 vi.mock('../../../src/services/version_content.js', () => ({
@@ -1036,10 +1044,12 @@ describe('TeamsService — publish', () => {
         expect(version_repo.publish_draft).not.toHaveBeenCalled();
     });
 
-    it("a binary file in a team hug's dist/ is refused at publish — a bundle is text (PLAN-hug-widgets §4.1, §15)", async () => {
+    it("a team hug that isn't a usable .hug is refused at publish; a hug's dist/ isn't part of a team (PLAN-gethugs-step8-4-cliqd.md)", async () => {
         team_repo.find_by_name_and_scope.mockResolvedValue(PUBLIC_TEAM);
-        stage({ ...FILES, 'hugs/review-batch/dist/hug.json': '{"name":"review-batch"}', 'hugs/review-batch/dist/logo.png': '\u0089PNG\r\n\u001a\n\u0000\u0000' });
-        await expect(publish()).rejects.toMatchObject({ status: 422, details: { paths: ['hugs/review-batch/dist/logo.png'] } });
+        stage({ ...FILES, 'hugs/review-batch.hug': hug_file('review-batch', 'other') });
+        await expect(publish()).rejects.toMatchObject({ status: 422, details: { field: 'hugs', problems: [expect.stringContaining("names 'other', not 'review-batch'")] } });
+        stage({ ...FILES, 'hugs/review-batch/dist/hug.json': '{"name":"review-batch"}' });
+        await expect(publish()).rejects.toMatchObject({ status: 422, details: { paths: ['hugs/review-batch/dist/hug.json'] } });
         expect(version_repo.publish_draft).not.toHaveBeenCalled();
     });
 
@@ -1111,12 +1121,14 @@ describe('TeamsService — team files (S1.3b)', () => {
         expect(storage.write).toHaveBeenCalledTimes(3);
     });
 
-    it("a team's hugs travel as their built dist/ only: hugs/<name>/dist/** is accepted, a hug's source refused (PLAN-hug-widgets §11.1)", async () => {
-        const dist = (path: string) => ({ path, content_type: 'text/plain', data: Buffer.from('x') });
-        const out = await service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [yml, dist('hugs/review-batch/dist/hug.json'), dist('hugs/review-batch/dist/assets/main.js')] });
-        expect(out.files.map((f) => f.path)).toEqual(['team.yml', 'hugs/review-batch/dist/hug.json', 'hugs/review-batch/dist/assets/main.js']);
-        await expect(service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [yml, dist('hugs/review-batch/src/main.ts'), dist('hugs/review-batch/hug.ts')] }))
-            .rejects.toMatchObject({ status: 422, details: { paths: ['hugs/review-batch/src/main.ts', 'hugs/review-batch/hug.ts'] } });
+    it("a team hug travels as its one .hug file, checked on arrival; its source and dist/ are refused (PLAN-gethugs-step8-4-cliqd.md)", async () => {
+        const file = (path: string, text = 'x') => ({ path, content_type: 'text/plain', data: Buffer.from(text) });
+        const out = await service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [yml, file('hugs/review-batch.hug', hug_file('review-batch'))] });
+        expect(out.files.map((f) => f.path)).toEqual(['team.yml', 'hugs/review-batch.hug']);
+        await expect(service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [yml, file('hugs/broken.hug', '{"hug_bundle":2}')] }))
+            .rejects.toMatchObject({ status: 422, details: { field: 'hugs', problems: [expect.stringMatching(/^hugs\/broken\.hug: /)] } });
+        await expect(service.upload_files(ALICE, { team_id: PUBLIC_TEAM.id, files: [yml, file('hugs/review-batch/dist/hug.json'), file('hugs/review-batch/hug.ts')] }))
+            .rejects.toMatchObject({ status: 422, details: { paths: ['hugs/review-batch/dist/hug.json', 'hugs/review-batch/hug.ts'] } });
     });
 
     it('a published version (or another team\'s draft) cannot take files', async () => {

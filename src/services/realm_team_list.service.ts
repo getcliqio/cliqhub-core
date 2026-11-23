@@ -18,6 +18,7 @@ import { OrgAgentSettingRepository } from '../repositories/org_agent_setting_rep
 import { RealmTeamRepository, type RealmTeamRow, type RealmTeamTreeRow } from '../repositories/realm_team_repository.js';
 import { get_sequelize } from '../lib/sequelize.js';
 import { resolve_realm_tree } from './realm_team_tree.js';
+import { gethugs_mark_realm } from './gethugs_sync.js';
 
 const _realm_repo_rtl = new RealmRepository();
 const _dt_repo_rtl = new DaemonTeamRepository();
@@ -275,6 +276,8 @@ export class RealmTeamListService {
         });
         if (existing?.version_id !== version_id) {
             log.info(`team list ${existing ? 'version' : 'add'}: realm=${realm_id} team=${key_of(team)} version=${version}`);
+            // The team's hugs are templates in getHugs (PLAN-gethugs-step8-4-cliqd.md): the org syncs them.
+            await gethugs_mark_realm(realm_id);
             void import('./mesh_lifecycle.service.js')
                 .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
                 .catch(() => {});
@@ -298,7 +301,10 @@ export class RealmTeamListService {
                 // Not published on this hub (e.g. a fresh local stack): nothing to seed.
             }
         }
-        if (added.length) log.info(`seeded builtin teams into realm=${realm_id}: ${added.join(', ')}`);
+        if (added.length) {
+            log.info(`seeded builtin teams into realm=${realm_id}: ${added.join(', ')}`);
+            await gethugs_mark_realm(realm_id);
+        }
     }
 
     /** A realm team's sub-team tree, as resolved when the realm added (or moved) it (S8). */
@@ -376,6 +382,7 @@ export class RealmTeamListService {
 
         if (await _realm_team_repo.take_off(realm_id, team_id)) {
             log.info(`team list remove: realm=${realm_id} team=${team_id}`);
+            await gethugs_mark_realm(realm_id);
             void import('./mesh_lifecycle.service.js')
                 .then(({ MeshLifecycleService }) => MeshLifecycleService.on_skills_changed(realm_id))
                 .catch(() => {});
@@ -386,6 +393,7 @@ export class RealmTeamListService {
     /** Take a team off the given realms (unpublish: it leaves every realm at once, in the caller's transaction). */
     static async take_off_realms(team_id: string, realm_ids: string[], transaction?: Transaction): Promise<void> {
         await _realm_team_repo.take_off_realms(team_id, realm_ids, transaction);
+        await gethugs_mark_realm(realm_ids, transaction);
     }
 
     /** The list as the routes answer it: ids and names per team. */
@@ -598,6 +606,7 @@ export class RealmTeamListService {
         if (!team) return;
         const realm_ids = await _realm_team_repo.take_off_everywhere(team.id);
         for (const realm_id of realm_ids) log.info(`cascade remove: realm=${realm_id} team=${key}`);
+        await gethugs_mark_realm(realm_ids);
 
         // Slots are marked uninstalled, not deleted: their runs keep the team. Found by the catalog team, not by name.
         await _dt_repo_rtl.update_where(

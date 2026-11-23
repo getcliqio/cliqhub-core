@@ -11,7 +11,7 @@ interface User { id: string; org_id: string; email: string; name: string | null;
 interface Workspace { id: string; org_id: string; name: string; archived_at: number | null; external: Ext; members: Map<string, string> }
 interface Channel { id: string; org_id: string; workspace_id: string | null; personal_user_id: string | null; name: string; enabled: boolean; archived_at: number | null; external: Ext; version: number }
 interface Dest { id: string; channel_id: string; type: string; config: Record<string, unknown>; target_channel_id: string | null }
-interface Template { id: string; org_id: string | null; name: string; builtin: boolean; versions: Array<{ id: string; sha: string }> }
+interface Template { id: string; org_id: string | null; name: string; builtin: boolean; versions: Array<{ id: string; sha: string; files?: Record<string, string> }>; current: string | null; archived_at: number | null }
 export interface FakeHug { id: string; org_id: string; workspace_id: string; ref_id: string | null; requester: string | null; template: string; title: string; channels: string[]; context: Record<string, unknown>; status: string; outcome: string | null; progress: string | null; expires_at: number; idempotency_key: string | null; body: Record<string, any>; last_seq: number; events: Array<{ hug_id: string; seq: number; type: 'response' | 'expired' | 'cancelled'; payload: Record<string, unknown> }> }
 /** One event of the partner feed (as getHugs' `events/get` gives it). */
 export interface FeedEvent { id: string; type: string; seq: number | null; hug: { id: string; ref_id: string | null; status: string }; [k: string]: unknown }
@@ -31,9 +31,9 @@ export class FakeGethugs {
     dests: Dest[] = [];
     /** The built-ins every org sees (as getHugs ships them), and the orgs' own templates. */
     templates: Template[] = [
-        { id: 'tpl_approval', org_id: null, name: 'approval', builtin: true, versions: [] },
-        { id: 'tpl_form', org_id: null, name: 'form', builtin: true, versions: [] },
-        { id: 'tpl_ack', org_id: null, name: 'ack', builtin: true, versions: [] },
+        { id: 'tpl_approval', org_id: null, name: 'approval', builtin: true, versions: [], current: null, archived_at: null },
+        { id: 'tpl_form', org_id: null, name: 'form', builtin: true, versions: [], current: null, archived_at: null },
+        { id: 'tpl_ack', org_id: null, name: 'ack', builtin: true, versions: [], current: null, archived_at: null },
     ];
     hugs: FakeHug[] = [];
     /** Documents (uploaded files): run files a Hug shows, or files someone sent in an answer. */
@@ -162,8 +162,11 @@ export class FakeGethugs {
     }
 
     private template_out(t: Template) {
-        const v = t.versions.at(-1);
-        return { id: t.id, name: t.name, builtin: t.builtin, current_version: v ? { id: v.id } : t.builtin ? { id: `tpv_${t.name}` } : null };
+        const v = t.versions.find((x) => x.id === t.current);
+        return {
+            id: t.id, name: t.name, builtin: t.builtin, archived_at: t.archived_at,
+            current_version: v ? { id: v.id, sha256: v.sha } : t.builtin ? { id: `tpv_${t.name}`, sha256: '' } : null,
+        };
     }
 
     /** As getHugs resolves a Hug's channel names in a workspace: an email is a person (a workspace member), else a channel. */
@@ -189,21 +192,45 @@ export class FakeGethugs {
     private handle(path: string, b: Record<string, any>, idempotency_key: string | null = null): unknown {
         switch (path) {
             case 'templates/get':
-                return { items: this.templates.filter((t) => t.org_id === null || t.org_id === b.org_id).map((t) => this.template_out(t)) };
+                return { items: this.templates.filter((t) => (t.org_id === null || t.org_id === b.org_id) && (b.include_archived || !t.archived_at)).map((t) => this.template_out(t)) };
             case 'templates/create': {
-                if (this.templates.some((t) => t.org_id === b.org_id && t.name === b.name)) throw new Refused(409, 'conflict', 'A template with this name exists');
+                if (this.templates.some((t) => t.org_id === b.org_id && !t.archived_at && t.name.toLowerCase() === String(b.name).toLowerCase())) throw new Refused(409, 'conflict', 'A template with this name exists');
                 if (b.files?.['bad.txt']) throw new Refused(400, 'invalid_request', 'The bundle breaks the rules');
-                const t: Template = { id: this.id('tpl'), org_id: b.org_id, name: b.name, builtin: false, versions: [{ id: this.id('tpv'), sha: JSON.stringify(b.files) }] };
+                const v = { id: this.id('tpv'), sha: JSON.stringify(b.files), files: b.files };
+                const t: Template = { id: this.id('tpl'), org_id: b.org_id, name: b.name, builtin: false, versions: [v], current: v.id, archived_at: null };
                 this.templates.push(t);
                 return this.template_out(t);
             }
             case 'templates/add_version': {
                 const t = this.templates.find((x) => x.id === b.id)!;
+                if (t.archived_at) throw new Refused(409, 'template_archived', 'The template is archived');
+                if (b.files?.['bad.txt']) throw new Refused(400, 'invalid_request', 'The bundle breaks the rules');
                 const sha = JSON.stringify(b.files);
                 const same = t.versions.find((v) => v.sha === sha);
-                const version = same ?? { id: this.id('tpv'), sha };
+                const version = same ?? { id: this.id('tpv'), sha, files: b.files };
                 if (!same) t.versions.push(version);
-                return { template: this.template_out(t), version: { id: version.id }, created: !same };
+                if (b.make_current !== false) t.current = version.id;
+                return { template: this.template_out(t), version: { id: version.id, sha256: version.sha }, created: !same };
+            }
+            case 'templates/update': {
+                const t = this.templates.find((x) => x.id === b.id && x.org_id === b.org_id);
+                if (!t) throw new Refused(404, 'not_found', 'Template not found');
+                if (b.restore) {
+                    if (this.templates.some((x) => x !== t && x.org_id === t.org_id && !x.archived_at && x.name.toLowerCase() === t.name.toLowerCase())) throw new Refused(409, 'conflict', 'A template with this name exists');
+                    t.archived_at = null;
+                }
+                if (b.current_version_id) {
+                    if (!t.versions.some((v) => v.id === b.current_version_id)) throw new Refused(400, 'invalid_request', 'Not a version of this template');
+                    t.current = b.current_version_id;
+                }
+                return this.template_out(t);
+            }
+            case 'templates/delete': {
+                const t = this.templates.find((x) => x.id === b.id && x.org_id === b.org_id);
+                if (!t) throw new Refused(404, 'not_found', 'Template not found');
+                if (t.builtin) throw new Refused(409, 'builtin', 'A built-in template');
+                t.archived_at ??= Date.now();
+                return this.template_out(t);
             }
             case 'hugs/create': {
                 if (idempotency_key) {

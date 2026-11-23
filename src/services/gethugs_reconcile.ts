@@ -17,6 +17,7 @@ import type { Level } from '../auth/route_policy/policy.js';
 import { get_sequelize } from '../db/sequelize.js';
 import { get_logger } from '../lib/log.js';
 import type { GethugsPartner } from './gethugs.service.js';
+import { reconcile_templates } from './gethugs_templates.js';
 
 const log = get_logger('gethugs_reconcile');
 
@@ -26,7 +27,7 @@ const ref = (kind: Kind, id: string) => `${kind}:${id}`;
 
 /** A record getHugs refused, or that has no getHugs form: skipped, never blocking the rest. */
 export interface Refusal {
-    kind: Kind | 'destination';
+    kind: Kind | 'destination' | 'template';
     cliq_id: string;
     reason: string;
     message?: string;
@@ -336,6 +337,9 @@ export async function gethugs_reconcile(org_id: string, partner: GethugsPartner)
             await attempt('destination', c.id, () => call('destinations/create', { org_id: g_org, ...(ws ? { workspace_id: ws } : {}), channel_id: g_channel, destination: body }, ref('channel', c.id)));
         }
     }
+
+    // Team hugs as templates (PLAN-gethugs-step8-4-cliqd.md).
+    await reconcile_templates({ org_id, g_org, call, read, attempt });
 
     await save_links(org_id, g_org, person_of, workspace_of, channel_of);
     log.info('gethugs_reconciled', { org_id, gethugs_org_id: g_org, writes: writes.length, refused: report.length });

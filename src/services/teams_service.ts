@@ -33,7 +33,7 @@ import { ScopeRepository as ScopeRepoClass } from '../repositories/scope_reposit
 
 import { get_logger } from '../lib/log.js';
 import { escape_like } from '../lib/search.js';
-import { is_bundle_path, lint_team, MAX_BUNDLE_FILES, MAX_BUNDLE_UNPACKED, pack_bundle, set_identity, TEAM_YML, TeamIdentityError, unknown_paths, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
+import { is_bundle_path, is_team_hug_path, lint_team, MAX_BUNDLE_FILES, MAX_BUNDLE_UNPACKED, pack_bundle, set_identity, TEAM_YML, TeamIdentityError, team_hugs, unknown_paths, type AgentInputs, type TeamInputDef } from '@getcliqio/cliq-sdk';
 import { AgentCatalog } from '../models/agent_catalog.model.js';
 import { Team } from '../models/team.model.js';
 import { TeamVersionRepository as TeamVersionRepoClass } from '../repositories/team_version_repository.js';
@@ -132,8 +132,21 @@ async function sub_team_inputs(team: Record<string, unknown>): Promise<Map<strin
 }
 
 /**
+ * A team's hugs (`hugs/<name>.hug`, PLAN-gethugs-step8-4-cliqd.md) must each be a `.hug` file getHugs accepts, named
+ * after its hug.
+ *
+ * @throws ApiError 422 `invalid_package` with `{ field: 'hugs', problems }`
+ */
+function assert_team_hugs(files: Record<string, string>): void {
+    const { problems } = team_hugs({ files });
+    if (problems.length) {
+        throw new ApiError('invalid_package', `Team hugs aren't usable: ${problems.slice(0, 5).join('; ')}`, 422, { field: 'hugs', problems });
+    }
+}
+
+/**
  * Check a team's files before anything is stored: team files only, at most 10 MB, a team.yml that parses,
- * a valid dependencies.yml, and the lint. Returns what the version row is filled from.
+ * a valid dependencies.yml, its hugs, and the lint. Returns what the version row is filled from.
  *
  * @throws ApiError 422 `invalid_package` / `invalid_team`.
  */
@@ -141,7 +154,8 @@ async function check_team_files(files: Record<string, string>) {
     const total = Object.values(files).reduce((n, text) => n + Buffer.byteLength(text, 'utf8'), 0);
     if (total > MAX_BUNDLE_UNPACKED) throw new ApiError('invalid_package', `Team files total more than ${MAX_BUNDLE_UNPACKED / 1024 / 1024} MB`, 422);
     const unknown = unknown_paths({ files });
-    if (unknown.length) throw new ApiError('invalid_package', `Not part of a team: ${unknown.join(', ')} (team.yml, roles/<name>.md, dependencies.yml, README.md)`, 422, { paths: unknown });
+    if (unknown.length) throw new ApiError('invalid_package', `Not part of a team: ${unknown.join(', ')} (team.yml, roles/<name>.md, dependencies.yml, README.md, hugs/<name>.hug)`, 422, { paths: unknown });
+    assert_team_hugs(files);
     // A team is text: a NUL character means binary content sent as a string.
     const binary = Object.keys(files).filter((p) => files[p].includes('\u0000')).sort();
     if (binary.length) throw new ApiError('invalid_package', `Not text: ${binary.join(', ')} (a team's files are UTF-8 text)`, 422, { paths: binary });
@@ -247,9 +261,11 @@ export class TeamsService {
         if (params.files.length === 0) throw new ApiError('invalid_params', 'No files to upload', 422);
         const paths = params.files.map((f) => f.path);
         const not_team = paths.filter((p) => !is_bundle_path(p));
-        if (not_team.length) throw new ApiError('invalid_package', `Not part of a team: ${not_team.join(', ')} (team.yml, roles/<name>.md, dependencies.yml, README.md)`, 422, { paths: not_team });
+        if (not_team.length) throw new ApiError('invalid_package', `Not part of a team: ${not_team.join(', ')} (team.yml, roles/<name>.md, dependencies.yml, README.md, hugs/<name>.hug)`, 422, { paths: not_team });
         const twice = paths.filter((p, i) => paths.indexOf(p) !== i);
         if (twice.length) throw new ApiError('invalid_params', `Sent twice: ${[...new Set(twice)].join(', ')}`, 422, { paths: twice });
+        // A team hug is checked as it arrives (and again at publish).
+        assert_team_hugs(Object.fromEntries(params.files.filter((f) => is_team_hug_path(f.path)).map((f) => [f.path, f.data.toString('utf8')])));
 
         if (params.version_id) {
             const draft = await this._version_repo.find_draft(params.version_id);
