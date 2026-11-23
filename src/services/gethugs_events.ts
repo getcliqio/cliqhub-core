@@ -65,7 +65,9 @@ const is_document = (v: unknown): v is FileValue => Boolean(v) && typeof v === '
 
 /**
  * A file someone sent in an answer, as a ready run artifact of the Hug's run (`source = 'hug'`, its slot), once per
- * document (`cliq.gethugs_documents`, `in`): cliq's file value `{ artifact_id, name, size, content_type, sha256 }`.
+ * document (`cliq.gethugs_documents`, `in`): the file value `{ artifact_id, document_id, name, size, content_type, sha256 }`
+ * — getHugs' `document_id` kept beside the run artifact, so getHugs' definitions (built-ins and team hugs, built with
+ * `@gethugs/template-kit`) accept the answer too (PLAN-gethugs-step8-cutover.md decision 4).
  */
 async function artifact_for(hug: Hug, slot: string, file: FileValue, uploaded_by: string | null): Promise<Record<string, unknown>> {
     const [known] = await get_sequelize().query<{ artifact_id: string }>(
@@ -80,7 +82,7 @@ async function artifact_for(hug: Hug, slot: string, file: FileValue, uploaded_by
             `SELECT gethugs_id FROM cliq.gethugs_links WHERE org_id = :org_id AND kind = 'org' LIMIT 1`,
             { replacements: { org_id: hug.org_id }, type: QueryTypes.SELECT },
         );
-        if (!partner || !org || !hug.gethugs_workspace_id) throw new Error(`getHugs is not set up for org ${hug.org_id}`);
+        if (!org) throw new Error(`getHugs is not set up for org ${hug.org_id}`);
         const res = await partner.in_workspace(org.gethugs_id, hug.gethugs_workspace_id).documents.download({ document_id: file.document_id });
         const bytes = Buffer.from(await res.arrayBuffer());
         const out = await new ArtifactStorageService().upload({
@@ -100,6 +102,7 @@ async function artifact_for(hug: Hug, slot: string, file: FileValue, uploaded_by
     }
     return {
         artifact_id,
+        document_id: file.document_id,
         name: stored?.name ?? file.name ?? 'file',
         size: stored?.size ?? file.size ?? 0,
         content_type: stored?.content_type ?? file.content_type ?? 'application/octet-stream',
@@ -130,7 +133,7 @@ export async function gethugs_apply(event: GethugsEvent): Promise<boolean> {
     if (event.type === 'hug.closed') {
         // The daemon's own close (Core relays it): the row, no event — as Core's own close.
         const [count] = await Hug.update(
-            { status: 'closed', outcome: event.outcome ?? null, closed_at: new Date(), next_remind_at: null },
+            { status: 'closed', outcome: event.outcome ?? null, closed_at: new Date() },
             { where: { id: known.id, status: 'open' } },
         );
         return count > 0;
@@ -178,7 +181,7 @@ export async function gethugs_apply(event: GethugsEvent): Promise<boolean> {
         // Expired or cancelled: once — not again when Core already ended it (the run's end).
         const how = event.type === 'hug.expired' ? 'expired' : 'cancelled';
         if (hug.status !== 'open') return true;
-        await hug.update({ status: how, closed_at: new Date(), next_remind_at: null }, { transaction: t });
+        await hug.update({ status: how, closed_at: new Date() }, { transaction: t });
         await HugsService.relay_event(hug, how, how === 'cancelled' && event.reason ? { reason: event.reason } : {}, t);
         log.info(`gethugs_hug_${how}`, { hug_id: hug.id, gethugs_seq: seq });
         return true;

@@ -116,7 +116,7 @@ const MATRIX: Record<string, Row> = {
     'POST /internal/dashboard/realms': { expect: ACME_MEMBER },
     'POST /v1/realms/get': { expect: ACME_MEMBER },
     'POST /v1/daemons/get': { expect: A1_VIEW },
-    'POST /v1/hugs/get': { expect: A1_VIEW },
+    'POST /v1/hugs/get': { expect: A1_VIEW }, // a run's Hugs: seen like the run
     'POST /v1/runs/get': { expect: A1_VIEW },
     'POST /v1/runs/get_logs': { expect: A1_VIEW },
     'POST /v1/workspaces/get': { expect: A1_VIEW },
@@ -240,9 +240,7 @@ const MATRIX: Record<string, Row> = {
     'POST /v1/hugs/close': { expect: A1_DAEMON_WRITE },
     'POST /v1/hugs/get_events': { expect: DAEMON_ONLY },
     'POST /v1/hugs/get_by_id': { expect: '1YYYYY44Y4Y' },
-    'POST /v1/hugs/respond': { expect: A1_VIEW },
     'POST /v1/hugs/create_sign_in_link': { expect: SIGNED_IN }, // the handler checks the Hug (runs.view) or the org (member)
-    'POST /v1/hug_bundles/get_file': { expect: ALL },
 
     // teams (default team = Mia's private team)
     'POST /v1/teams/get_phases': { expect: TEAM_PRIVATE },

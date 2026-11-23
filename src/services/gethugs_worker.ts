@@ -2,14 +2,13 @@
  * The getHugs sync worker (PLAN-gethugs-step2-provisioning.md, sub-step 4). In every Core process, every 30 s, one
  * process at a time (an advisory lock, like the invite sweep):
  *
- * - **nightly** (the first run after 03:00 UTC each day): marks every switched org, so a missed hook or a bulk write is
+ * - **nightly** (the first run after 03:00 UTC each day): marks every org, so a missed hook or a bulk write is
  *   repaired within a day;
- * - reconciles each org that is switched (`hugs_provider = 'gethugs'`) or switching (`state = 'switching'`), marked
- *   since its last sync and due (`next_try_at`), oldest mark first. A reconcile that throws backs off (1 min doubling
- *   to 1 h) with `last_error`; one that finishes is `synced_at` its start (a mark made meanwhile is seen next time),
- *   with what getHugs refused in `report` — and a switching org is switched on.
+ * - reconciles each org marked since its last sync and due (`next_try_at`), oldest mark first. A reconcile that throws
+ *   backs off (1 min doubling to 1 h) with `last_error`; one that finishes is `synced_at` its start (a mark made
+ *   meanwhile is seen next time), with what getHugs refused in `report`.
  *
- * Marks on orgs that aren't switched are ignored. Nothing runs when getHugs isn't configured.
+ * Every org is on getHugs (PLAN-gethugs-step8-cutover.md decision 1).
  */
 
 import { QueryTypes } from 'sequelize';
@@ -37,14 +36,12 @@ interface LockConnection {
 }
 
 export interface GethugsSyncResult {
-    /** False when getHugs isn't configured or another process holds the lock. */
+    /** False when another process holds the lock. */
     ran: boolean;
     /** Orgs marked by the nightly pass (0 when it didn't run). */
     nightly: number;
     synced: string[];
     failed: string[];
-    /** Orgs switched on by this run. */
-    switched: string[];
 }
 
 /** The seconds to wait after the `attempts`-th failure in a row: 1 min, doubling, at most 1 h. */
@@ -53,14 +50,13 @@ export function backoff_s(attempts: number): number {
 }
 
 /**
- * Runs the worker once at `now`, unless getHugs isn't configured or another process holds the lock.
+ * Runs the worker once at `now`, unless another process holds the lock.
  *
  * @param now - The run's clock (tests pass a fake one).
  * @param partner - cliqhub's partner at getHugs (tests pass one with a fake getHugs).
  */
-export async function run_gethugs_sync(now: Date = new Date(), partner: GethugsPartner | null = gethugs_partner()): Promise<GethugsSyncResult> {
-    const result: GethugsSyncResult = { ran: false, nightly: 0, synced: [], failed: [], switched: [] };
-    if (!partner) return result;
+export async function run_gethugs_sync(now: Date = new Date(), partner: GethugsPartner = gethugs_partner()): Promise<GethugsSyncResult> {
+    const result: GethugsSyncResult = { ran: false, nightly: 0, synced: [], failed: [] };
     const manager = get_sequelize().connectionManager;
     const connection = await manager.getConnection({ type: 'write' }) as unknown as LockConnection;
     try {
@@ -83,14 +79,14 @@ export async function run_gethugs_sync(now: Date = new Date(), partner: GethugsP
     }
 }
 
-/** Marks every switched org, once a day after 03:00 UTC. */
+/** Marks every org, once a day after 03:00 UTC. */
 async function nightly(now: Date): Promise<number> {
     if (now.getUTCHours() < NIGHTLY_HOUR_UTC) return 0;
     const today = now.toISOString().slice(0, 10);
     const sq = get_sequelize();
     const [done] = await sq.query<{ value: string }>('SELECT value FROM cliq.settings WHERE key = :key', { replacements: { key: NIGHTLY_KEY }, type: QueryTypes.SELECT });
     if (done?.value === today) return 0;
-    const orgs = await sq.query<{ id: string }>(`SELECT id FROM cliq.orgs WHERE hugs_provider = 'gethugs'`, { type: QueryTypes.SELECT });
+    const orgs = await sq.query<{ id: string }>('SELECT id FROM cliq.orgs', { type: QueryTypes.SELECT });
     await gethugs_mark(orgs.map((o) => o.id));
     await sq.query(
         `INSERT INTO cliq.settings (key, value, updated_at) VALUES (:key, :today, now())
@@ -102,10 +98,9 @@ async function nightly(now: Date): Promise<number> {
 
 async function sync_due(now: Date, partner: GethugsPartner, result: GethugsSyncResult): Promise<void> {
     const sq = get_sequelize();
-    const due = await sq.query<{ org_id: string; state: string; attempts: number }>(
-        `SELECT s.org_id, s.state, s.attempts FROM cliq.gethugs_sync s JOIN cliq.orgs o ON o.id = s.org_id
-         WHERE (o.hugs_provider = 'gethugs' OR s.state = 'switching')
-           AND (s.synced_at IS NULL OR s.marked_at > s.synced_at)
+    const due = await sq.query<{ org_id: string; attempts: number }>(
+        `SELECT s.org_id, s.attempts FROM cliq.gethugs_sync s
+         WHERE (s.synced_at IS NULL OR s.marked_at > s.synced_at)
            AND s.next_try_at <= :now
          ORDER BY s.marked_at LIMIT ${BATCH}`,
         { replacements: { now }, type: QueryTypes.SELECT },
@@ -126,44 +121,23 @@ async function sync_due(now: Date, partner: GethugsPartner, result: GethugsSyncR
             result.failed.push(row.org_id);
             continue;
         }
-        await sq.transaction(async (t) => {
-            await sq.query(
-                `UPDATE cliq.gethugs_sync SET synced_at = :started, attempts = 0, last_error = NULL, next_try_at = :now, report = CAST(:report AS jsonb), state = 'idle'
-                 WHERE org_id = :org_id`,
-                { replacements: { started, now, report: JSON.stringify(report), org_id: row.org_id }, transaction: t },
-            );
-            if (row.state === 'switching') {
-                await sq.query(`UPDATE cliq.orgs SET hugs_provider = 'gethugs' WHERE id = :org_id`, { replacements: { org_id: row.org_id }, transaction: t });
-            }
-        });
+        await sq.query(
+            `UPDATE cliq.gethugs_sync SET synced_at = :started, attempts = 0, last_error = NULL, next_try_at = :now, report = CAST(:report AS jsonb)
+             WHERE org_id = :org_id`,
+            { replacements: { started, now, report: JSON.stringify(report), org_id: row.org_id } },
+        );
         result.synced.push(row.org_id);
-        if (row.state === 'switching') {
-            result.switched.push(row.org_id);
-            log.info('gethugs_switched_on', { org_id: row.org_id, refused: report.length });
-        }
     }
 }
 
-/**
- * Starts switching an org to getHugs: the worker reconciles it and switches it on when a reconcile finishes.
- * Already switched: marks it (a fresh reconcile).
- */
-export async function gethugs_switch_on(org_id: string): Promise<void> {
+/** Marks an org for a reconcile now, past any backoff (the `gethugs:sync` script). */
+export async function gethugs_sync_now(org_id: string): Promise<void> {
     await get_sequelize().query(
-        `INSERT INTO cliq.gethugs_sync (org_id, marked_at, next_try_at, attempts, state)
-         SELECT id, clock_timestamp(), now(), 0, CASE WHEN hugs_provider = 'gethugs' THEN 'idle' ELSE 'switching' END FROM cliq.orgs WHERE id = :org_id
-         ON CONFLICT (org_id) DO UPDATE SET marked_at = EXCLUDED.marked_at, next_try_at = now(), attempts = 0, state = EXCLUDED.state`,
+        `INSERT INTO cliq.gethugs_sync (org_id, marked_at, next_try_at, attempts)
+         SELECT id, clock_timestamp(), now(), 0 FROM cliq.orgs WHERE id = :org_id
+         ON CONFLICT (org_id) DO UPDATE SET marked_at = EXCLUDED.marked_at, next_try_at = now(), attempts = 0`,
         { replacements: { org_id } },
     );
-}
-
-/** Switches an org back to cliqhub's own Hugs (Hugs already in getHugs stay there) and stops switching it. */
-export async function gethugs_switch_off(org_id: string): Promise<void> {
-    const sq = get_sequelize();
-    await sq.transaction(async (t) => {
-        await sq.query(`UPDATE cliq.orgs SET hugs_provider = 'cliqhub' WHERE id = :org_id`, { replacements: { org_id }, transaction: t });
-        await sq.query(`UPDATE cliq.gethugs_sync SET state = 'idle' WHERE org_id = :org_id`, { replacements: { org_id }, transaction: t });
-    });
 }
 
 function run_logged(): void {
@@ -172,13 +146,9 @@ function run_logged(): void {
     });
 }
 
-/** Starts the worker (runs once right away). Does nothing when getHugs isn't configured. */
+/** Starts the worker (runs once right away). */
 export function start_gethugs_worker(): void {
     if (_timer) return;
-    if (!gethugs_partner()) {
-        log.info('gethugs_worker_off', { reason: 'not_configured' });
-        return;
-    }
     run_logged();
     _timer = setInterval(run_logged, GETHUGS_SYNC_INTERVAL_MS);
     _timer.unref();

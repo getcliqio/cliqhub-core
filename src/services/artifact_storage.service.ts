@@ -13,7 +13,6 @@ import path from 'node:path';
 import type { Readable } from 'node:stream';
 
 import { v4 as uuid_v4 } from 'uuid';
-import { FILE_SNIFF_BYTES, file_accept_problem } from '@getcliqio/cliq-sdk';
 
 import { object_store_from_env, type ObjectStore } from '../lib/local_object_store.js';
 import { StoredArtifactRepository } from '../repositories/stored_artifact_repository.js';
@@ -41,25 +40,20 @@ export class ArtifactStorageService {
     }
 
     /**
-     * Stream one file in and store it in R2 (PLAN-hug-requests §6.6.3) — the only upload path, for
-     * the daemon's run artifacts and for a Hug responder's `file` input alike.
+     * Stream one file in and store it in R2 (PLAN-hug-requests §6.6.3) — the daemon's run artifacts, and the files
+     * people send in getHugs answers (`hug_answer`, PLAN-gethugs-step5-files.md).
      *
      * The body is hashed and counted while it is written to a temp file; it is refused (413) the
-     * moment it passes the limit, or if it doesn't match its declared length. A Hug upload is
-     * checked against its input's `accept` (declared type, extension and leading bytes) and stored
-     * `pending` until a response uses it.
+     * moment it passes the limit, or if it doesn't match its declared length.
      */
     async upload(input: UploadInput): Promise<UploadOutput> {
         if (!this._r2.is_configured) throw new ApiError('ARTIFACT_STORAGE_UNAVAILABLE', 'File storage is not configured', 503);
         const target = input.target;
-        const limit = Math.min(this._max_size_mb * 1024 * 1024, target.kind === 'hug' ? (target.max_bytes ?? Infinity) : Infinity);
+        const limit = this._max_size_mb * 1024 * 1024;
         if (!Number.isFinite(input.content_length) || input.content_length < 0) {
             throw new ApiError('ARTIFACT_LENGTH_REQUIRED', 'Content-Length is required', 411);
         }
         if (input.content_length > limit) throw too_large(limit);
-        if (target.kind === 'hug' && target.pending_count >= MAX_PENDING_PER_RESPONDER) {
-            throw new ApiError('HUG_FILE_INVALID', `At most ${MAX_PENDING_PER_RESPONDER} files may wait for a response`, 422);
-        }
 
         const tmp = await spool_to_temp(input.stream, Math.min(limit, input.content_length));
         try {
@@ -67,10 +61,6 @@ export class ArtifactStorageService {
                 throw new ApiError('invalid_request', `Body was ${tmp.size} bytes, not the declared ${input.content_length}`, 400);
             }
             const mime_type = input.content_type || 'application/octet-stream';
-            if (target.kind === 'hug' && target.accept?.length) {
-                const problem = accept_problem(target.accept, input.name, mime_type, tmp.head);
-                if (problem) throw new ApiError('HUG_FILE_INVALID', `${target.requested_input}: ${problem}`, 422);
-            }
 
             const artifact_id = uuid_v4();
             await this._repo.create({
@@ -84,7 +74,6 @@ export class ArtifactStorageService {
                 storage_key: artifact_id,
                 uploaded_by: input.uploaded_by,
                 created_at: Date.now(),
-                status: target.kind === 'hug' ? 'pending' : 'ready',
                 source: target.kind === 'run' ? 'daemon' : 'hug',
                 hug_id: target.kind === 'run' ? null : target.hug_id,
                 hug_requested_input: target.kind === 'run' ? null : target.requested_input,
@@ -106,7 +95,6 @@ export class ArtifactStorageService {
                 size: tmp.size,
                 content_type: mime_type,
                 sha256: tmp.sha256,
-                status: target.kind === 'hug' ? 'pending' : 'ready',
                 download_url: download_url_for(artifact_id),
             };
         } finally {
@@ -115,33 +103,17 @@ export class ArtifactStorageService {
     }
 
     /**
-     * Stream one stored file out of R2 (§6.6.4). A pending upload is visible only to its uploader.
-     * Throws 404 when there is no such file (or the caller may not see a pending one).
+     * Stream one stored file out of R2 (§6.6.4). Throws 404 when there is no such file.
      */
-    async download(artifact_id: string, caller_user_id: string | null, range?: string): Promise<DownloadOutput> {
+    async download(artifact_id: string, range?: string): Promise<DownloadOutput> {
         const row = /^[0-9a-f-]{36}$/i.test(artifact_id) ? await this._repo.find_by_id(artifact_id) : null;
-        if (!row || (row.status === 'pending' && row.uploaded_by !== caller_user_id)) {
+        if (!row) {
             throw new ApiError('not_found', `Artifact '${artifact_id}' not found`, 404);
         }
         if (!this._r2.is_configured) throw new ApiError('ARTIFACT_STORAGE_UNAVAILABLE', 'File storage is not configured', 503);
         const object = await this._r2.get_object_stream(row.storage_key, range ? { range } : {});
         if (!object) throw new ApiError('not_found', `Artifact '${artifact_id}' not found`, 404);
         return { ...object, name: row.name, mime_type: row.mime_type };
-    }
-
-    /** Remove responder uploads never used in a response (older than 24h): the R2 object and the row (§6.6.8). */
-    async delete_stale_pending(now = new Date()): Promise<number> {
-        const stale = await this._repo.find_stale_pending(now.getTime() - PENDING_TTL_MS);
-        for (const row of stale) {
-            try {
-                if (this._r2.is_configured) await this._r2.delete_object(row.storage_key);
-                await this._repo.delete_by_id(row.id);
-            } catch (err) {
-                log.error('stale_pending_delete_failed', { artifact_id: row.id, error: err instanceof Error ? err.message : String(err) });
-            }
-        }
-        if (stale.length > 0) log.info('stale_pending_deleted', { count: stale.length });
-        return stale.length;
     }
 
     /**
@@ -241,27 +213,12 @@ function record_to_artifact_data(
     };
 }
 
-/** Responder uploads not used in a response are removed after this long. */
-const PENDING_TTL_MS = 24 * 60 * 60 * 1000;
-/** Most pending uploads one responder may have on one Hug. */
-const MAX_PENDING_PER_RESPONDER = 20;
 /** Where upload bodies are spooled before they go to R2. */
 const TEMP_DIR = path.join(os.tmpdir(), 'cliq-uploads');
 
-/** Where an upload belongs: a run artifact (daemon) or a Hug's `file` input (responder). */
+/** Where an upload belongs: a run artifact (daemon) or a file sent in a getHugs answer. */
 export type UploadTarget =
     | { kind: 'run'; run_id: string; phase: string }
-    | {
-        kind: 'hug';
-        run_id: string;
-        phase: string;
-        hug_id: string;
-        requested_input: string;
-        accept?: string[];
-        max_bytes?: number;
-        /** This responder's pending uploads on the Hug so far. */
-        pending_count: number;
-    }
     /**
      * A file someone sent in an answer through getHugs (PLAN-gethugs-step5-files.md): getHugs checked it against the
      * slot; it is stored ready, as a `hug` file of the Hug and slot.
@@ -286,7 +243,6 @@ export interface UploadOutput {
     size: number;
     content_type: string;
     sha256: string;
-    status: 'pending' | 'ready';
     download_url: string;
 }
 
@@ -346,14 +302,12 @@ function too_large(limit: number): ApiError {
 }
 
 /** Write a body to a temp file, hashing and counting it; abort as soon as it passes `max`. */
-async function spool_to_temp(stream: Readable, max: number): Promise<{ path: string; size: number; sha256: string; head: Buffer }> {
+async function spool_to_temp(stream: Readable, max: number): Promise<{ path: string; size: number; sha256: string }> {
     await fs.promises.mkdir(TEMP_DIR, { recursive: true });
     const file = path.join(TEMP_DIR, `${uuid_v4()}.part`);
     const out = fs.createWriteStream(file);
     const hash = crypto.createHash('sha256');
     let size = 0;
-    const head_chunks: Buffer[] = [];
-    let head_len = 0;
     try {
         for await (const chunk of stream) {
             const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
@@ -363,30 +317,13 @@ async function spool_to_temp(stream: Readable, max: number): Promise<{ path: str
                 throw too_large(max);
             }
             hash.update(buf);
-            if (head_len < SNIFF_BYTES) {
-                head_chunks.push(buf.subarray(0, SNIFF_BYTES - head_len));
-                head_len += Math.min(buf.length, SNIFF_BYTES - head_len);
-            }
             if (!out.write(buf)) await new Promise<void>((resolve) => out.once('drain', () => resolve()));
         }
         await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
-        return { path: file, size, sha256: hash.digest('hex'), head: Buffer.concat(head_chunks) };
+        return { path: file, size, sha256: hash.digest('hex') };
     } catch (err) {
         out.destroy();
         await fs.promises.rm(file, { force: true });
         throw err;
     }
-}
-
-/** Bytes read for type sniffing (the SDK's rule looks at this many). */
-const SNIFF_BYTES = FILE_SNIFF_BYTES;
-
-/**
- * Why a file fails an input's `accept`, or null — the SDK's one rule for files given to a `file`
- * input (cliqd checks local answers with it too): its declared type or extension must match an
- * entry, an executable is only accepted when an entry names its type, and recognisable leading
- * bytes must agree with an accepted type (so a renamed program isn't taken as a PDF).
- */
-export function accept_problem(accept: readonly string[], name: string, declared_type: string, head: Buffer): string | null {
-    return file_accept_problem(accept, name, declared_type, head);
 }

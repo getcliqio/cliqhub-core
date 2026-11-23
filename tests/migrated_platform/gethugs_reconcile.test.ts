@@ -78,7 +78,7 @@ describe.skipIf(!has_postgres)('the getHugs reconcile', () => {
     });
     beforeEach(() => {
         fake = new FakeGethugs();
-        partner = new GethugsPartner({ url: 'http://gethugs.test', token: 'hugs_svc_test' }, fake.fetch);
+        partner = new GethugsPartner({ url: 'http://gethugs.test', token: 'hugs_svc_test', app_url: 'http://app.gethugs.test' }, fake.fetch);
     });
     afterAll(async () => {
         if (orgs.length) {

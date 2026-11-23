@@ -157,10 +157,6 @@ export class InAppNotificationService {
 
 		const id = randomUUID();
 		const created_at = Date.now();
-		/** The Hug a hug.* notification is about, for indexing. */
-		const hug_id = typeof payload.hug_id === 'string'
-			? payload.hug_id.trim() || null
-			: null;
 
 		// Denormalize org_id from realm so org-scoped inbox queries stay cheap.
 		let org_id: string | null = org_id_hint ?? null;
@@ -185,7 +181,6 @@ export class InAppNotificationService {
 			run_id: payload.run_id?.trim() || null,
 			phase: payload.phase_name?.trim() || null,
 			severity: payload.severity?.trim() || null,
-			hug_id,
 			audience: audience ?? (user_id ? 'person' : realm_id_val ? 'realm' : 'org'),
 			payload_json: JSON.stringify(InAppNotificationService.extra_payload(payload)),
 			created_at,

@@ -13,13 +13,12 @@ import {
 } from '../../../src/schemas/artifacts_schemas.js';
 
 describe('ArtifactsUploadQuery', () => {
-    it('takes a run target (daemon) or a Hug target (responder)', () => {
+    it('takes a run target (the daemon\'s run artifact)', () => {
         expect(ArtifactsUploadQuery.parse({ run_id: 'r', phase: 'p', name: 'lld.md' })).toMatchObject({ run_id: 'r', phase: 'p' });
-        expect(ArtifactsUploadQuery.parse({ hug_id: 'h', requested_input: 'contract', name: 'MSA.pdf' })).toMatchObject({ hug_id: 'h' });
     });
 
-    it('refuses both targets, neither, half a run target, and a missing name', () => {
-        expect(() => ArtifactsUploadQuery.parse({ run_id: 'r', phase: 'p', hug_id: 'h', requested_input: 'c', name: 'n' })).toThrow();
+    it('refuses a Hug target (people answer in getHugs), no target, half a run target, and a missing name', () => {
+        expect(() => ArtifactsUploadQuery.parse({ hug_id: 'h', requested_input: 'contract', name: 'MSA.pdf' })).toThrow();
         expect(() => ArtifactsUploadQuery.parse({ name: 'n' })).toThrow();
         expect(() => ArtifactsUploadQuery.parse({ run_id: 'r', name: 'n' })).toThrow();
         expect(() => ArtifactsUploadQuery.parse({ run_id: 'r', phase: 'p' })).toThrow();

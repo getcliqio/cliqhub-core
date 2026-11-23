@@ -18,17 +18,10 @@ import { z } from 'zod';
  * (`run_id` + `phase`, the daemon) or a Hug's file input (`hug_id` + `requested_input`, a responder).
  */
 export const ArtifactsUploadQuery = z.object({
-    run_id: z.string().min(1).optional().describe('Run the artifact belongs to (daemon uploads)'),
-    phase: z.string().min(1).optional().describe('Phase that produced it (daemon uploads)'),
-    hug_id: z.string().min(1).optional().describe('Hug whose file input this answers (responder uploads)'),
-    requested_input: z.string().min(1).optional().describe('The Hug file input it answers'),
+    run_id: z.string().min(1).describe('Run the artifact belongs to'),
+    phase: z.string().min(1).describe('Phase that produced it'),
     name: z.string().min(1).max(255).describe('File name'),
     description: z.string().max(2_000).optional().describe('Human-readable description shown in UI'),
-}).superRefine((q, ctx) => {
-    const run = Boolean(q.run_id || q.phase);
-    const hug = Boolean(q.hug_id || q.requested_input);
-    if (run === hug) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'give either run_id + phase or hug_id + requested_input' });
-    if (run && !(q.run_id && q.phase)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'run_id and phase go together' });
 });
 export type ArtifactsUploadQuery = z.infer<typeof ArtifactsUploadQuery>;
 

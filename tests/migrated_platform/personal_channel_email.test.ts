@@ -22,8 +22,6 @@ import {
 	open_test_control_plane_store,
 	postgres_reachable,
 } from './helpers/control_plane_store.js';
-import { HugsService } from '../../src/services/hugs.service.js';
-import { hug_bundle_hash } from '@getcliqio/cliq-sdk';
 import { RealmService } from '../../src/services/realm.service.js';
 import { NotificationService } from '../../src/services/notification.service.js';
 import { NotificationFanOutService } from '../../src/notifications/fan_out.service.js';
@@ -47,8 +45,6 @@ import {
 	OrgRole,
 	Realm,
 	RealmMember,
-	Hug,
-	HugDelivery,
 	Setting,
 	User,
 } from '../../src/models/index.js';
@@ -70,7 +66,7 @@ class StubSender implements EmailSender {
 	}
 }
 
-/** Poll until `fn` returns a truthy value (delivery runs after the Hug is stored). */
+/** Poll until `fn` returns a truthy value. */
 async function eventually<T>(fn: () => Promise<T> | T, ms = 3000): Promise<T> {
 	const end = Date.now() + ms;
 	for (;;) {
@@ -80,25 +76,16 @@ async function eventually<T>(fn: () => Promise<T> | T, ms = 3000): Promise<T> {
 	}
 }
 
-/** A minimal hug bundle (sent with each create; Core stores it once). */
-const ASK_BUNDLE = {
-	'hug.json': JSON.stringify({ name: 'ask', title: 'Ask', sdk_version: '0.1.0' }),
-	'index.html': '<!doctype html><p>ask</p>',
-	'definition.mjs': 'export default {};',
-};
-
-/** Open a Hug that asks `channel` (posted straight to it, PLAN-hug-requests); returns its id. */
-async function hug_to(channel: string): Promise<string> {
-	const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Hugs', { org_id: ORG });
-	// A person's name reaches them from a realm they're a member of.
+/** A run of a realm KAI is a member of fails, and the notice goes straight to the channel `name`; returns the run's id. */
+async function notice_to(name: string): Promise<string> {
+	const realm = await RealmService.create(ORG, `r-${uid()}`.slice(0, 40), 'Runs', { org_id: ORG });
 	await RealmMember.create({ id: `${realm.id}:${KAI}`, realm_id: realm.id, member_type: 'user', member_id: KAI, role: 'member', created_at: Date.now() } as never);
-	const created = await HugsService.create({
-		run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: realm.id, phase: 'human-review', iteration: 0,
-		spec: { hug: { name: 'ask', sha256: hug_bundle_hash(ASK_BUNDLE) }, title: 'Approve the release', summary: 'Approve?', channels: [channel], expires_in_min: 60 },
-		bundle: ASK_BUNDLE, may_upload_bundle: true,
-		actor_id: ORG,
-	});
-	return created.hug_id;
+	const channel = await NotificationChannel.findOne({ where: { name }, attributes: ['id'], raw: true });
+	const run_id = `run-${uid()}`;
+	await NotificationFanOutService.deliver_to_channels([String(channel!.id)], {
+		id: randomUUID(), type: 'run.failed', occurred_at: new Date().toISOString(), realm_id: realm.id, run_id, daemon_id: 'daemon-1', message: 'Release failed',
+	} as never);
+	return run_id;
 }
 
 const email_deliverer = DELIVERER_BY_PROVIDER.email as EmailDeliverer;
@@ -119,8 +106,6 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	beforeEach(async () => {
 		if (!has_postgres) return;
 		await InAppNotification.destroy({ where: {} });
-		await HugDelivery.destroy({ where: {} });
-		await Hug.destroy({ where: {} });
 		await ChannelDestination.destroy({ where: {} });
 		await NotificationChannel.destroy({ where: {} });
 		await RealmMember.destroy({ where: {} });
@@ -149,10 +134,10 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 
 	// ── S3 ──────────────────────────────────────────────────────────────
 
-	it('a Hug to the personal channel arrives in-app and by email to the account address', async () => {
+	it('a notice to the personal channel arrives in-app and by email to the account address', async () => {
 		await ensure_personal_channel(KAI, KAI_NAME);
-		const hug_id = await hug_to(KAI_NAME);
-		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, hug_id }, raw: true }))).toBeTruthy();
+		const run_id = await notice_to(KAI_NAME);
+		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, run_id }, raw: true }))).toBeTruthy();
 		await eventually(() => stub.sent.length > 0);
 		expect(stub.sent).toHaveLength(1);
 		expect(recipients(stub.sent[0])).toEqual(['kai@cliq.test']);
@@ -161,7 +146,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	it('the address is read when sending: changing the account email changes where the next one goes', async () => {
 		await ensure_personal_channel(KAI, KAI_NAME);
 		await User.update({ email: 'kai.new@cliq.test' }, { where: { id: KAI } });
-		await hug_to(KAI_NAME);
+		await notice_to(KAI_NAME);
 		await eventually(() => stub.sent.length > 0);
 		expect(recipients(stub.sent[0])).toEqual(['kai.new@cliq.test']);
 	});
@@ -169,8 +154,8 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	it('a suspended account gets no email; in-app still arrives', async () => {
 		await ensure_personal_channel(KAI, KAI_NAME);
 		await User.update({ status: 'suspended' }, { where: { id: KAI } });
-		const hug_id = await hug_to(KAI_NAME);
-		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, hug_id }, raw: true }))).toBeTruthy();
+		const run_id = await notice_to(KAI_NAME);
+		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, run_id }, raw: true }))).toBeTruthy();
 		await new Promise((r) => setTimeout(r, 300));
 		expect(stub.sent).toHaveLength(0);
 	});
@@ -178,13 +163,13 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 	it('removing the email destination from the channel stops the email; in-app stays', async () => {
 		const id = await ensure_personal_channel(KAI, KAI_NAME);
 		await NotificationService.update_channel({ id, destinations: [{ type: 'cliqhub' }] });
-		const hug_id = await hug_to(KAI_NAME);
-		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, hug_id }, raw: true }))).toBeTruthy();
+		const run_id = await notice_to(KAI_NAME);
+		expect(await eventually(() => InAppNotification.findOne({ where: { user_id: KAI, run_id }, raw: true }))).toBeTruthy();
 		await new Promise((r) => setTimeout(r, 300));
 		expect(stub.sent).toHaveLength(0);
 		// …and an admin can put it back.
 		await NotificationService.update_channel({ id, destinations: [{ type: 'cliqhub' }, { type: 'email', account: true }] });
-		await hug_to(KAI_NAME);
+		await notice_to(KAI_NAME);
 		await eventually(() => stub.sent.length > 0);
 		expect(recipients(stub.sent[0])).toEqual(['kai@cliq.test']);
 	});
@@ -219,7 +204,7 @@ describe.skipIf(!has_postgres)('PLAN-channels S3/S4: a personal channel emails i
 
 	it('a shared channel with a fixed address still emails that address', async () => {
 		await NotificationService.create_channel({ org_id: ORG, name: 'qa-fixed', destinations: [{ type: 'email', address: 'qa@cliq.test' }] });
-		await hug_to('qa-fixed');
+		await notice_to('qa-fixed');
 		await eventually(() => stub.sent.length > 0);
 		expect(recipients(stub.sent[0])).toEqual(['qa@cliq.test']);
 	});

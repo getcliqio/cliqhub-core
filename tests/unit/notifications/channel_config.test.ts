@@ -120,14 +120,14 @@ describe('destination_schema (v2)', () => {
 		expect(result.success).toBe(true);
 	});
 
-	it('accepts jira destination', () => {
+	it('refuses a jira destination (removed: never delivered; PLAN-gethugs-step8-cutover.md)', () => {
 		const result = destination_schema.safeParse({
 			type: 'jira',
 			url: 'https://jira.example.com',
 			project_key: 'OPS',
 			issue_type: 'Task',
 		});
-		expect(result.success).toBe(true);
+		expect(result.success).toBe(false);
 	});
 
 	it('accepts channel_ref destination', () => {

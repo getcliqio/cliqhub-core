@@ -25,7 +25,7 @@ function make_event(type: string, overrides: Record<string, unknown> = {}) {
 describe('route_event', () => {
 	beforeEach(() => vi.clearAllMocks());
 
-	it.each(['run.failed', 'phase.escalated', 'hug.review_requested', 'daemon.offline', 'realm.created', 'custom.deploy'])(
+	it.each(['run.failed', 'phase.escalated', 'daemon.offline', 'realm.created', 'custom.deploy'])(
 		'routes %s to notify_realm',
 		async (type) => {
 			await route_event(make_event(type));

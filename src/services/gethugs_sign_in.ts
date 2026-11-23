@@ -15,7 +15,6 @@ import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import { Hug } from '../models/index.js';
 import { EXTERNAL_SOURCE } from './gethugs_reconcile.js';
-import { hugs_provider_of } from './gethugs.service.js';
 
 const log = get_logger('svc.gethugs_sign_in');
 
@@ -32,15 +31,14 @@ export interface GethugsSignInConfig {
 }
 
 /**
- * The sign-in settings, read on each call: null when neither is set (signing in falls back to the plain link).
+ * The sign-in settings, read on each call. Required, like the rest of `GETHUGS_*` (`load_env` checks them at start).
  *
- * @throws Error when only one is set, or the key isn't a private Ed25519 JWK
+ * @throws Error when one is missing, or the key isn't a private Ed25519 JWK
  */
-export async function gethugs_signin_config(): Promise<GethugsSignInConfig | null> {
+export async function gethugs_signin_config(): Promise<GethugsSignInConfig> {
     const raw = process.env.GETHUGS_SIGNIN_JWK?.trim();
     const partner_id = process.env.GETHUGS_PARTNER_ID?.trim();
-    if (!raw && !partner_id) return null;
-    if (!raw || !partner_id) throw new Error('Set both GETHUGS_SIGNIN_JWK and GETHUGS_PARTNER_ID, or neither');
+    if (!raw || !partner_id) throw new Error('Missing required env var: GETHUGS_SIGNIN_JWK and GETHUGS_PARTNER_ID are both required');
     let jwk: JWK;
     try {
         jwk = JSON.parse(raw) as JWK;
@@ -66,15 +64,14 @@ async function linked(org_id: string, kind: 'org' | 'user', cliq_id: string): Pr
  * of the org `org_id` (they must be an active member).
  *
  * @throws 404 — no such Hug, or one they can't see; 403 — not a member of the org
- * @throws 409 `not_in_gethugs` — the org or the person isn't in getHugs; 409 `not_configured` — no key here
+ * @throws 409 `not_in_gethugs` — the org or the person isn't in getHugs yet
  */
 export async function gethugs_sign_in_link(input: { user_id: string; hug_id?: string; org_id?: string }): Promise<{ url: string }> {
     let org_id: string;
     let next = '/hugs';
     if (input.hug_id) {
-        const hug = await Hug.findByPk(input.hug_id, { attributes: ['id', 'org_id', 'realm_id', 'provider', 'gethugs_id'], raw: true });
+        const hug = await Hug.findByPk(input.hug_id, { attributes: ['id', 'org_id', 'realm_id', 'gethugs_id'], raw: true });
         if (!hug || !(await visible_realm_ids(input.user_id, { perm: 'runs.view' })).includes(hug.realm_id)) throw ApiError.not_found('Hug not found');
-        if (hug.provider !== 'gethugs' || !hug.gethugs_id) throw new ApiError(409, 'This Hug is not in getHugs', 'not_in_gethugs');
         org_id = hug.org_id;
         next = `/hugs/${hug.gethugs_id}`;
     } else {
@@ -86,12 +83,11 @@ export async function gethugs_sign_in_link(input: { user_id: string; hug_id?: st
         if (!member) throw ApiError.forbidden('Not a member of this org');
     }
 
-    if (await hugs_provider_of(org_id) !== 'gethugs' || !(await linked(org_id, 'org', org_id)) || !(await linked(org_id, 'user', input.user_id))) {
+    if (!(await linked(org_id, 'org', org_id)) || !(await linked(org_id, 'user', input.user_id))) {
         throw new ApiError(409, 'This org or person is not in getHugs yet', 'not_in_gethugs');
     }
     const sign_in = await gethugs_signin_config();
-    const app = gethugs_config()?.app_url;
-    if (!sign_in || !app) throw new ApiError(409, 'Signing in to getHugs is not set up on this CliqHub', 'not_configured');
+    const app = gethugs_config().app_url;
 
     const statement = await new SignJWT({ src: EXTERNAL_SOURCE, org: `org:${org_id}`, next })
         .setProtectedHeader({ alg: 'EdDSA', kid: sign_in.kid })

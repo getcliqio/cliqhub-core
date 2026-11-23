@@ -100,10 +100,12 @@ export async function migrate_gethugs_sync(sequelize: ReturnType<typeof get_sequ
             attempts INTEGER NOT NULL DEFAULT 0,
             next_try_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             last_error TEXT,
-            report JSONB NOT NULL DEFAULT '[]'::jsonb,
-            state TEXT NOT NULL DEFAULT 'idle' CONSTRAINT gethugs_sync_state_check CHECK (state IN ('idle', 'switching'))
+            report JSONB NOT NULL DEFAULT '[]'::jsonb
         )
     `);
+    // Step 8: no switching — every org is on getHugs. An org never marked yet (one from before the cut-over) is due now.
+    await sequelize.query('ALTER TABLE cliq.gethugs_sync DROP COLUMN IF EXISTS state');
+    await sequelize.query('INSERT INTO cliq.gethugs_sync (org_id) SELECT id FROM cliq.orgs ON CONFLICT (org_id) DO NOTHING');
     // getHugs' id for each mirrored record, per org: a cliq user in two orgs is two people in getHugs. The external
     // references (cliqhub:<kind>:<id>) stay the truth — a lost link is found again by reference.
     await sequelize.query(`

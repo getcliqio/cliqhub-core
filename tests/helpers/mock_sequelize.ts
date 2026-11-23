@@ -179,8 +179,6 @@ export function setup_sequelize_mocks() {
             ChannelDestination: make_model(),
             WebhookDelivery: make_model(),
             Hug: make_model(),
-            HugDelivery: make_model(),
-            HugResponse: make_model(),
             HugEventRow: make_model(),
             StoredArtifact: make_model(),
             RealmA2aSetting: make_model(),

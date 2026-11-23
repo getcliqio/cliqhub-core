@@ -7,15 +7,16 @@ import {
 } from '../../../src/schemas/event_types.js';
 
 describe('event types catalog', () => {
-	it('includes core run, phase, hug, team, daemon, realm types', () => {
+	it('includes core run, phase, team, daemon, realm types; no hug events (getHugs notifies people)', () => {
 		expect(EVENT_TYPES).toContain('run.started');
 		expect(EVENT_TYPES).toContain('phase.timed_out');
 		// Retired (PLAN-notifications-v2 B4.5): a phase that needs a person posts its own Hug to its channels.
 		expect(EVENT_TYPES).not.toContain('hug.review_requested');
 		expect(EVENT_TYPES).not.toContain('phase.input_required');
-		// Hugs (PLAN-hug-requests §6.8): opening one is not an event; routing is the gate's meaning.
-		for (const t of ['hug.reminded', 'hug.responded', 'hug.closed', 'hug.expired', 'phase.resumed']) expect(EVENT_TYPES).toContain(t);
-		for (const t of ['hug.routing_requested', 'hug.review_responded', 'hug.opened', 'phase.inputs_supplied']) expect(EVENT_TYPES).not.toContain(t);
+		expect(EVENT_TYPES).toContain('phase.resumed');
+		// Hugs are asked in getHugs, which notifies people itself (PLAN-gethugs-step8-cutover.md decision 8).
+		expect(EVENT_TYPES.filter((t) => t.startsWith('hug.'))).toEqual([]);
+		for (const t of ['notification.no_access', 'phase.inputs_supplied']) expect(EVENT_TYPES).not.toContain(t);
 		expect(EVENT_TYPES).toContain('team.published');
 		expect(EVENT_TYPES).toContain('daemon.removed');
 		expect(EVENT_TYPES).toContain('realm.key_rotated');

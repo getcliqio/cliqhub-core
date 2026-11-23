@@ -532,14 +532,8 @@ export async function migrate_hub_schema(sequelize: Sequelize): Promise<void> {
     // password links, system notification rows, email delivery log.
     await migrate_identity_lifecycle(sequelize);
 
-    // Where each org's Hugs live (PLAN-gethugs-integration.md step 1): cliqhub's own until switched to getHugs.
-    await sequelize.query(`ALTER TABLE cliq.orgs ADD COLUMN IF NOT EXISTS hugs_provider TEXT NOT NULL DEFAULT 'cliqhub'`);
-    await sequelize.query(`
-        DO $$ BEGIN
-            ALTER TABLE cliq.orgs ADD CONSTRAINT orgs_hugs_provider_check CHECK (hugs_provider IN ('cliqhub', 'gethugs'));
-        EXCEPTION WHEN duplicate_object THEN NULL;
-        END $$
-    `);
+    // Every org's Hugs live in getHugs (PLAN-gethugs-step8-cutover.md decision 1): the per-org switch is gone.
+    await sequelize.query('ALTER TABLE cliq.orgs DROP COLUMN IF EXISTS hugs_provider');
 
     // Marks and links for the getHugs reconcile (PLAN-gethugs-step2-provisioning.md sub-step 2).
     await migrate_gethugs_sync(sequelize);

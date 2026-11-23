@@ -123,7 +123,7 @@ describe.skipIf(!has_postgres)('Notification fan-out on event submit', () => {
         expect(event.notifications).toBe('skipped');
     });
 
-    it('dispatches Slack for run.started, phase.escalated and hug.reminded when rules exist', async () => {
+    it('dispatches Slack for run.started and phase.escalated when rules exist', async () => {
         const fetch_mock = vi.fn().mockResolvedValue({ ok: true });
         vi.stubGlobal('fetch', fetch_mock);
 
@@ -133,7 +133,7 @@ describe.skipIf(!has_postgres)('Notification fan-out on event submit', () => {
             name: uid(),
             destinations: slack_dest(),
         });
-        for (const sel of ['run.*', 'phase.*', 'hug.*']) {
+        for (const sel of ['run.*', 'phase.*']) {
             await NotificationService.set_rule({
                 realm_id: realm.id,
                 event: sel,
@@ -144,7 +144,6 @@ describe.skipIf(!has_postgres)('Notification fan-out on event submit', () => {
         const cases = [
             { type: 'run.started' as const, message: 'run started', phase: undefined as string | undefined },
             { type: 'phase.escalated' as const, message: 'gate escalated', phase: 'collect' },
-            { type: 'hug.reminded' as const, message: 'your input please', phase: undefined },
         ];
 
         for (const c of cases) {

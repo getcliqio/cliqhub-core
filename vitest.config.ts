@@ -18,6 +18,10 @@ export default defineConfig({
         env: {
             DATABASE_URL: test_database_url,
             CLIQHUB_TEST_DATABASE_URL: test_database_url,
+            // getHugs is required (PLAN-gethugs-step8-cutover.md decision 9): the fake one's host (tests/helpers/fake_gethugs.ts).
+            GETHUGS_URL: 'http://gethugs.test',
+            GETHUGS_PARTNER_TOKEN: 'hugs_svc_test',
+            GETHUGS_APP_URL: 'http://app.gethugs.test',
         },
         // Resolve supertest et al. from sibling BFF when backend node_modules is incomplete.
         server: {

@@ -203,14 +203,10 @@ describe('tokens and callers', () => {
         expect(await status('POST /v1/hugs/get_events', 'daemon_a1')).toBe(200);
         expect(await status('POST /v1/hugs/get_events', 'omar')).toBe(403);
     });
-    it('one upload route: a run artifact for the daemon, a Hug file for a responder', async () => {
+    it('upload: a run artifact, by the run\'s daemon only', async () => {
         expect(await status('POST /v1/artifacts/upload', 'daemon_a1', {}, true, { run_id: 'r-a1', phase: 'p', name: 'n' })).toBe(200);
         expect(await status('POST /v1/artifacts/upload', 'daemon_b1', {}, true, { run_id: 'r-a1', phase: 'p', name: 'n' })).toBe(404);
-        expect(await status('POST /v1/artifacts/upload', 'omar', {}, true, { hug_id: 'h-a1', requested_input: 'f', name: 'n' })).toBe(200);
-        expect(await status('POST /v1/artifacts/upload', 'mia', {}, true, { hug_id: 'h-a1', requested_input: 'f', name: 'n' })).toBe(200);
-        expect(await status('POST /v1/artifacts/upload', 'daemon_a1', {}, true, { hug_id: 'h-a1', requested_input: 'f', name: 'n' })).not.toBe(200);
-        expect(await status('POST /v1/artifacts/upload', 'nick', {}, true, { hug_id: 'h-a1', requested_input: 'f', name: 'n' })).toBe(403);
-        expect(await status('POST /v1/artifacts/upload', 'nora', {}, true, { hug_id: 'h-a1', requested_input: 'f', name: 'n' })).toBe(404);
+        expect(await status('POST /v1/artifacts/upload', 'mia', {}, true, { run_id: 'r-a1', phase: 'p', name: 'n' })).toBe(403);
     });
     it("downloads: realm viewers and the realm's daemons, nobody else", async () => {
         expect(await status('POST /v1/artifacts/download', 'mia', { artifact_id: 'a-a1' })).toBe(200);
@@ -228,18 +224,13 @@ describe('tokens and callers', () => {
     });
 });
 
-describe('Hugs are seen and answered like their run (runs.view)', () => {
-    it('anyone with runs.view on the realm passes the route (the service checks it was addressed to them)', async () => {
-        for (const who of ['mia', 'omar']) {
-            expect(await status('POST /v1/hugs/get_by_id', who, { hug_id: 'h-a1' })).toBe(200);
-            expect(await status('POST /v1/hugs/respond', who, { hug_id: 'h-a1' })).toBe(200);
-        }
+describe('Hugs are seen like their run (runs.view)', () => {
+    it('anyone with runs.view on the realm sees it', async () => {
+        for (const who of ['mia', 'omar']) expect(await status('POST /v1/hugs/get_by_id', who, { hug_id: 'h-a1' })).toBe(200);
     });
-    it('no realm membership, or no runs.view, means no Hug — however it was addressed', async () => {
+    it('no realm membership, or no runs.view, means no Hug', async () => {
         expect(await status('POST /v1/hugs/get_by_id', 'nora', { hug_id: 'h-a1' })).toBe(404);
-        expect(await status('POST /v1/hugs/respond', 'nora', { hug_id: 'h-a1' })).toBe(404);
         expect(await status('POST /v1/hugs/get_by_id', 'nick', { hug_id: 'h-a1' })).toBe(403);
-        expect(await status('POST /v1/hugs/respond', 'nick', { hug_id: 'h-a1' })).toBe(403);
     });
     it('people never make daemon-only pushes', async () => {
         expect(await status('POST /v1/hugs/close', 'mia', { hug_id: 'h-a1' })).toBe(403);

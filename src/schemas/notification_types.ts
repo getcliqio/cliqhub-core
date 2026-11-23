@@ -180,7 +180,7 @@ export const NotificationChannelData = z.object({
 	org_id: z.string().nullable().optional().describe('Owning org for account channels'),
 	user_id: z.string().nullable().optional().describe('Owning user for personal account channels'),
 	name: z.string().describe('Unique name within the realm or org scope'),
-	destinations: z.array(destination_schema).describe('Delivery destinations — typed array where each item has a fixed `type` (slack | email | webhook | http | jira | cliqhub | channel_ref) and type-specific required fields'),
+	destinations: z.array(destination_schema).describe('Delivery destinations — typed array where each item has a fixed `type` (slack | email | webhook | http | cliqhub | channel_ref) and type-specific required fields'),
 	enabled: z.number().describe('1 = enabled, 0 = disabled'),
 	created_at: z.number().describe('Create time (unix ms)'),
 	updated_at: z.number().describe('Last update time (unix ms)'),

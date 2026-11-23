@@ -1,5 +1,5 @@
 /**
- * PLAN-gethugs-step3-asking.md sub-step 2: a switched org's Hug is created in getHugs (a fake one) — built-in templates
+ * PLAN-gethugs-step3-asking.md sub-step 2: an org's Hug is created in getHugs (a fake one) — built-in templates
  * read from getHugs by name, a team hug installed once per bundle, channel names translated, the run's `ref_id`,
  * `requester` and the daemon's id as the `Idempotency-Key` — and Core keeps its row under the daemon's id. Errors:
  * unknown channels and non-members as today's 422, getHugs down 503, the token 502, not set up yet 503,
@@ -25,14 +25,15 @@ import { gethugs_partner } from '../../src/services/gethugs.service.js';
 import { reset_gethugs_builtins } from '../../src/services/gethugs_hugs.js';
 import { gethugs_reconcile } from '../../src/services/gethugs_reconcile.js';
 import { HugsService } from '../../src/services/hugs.service.js';
-import { HugPendingService } from '../../src/services/hug_pending.service.js';
+import { HugBundlesService } from '../../src/services/hug_bundles.service.js';
+import { HugsGetInput } from '../../src/schemas/hug_types.js';
 import { gethugs_sign_in_link } from '../../src/services/gethugs_sign_in.js';
 import { calculateJwkThumbprint, decodeProtectedHeader, exportJWK, generateKeyPair, jwtVerify } from 'jose';
 import { gethugs_apply } from '../../src/services/gethugs_events.js';
 import { GETHUGS_FEED_LOCK_KEY, run_gethugs_feed } from '../../src/services/gethugs_feed.js';
 import pg from 'pg';
 import { database_url } from './helpers/control_plane_store.js';
-import { HugEventRow } from '../../src/models/index.js';
+import { HugBundle, HugEventRow } from '../../src/models/index.js';
 import { NotificationService } from '../../src/services/notification.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 
@@ -57,8 +58,8 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         await User.create({ id, username: name, email: `${name}@cliq.test`, display_name: name, status: 'active', role: 'user', password_hash: 'x' } as never);
         return { id, username: name, email: `${name}@cliq.test` };
     }
-    /** A switched org reconciled into the fake getHugs: owner, Bob (member of realm `ops`), channel `reviewers` in `ops`. */
-    async function switched_org() {
+    /** An org reconciled into the fake getHugs: owner, Bob (member of realm `ops`), channel `reviewers` in `ops`. */
+    async function reconciled_org() {
         const owner = await person();
         const org = await Org.create({ slug: uid(), display_name: 'Ask', status: 'active', owner_id: owner.id, activated_at: new Date() } as never);
         orgs.push(org.id);
@@ -71,12 +72,11 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         const ops = await RealmService.create(owner.id, uid(), 'Ops', { org_id: org.id });
         await RealmMember.create({ id: randomUUID(), realm_id: ops.id, member_type: 'user', member_id: bob.id, role: 'operator', created_at: Date.now() } as never);
         await NotificationService.create_channel({ realm_id: ops.id, name: 'reviewers', destinations: [{ type: 'email', address: 'rev@cliq.test' }] });
-        await gethugs_reconcile(org.id, gethugs_partner()!);
-        await Org.update({ hugs_provider: 'gethugs' } as never, { where: { id: org.id } });
+        await gethugs_reconcile(org.id, gethugs_partner());
         return { org_id: org.id, realm_id: ops.id, bob };
     }
     const spec = (over: Record<string, unknown> = {}) => ({
-        hug: { name: 'approval', sha256: 'a'.repeat(64) },
+        hug: { name: 'approval' },
         title: 'Ship it?',
         summary: 'Release 4.2',
         params: { question: 'Ship?' },
@@ -100,13 +100,10 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         process.env.GETHUGS_PARTNER_TOKEN = 'hugs_svc_test';
         process.env.GETHUGS_APP_URL = 'http://app.gethugs.test';
         reset_gethugs_builtins();
-        o = await switched_org();
+        o = await reconciled_org();
     });
     afterEach(() => {
         vi.unstubAllGlobals();
-        delete process.env.GETHUGS_URL;
-        delete process.env.GETHUGS_PARTNER_TOKEN;
-        delete process.env.GETHUGS_APP_URL;
     });
     afterAll(async () => {
         if (orgs.length) {
@@ -135,7 +132,7 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         expect(fake.calls).not.toContain('templates/create');
 
         const row = (await Hug.findByPk(hug_id, { raw: true }))!;
-        expect(row).toMatchObject({ provider: 'gethugs', gethugs_id: h.id, status: 'open', run_id, hug_name: 'approval', next_remind_at: null });
+        expect(row).toMatchObject({ gethugs_id: h.id, status: 'open', run_id, hug_name: 'approval', hug_sha256: null });
         expect(row.gethugs_workspace_id).toBe(h.workspace_id);
 
         // A retry with the same id: the same Hug, also when Core lost its row (getHugs' Idempotency-Key).
@@ -143,6 +140,18 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         await Hug.destroy({ where: { id: hug_id } });
         expect(await open({ channels: ['All realm members', o.bob.username, 'reviewers'] }, { hug_id, run_id })).toEqual(out);
         expect(fake.hugs).toHaveLength(1);
+    });
+
+    it('a name without a bundle hash that isn’t a getHugs built-in is refused, naming the built-ins (PLAN-gethugs-step8-cutover.md decision 3)', async () => {
+        const err = await open({ hug: { name: 'nope' } }).catch((e: unknown) => e) as { status_code: number; code: string; message: string };
+        expect(err).toMatchObject({ status_code: 422, code: 'unknown_hug' });
+        expect(err.message).toMatch(/'nope' isn't one of getHugs' built-in hugs \(.*approval.*\)/);
+        expect(fake.hugs).toHaveLength(0);
+        expect((await HugsService.create({
+            hug_id: randomUUID(), run_id: `run-${uid()}`, daemon_id: 'daemon-1', realm_id: o.realm_id, phase: 'review', iteration: 1,
+            spec: { ...spec(), hug: { name: 'approval', sha256: 'b'.repeat(64) } }, actor_id: null,
+        } as never)).hug_url).toMatch(/^http:\/\/app\.gethugs\.test\/hugs\//);
+        expect(fake.hugs.at(-1)!.template).toBe('tpl_approval');
     });
 
     it('a team hug is installed from its bundle once per bundle (asking cliqd for it as today); a new bundle is a new version', async () => {
@@ -178,7 +187,7 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         await expect(open()).rejects.toMatchObject({ status_code: 502, code: 'gethugs_auth' });
         fake.fail_with = null;
 
-        const bare = await switched_org();
+        const bare = await reconciled_org();
         await get_sequelize().query('DELETE FROM cliq.gethugs_links WHERE org_id = :org_id', { replacements: { org_id: bare.org_id } });
         await get_sequelize().query('DELETE FROM cliq.gethugs_sync WHERE org_id = :org_id', { replacements: { org_id: bare.org_id } });
         await expect(HugsService.create({ hug_id: randomUUID(), run_id: 'run-x', daemon_id: 'd', realm_id: bare.realm_id, phase: 'p', iteration: 0, spec: spec(), actor_id: null } as never))
@@ -191,6 +200,64 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         fake.fail_with = 503;
         await expect(open()).rejects.toMatchObject({ status_code: 503, code: 'gethugs_unavailable' });
     }, 60_000);
+
+    it('refuses an invalid spec, one without an expiry, and one from an older cliq (templates): 422', async () => {
+        await expect(open({ files: [{ name: 'x' }, { name: 'x' }] })).rejects.toMatchObject({ status_code: 422, message: expect.stringContaining("'x' is listed twice") });
+        await expect(open({ params: { big: 'x'.repeat(257 * 1024) } })).rejects.toMatchObject({ status_code: 422, message: expect.stringContaining('params is larger') });
+        await expect(open({ hug: { name: 'Bad Name' } })).rejects.toMatchObject({ status_code: 422 });
+        await expect(open({ expires_in_min: undefined })).rejects.toMatchObject({ status_code: 422, message: expect.stringContaining('expires') });
+        await expect(open({ expires_in_min: 10_081 })).rejects.toMatchObject({ status_code: 422 });
+        await expect(open({ hug: undefined, template: 'form' })).rejects.toMatchObject({ status_code: 422, code: 'invalid_hug', message: expect.stringContaining('update cliq') });
+        expect(fake.hugs).toHaveLength(0);
+    });
+
+    it('a run’s Hugs (hugs/get { run_id }): every round of every phase, oldest first, any status, with iteration and outcome', async () => {
+        const run_id = `run-${uid()}`;
+        const round1 = await open({}, { run_id, phase: 'review', iteration: 0 });
+        await HugsService.close({ hug_id: round1.hug_id, outcome: 'Rejected by Ann', daemon_id: 'daemon-1' });
+        await Hug.update({ outcome: 'Rejected by Ann' }, { where: { id: round1.hug_id } });
+        const round2 = await open({}, { run_id, phase: 'review', iteration: 1 });
+        const other = await open({}, { run_id: `run-${uid()}` });
+        const { hugs, total } = await HugsService.list_for_run({ user_id: o.bob.id, run_id });
+        expect(total).toBe(2);
+        expect(hugs.map((h) => [h.hug_id, h.phase, h.iteration, h.status, h.outcome])).toEqual([
+            [round1.hug_id, 'review', 0, 'closed', 'Rejected by Ann'],
+            [round2.hug_id, 'review', 1, 'open', null],
+        ]);
+        expect(hugs.some((h) => h.hug_id === other.hug_id)).toBe(false);
+        expect((await HugsService.list_for_run({ user_id: o.bob.id, run_id, statuses: ['open'] })).hugs.map((h) => h.hug_id)).toEqual([round2.hug_id]);
+        expect(HugsGetInput.safeParse({ run_id }).success).toBe(true);
+        expect(HugsGetInput.safeParse({}).success).toBe(false);
+    });
+
+    it('unused team hug bundles are swept; those of open or recently closed Hugs, new ones and just-resolved ones stay', async () => {
+        const day = 24 * 60 * 60 * 1000;
+        const stored = async (name: string) => {
+            const { sha256 } = await HugBundlesService.store(bundle_of(name, uid()), null);
+            await HugBundle.update({ created_at: new Date(Date.now() - 2 * day), last_used_at: new Date(Date.now() - 2 * day) }, { where: { sha256 } });
+            return sha256;
+        };
+        const unused = await stored('sweep-unused');
+        const old_closed = await stored('sweep-old');
+        const recent_closed = await stored('sweep-recent');
+        const old_open = await stored('sweep-open');
+        const fresh = (await HugBundlesService.store(bundle_of('sweep-fresh', uid()), null)).sha256;
+        // Old, but a Hug being opened just resolved it (its row isn't written yet): it stays.
+        const resolving = await stored('sweep-resolving');
+        await HugBundlesService.resolve({ name: 'sweep-resolving', sha256: resolving }, { may_upload: false, realm_id: 'r' });
+        for (const [sha256, days] of [[old_closed, 100], [recent_closed, 10]] as const) {
+            const { hug_id } = await open();
+            await Hug.update({ hug_sha256: sha256, status: 'closed', closed_at: new Date(Date.now() - days * day) }, { where: { id: hug_id } });
+        }
+        // An open Hug keeps its bundle however old both are.
+        const { hug_id: open_id } = await open();
+        await Hug.update({ hug_sha256: old_open, created_at: new Date(Date.now() - 200 * day) }, { where: { id: open_id } });
+        expect(await HugBundlesService.sweep_unused()).toBeGreaterThanOrEqual(2);
+        const left = (await HugBundle.findAll({ where: { sha256: [unused, old_closed, recent_closed, old_open, fresh, resolving] }, raw: true })).map((b) => b.sha256);
+        expect(left.sort()).toEqual([recent_closed, old_open, fresh, resolving].sort());
+        expect(await HugBundlesService.read_files(unused)).toBeNull();
+        expect(await HugBundlesService.read_files(recent_closed)).not.toBeNull();
+    });
 
     describe('run files shown with a Hug (PLAN-gethugs-step5-files.md)', () => {
         // Files go to a local folder, never to the object store a developer's shell may point at (S3_*).
@@ -265,11 +332,11 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             const [event] = await HugEventRow.findAll({ where: { hug_id }, raw: true });
             const values = (event!.payload as { response: { values: Record<string, any> } }).response.values;
             expect(values.name).toBe('Bob');
-            expect(Object.keys(values.attachment).sort()).toEqual(['artifact_id', 'content_type', 'name', 'sha256', 'size']);
-            expect(values.attachment).toMatchObject({ name: 'notes.txt', size: 14, content_type: 'text/plain' });
+            expect(Object.keys(values.attachment).sort()).toEqual(['artifact_id', 'content_type', 'document_id', 'name', 'sha256', 'size']);
+            expect(values.attachment).toMatchObject({ document_id: one.document_id, name: 'notes.txt', size: 14, content_type: 'text/plain' });
             expect(values.docs.map((d: { name: string; size: number }) => [d.name, d.size])).toEqual([['a.txt', 1], ['b.txt', 2]]);
             const stored = await StoredArtifact.findByPk(values.attachment.artifact_id, { raw: true });
-            expect(stored).toMatchObject({ run_id, status: 'ready', source: 'hug', hug_id, hug_requested_input: 'attachment', uploaded_by: o.bob.id });
+            expect(stored).toMatchObject({ run_id, source: 'hug', hug_id, hug_requested_input: 'attachment', uploaded_by: o.bob.id });
             const back = await new ArtifactStorageService().download(values.attachment.artifact_id, null);
             expect(Buffer.from(await new Response(back.body).arrayBuffer()).toString()).toBe('hello from bob');
 
@@ -300,7 +367,7 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             await Run.destroy({ where: { run_id } });
         }, 60_000);
 
-        it('a file that is not a ready file of the run is refused, as for Core’s own Hugs', async () => {
+        it('a file that is not a file of the run is refused', async () => {
             const a = await run_with_file();
             const b = await run_with_file();
             await expect(open({ attachments: [attachment(a.file)] }, { run_id: b.run_id, daemon_id: b.daemon_id }))
@@ -407,24 +474,24 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             expect((await Hug.findByPk(hug_id, { raw: true }))!.gethugs_seq).toBe(2);
         });
 
-        it('Core’s reads (PLAN-gethugs-step6-ui-link.md): the getHugs page, each person’s latest answer, responded, not answerable here', async () => {
+        it('Core’s reads (PLAN-gethugs-step6-ui-link.md): the getHugs page, each person’s latest answer, responded', async () => {
             const run_id = `run-${uid()}`;
             const { hug_id } = await open({}, { run_id });
             const id = await g(hug_id);
             await gethugs_apply(responded(id, 1, { approved: true }));
             await gethugs_apply(responded(id, 2, { approved: false }));
 
-            const detail = await HugsService.get(hug_id, o.bob.id);
+            const detail = await HugsService.get(hug_id);
             expect(detail.hug_url).toBe(`http://app.gethugs.test/hugs/${id}`);
             expect(detail.responses).toEqual([{
                 response_id: 'rsp_2', responder: { user_id: o.bob.id, name: o.bob.username }, via: ['reviewers'],
                 values: { approved: false }, summary: 'Approved', responded_at: new Date(1_795_400_000_000).toISOString(),
             }]);
-            expect(detail.viewer).toEqual({ can_answer: false, via: [] });
+            expect(detail).not.toHaveProperty('viewer');
 
-            const list = await HugPendingService.list_for_run({ user_id: o.bob.id, run_id });
+            const list = await HugsService.list_for_run({ user_id: o.bob.id, run_id });
             expect(list.hugs.map((h) => [h.hug_url, h.responded])).toEqual([[`http://app.gethugs.test/hugs/${id}`, true]]);
-            const others = await HugPendingService.list_for_run({ user_id: (await person()).id, run_id }).catch(() => ({ hugs: [] }));
+            const others = await HugsService.list_for_run({ user_id: (await person()).id, run_id }).catch(() => ({ hugs: [] }));
             expect(others.hugs.every((h) => !h.responded)).toBe(true);
         });
 
@@ -460,6 +527,33 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             await gethugs_apply({ type: 'hug.closed', hug: { id: await g(other.hug_id) }, seq: null, outcome: 'done' });
             expect(await delivered(other.hug_id)).toEqual([]);
             expect(await gethugs_apply({ type: 'hug.responded', hug: { id: 'hug_not_ours' }, seq: 1 })).toBe(false);
+        });
+        it('a daemon catches up on its own Hugs only: events after each cursor, and each Hug’s status', async () => {
+            const mine = await open();
+            const other = await open({}, { daemon_id: 'daemon-2' });
+            await gethugs_apply(responded(await g(mine.hug_id), 1, { approved: true }));
+            await gethugs_apply(responded(await g(mine.hug_id), 2, { approved: false }));
+            await gethugs_apply(responded(await g(other.hug_id), 1, { approved: true }));
+            const out = await HugsService.get_events({ daemon_id: 'daemon-1', cursors: [{ hug_id: mine.hug_id, after_seq: 1 }, { hug_id: other.hug_id, after_seq: 0 }] });
+            expect(out.events.map((e) => [e.hug_id, e.seq, e.type])).toEqual([[mine.hug_id, 2, 'response']]);
+            expect(out.hugs).toEqual([{ hug_id: mine.hug_id, status: 'open', last_seq: 2 }]);
+            expect(out.has_more).toBe(false);
+        });
+
+        it('the events of Hugs that ended more than 7 days ago are deleted; an ended Hug still reports how it ended', async () => {
+            const old = await open();
+            const recent = await open();
+            for (const h of [old, recent]) {
+                await gethugs_apply(responded(await g(h.hug_id), 1, { approved: true }));
+                await HugsService.close({ hug_id: h.hug_id, outcome: 'done', daemon_id: 'daemon-1' });
+            }
+            await Hug.update({ closed_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000) }, { where: { id: old.hug_id } });
+            expect(await HugsService.delete_old_events()).toBeGreaterThanOrEqual(1);
+            expect(await HugEventRow.count({ where: { hug_id: old.hug_id } })).toBe(0);
+            expect(await HugEventRow.count({ where: { hug_id: recent.hug_id } })).toBe(1);
+            const out = await HugsService.get_events({ daemon_id: 'daemon-1', cursors: [{ hug_id: old.hug_id, after_seq: 0 }] });
+            expect(out.events).toEqual([]);
+            expect(out.hugs).toEqual([{ hug_id: old.hug_id, status: 'closed', last_seq: 1 }]);
         });
     });
 
@@ -575,7 +669,7 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             expect((await jwtVerify(statement_of(url), public_key)).payload).toMatchObject({ next: '/hugs', org: `org:${o.org_id}` });
         });
 
-        it('refused: someone who can’t see the Hug, a non-member, a person not in getHugs yet, no key here', async () => {
+        it('refused: someone who can’t see the Hug, a non-member, a person not in getHugs yet; no key here is an error', async () => {
             const { hug_id } = await open();
             const stranger = await person();
             await expect(gethugs_sign_in_link({ user_id: stranger.id, hug_id })).rejects.toMatchObject({ status_code: 404 });
@@ -587,7 +681,7 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             delete process.env.GETHUGS_SIGNIN_JWK;
             delete process.env.GETHUGS_PARTNER_ID;
             try {
-                await expect(gethugs_sign_in_link({ user_id: o.bob.id, org_id: o.org_id })).rejects.toMatchObject({ status_code: 409, code: 'not_configured' });
+                await expect(gethugs_sign_in_link({ user_id: o.bob.id, org_id: o.org_id })).rejects.toThrow(/Missing required env var/);
             } finally {
                 process.env.GETHUGS_SIGNIN_JWK = saved;
                 process.env.GETHUGS_PARTNER_ID = 'prt_test';

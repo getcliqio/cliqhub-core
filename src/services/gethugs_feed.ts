@@ -70,11 +70,11 @@ async function catch_up(partner: GethugsPartner, hugs: Array<Pick<Hug, 'org_id' 
             { replacements: { org_id: list[0]!.org_id }, type: QueryTypes.SELECT },
         );
         if (!org) continue;
-        const after = new Map(list.map((h) => [h.gethugs_id!, h.gethugs_seq]));
+        const after = new Map(list.map((h) => [h.gethugs_id, h.gethugs_seq]));
         for (let i = 0; i < list.length; i += 500) {
             let more = true;
             while (more) {
-                const cursors = list.slice(i, i + 500).map((h) => ({ hug_id: h.gethugs_id!, after_seq: after.get(h.gethugs_id!) ?? 0 }));
+                const cursors = list.slice(i, i + 500).map((h) => ({ hug_id: h.gethugs_id, after_seq: after.get(h.gethugs_id) ?? 0 }));
                 const page = await partner.site.call<HugEvents>('hugs/get_events', { org_id: org.gethugs_id, workspace_id, cursors });
                 for (const e of page.events) {
                     if (await gethugs_apply(as_feed_event(e.hug_id, e))) applied += 1;
@@ -89,15 +89,14 @@ async function catch_up(partner: GethugsPartner, hugs: Array<Pick<Hug, 'org_id' 
 
 /** Re-reads every open getHugs Hug's events: the feed's start, and after `cursor_expired`. */
 async function recover(partner: GethugsPartner): Promise<number> {
-    const open = await Hug.findAll({ where: { provider: 'gethugs', status: 'open', gethugs_id: { [Op.ne]: null } }, attributes: ['org_id', 'gethugs_id', 'gethugs_workspace_id', 'gethugs_seq'], raw: true });
+    const open = await Hug.findAll({ where: { status: 'open' }, attributes: ['org_id', 'gethugs_id', 'gethugs_workspace_id', 'gethugs_seq'], raw: true });
     const applied = await catch_up(partner, open);
     log.info('gethugs_feed_recovered', { open: open.length, applied });
     return applied;
 }
 
 /** A new Hug's events so far — what the feed skipped while Core had no row for it. Best effort. */
-export async function gethugs_catch_up(hug_id: string, partner: GethugsPartner | null = gethugs_partner()): Promise<void> {
-    if (!partner) return;
+export async function gethugs_catch_up(hug_id: string, partner: GethugsPartner = gethugs_partner()): Promise<void> {
     try {
         const hug = await Hug.findByPk(hug_id, { attributes: ['org_id', 'gethugs_id', 'gethugs_workspace_id', 'gethugs_seq'], raw: true });
         if (hug) await catch_up(partner, [hug]);
@@ -162,11 +161,10 @@ export async function run_gethugs_feed(partner: GethugsPartner, opts: { wait_s?:
 
 let _running = false;
 
-/** Starts the feed reader loop (one reads; the others wait their turn). Does nothing when getHugs isn't configured. */
+/** Starts the feed reader loop (one reads; the others wait their turn). */
 export function start_gethugs_feed(): void {
     if (_running) return;
     const partner = gethugs_partner();
-    if (!partner) return;
     _running = true;
     void (async () => {
         let failures = 0;

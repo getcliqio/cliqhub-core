@@ -24,7 +24,6 @@ const _realm_repo_dc = new RealmRepository();
 import { DaemonService } from '../services/daemon.service.js';
 import { RealmService } from '../services/realm.service.js';
 import { RunService } from '../services/run.service.js';
-import { HugPendingService } from '../services/hug_pending.service.js';
 import { ApiError } from '../lib/api_error.js';
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
 import {
@@ -113,7 +112,7 @@ export class DashboardController extends BaseController {
         const one_hour_ago = Date.now() - 60 * 60 * 1000;
         const user_daemon_ids = await RealmService.list_daemon_ids_for_user(user_id);
 
-        const [daemon_members, all_daemons, active_runs, open_hugs, recent_notifs] = await Promise.all([
+        const [daemon_members, all_daemons, active_runs, recent_notifs] = await Promise.all([
             _realm_member_repo_dc.find_all_q({
                 where: { realm_id: { [Op.in]: realm_ids }, member_type: 'daemon' },
                 attributes: ['realm_id', 'member_id'],
@@ -128,7 +127,6 @@ export class DashboardController extends BaseController {
                     attributes: ['run_id', 'daemon_id', 'state', 'started_at'],
                 })
                 : Promise.resolve([]),
-            HugPendingService.count_open_by_realm_for_user({ user_id, realm_ids }),
             _ian_repo.find_all_q({
                 where: {
                     realm_id: { [Op.in]: realm_ids },
@@ -192,7 +190,6 @@ export class DashboardController extends BaseController {
                 (max, r) => Math.max(max, as_ms(r.started_at) ?? 0), 0,
             );
 
-            const hug_count = open_hugs.get(realm.id) ?? 0;
             const notif_count = recent_notifs.filter((n) => n.realm_id === realm.id).length;
             const latest_notif = recent_notifs
                 .filter((n) => n.realm_id === realm.id)
@@ -209,7 +206,6 @@ export class DashboardController extends BaseController {
                 last_activity_at,
                 daemons: { online, stale, offline, total: d_ids.length },
                 runs: { active: active_count, awaiting_input: awaiting_count },
-                open_hugs: hug_count,
                 recent_notifications: notif_count,
             };
         });
@@ -270,7 +266,6 @@ export class DashboardController extends BaseController {
             failed_24h_count,
             completed_24h_count,
             run_count,
-            open_hugs,
         ] = await Promise.all([
             _dt_repo_dc.find_count(),
             DaemonService.list(user_id, { org_id }),
@@ -311,8 +306,6 @@ export class DashboardController extends BaseController {
             run_where_base
                 ? _run_repo_dc.find_count_q({ where: run_where_base })
                 : Promise.resolve(0),
-            // What's waiting on the caller: open Hugs they haven't answered yet.
-            HugPendingService.list_for_user({ user_id, org_id, unanswered: true, limit: 5, offset: 0 }),
         ]);
 
         const live_enriched = [...live_awaiting.runs, ...live_running.runs]
@@ -329,7 +322,6 @@ export class DashboardController extends BaseController {
         const daemons_online = daemons.daemons.filter((d) => d.status === 'online').length;
         const daemons_stale = daemons.daemons.filter((d) => d.status === 'stale').length;
         const daemons_offline = daemons.daemons.filter((d) => d.status === 'offline').length;
-        const open_hug_count = open_hugs.total;
 
         const mapped_recent = recent.runs.map((r) => map_run_row(r, realms_by_daemon));
         const mapped_live = live_enriched.map((r) => map_run_row(r, realms_by_daemon));
@@ -386,7 +378,6 @@ export class DashboardController extends BaseController {
                 daemons_stale,
                 daemons_offline,
                 daemons_total: daemons.total,
-                open_hugs: open_hug_count,
                 realms: member_realms.length,
             },
             attention: {
@@ -394,7 +385,6 @@ export class DashboardController extends BaseController {
                 failed_24h: failed_24h_count,
                 daemons_offline,
                 daemons_stale,
-                open_hugs: open_hug_count,
                 oldest_awaiting_started_at: oldest_awaiting?.started_at ?? null,
                 last_completed_at: last_completed?.completed_at ?? last_completed?.started_at ?? null,
                 last_completed_label: last_completed?.team_label
@@ -408,7 +398,6 @@ export class DashboardController extends BaseController {
             })),
             suggested_teams,
             live_runs: mapped_live,
-            open_hugs: open_hugs.hugs.slice(0, 5),
             recent_runs: mapped_recent,
         });
     }

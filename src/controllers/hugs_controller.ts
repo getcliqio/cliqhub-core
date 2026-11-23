@@ -1,25 +1,20 @@
 /**
- * Hugs — requests for input from people (PLAN-hug-requests §6.3).
+ * Hugs — requests for input from people (PLAN-hug-requests §6.3), asked in getHugs (PLAN-gethugs-integration.md).
  *
  *   POST /v1/hugs/create      cliqd opens a Hug for a phase
  *   POST /v1/hugs/close       cliqd (the requester) ends it with an outcome
  *   POST /v1/hugs/get_events  cliqd catches up on its Hugs' events
- *   POST /v1/hugs/get         a person's Hugs (inbox)
+ *   POST /v1/hugs/get         a run's Hugs
  *   POST /v1/hugs/get_by_id   one Hug with its responses
- *   POST /v1/hugs/respond     a person submits or replaces their response
+ *   POST /v1/hugs/create_sign_in_link  a person's link into getHugs
  *
- *   POST /v1/hug_bundles/get_file  one file of a stored hug bundle (public; PLAN-hug-widgets §11.1)
- *
- * Files for upload slots are uploaded through `/v1/artifacts/upload` (§6.6). There is no chat.
+ * People answer in getHugs.
  */
 
 import { BaseController } from './base_controller.js';
-import { get_logger } from '../lib/log.js';
 import { ApiError } from '../lib/api_error.js';
 import { HugsService } from '../services/hugs.service.js';
-import { HugBundlesService } from '../services/hug_bundles.service.js';
 import { gethugs_sign_in_link } from '../services/gethugs_sign_in.js';
-import { HugPendingService } from '../services/hug_pending.service.js';
 import { RealmService } from '../services/realm.service.js';
 import { Run } from '../models/index.js';
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
@@ -30,13 +25,9 @@ import {
     HugsGetByIdInput,
     HugsGetEventsInput,
     HugsGetInput,
-    HugsRespondInput,
-    HugBundlesGetFileInput,
 } from '../schemas/hug_types.js';
 
 type HugsFields = Record<string, unknown>;
-
-const log = get_logger('ctrl.hugs');
 
 /** `/v1/hugs/*`. */
 export class HugsController extends BaseController {
@@ -45,8 +36,9 @@ export class HugsController extends BaseController {
      * only name a daemon of that realm. Only such a daemon may send the hug's bundle.
      *
      * @param req - Body: {@link HugsCreateInput}
-     * @param res - 201 `{ ok: true, data: { hug_id, hug_url } }`; 409 `BUNDLE_MISSING` `{ sha256 }` — retry
-     *   with `bundle`; 422 `BUNDLE_INVALID` `{ problems }`; 403 `BUNDLE_REJECTED`
+     * @param res - 201 `{ ok: true, data: { hug_id, hug_url } }`; 422 `unknown_hug` — no bundle hash and not a getHugs
+     *   built-in; 409 `BUNDLE_MISSING` `{ sha256 }` — retry with `bundle`; 422 `BUNDLE_INVALID` `{ problems }`;
+     *   403 `BUNDLE_REJECTED`
      */
     async create(req: FlatApiRequest<HugsCreateInput, HugsFields>, res: FlatApiOkResponse<HugsFields>): Promise<void> {
         const body = this.parse_body(HugsCreateInput, req);
@@ -99,7 +91,7 @@ export class HugsController extends BaseController {
     }
 
     /**
-     * POST /v1/hugs/get — the caller's Hugs; with `run_id`, that run's Hugs (every round, oldest first).
+     * POST /v1/hugs/get — a run's Hugs (every round, oldest first).
      *
      * @param req - Body: {@link HugsGetInput}
      * @param res - `{ ok: true, data: { items, total, offset, limit } }`
@@ -108,41 +100,19 @@ export class HugsController extends BaseController {
         const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
         const body = this.parse_body(HugsGetInput, req);
-        // With run_id: that run's Hugs (every round), seen like the run; else the caller's own Hugs.
-        const result = body.run_id
-            ? await HugPendingService.list_for_run({ user_id, run_id: body.run_id, statuses: body.statuses, limit: body.limit, offset: body.offset })
-            : await HugPendingService.list_for_user({
-                user_id, realm_id: body.realm_id, org_id: body.org_id, statuses: body.statuses, limit: body.limit, offset: body.offset,
-            });
+        const result = await HugsService.list_for_run({ user_id, run_id: body.run_id, statuses: body.statuses, limit: body.limit, offset: body.offset });
         res.json({ ok: true, data: { items: result.hugs, total: result.total, offset: body.offset ?? 0, limit: body.limit ?? 50 } });
     }
 
     /**
-     * POST /v1/hugs/get_by_id — one Hug with its responses, and for a person `viewer: { can_answer, via }`
-     * (whether `respond` would take their answer now; a daemon gets `viewer: null`).
+     * POST /v1/hugs/get_by_id — one Hug with its responses.
      *
      * @param req - Body: {@link HugsGetByIdInput}
      * @param res - `{ ok: true, data: HugData }`
      */
     async get_by_id(req: FlatApiRequest<HugsGetByIdInput, HugsFields>, res: FlatApiOkResponse<HugsFields>): Promise<void> {
         const body = this.parse_body(HugsGetByIdInput, req);
-        const viewer = req.auth?.auth_via === 'daemon_token' ? null : req.auth?.user?.id?.trim() || null;
-        const data = await HugsService.get(body.hug_id, viewer);
-        res.json({ ok: true, data });
-    }
-
-    /**
-     * POST /v1/hugs/respond — submit or replace the caller's response.
-     *
-     * @param req - Body: {@link HugsRespondInput}
-     * @param res - `{ ok: true, data: { response_id, seq } }`
-     */
-    async respond(req: FlatApiRequest<HugsRespondInput, HugsFields>, res: FlatApiOkResponse<HugsFields>): Promise<void> {
-        const user_id = req.auth?.user?.id?.trim();
-        if (!user_id) throw ApiError.unauthorized('Authentication required');
-        const body = this.parse_body(HugsRespondInput, req);
-        const data = await HugsService.respond({ hug_id: body.hug_id, user_id, values: body.values, summary: body.summary });
-        log.info('hug_response_submitted', { hug_id: body.hug_id });
+        const data = await HugsService.get(body.hug_id);
         res.json({ ok: true, data });
     }
 
@@ -151,7 +121,7 @@ export class HugsController extends BaseController {
      * (`hug_id`) or their getHugs inbox (`org_id`). People only, never daemons.
      *
      * @param req - Body: {@link HugsCreateSignInLinkInput}
-     * @param res - `{ ok: true, data: { url } }`; 409 `not_in_gethugs` / `not_configured` (use the plain link)
+     * @param res - `{ ok: true, data: { url } }`; 409 `not_in_gethugs` (use the plain link)
      */
     async create_sign_in_link(req: FlatApiRequest<HugsCreateSignInLinkInput, HugsFields>, res: FlatApiOkResponse<HugsFields>): Promise<void> {
         const user_id = req.auth?.user?.id?.trim();
@@ -159,22 +129,5 @@ export class HugsController extends BaseController {
         const body = this.parse_body(HugsCreateSignInLinkInput, req);
         const data = await gethugs_sign_in_link({ user_id, hug_id: body.hug_id, org_id: body.org_id });
         res.json({ ok: true, data });
-    }
-
-    /**
-     * POST /v1/hug_bundles/get_file — one file of a stored hug bundle: its bytes, with its content type.
-     * Public: a bundle is the hug author's built code, holds no Hug data and is named by its sha256.
-     *
-     * @param req - Body: {@link HugBundlesGetFileInput}
-     * @param res - the file's bytes; 404 when the bundle or file isn't stored
-     */
-    async get_bundle_file(req: FlatApiRequest<HugBundlesGetFileInput, HugsFields>, res: FlatApiOkResponse<HugsFields>): Promise<void> {
-        const body = this.parse_body(HugBundlesGetFileInput, req);
-        const file = await HugBundlesService.get_file(body.sha256, body.path);
-        if (!file) throw ApiError.not_found('Bundle file not found');
-        res.setHeader('Content-Type', file.content_type);
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        (res as unknown as { send: (b: Buffer) => void }).send(file.body);
     }
 }

@@ -259,18 +259,11 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
                ON cliq."notification_channels" ("name")
                WHERE "realm_id" IS NULL`);
 
-    // Hugs: requests for input from people, opened by a run's phase (PLAN-hug-requests §6.1).
+    // Hugs: requests for input from people, opened by a run's phase (PLAN-hug-requests §6.1), asked in getHugs.
     // The pre-Hug tables (reviews, review_notifications, review_chat_messages) are dropped
     // once by migrate_hugs (below) and never created again.
     await run(HUGS_TABLE_SQL);
     await run(`CREATE INDEX IF NOT EXISTS "hugs_run_id_idx" ON cliq."hugs" ("run_id")`);
-    await run(`CREATE INDEX IF NOT EXISTS "hugs_realm_status_idx" ON cliq."hugs" ("realm_id", "status")`);
-    await run(`CREATE INDEX IF NOT EXISTS "hugs_open_expiry_idx" ON cliq."hugs" ("expires_at") WHERE "status" = 'open'`);
-    await run(`CREATE INDEX IF NOT EXISTS "hugs_open_remind_idx" ON cliq."hugs" ("next_remind_at") WHERE "status" = 'open'`);
-    await run(HUG_DELIVERIES_TABLE_SQL);
-    await run(`CREATE INDEX IF NOT EXISTS "hug_deliveries_hug_idx" ON cliq."hug_deliveries" ("hug_id")`);
-    await run(`CREATE INDEX IF NOT EXISTS "hug_deliveries_user_idx" ON cliq."hug_deliveries" ("user_id") WHERE "user_id" IS NOT NULL`);
-    await run(HUG_RESPONSES_TABLE_SQL);
     await run(HUG_EVENTS_TABLE_SQL);
 
     // Searchable per-line run logs (Datadog-style explorer).
@@ -998,16 +991,6 @@ export async function run_core_api_schema_migrations(sq: Sequelize): Promise<voi
     /** Ensure every org member with a username has a personal notification channel. */
     await backfill_per_user_channels(sq);
 
-    // ── In-app notification: the Hug it is about (PLAN-hug-requests) ──
-    // Was `review_id`; renamed once, then kept.
-    await run(`ALTER TABLE cliq."in_app_notifications" RENAME COLUMN "review_id" TO "hug_id"`);
-    await run(`DROP INDEX IF EXISTS cliq."in_app_notifications_review_id_idx"`);
-    await run(`ALTER TABLE cliq."in_app_notifications"
-        ADD COLUMN IF NOT EXISTS "hug_id" TEXT`);
-    await run(`CREATE INDEX IF NOT EXISTS "in_app_notifications_hug_id_idx"
-        ON cliq."in_app_notifications" ("hug_id")
-        WHERE "hug_id" IS NOT NULL`);
-
     // ── Realms: org_id NOT NULL ───────────────────────────────────────
     // All existing rows already have org_id set. Enforce going forward.
 
@@ -1441,9 +1424,9 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_run_started_by(sq);
     await migrate_person_settings_seed(sq);
     await migrate_hugs(sq);
-    await migrate_hug_templates(sq);
     await migrate_hug_widgets(sq);
     await migrate_hugs_gethugs(sq);
+    await migrate_gethugs_cutover(sq);
     await migrate_team_visibility(sq);
     await migrate_realm_team_delivery(sq);
 }
@@ -2417,7 +2400,7 @@ const PERSON_SETTINGS_INDEX_SQL = `CREATE UNIQUE INDEX IF NOT EXISTS "notificati
 
 // ── Hugs (PLAN-hug-requests §6.1, §6.6, §9) ─────────────────────────────
 
-/** A request for input from people, opened by one phase iteration of a run. */
+/** A request for input from people, opened by one phase iteration of a run and asked in getHugs. */
 const HUGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hugs" (
     "id"                TEXT PRIMARY KEY,
     "run_id"            TEXT NOT NULL,
@@ -2438,37 +2421,12 @@ const HUGS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hugs" (
     "status"            TEXT NOT NULL DEFAULT 'open',
     "outcome"           TEXT,
     "expires_at"        TIMESTAMPTZ NOT NULL,
-    "reminders"         JSONB,
-    "next_remind_at"    TIMESTAMPTZ,
-    "last_reminded_at"  TIMESTAMPTZ,
     "last_seq"          INTEGER NOT NULL DEFAULT 0,
     "created_at"        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "closed_at"         TIMESTAMPTZ,
-    "not_sent_to"       JSONB
-)`;
-
-/** One row per destination a Hug's channels resolved to — who was asked (audit and authorization). */
-const HUG_DELIVERIES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hug_deliveries" (
-    "id"          TEXT PRIMARY KEY,
-    "hug_id"      TEXT NOT NULL REFERENCES cliq."hugs"("id") ON DELETE CASCADE,
-    "channel"     TEXT NOT NULL,
-    "channel_id"  TEXT NOT NULL,
-    "user_id"     UUID,
-    "created_at"  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`;
-
-/** One response per responder per Hug (latest wins). */
-const HUG_RESPONSES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hug_responses" (
-    "id"                 TEXT PRIMARY KEY,
-    "hug_id"             TEXT NOT NULL REFERENCES cliq."hugs"("id") ON DELETE CASCADE,
-    "responder_user_id"  UUID NOT NULL,
-    "via_channels"       TEXT[] NOT NULL,
-    "values"             JSONB NOT NULL,
-    "summary"            TEXT,
-    "seq"                INTEGER NOT NULL,
-    "created_at"         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    "updated_at"         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE ("hug_id", "responder_user_id")
+    "gethugs_id"        TEXT NOT NULL,
+    "gethugs_workspace_id" TEXT NOT NULL,
+    "gethugs_seq"       INTEGER NOT NULL DEFAULT 0
 )`;
 
 /** The requester's event stream, numbered per Hug — what cliqd catches up from (§9.4). */
@@ -2481,7 +2439,7 @@ const HUG_EVENTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hug_events" (
     PRIMARY KEY ("hug_id", "seq")
 )`;
 
-/** Hug bundles, stored once by hash; files in package storage `hug-bundles/<sha256>/` (PLAN-hug-widgets §11.1). */
+/** Team hug bundles, stored once by hash; files in package storage `hug-bundles/<sha256>/` (PLAN-hug-widgets §11.1). */
 const HUG_BUNDLES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hug_bundles" (
     "sha256"        TEXT PRIMARY KEY,
     "name"          TEXT NOT NULL,
@@ -2493,80 +2451,21 @@ const HUG_BUNDLES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS cliq."hug_bundles" (
 )`;
 
 /**
- * Hug schema that must exist before `sequelize.sync()` (PLAN-hug-requests §6.1) — run at startup
- * ahead of `migrate_store`. Sync builds tables and indexes from the models, so without this step it
- * would (1) try to index `in_app_notifications.hug_id` while an older database still calls it
- * `review_id`, and (2) create the Hug tables from the models, without their cascading foreign keys
- * and the one-response-per-person rule. Idempotent; safe on a new or an up-to-date database.
+ * Hug schema that must exist before `sequelize.sync()` (PLAN-hug-requests §6.1) — run at startup ahead of
+ * `migrate_store`, so sync doesn't create the Hug tables from the models, without their cascading foreign keys.
+ * Idempotent; safe on a new or an up-to-date database.
  */
 export async function migrate_hugs_before_sync(sq: Sequelize): Promise<void> {
     if (sq.getDialect() !== 'postgres') return;
     await sq.query('CREATE SCHEMA IF NOT EXISTS cliq');
-    const [cols] = await sq.query(
-        `SELECT column_name FROM information_schema.columns
-         WHERE table_schema = 'cliq' AND table_name = 'in_app_notifications' AND column_name IN ('review_id', 'hug_id')`,
-    ) as [Array<{ column_name: string }>, unknown];
-    const names = new Set(cols.map((c) => c.column_name));
-    if (names.has('review_id') && !names.has('hug_id')) {
-        await sq.query(`ALTER TABLE cliq."in_app_notifications" RENAME COLUMN "review_id" TO "hug_id"`);
-        await sq.query(`DROP INDEX IF EXISTS cliq."in_app_notifications_review_id"`);
-        await sq.query(`DROP INDEX IF EXISTS cliq."in_app_notifications_review_id_idx"`);
-        _mig_log.info('hugs_in_app_column_renamed', {});
-    }
     await sq.query(HUGS_TABLE_SQL);
-    await sq.query(HUG_DELIVERIES_TABLE_SQL);
-    await sq.query(HUG_RESPONSES_TABLE_SQL);
     await sq.query(HUG_EVENTS_TABLE_SQL);
     await sq.query(HUG_BUNDLES_TABLE_SQL);
 }
 
 /**
- * Hugs become RPCs to a template (PLAN-hug-templates §8) — no backward compatibility. On a database
- * whose `hugs` still has `prompt` (and so once):
- *
- * - open Hugs are cancelled, each with a `cancelled` event for its daemon's catch-up;
- * - every Hug becomes `form@1`, its `prompt`, `context` and `requested_inputs` moved into `params`
- *   (`requested_inputs` → `inputs`); `ui` is dropped;
- * - a response's `comment` moves into its `values` (a template key now);
- * - the old columns are dropped. One transaction; safe to repeat (a converted database is skipped).
- */
-export async function migrate_hug_templates(sq: Sequelize): Promise<void> {
-    if (sq.getDialect() !== 'postgres') return;
-    const [cols] = await sq.query(
-        `SELECT column_name FROM information_schema.columns WHERE table_schema = 'cliq' AND table_name = 'hugs' AND column_name = 'prompt'`,
-    ) as [Array<{ column_name: string }>, unknown];
-    if (cols.length === 0) return;
-    await sq.transaction(async (t) => {
-        const q = (sql: string) => sq.query(sql, { transaction: t });
-        const [cancelled] = await q(`UPDATE cliq."hugs"
-            SET "status" = 'cancelled', "outcome" = 'cancelled: Hugs moved to templates', "closed_at" = NOW(),
-                "next_remind_at" = NULL, "last_seq" = "last_seq" + 1
-            WHERE "status" = 'open' RETURNING "id", "last_seq"`) as [Array<{ id: string; last_seq: number }>, unknown];
-        for (const h of cancelled) {
-            await sq.query(`INSERT INTO cliq."hug_events" ("hug_id", "seq", "type", "payload", "created_at")
-                VALUES (:id, :seq, 'cancelled', '{"reason":"Hugs moved to templates"}'::jsonb, NOW())`,
-            { replacements: { id: h.id, seq: h.last_seq }, transaction: t });
-        }
-        await q(`ALTER TABLE cliq."hugs" ADD COLUMN IF NOT EXISTS "template" TEXT`);
-        await q(`ALTER TABLE cliq."hugs" ADD COLUMN IF NOT EXISTS "template_version" INTEGER`);
-        await q(`ALTER TABLE cliq."hugs" ADD COLUMN IF NOT EXISTS "params" JSONB NOT NULL DEFAULT '{}'::jsonb`);
-        await q(`UPDATE cliq."hugs" SET "template" = 'form', "template_version" = 1,
-            "params" = jsonb_build_object('prompt', "prompt", 'context', "context", 'inputs', "requested_inputs")
-            WHERE "template" IS NULL`);
-        await q(`ALTER TABLE cliq."hugs" ALTER COLUMN "template" SET NOT NULL, ALTER COLUMN "template_version" SET NOT NULL`);
-        await q(`ALTER TABLE cliq."hugs" DROP COLUMN "prompt", DROP COLUMN "context", DROP COLUMN "requested_inputs", DROP COLUMN IF EXISTS "ui"`);
-        await q(`UPDATE cliq."hug_responses" SET "values" = "values" || jsonb_build_object('comment', "comment")
-            WHERE "comment" IS NOT NULL AND ("values"->'comment') IS NULL`);
-        await q(`ALTER TABLE cliq."hug_responses" DROP COLUMN IF EXISTS "comment"`);
-        _mig_log.info('hug_templates_migrated', { cancelled: cancelled.length });
-    });
-}
-
-/**
- * Hugs open with a hug — a named frontend and its bundle (PLAN-hug-widgets §11.1, §11.3). Idempotent: adds the
- * envelope's columns and `hug_bundles`; then, once (while `hugs.template` exists), the cut-over: open Hugs opened
- * before hugs (no `hug_name`) are cancelled, each with a `cancelled` event for its daemon's catch-up, and the
- * `template` / `template_version` columns are dropped. Past pre-hug Hugs keep their rows (shown without a hug).
+ * Hugs open with a hug, by name and (a team hug) its bundle's hash (PLAN-hug-widgets §11.1). Idempotent: adds the
+ * envelope's columns and `hug_bundles`.
  */
 export async function migrate_hug_widgets(sq: Sequelize): Promise<void> {
     if (sq.getDialect() !== 'postgres') return;
@@ -2577,50 +2476,91 @@ export async function migrate_hug_widgets(sq: Sequelize): Promise<void> {
         ADD COLUMN IF NOT EXISTS "progress" TEXT,
         ADD COLUMN IF NOT EXISTS "files" JSONB NOT NULL DEFAULT '[]'::jsonb,
         ADD COLUMN IF NOT EXISTS "attachments" JSONB NOT NULL DEFAULT '[]'::jsonb`);
-    await sq.query(`ALTER TABLE cliq."hug_responses" ADD COLUMN IF NOT EXISTS "summary" TEXT`);
     await sq.query(HUG_BUNDLES_TABLE_SQL);
     await sq.query(`CREATE INDEX IF NOT EXISTS "hugs_hug_sha256_idx" ON cliq."hugs" ("hug_sha256")`);
-    await cut_over_to_hugs(sq);
 }
 
 /**
- * A Hug of an org switched to getHugs keeps its row here — under the id its daemon minted, so catch-up and the run's
- * Hug list read it as any other — with getHugs' id and workspace (PLAN-gethugs-step3-asking.md). Idempotent.
+ * A Hug keeps its row here — under the id its daemon minted, so catch-up and the run's Hug list read it — with
+ * getHugs' id and workspace (PLAN-gethugs-step3-asking.md). Idempotent. On a database from before them the columns are
+ * added nullable; {@link migrate_gethugs_cutover} makes them required once the older Hugs are gone.
  */
 export async function migrate_hugs_gethugs(sq: Sequelize): Promise<void> {
     if (sq.getDialect() !== 'postgres') return;
     await sq.query(`ALTER TABLE cliq."hugs"
-        ADD COLUMN IF NOT EXISTS "provider" TEXT NOT NULL DEFAULT 'cliqhub',
         ADD COLUMN IF NOT EXISTS "gethugs_id" TEXT,
         ADD COLUMN IF NOT EXISTS "gethugs_workspace_id" TEXT,
         ADD COLUMN IF NOT EXISTS "gethugs_seq" INTEGER NOT NULL DEFAULT 0`);
-    await sq.query(`DO $$ BEGIN
-        ALTER TABLE cliq."hugs" ADD CONSTRAINT "hugs_provider_check" CHECK ("provider" IN ('cliqhub', 'gethugs'));
-    EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
     await sq.query(`CREATE UNIQUE INDEX IF NOT EXISTS "hugs_gethugs_id_idx" ON cliq."hugs" ("gethugs_id") WHERE "gethugs_id" IS NOT NULL`);
 }
 
-/** Why a pre-hug Hug that was still open ended (its outcome and its `cancelled` event's reason). */
-export const HUG_CUTOVER_REASON = 'Hugs moved to hugs — update cliq';
+/** Notification events that went with cliqhub's own Hugs — frozen as written (PLAN-gethugs-step8-cutover.md decision 8). */
+const GETHUGS_CUTOVER_REMOVED_EVENTS = ['hug.opened', 'hug.reminded', 'hug.responded', 'hug.closed', 'hug.expired', 'hug.*', 'notification.no_access'] as const;
 
-/** The Step 10 cut-over (PLAN-hug-widgets §11.3): once, while `hugs.template` exists; one transaction. */
-async function cut_over_to_hugs(sq: Sequelize): Promise<void> {
-    const [cols] = await sq.query(
-        `SELECT column_name FROM information_schema.columns WHERE table_schema = 'cliq' AND table_name = 'hugs' AND column_name = 'template'`,
-    ) as [Array<{ column_name: string }>, unknown];
-    if (cols.length === 0) return;
+/**
+ * The cut-over to getHugs (PLAN-gethugs-step8-cutover.md): every Hug is a getHugs one. Idempotent; each part runs
+ * only while what it removes is there. One transaction.
+ *
+ * - cliqhub's own Hugs (no getHugs id) are deleted with their events, deliveries and responses (decision 2: no
+ *   archive; their answer files stay as run artifacts), and so are the in-app notifications about Hugs;
+ *   `hug_deliveries`, `hug_responses`, `in_app_notifications.hug_id` and the Hug columns only they used (and any
+ *   pre-hug ones an old database still has) go;
+ *   `gethugs_id` and `gethugs_workspace_id` become required.
+ * - Responder uploads never used in an answer (`pending`) are deleted with the pending state (their files stay in
+ *   storage, unreferenced).
+ * - Rules and people's settings on the removed events go (decision 8), and `jira` destinations (never delivered).
+ */
+export async function migrate_gethugs_cutover(sq: Sequelize): Promise<void> {
+    if (sq.getDialect() !== 'postgres') return;
     await sq.transaction(async (t) => {
-        const [cancelled] = await sq.query(`UPDATE cliq."hugs"
-            SET "status" = 'cancelled', "outcome" = :outcome, "closed_at" = NOW(), "next_remind_at" = NULL, "last_seq" = "last_seq" + 1
-            WHERE "status" = 'open' AND "hug_name" IS NULL RETURNING "id", "last_seq"`,
-        { replacements: { outcome: `cancelled: ${HUG_CUTOVER_REASON}` }, transaction: t }) as [Array<{ id: string; last_seq: number }>, unknown];
-        for (const h of cancelled) {
-            await sq.query(`INSERT INTO cliq."hug_events" ("hug_id", "seq", "type", "payload", "created_at")
-                VALUES (:id, :seq, 'cancelled', jsonb_build_object('reason', CAST(:reason AS TEXT)), NOW())`,
-            { replacements: { id: h.id, seq: h.last_seq, reason: HUG_CUTOVER_REASON }, transaction: t });
+        const q = (sql: string, replacements?: Record<string, unknown>) => sq.query(sql, { transaction: t, ...(replacements ? { replacements } : {}) });
+        const has_column = async (table: string, column: string) => {
+            const [rows] = await q(
+                `SELECT 1 FROM information_schema.columns WHERE table_schema = 'cliq' AND table_name = :table AND column_name = :column`,
+                { table, column },
+            );
+            return (rows as unknown[]).length > 0;
+        };
+        if (await has_column('in_app_notifications', 'hug_id')) {
+            const [gone] = await q(`DELETE FROM cliq."in_app_notifications" WHERE "hug_id" IS NOT NULL RETURNING "id"`) as [unknown[], unknown];
+            await q(`DROP INDEX IF EXISTS cliq."in_app_notifications_hug_id_idx"`);
+            await q(`DROP INDEX IF EXISTS cliq."in_app_notifications_hug_id"`);
+            await q(`ALTER TABLE cliq."in_app_notifications" DROP COLUMN "hug_id"`);
+            _mig_log.info('gethugs_cutover_in_app_deleted', { count: gone.length });
         }
-        await sq.query(`ALTER TABLE cliq."hugs" DROP COLUMN IF EXISTS "template", DROP COLUMN IF EXISTS "template_version"`, { transaction: t });
-        _mig_log.info('hugs_cut_over', { cancelled: cancelled.length });
+        const [hugs] = await q(`DELETE FROM cliq."hugs" WHERE "gethugs_id" IS NULL RETURNING "id"`) as [unknown[], unknown];
+        if (hugs.length > 0) _mig_log.info('gethugs_cutover_hugs_deleted', { count: hugs.length });
+        await q(`DROP TABLE IF EXISTS cliq."hug_deliveries", cliq."hug_responses"`);
+        await q(`DROP INDEX IF EXISTS cliq."hugs_realm_status_idx"`);
+        await q(`DROP INDEX IF EXISTS cliq."hugs_open_expiry_idx"`);
+        await q(`DROP INDEX IF EXISTS cliq."hugs_open_remind_idx"`);
+        await q(`ALTER TABLE cliq."hugs" DROP CONSTRAINT IF EXISTS "hugs_provider_check"`);
+        await q(`ALTER TABLE cliq."hugs"
+            DROP COLUMN IF EXISTS "provider",
+            DROP COLUMN IF EXISTS "reminders",
+            DROP COLUMN IF EXISTS "next_remind_at",
+            DROP COLUMN IF EXISTS "last_reminded_at",
+            DROP COLUMN IF EXISTS "not_sent_to",
+            DROP COLUMN IF EXISTS "template",
+            DROP COLUMN IF EXISTS "template_version",
+            DROP COLUMN IF EXISTS "prompt",
+            DROP COLUMN IF EXISTS "context",
+            DROP COLUMN IF EXISTS "requested_inputs",
+            DROP COLUMN IF EXISTS "ui",
+            ALTER COLUMN "gethugs_id" SET NOT NULL,
+            ALTER COLUMN "gethugs_workspace_id" SET NOT NULL`);
+
+        if (await has_column('stored_artifacts', 'status')) {
+            const [pending] = await q(`DELETE FROM cliq."stored_artifacts" WHERE "status" = 'pending' RETURNING "id"`) as [unknown[], unknown];
+            await q(`DROP INDEX IF EXISTS cliq."stored_artifacts_pending_idx"`);
+            await q(`ALTER TABLE cliq."stored_artifacts" DROP COLUMN "status"`);
+            _mig_log.info('gethugs_cutover_pending_uploads_deleted', { count: pending.length });
+        }
+
+        const events = { events: [...GETHUGS_CUTOVER_REMOVED_EVENTS] };
+        await q(`DELETE FROM cliq."notification_rules" WHERE "event" IN (:events)`, events);
+        await q(`DELETE FROM cliq."notification_person_settings" WHERE "event" IN (:events)`, events);
+        await q(`DELETE FROM cliq."channel_destinations" WHERE "type" = 'jira'`);
     });
 }
 
@@ -2656,7 +2596,7 @@ const HUGS_REMOVED_PERMISSIONS = ['reviews.view', 'reviews.verdict', 'hugs.view'
  *   equivalent are deleted.
  * - Org roles lose `reviews.view` / `reviews.verdict` (a Hug is seen and answered with `runs.view`) and
  *   `teams.inputs` (only used by the removed runs/supply_inputs) — every boot, idempotent.
- * - `stored_artifacts` gains the upload state and Hug link (§6.6.7); `command_outbox` gains `deliver_until` (§9).
+ * - `stored_artifacts` gains its source and Hug link (§6.6.7); `command_outbox` gains `deliver_until` (§9).
  *
  * The column additions run every boot (idempotent); the data changes run once, keyed. Safe to repeat.
  */
@@ -2668,14 +2608,11 @@ export async function migrate_hugs(sq: Sequelize): Promise<void> {
             /* already applied or not applicable */
         }
     };
-    await run(`ALTER TABLE cliq."stored_artifacts" ADD COLUMN IF NOT EXISTS "status" TEXT NOT NULL DEFAULT 'ready'`);
     await run(`ALTER TABLE cliq."stored_artifacts" ADD COLUMN IF NOT EXISTS "source" TEXT NOT NULL DEFAULT 'daemon'`);
     await run(`ALTER TABLE cliq."stored_artifacts" ADD COLUMN IF NOT EXISTS "hug_id" TEXT`);
     await run(`ALTER TABLE cliq."stored_artifacts" ADD COLUMN IF NOT EXISTS "hug_requested_input" TEXT`);
     await run(`ALTER TABLE cliq."stored_artifacts" ADD COLUMN IF NOT EXISTS "sha256" TEXT`);
-    await run(`CREATE INDEX IF NOT EXISTS "stored_artifacts_pending_idx" ON cliq."stored_artifacts" ("created_at") WHERE "status" = 'pending'`);
     await run(`ALTER TABLE cliq."command_outbox" ADD COLUMN IF NOT EXISTS "deliver_until" BIGINT`);
-    await run(`ALTER TABLE cliq."hugs" ADD COLUMN IF NOT EXISTS "not_sent_to" JSONB`);
     for (const perm of HUGS_REMOVED_PERMISSIONS) {
         await run(`UPDATE cliq."org_roles" SET "permissions" = array_remove("permissions", '${perm}') WHERE '${perm}' = ANY("permissions")`);
     }

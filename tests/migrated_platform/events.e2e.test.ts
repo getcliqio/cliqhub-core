@@ -46,8 +46,7 @@ describe.skipIf(!has_postgres)('Events endpoints', () => {
 			.send({});
 		expect(res.status).toBe(200);
 		expect(res.body.ok).toBe(true);
-		expect(res.body.types).toContain('hug.responded');
-		expect(res.body.types).not.toContain('hug.routing_requested');
+		expect(res.body.types.filter((t: string) => t.startsWith('hug.'))).toEqual([]);
 		expect(res.body.types).toContain('run.started');
 	});
 

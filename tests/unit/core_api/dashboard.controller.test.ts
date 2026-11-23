@@ -40,13 +40,6 @@ vi.mock('../../../src/services/run.service.js', () => ({
     },
 }));
 
-vi.mock('../../../src/services/hug_pending.service.js', () => ({
-    HugPendingService: {
-        list_for_user: vi.fn(async () => ({ hugs: [], total: 0 })),
-        count_open_by_realm_for_user: vi.fn(async () => new Map()),
-    },
-}));
-
 import { DashboardController } from '../../../src/controllers/dashboard_controller.js';
 import { DaemonService } from '../../../src/services/daemon.service.js';
 import { RealmService } from '../../../src/services/realm.service.js';

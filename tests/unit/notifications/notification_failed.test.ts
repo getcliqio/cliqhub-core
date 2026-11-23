@@ -67,8 +67,7 @@ describe('notification.* event group', () => {
         expect(types).toContain('notification.test');
         expect(types).toContain('notification.failed');
         expect(types).toContain('notification.unknown_channel');
-        expect(types).toContain('notification.no_access');
-        expect(types.length).toBe(4);
+        expect(types.length).toBe(3);
     });
 });
 

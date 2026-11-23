@@ -34,10 +34,10 @@ describe('route policy coverage', () => {
         expect(routes.length).toBeGreaterThan(170);
     });
 
-    it('no review, chat, supply-inputs, multipart-submit or Hug upload route is mounted (PLAN-hug-requests §12, §17)', () => {
-        const gone = routes.filter((r) => /\/v1\/reviews\/|get_messages|send_message|stream_messages|claim_review|\/v1\/runs\/supply_inputs|\/v1\/artifacts\/submit|\/v1\/hugs\/upload|remind/.test(r));
+    it('no review, chat, supply-inputs, multipart-submit, Hug upload or answering route is mounted (PLAN-hug-requests §12, §17; getHugs cut-over)', () => {
+        const gone = routes.filter((r) => /\/v1\/reviews\/|get_messages|send_message|stream_messages|claim_review|\/v1\/runs\/supply_inputs|\/v1\/artifacts\/submit|\/v1\/hugs\/upload|\/v1\/hugs\/respond|\/v1\/hug_bundles\/|remind/.test(r));
         expect(gone).toEqual([]);
-        expect(routes).toEqual(expect.arrayContaining(['POST /v1/hugs/respond', 'POST /v1/artifacts/upload', 'GET /v1/artifacts/download']));
+        expect(routes).toEqual(expect.arrayContaining(['POST /v1/artifacts/upload', 'GET /v1/artifacts/download']));
     });
 
     it('every mounted route has a policy', () => {
@@ -65,7 +65,6 @@ describe('route policy coverage', () => {
             "by_body(body.reset_token ? public : signed_in) POST /internal/users/change_password",
             "public GET /a2a/o/:org/r/:slug/.well-known/agent-card.json",
             "public GET /v1/health",
-            "public POST /v1/hug_bundles/get_file",
             "public POST /v1/integrations/jira/disconnect_workspace",
             "public POST /v1/integrations/jira/get_workspaces",
             "public POST /v1/integrations/jira/register_workspace",

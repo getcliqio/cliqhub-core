@@ -12,7 +12,7 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
-        "gethugs:switch": "tsc && node --env-file=.env dist/scripts/gethugs_switch.js",
+        "gethugs:sync": "tsc && node --env-file=.env dist/scripts/gethugs_sync.js",
         "gethugs:signin-key": "tsc && node dist/scripts/gethugs_signin_key.js"
     },
     "engines": {

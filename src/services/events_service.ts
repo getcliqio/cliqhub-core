@@ -35,13 +35,6 @@ export interface SubmitEventInput {
 	severity?: EventSeverity;
 	payload?: Record<string, unknown>;
 	actor_id?: string | null;
-	/**
-	 * Optional targeted channel IDs. When present, the event is delivered
-	 * to these channels IN ADDITION TO rule-based routing. This is the
-	 * mechanism for targeted notifications (e.g., HUG review → specific
-	 * reviewer channels, delegation → new reviewer channel).
-	 */
-	target_channels?: string[];
 }
 
 export interface SubmittedEvent {
@@ -251,22 +244,6 @@ export class EventSubmitService {
 				`notification handler failed for ${type}: `
 				+ (err instanceof Error ? err.message : String(err)),
 			);
-		}
-
-		/** Targeted delivery to specific channels (in addition to rules). */
-		const targets = input.target_channels ?? [];
-		if (targets.length > 0) {
-			try {
-				const { NotificationFanOutService } = await import('../notifications/fan_out.service.js');
-				const targeted_status = await NotificationFanOutService.deliver_to_channels(targets, dto);
-				if (notifications === 'skipped') notifications = targeted_status;
-			} catch (err) {
-				log.error(
-					`targeted delivery failed for ${type}: `
-					+ (err instanceof Error ? err.message : String(err)),
-				);
-				if (notifications === 'skipped') notifications = 'failed';
-			}
 		}
 
 		log.info(`event submitted: ${type} id=${id} notifications=${notifications}`);

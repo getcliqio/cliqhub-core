@@ -70,7 +70,7 @@ function to_rule_data(r: NotificationRule): NotificationRuleData {
 }
 
 /** Order destinations are shown and indexed in: in-app first, then email, chat, hooks and refs. */
-const DESTINATION_ORDER = ['cliqhub', 'email', 'slack', 'webhook', 'http', 'jira', 'channel_ref'];
+const DESTINATION_ORDER = ['cliqhub', 'email', 'slack', 'webhook', 'http', 'channel_ref'];
 
 /** Destination rows in a stable order (by type, then creation), the same for display and for `destination_index`. */
 export function sort_destination_rows<T extends { type: string; created_at?: number | string | null; id?: string }>(rows: T[]): T[] {

@@ -9,7 +9,7 @@ export const EventData = z.object({
     id: z.string().uuid()
         .describe('Event UUID'),
     type: z.string()
-        .describe('Event type slug (e.g. "run.completed", "hug.responded")'),
+        .describe('Event type slug (e.g. "run.completed", "phase.failed")'),
     occurred_at: z.string()
         .describe('ISO timestamp of when the event occurred'),
     realm_id: z.string().uuid().nullable()
@@ -86,11 +86,6 @@ export const EVENT_TYPES = [
 	// Idle watchdog: no progress for threshold — notify only, not a hard fail.
 	// Distinct from phase.timed_out (wall-clock cancel). Severity: warn.
 	'phase.idle',
-	// Hugs (PLAN-hug-requests §6.8). Opening one posts straight to its channels — not an event.
-	'hug.reminded',
-	'hug.responded',
-	'hug.closed',
-	'hug.expired',
 	'team.published',
 	'team.visibility_changed',
 	'daemon.enrolled',
@@ -120,9 +115,6 @@ export const EVENT_TYPES = [
 	// A channel named for an event (a run's notify channels, a gate's reviewers) doesn't exist.
 	// Raised only by CliqHub; always reaches the realm through its fixed rule (PLAN-notifications-v2).
 	'notification.unknown_channel',
-	// A person a Hug's channels reach may not see it (no runs.view on its realm): nothing was sent to them.
-	// Raised only by CliqHub; goes wherever the org or realm sends it.
-	'notification.no_access',
 	// Org-scoped identity events, raised only by CliqHub itself
 	// (notifications/org_events.ts); `events/submit` refuses them.
 	'invite.owner.sent',
@@ -178,10 +170,6 @@ export const EVENT_TYPE_SEVERITY: Record<EventType, EventSeverity> = {
 	'phase.resumed': 'info',
 	'phase.timed_out': 'error',
 	'phase.idle': 'warn',
-	'hug.reminded': 'info',
-	'hug.responded': 'info',
-	'hug.closed': 'info',
-	'hug.expired': 'error',
 	'team.published': 'info',
 	'team.visibility_changed': 'info',
 	'daemon.enrolled': 'info',
@@ -203,7 +191,6 @@ export const EVENT_TYPE_SEVERITY: Record<EventType, EventSeverity> = {
 	'notification.test': 'info',
 	'notification.failed': 'error',
 	'notification.unknown_channel': 'warn',
-	'notification.no_access': 'warn',
 	'invite.owner.sent': 'info',
 	'invite.owner.reminder': 'info',
 	'invite.owner.accepted': 'info',
@@ -232,7 +219,7 @@ export const EVENT_TYPE_SEVERITY: Record<EventType, EventSeverity> = {
 const SYSTEM_EVENT_PREFIXES = ['invite.', 'org.', 'user.'] as const;
 
 /** Single event types raised only by CliqHub. */
-const SYSTEM_EVENT_TYPES: ReadonlySet<string> = new Set(['notification.unknown_channel', 'notification.no_access']);
+const SYSTEM_EVENT_TYPES: ReadonlySet<string> = new Set(['notification.unknown_channel']);
 
 /** True for event types only CliqHub raises (invites, org lifecycle, account emails, unknown channel). */
 export function is_system_event_type(type: string): boolean {
@@ -249,12 +236,11 @@ const non_empty = z.string().trim().min(1);
 export function required_fields_for(type: EventType): readonly string[] {
 	if (type.startsWith('run.')) return ['realm_id', 'run_id', 'daemon_id'];
 	if (type.startsWith('phase.')) return ['realm_id', 'run_id', 'phase', 'daemon_id'];
-	if (type.startsWith('hug.')) return ['realm_id', 'run_id', 'daemon_id'];
 	if (type.startsWith('daemon.')) return ['realm_id', 'daemon_id'];
 	if (type.startsWith('realm.')) return ['realm_id'];
 	if (type.startsWith('team.')) return ['team'];
 	if (type.startsWith('custom.')) return ['realm_id'];
-	if (type === 'notification.unknown_channel' || type === 'notification.no_access') return ['realm_id'];
+	if (type === 'notification.unknown_channel') return ['realm_id'];
 	return [];
 }
 
@@ -299,7 +285,6 @@ export const event_payload_schema = z
 		daemon_name: z.string().optional().describe('Display name for the daemon'),
 		error: z.string().optional().describe('Failure / crash message'),
 		reason: z.string().optional().describe('Human-readable reason (cancel, escalate, …)'),
-		hug_id: z.string().optional().describe('The Hug a hug.* event is about'),
 		stream_event: z.string().optional().describe('Underlying stream/lifecycle verb'),
 		dead_count: z.number().optional().describe('daemon.outbox.dead — dead outbox row count'),
 		cause_summary: z.string().optional().describe('Compact outbox dead-cause summary'),
@@ -314,7 +299,7 @@ function make_event_submit_schema(allow_system: boolean) {
 	return z
 	.object({
 		type: event_type_schema.describe(
-			'Hub catalog type (run.* / phase.* / hug.* / …) or custom.<name>',
+			'Hub catalog type (run.* / phase.* / daemon.* / …) or custom.<name>',
 		),
 		occurred_at: z
 			.string()
@@ -323,9 +308,9 @@ function make_event_submit_schema(allow_system: boolean) {
 		realm_id: z.string().optional().describe('Required for most families (see family rules)'),
 		org_id: z.string().optional().describe('Optional org scope'),
 		team: z.string().optional().describe('Team slug; required for team.*'),
-		run_id: z.string().optional().describe('Required for run.* / phase.* / hug.*'),
+		run_id: z.string().optional().describe('Required for run.* / phase.*'),
 		phase: z.string().optional().describe('Required for phase.*'),
-		daemon_id: z.string().optional().describe('Required for run.* / phase.* / hug.* / daemon.*'),
+		daemon_id: z.string().optional().describe('Required for run.* / phase.* / daemon.*'),
 		title: z.string().optional().describe('Short notification title'),
 		message: z.string().optional().describe('Longer notification body'),
 		severity: z

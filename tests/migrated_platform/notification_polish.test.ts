@@ -33,8 +33,7 @@ describe('event titles and destination order (pure)', () => {
 		expect(event_title('run.failed')).toBe('Run failed');
 		expect(event_title('phase.timed_out')).toBe('Phase timed out');
 		expect(event_title('phase.resumed')).toBe('Phase resumed');
-		expect(event_title('hug.opened')).toBe('Input requested');
-		expect(event_title('hug.expired')).toBe('Hug expired');
+		expect(event_title('team.published')).toBe('Team published');
 	});
 
 	it('destinations sort in-app, email, then the rest (stable within a type)', () => {

@@ -4,11 +4,9 @@
  * POST /v1/hugs/create      (cliqd; dedup by tx_id)
  * POST /v1/hugs/close       (cliqd)
  * POST /v1/hugs/get_events  (cliqd)
- * POST /v1/hugs/get
+ * POST /v1/hugs/get        (a run's Hugs)
  * POST /v1/hugs/get_by_id
- * POST /v1/hugs/respond
  * POST /v1/hugs/create_sign_in_link  (a person; PLAN-gethugs-step7-sign-in.md)
- * POST /v1/hug_bundles/get_file  (public; PLAN-hug-widgets §11.1)
  */
 import type { Router } from 'express';
 import { with_dedup } from '../../middleware/inbound_dedup.js';
@@ -23,7 +21,5 @@ export function register_hugs_routes(router: Router): void {
     router.post('/hugs/get_events', hugs.wrap(hugs.get_events));
     router.post('/hugs/get', hugs.wrap(hugs.get));
     router.post('/hugs/get_by_id', hugs.wrap(hugs.get_by_id));
-    router.post('/hugs/respond', hugs.wrap(hugs.respond));
     router.post('/hugs/create_sign_in_link', hugs.wrap(hugs.create_sign_in_link));
-    router.post('/hug_bundles/get_file', hugs.wrap(hugs.get_bundle_file));
 }

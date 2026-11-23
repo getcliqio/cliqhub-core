@@ -102,9 +102,7 @@ export class NotificationFanOutService {
 	}
 
 	/**
-	 * Deliver directly to a specific set of channel IDs (bypassing rule resolution).
-	 *
-	 * Used for targeted review notifications where channels are already resolved.
+	 * Deliver directly to a set of channel ids (bypassing rule resolution) — where the channels are already known.
 	 */
 	static async deliver_to_channels(
 		channel_ids: string[],
@@ -560,8 +558,6 @@ export function destination_to_config(dest: Destination): Record<string, unknown
 			return { url: dest.url, headers: dest.headers };
 		case 'http':
 			return { url: dest.url, headers: dest.headers, method: dest.method };
-		case 'jira':
-			return { url: dest.url, project_key: dest.project_key, issue_type: dest.issue_type, auth_header: dest.auth_header };
 		case 'cliqhub':
 			return {};
 		default:

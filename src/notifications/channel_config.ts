@@ -77,14 +77,6 @@ const http_destination = z.object({
 	headers: z.record(z.string()).optional(),
 });
 
-const jira_destination = z.object({
-	type: z.literal('jira'),
-	url: z.string().url(),
-	project_key: z.string().min(1),
-	issue_type: z.string().min(1),
-	auth_header: z.string().optional(),
-});
-
 const channel_ref_destination = z.object({
 	type: z.literal('channel_ref'),
 	name: z.string().min(1),
@@ -99,7 +91,6 @@ export const destination_schema = z.discriminatedUnion('type', [
 	email_destination,
 	webhook_destination,
 	http_destination,
-	jira_destination,
 	channel_ref_destination,
 	cliqhub_destination,
 ]).superRefine((d, ctx) => {
@@ -115,7 +106,7 @@ export const destinations_array_schema = z.array(destination_schema).min(1);
 
 /** All recognized destination type strings. */
 export const DESTINATION_TYPES = [
-	'slack', 'email', 'webhook', 'http', 'jira', 'channel_ref', 'cliqhub',
+	'slack', 'email', 'webhook', 'http', 'channel_ref', 'cliqhub',
 ] as const;
 export type DestinationType = (typeof DESTINATION_TYPES)[number];
 

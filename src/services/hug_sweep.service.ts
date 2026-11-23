@@ -1,9 +1,7 @@
 /**
- * The Hug sweep (PLAN-hug-requests §6.7): every minute, expire open Hugs past `expires_at`
- * (telling each requester) and send due reminders to the people who haven't responded. Also
- * removes responder uploads never used in a response (24h, §6.6.8) and, hourly, the events of Hugs
- * that ended more than 7 days ago (§9.3), and daily, hug bundles no Hug needs any more
- * (PLAN-hug-widgets §11.1). At start it deletes upload temp files a crash left (§6.6.3).
+ * The Hug sweep: hourly, the events of Hugs that ended more than 7 days ago (§9.3); daily, hug bundles no Hug needs any
+ * more (PLAN-hug-widgets §11.1). At start it deletes upload temp files a crash left (§6.6.3). getHugs expires Hugs and
+ * reminds people itself (PLAN-gethugs-integration.md).
  */
 
 import { get_logger } from '../lib/log.js';
@@ -23,10 +21,6 @@ let _last_bundle_sweep = 0;
 
 async function sweep(): Promise<void> {
     const now = new Date();
-    await HugsService.expire_due(now);
-    await HugsService.remind_due(now);
-    const { ArtifactStorageService } = await import('./artifact_storage.service.js');
-    await new ArtifactStorageService().delete_stale_pending(now);
     if (now.getTime() - _last_event_cleanup >= EVENT_CLEANUP_INTERVAL_MS) {
         _last_event_cleanup = now.getTime();
         await HugsService.delete_old_events(now);

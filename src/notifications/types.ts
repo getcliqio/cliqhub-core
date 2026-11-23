@@ -16,7 +16,6 @@ export function is_channel_provider(value: string): value is ChannelProvider {
 export const EVENT_GROUPS = [
 	'run.*',
 	'phase.*',
-	'hug.*',
 	'team.*',
 	'daemon.*',
 	'realm.*',
@@ -33,7 +32,6 @@ export type EventGroup = (typeof EVENT_GROUPS)[number];
 export const EVENT_GROUP_ALIASES: Record<string, EventGroup> = {
 	run: 'run.*',
 	phase: 'phase.*',
-	hug: 'hug.*',
 	team: 'team.*',
 	daemon: 'daemon.*',
 	realm: 'realm.*',
@@ -51,7 +49,6 @@ function types_with_prefix(prefix: string): readonly EventType[] {
 export const EVENT_GROUP_TYPES: Record<EventGroup, readonly EventType[]> = {
 	'run.*': types_with_prefix('run.'),
 	'phase.*': types_with_prefix('phase.'),
-	'hug.*': types_with_prefix('hug.'),
 	'team.*': types_with_prefix('team.'),
 	'daemon.*': types_with_prefix('daemon.'),
 	'realm.*': types_with_prefix('realm.'),
@@ -150,11 +147,6 @@ const EVENT_TITLES: Record<string, string> = {
 	'phase.resumed': 'Phase resumed',
 	'phase.idle': 'Phase idle',
 	'phase.timed_out': 'Phase timed out',
-	'hug.opened': 'Input requested',
-	'hug.reminded': 'Reminder: input requested',
-	'hug.responded': 'Hug answered',
-	'hug.closed': 'Hug closed',
-	'hug.expired': 'Hug expired',
 };
 
 /**

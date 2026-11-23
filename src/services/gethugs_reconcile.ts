@@ -393,8 +393,6 @@ function map_destination(
         }
         case 'cliqhub':
             return refuse('in_app_not_mirrored', 'getHugs has in-app only on personal channels; people get Hugs in their inbox');
-        case 'jira':
-            return refuse('jira_not_mirrored');
         default:
             return refuse('unknown_destination_type', d.type);
     }

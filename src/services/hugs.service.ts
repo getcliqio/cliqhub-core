@@ -1,33 +1,22 @@
 /**
- * Hugs — Core's side of the one protocol for asking people (PLAN-hug-requests §6).
+ * Hugs — Core's side of asking people (PLAN-hug-requests §6), through getHugs (PLAN-gethugs-integration.md; step 8:
+ * every Hug is a getHugs one).
  *
- * Core stores a Hug (its envelope — which hug and bundle, title, summary, upload slots, attachments;
- * PLAN-hug-widgets §11.1), resolves its channels and notifies the people they reach, authorizes
- * responses, keeps the requester's event stream (numbered per Hug) and delivers each event to the
- * daemon that opened it, expires Hugs and sends their reminders. It never interprets `params` or a
- * response's `values` (the hug's definition checks them, in the frontend and in the agent): it checks
- * only their size, and that uploads sit under the Hug's upload slots.
+ * Core opens a Hug in getHugs for a run's phase and keeps a row for it under the id its daemon minted; getHugs asks the
+ * people, takes their answers and ends it. Core keeps the requester's event stream (numbered per Hug, from getHugs'
+ * events) and delivers each event to the daemon that opened it; it relays the daemon's close and status line and a
+ * run's end. It never interprets `params` or a response's `values`.
  */
 
-import { randomUUID } from 'node:crypto';
 import { Op, type Transaction } from 'sequelize';
-import type { FileValue } from '@getcliqio/cliq-sdk';
 
 import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
-import { get_sequelize } from '../db/sequelize.js';
-import { Hug, HugDelivery, HugEventRow, HugResponse, Realm, StoredArtifact, User } from '../models/index.js';
-import type { HugAttachmentRow, HugFileSlotRow, HugNotSentTo } from '../models/hug.model.js';
+import { Hug, HugEventRow, Realm } from '../models/index.js';
+import type { HugAttachmentRow, HugFileSlotRow } from '../models/hug.model.js';
 import { HugEnvelopeSchema, type HugEnvelope } from '../schemas/hug_types.js';
-import { HugBundlesService } from './hug_bundles.service.js';
 import type { HugEventType } from '../models/hug.model.js';
-import { visible_realm_ids } from '../auth/route_policy/visible.js';
-import { no_channel_message, raise_unknown_channel } from '../notifications/unknown_channel.js';
-import { raise_no_access } from '../notifications/no_access.js';
-import { people_reached, resolve_channels, type ChannelDestination } from './channel_resolution.service.js';
 import { load_realm_info_map, load_run_info_map, resolve_team } from './hug_enrichment.js';
-import { EventSubmitService, type SubmittedEvent } from './events_service.js';
-import { hugs_provider_of } from './gethugs.service.js';
 import { gethugs_cancel_run, gethugs_close, gethugs_create, gethugs_hug_url, gethugs_progress } from './gethugs_hugs.js';
 
 const log = get_logger('svc.hugs');
@@ -49,7 +38,7 @@ export interface CreateHugInput {
     iteration: number;
     /** The Hug's envelope, validated here (it comes from the daemon unchanged). */
     spec: unknown;
-    /** The hug's bundle (path → text), sent on the retry after `BUNDLE_MISSING`. */
+    /** A team hug's bundle (path → text), sent on the retry after `BUNDLE_MISSING`. */
     bundle?: Record<string, string>;
     /** Whether the caller may upload a bundle (a daemon of the Hug's realm). */
     may_upload_bundle?: boolean;
@@ -63,7 +52,7 @@ export interface HugResponseData {
     via: string[];
     /** The answer, as the hug's keys. */
     values: Record<string, unknown>;
-    /** The answer in one line, from the frontend (absent when it gave none). */
+    /** The answer in one line (absent when it has none). */
     summary?: string;
     responded_at: string;
 }
@@ -83,9 +72,8 @@ export interface HugData {
     org_slug: string | null;
     daemon_id: string;
     title: string;
-    /** The hug it was opened with and its bundle (the page renders it by these); null for a Hug opened
-     *  before hugs, which the page shows in its simple fallback view. */
-    hug: { name: string; sha256: string } | null;
+    /** The hug it was opened with: a getHugs built-in by name (no bundle), or a team hug and its bundle's hash. */
+    hug: { name: string; sha256: string | null } | null;
     summary: string | null;
     /** The requester's latest status line while the Hug is open ("1 answer couldn't be used; …"); null otherwise. */
     progress: string | null;
@@ -101,16 +89,35 @@ export interface HugData {
     expires_at: string;
     created_at: string;
     closed_at: string | null;
-    last_reminded_at: string | null;
-    /** People its channels reach who may not see it, so it wasn't sent to them (name and channel). */
-    not_sent_to: Array<{ name: string; channel: string }>;
+    /** The answers, each person's latest, oldest first (answered in getHugs). */
     responses: HugResponseData[];
-    /**
-     * What the person reading it may do — the rule `respond` applies, so the page offers an answer only when Core
-     * would take one: open (and not past its expiry) and reaching them ({@link HugsService.channels_reaching}).
-     * `via` is the channels that reached them. Null for a daemon.
-     */
-    viewer: { can_answer: boolean; via: string[] } | null;
+}
+
+/** One row of a run's Hug list. */
+export interface HugListItem {
+    hug_id: string;
+    hug_url: string;
+    title: string;
+    summary: string | null;
+    realm_id: string;
+    realm_name: string | null;
+    realm_slug: string | null;
+    org_slug: string | null;
+    run_id: string;
+    run_name: string | null;
+    team: string | null;
+    phase: string;
+    /** Which round of its phase this Hug is (0 for the first): a gate sent back asks again as the next one. */
+    iteration: number;
+    status: string;
+    /** How it ended, in the requester's words ("Rejected by Ann"), or null while open. */
+    outcome: string | null;
+    /** Whether the caller has answered it. */
+    responded: boolean;
+    /** Epoch ms. */
+    created_at: number;
+    expires_at: number;
+    closed_at: number | null;
 }
 
 /** One event of a Hug's requester stream. */
@@ -121,21 +128,12 @@ export interface HugEventData {
     payload: Record<string, unknown>;
 }
 
-/** The Hub page for a Hug. */
-export function hug_url_for(hug_id: string): string {
-    const base = (process.env.PUBLIC_APP_URL || process.env.CLIQHUB_PUBLIC_URL || 'https://cliqhub.io').replace(/\/+$/, '');
-    return `${base}/hugs/${hug_id}`;
+/** A Hug's page in getHugs (PLAN-gethugs-step6-ui-link.md). */
+export function hug_url_of(hug: Pick<Hug, 'gethugs_id'>): string {
+    return gethugs_hug_url(hug.gethugs_id);
 }
 
-/** A Hug's page: getHugs' for a Hug asked there (PLAN-gethugs-step6-ui-link.md), else the Hub's. */
-export function hug_url_of(hug: Pick<Hug, 'id' | 'provider' | 'gethugs_id'>): string {
-    return hug.provider === 'gethugs' && hug.gethugs_id ? gethugs_hug_url(hug.gethugs_id) : hug_url_for(hug.id);
-}
-
-/**
- * The answers of a getHugs Hug, from its `response` events (step 4): each person's latest, oldest first — the shape
- * Core's own `hug_responses` give.
- */
+/** The answers of Hugs, from their `response` events (PLAN-gethugs-step4-answers.md): each person's latest, oldest first. */
 export async function gethugs_responses(hug_ids: readonly string[]): Promise<Map<string, HugResponseData[]>> {
     const out = new Map<string, HugResponseData[]>();
     if (hug_ids.length === 0) return out;
@@ -153,34 +151,18 @@ export async function gethugs_responses(hug_ids: readonly string[]): Promise<Map
     return out;
 }
 
-/** Whether `user_id` has `runs.view` on `realm_id` (the route policy's rule). */
-async function can_view_runs(user_id: string, realm_id: string): Promise<boolean> {
-    return (await visible_realm_ids(user_id, { perm: 'runs.view' })).includes(realm_id);
-}
-
-/** Those of `user_ids` with `runs.view` on `realm_id`. */
-async function users_with_runs_view(user_ids: readonly string[], realm_id: string): Promise<string[]> {
-    const out: string[] = [];
-    for (const id of user_ids) if (await can_view_runs(id, realm_id)) out.push(id);
-    return out;
-}
-
 /** Core's side of the Hug protocol. */
 export class HugsService {
-    /**
-     * Open a Hug: validate it, resolve its channels (unknown names raise Unknown channel; none left →
-     * 422), store it with one delivery row per destination, and notify those channels directly.
-     */
+    /** Open a Hug: validate it and ask through getHugs ({@link gethugs_create}). */
     static async create(input: CreateHugInput): Promise<{ hug_id: string; hug_url: string }> {
         const spec = parse_envelope(input.spec);
         if (spec.expires_in_min === undefined) throw ApiError.unprocessable('expires_in_min is required — every Hug expires', 'invalid_hug');
 
         if (input.hug_id) {
-            const existing = await Hug.findByPk(input.hug_id, { attributes: ['id', 'run_id', 'provider', 'gethugs_id'], raw: true });
+            const existing = await Hug.findByPk(input.hug_id, { attributes: ['id', 'run_id', 'gethugs_id'], raw: true });
             if (existing) {
                 if (existing.run_id !== input.run_id) throw ApiError.conflict('Hug id is already used by another run');
-                const hug_url = existing.provider === 'gethugs' && existing.gethugs_id ? gethugs_hug_url(existing.gethugs_id) : hug_url_for(existing.id);
-                return { hug_id: existing.id, hug_url };
+                return { hug_id: existing.id, hug_url: hug_url_of(existing) };
             }
         }
 
@@ -188,134 +170,22 @@ export class HugsService {
         if (!realm?.org_id) throw ApiError.not_found('Realm not found');
         const org_id = String(realm.org_id);
 
-        // An org switched to getHugs asks there (PLAN-gethugs-step3-asking.md); Core keeps a row for the daemon.
-        if (await hugs_provider_of(org_id) === 'gethugs') {
-            return gethugs_create({
-                hug_id: input.hug_id, run_id: input.run_id, daemon_id: input.daemon_id, realm_id: input.realm_id, org_id,
-                phase: input.phase, iteration: input.iteration, spec, bundle: input.bundle, may_upload_bundle: input.may_upload_bundle,
-            });
-        }
-
-        await HugsService._check_attachments(spec.attachments, input.run_id);
-        const hug_sha256 = await HugBundlesService.resolve(spec.hug, {
-            bundle: input.bundle, may_upload: input.may_upload_bundle ?? false, realm_id: input.realm_id,
+        // getHugs asks (PLAN-gethugs-step3-asking.md); Core keeps a row for the daemon.
+        return gethugs_create({
+            hug_id: input.hug_id, run_id: input.run_id, daemon_id: input.daemon_id, realm_id: input.realm_id, org_id,
+            phase: input.phase, iteration: input.iteration, spec, bundle: input.bundle, may_upload_bundle: input.may_upload_bundle,
         });
-
-        const channels = [...new Set((spec.channels ?? []).map((c) => c.trim()).filter(Boolean))];
-        const raise = (name: string | null) => raise_unknown_channel({
-            realm_id: input.realm_id, name, source: 'reviewers', for_event: 'hug.opened',
-            run_id: input.run_id, phase: input.phase, daemon_id: input.daemon_id,
-        });
-        if (channels.length === 0) {
-            await raise(null);
-            throw ApiError.unprocessable(no_channel_message(input.phase), 'invalid_params');
-        }
-        const resolved = await resolve_channels(org_id, channels, input.realm_id);
-        for (const name of resolved.unresolved) await raise(name);
-        if (resolved.destinations.length === 0) {
-            throw ApiError.unprocessable(
-                `Hug sent to unknown channel ${resolved.unresolved.map((c) => `'${c}'`).join(', ')} — no channel with that name in this realm or its org`,
-                'invalid_params',
-            );
-        }
-        const not_sent_to = await HugsService._not_sent_to(resolved.destinations, input.realm_id);
-
-        const id = input.hug_id ?? randomUUID();
-        const now = new Date();
-        const expires_at = new Date(now.getTime() + spec.expires_in_min * 60_000);
-        const reminders = spec.reminders ?? null;
-        await get_sequelize().transaction(async (t) => {
-            await Hug.create({
-                id,
-                run_id: input.run_id,
-                phase: input.phase,
-                iteration: input.iteration,
-                daemon_id: input.daemon_id,
-                realm_id: input.realm_id,
-                org_id,
-                title: spec.title,
-                hug_name: spec.hug.name,
-                hug_sha256,
-                summary: spec.summary ?? null,
-                params: spec.params,
-                files: spec.files,
-                attachments: spec.attachments,
-                channels,
-                status: 'open',
-                outcome: null,
-                expires_at,
-                reminders,
-                next_remind_at: next_remind_at(now, reminders, null, expires_at),
-                last_reminded_at: null,
-                last_seq: 0,
-                created_at: now,
-                closed_at: null,
-                not_sent_to: not_sent_to.length > 0 ? not_sent_to : null,
-            }, { transaction: t });
-            await HugDelivery.bulkCreate(resolved.destinations.map((d) => ({
-                id: randomUUID(), hug_id: id, channel: d.channel, channel_id: d.channel_id, user_id: d.user_id, created_at: now,
-            })), { transaction: t });
-        });
-
-        const hug_url = hug_url_for(id);
-        await HugsService._notify_opened({
-            hug_id: id, hug_url, realm_id: input.realm_id, org_id, run_id: input.run_id, phase: input.phase,
-            daemon_id: input.daemon_id, title: spec.title, summary: spec.summary ?? null, actor_id: input.actor_id,
-            channel_ids: [...new Set(resolved.destinations.map((d) => d.channel_id))],
-        });
-        for (const p of not_sent_to) {
-            await raise_no_access({
-                realm_id: input.realm_id, channel: p.channel, person: { user_id: p.user_id, name: p.name }, for_event: 'hug.opened',
-                run_id: input.run_id, phase: input.phase, daemon_id: input.daemon_id,
-            });
-        }
-        log.info('hug_opened', { hug_id: id, run_id: input.run_id, phase: input.phase, destinations: resolved.destinations.length, not_sent_to: not_sent_to.length });
-        return { hug_id: id, hug_url };
     }
 
-    /**
-     * The people a Hug's channels reach — transitively ({@link people_reached}) — who may not see it
-     * (no `runs.view` on its realm). Channels carry no permissions; the fan-out leaves these people out
-     * (notifications/event_access.ts), and the Hug records them so its page and admins can see who
-     * wasn't asked. People behind Slack, plain email addresses and webhooks can't be named.
-     *
-     * @throws ApiError 422 `no_one_can_answer` when nobody it reaches could answer: every person it
-     *   names lacks access and it reaches no one Core can't name.
-     */
-    private static async _not_sent_to(destinations: readonly ChannelDestination[], realm_id: string): Promise<HugNotSentTo[]> {
-        const { people, external } = await people_reached(destinations, realm_id);
-        const allowed = new Set(await users_with_runs_view([...people.keys()], realm_id));
-        const denied = [...people].filter(([user_id]) => !allowed.has(user_id));
-        const names = denied.length === 0 ? new Map<string, string>() : new Map((await User.findAll({
-            where: { id: { [Op.in]: denied.map(([id]) => id) } }, attributes: ['id', 'username', 'display_name'], raw: true,
-        })).map((u) => [String(u.id), u.username || u.display_name || String(u.id)]));
-        const not_sent_to = denied.map(([user_id, channel]) => ({ user_id, name: names.get(user_id) ?? user_id, channel }));
-        if (allowed.size === 0 && !external && not_sent_to.length > 0) {
-            const who = not_sent_to.slice(0, 5).map((p) => `${p.name} (via '${p.channel}')`).join(', ');
-            throw ApiError.unprocessable(
-                `Hug refused: nobody it reaches can view runs in this realm — ${who}${not_sent_to.length > 5 ? ` and ${not_sent_to.length - 5} more` : ''}. Give them a role with runs.view, or change the channels.`,
-                'no_one_can_answer',
-            );
-        }
-        return not_sent_to;
-    }
-
-    /**
-     * One Hug with its responses, and — for a person — whether they may answer it.
-     *
-     * @param viewer_user_id - the person reading it; null for a daemon (no `viewer`)
-     */
-    static async get(hug_id: string, viewer_user_id: string | null = null): Promise<HugData> {
+    /** One Hug with its responses. */
+    static async get(hug_id: string): Promise<HugData> {
         const hug = await Hug.findByPk(hug_id);
         if (!hug) throw ApiError.not_found('Hug not found');
-        const [runs, realms, responses, via] = await Promise.all([
+        const [runs, realms, responses] = await Promise.all([
             load_run_info_map([hug.run_id]),
             load_realm_info_map([hug.realm_id]),
-            hug.provider === 'gethugs' ? gethugs_responses([hug.id]).then((m) => m.get(hug.id) ?? []) : HugsService._responses(hug.id),
-            viewer_user_id ? HugsService.channels_reaching(hug, viewer_user_id) : Promise.resolve(null),
+            gethugs_responses([hug.id]).then((m) => m.get(hug.id) ?? []),
         ]);
-        let answerable = true;
-        try { assert_answerable(hug); } catch { answerable = false; }
         const run = runs.get(hug.run_id);
         const realm = realms.get(hug.realm_id);
         return {
@@ -332,7 +202,7 @@ export class HugsService {
             org_slug: realm?.org_slug ?? null,
             daemon_id: hug.daemon_id,
             title: hug.title,
-            hug: hug.hug_name && hug.hug_sha256 ? { name: hug.hug_name, sha256: hug.hug_sha256 } : null,
+            hug: hug.hug_name ? { name: hug.hug_name, sha256: hug.hug_sha256 } : null,
             summary: hug.summary,
             progress: hug.status === 'open' ? hug.progress ?? null : null,
             params: hug.params,
@@ -344,100 +214,75 @@ export class HugsService {
             expires_at: hug.expires_at.toISOString(),
             created_at: hug.created_at.toISOString(),
             closed_at: hug.closed_at ? hug.closed_at.toISOString() : null,
-            last_reminded_at: hug.last_reminded_at ? hug.last_reminded_at.toISOString() : null,
-            not_sent_to: (hug.not_sent_to ?? []).map((p) => ({ name: p.name, channel: p.channel })),
             responses,
-            // A getHugs Hug is answered in getHugs, never here.
-            viewer: via === null ? null : hug.provider === 'gethugs' ? { can_answer: false, via: [] } : { can_answer: answerable && via.length > 0, via },
         };
     }
 
     /**
-     * The Hug's channels addressed to `user_id`: their own channel and its shared channels. Empty
-     * when it wasn't addressed to them, or they lack `runs.view` on its realm (a Hug is seen like
-     * its run; being asked grants nothing).
+     * A run's Hugs, in the order they opened (`hugs/get { run_id }`): every round of every phase — seen like the run (the
+     * route checks `runs.view` on it), as `hugs/get_by_id` does. Default: any status.
      */
-    static async channels_reaching(hug: Pick<Hug, 'id' | 'realm_id'>, user_id: string): Promise<string[]> {
-        if (!(await can_view_runs(user_id, hug.realm_id))) return [];
-        const rows = await HugDelivery.findAll({ where: { hug_id: hug.id }, attributes: ['channel', 'user_id'], raw: true });
-        return [...new Set(rows.filter((r) => r.user_id === null || r.user_id === user_id).map((r) => r.channel))];
-    }
-
-    /**
-     * Submit or replace a person's response. The Hug must be open and not past `expires_at` (410
-     * even when the sweep hasn't run yet); the person must have been reached through its channels;
-     * Core checks only the answer's envelope (size, a one-line summary, uploads only under the Hug's
-     * upload slots, each this person's upload for this Hug and slot); the hug's definition checks the
-     * values (in the frontend, and again in the agent). The response, its `response` event and the delivery to the daemon are
-     * written in one transaction that holds the Hug's row, so a `close` or expiry can't slip in
-     * between the check and the write, and no response is stored without its delivery.
-     */
-    static async respond(input: {
-        hug_id: string;
+    static async list_for_run(opts: {
         user_id: string;
-        values: Record<string, unknown>;
-        summary?: string;
-    }): Promise<{ response_id: string; seq: number }> {
-        const hug = await Hug.findByPk(input.hug_id);
-        if (!hug) throw ApiError.not_found('Hug not found');
-        assert_answerable(hug);
-
-        const via = await HugsService.channels_reaching(hug, input.user_id);
-        if (via.length === 0) throw ApiError.forbidden('This Hug was not sent to you, or you cannot view runs in its realm');
-
-        const values = { ...input.values };
-        const slots = hug.files ?? [];
-        assert_files_only_in_slots(values, slots);
-        const summary = input.summary?.trim() || null;
-
-        const response = await get_sequelize().transaction(async (t) => {
-            const locked = await Hug.findByPk(hug.id, { transaction: t, lock: t.LOCK.UPDATE });
-            if (!locked) throw ApiError.not_found('Hug not found');
-            assert_answerable(locked);
-            await HugsService._attach_files(hug, slots, values, input.user_id, t);
-            const seq = await append_seq(hug.id, t);
-            const now = new Date();
-            const existing = await HugResponse.findOne({ where: { hug_id: hug.id, responder_user_id: input.user_id }, transaction: t });
-            const row = existing
-                ? await existing.update({ via_channels: via, values, summary, seq, updated_at: now }, { transaction: t })
-                : await HugResponse.create({
-                    id: randomUUID(), hug_id: hug.id, responder_user_id: input.user_id, via_channels: via, values, summary,
-                    seq, created_at: now, updated_at: now,
-                }, { transaction: t });
-            const data = await response_data(row);
-            await HugEventRow.create({ hug_id: hug.id, seq, type: 'response', payload: { response: data }, created_at: now }, { transaction: t });
-            await HugsService._deliver(hug, { hug_id: hug.id, seq, type: 'response', payload: { response: data } }, t);
-            return { row, data, seq };
-        });
-
-        // The answer in one line, from its hug (PLAN-hug-widgets §3.2): "Ann responded: 2 of 3 OK".
-        const who = response.data.responder.name;
-        await HugsService._notify(hug, 'hug.responded', { responder: who, ...(summary ? { summary } : {}) }, undefined,
-            summary ? `${who} responded: ${summary}` : `${who} responded`);
-        log.info('hug_responded', { hug_id: hug.id, seq: response.seq, responder: input.user_id });
-        return { response_id: response.row.id, seq: response.seq };
+        run_id: string;
+        statuses?: string[];
+        limit?: number;
+        offset?: number;
+    }): Promise<{ hugs: HugListItem[]; total: number }> {
+        const limit = Math.min(Math.max(1, opts.limit ?? 50), 100);
+        const offset = Math.max(0, opts.offset ?? 0);
+        const where = {
+            run_id: opts.run_id,
+            ...(opts.statuses?.length ? { status: { [Op.in]: opts.statuses } } : {}),
+        };
+        const [total, rows] = await Promise.all([
+            Hug.count({ where }),
+            Hug.findAll({ where, order: [['created_at', 'ASC'], ['id', 'ASC']], limit, offset }),
+        ]);
+        const [runs, realms, answers] = await Promise.all([
+            load_run_info_map(rows.map((r) => r.run_id)),
+            load_realm_info_map(rows.map((r) => r.realm_id)),
+            gethugs_responses(rows.map((r) => r.id)),
+        ]);
+        return {
+            total,
+            hugs: rows.map((row) => {
+                const run = runs.get(row.run_id);
+                const realm = realms.get(row.realm_id);
+                return {
+                    hug_id: row.id,
+                    hug_url: hug_url_of(row),
+                    title: row.title,
+                    summary: row.summary ?? null,
+                    realm_id: row.realm_id,
+                    realm_name: realm?.realm_name ?? null,
+                    realm_slug: realm?.realm_slug ?? null,
+                    org_slug: realm?.org_slug ?? null,
+                    run_id: row.run_id,
+                    run_name: run?.run_name ?? null,
+                    team: resolve_team(run),
+                    phase: row.phase,
+                    iteration: row.iteration ?? 0,
+                    status: row.status,
+                    outcome: row.outcome ?? null,
+                    responded: (answers.get(row.id) ?? []).some((a) => a.responder.user_id === opts.user_id),
+                    created_at: row.created_at.getTime(),
+                    expires_at: row.expires_at.getTime(),
+                    closed_at: row.closed_at ? row.closed_at.getTime() : null,
+                };
+            }),
+        };
     }
 
     /**
-     * The requester closes the Hug with its outcome; later responses are refused. Idempotent. Only
-     * the daemon that opened it may close it (403 otherwise).
+     * The requester closes the Hug with its outcome, in getHugs ({@link gethugs_close}); later answers are refused there.
+     * Idempotent. Only the daemon that opened it may close it (403 otherwise).
      */
     static async close(input: { hug_id: string; outcome: string; daemon_id: string }): Promise<{ status: string }> {
-        const owner = await Hug.findByPk(input.hug_id, { attributes: ['daemon_id', 'provider'], raw: true });
-        if (!owner) throw ApiError.not_found('Hug not found');
-        if (owner.daemon_id !== input.daemon_id) throw ApiError.forbidden('Only the daemon that opened this Hug may close it');
-        if (owner.provider === 'gethugs') return { status: await gethugs_close((await Hug.findByPk(input.hug_id))!, input.outcome) };
-        const [count] = await Hug.update(
-            { status: 'closed', outcome: input.outcome, closed_at: new Date(), next_remind_at: null },
-            { where: { id: input.hug_id, status: 'open' } },
-        );
         const hug = await Hug.findByPk(input.hug_id);
         if (!hug) throw ApiError.not_found('Hug not found');
-        if (count > 0) {
-            await HugsService._notify(hug, 'hug.closed', { outcome: input.outcome });
-            log.info('hug_closed', { hug_id: hug.id });
-        }
-        return { status: hug.status };
+        if (hug.daemon_id !== input.daemon_id) throw ApiError.forbidden('Only the daemon that opened this Hug may close it');
+        return { status: await gethugs_close(hug, input.outcome) };
     }
 
     /**
@@ -468,39 +313,10 @@ export class HugsService {
         };
     }
 
-    /** A run ended (any reason): its open Hugs are cancelled and the requester is told (§6.2). */
+    /** A run ended (any reason): its open Hugs are cancelled in getHugs and the requester is told (§6.2). */
     static async cancel_for_run(run_id: string): Promise<number> {
         const open = await Hug.findAll({ where: { run_id, status: 'open' } });
-        const relayed = open.filter((h) => h.provider === 'gethugs');
-        for (const hug of open) if (hug.provider !== 'gethugs') await HugsService._end(hug, 'cancelled');
-        const cancelled = relayed.length ? await gethugs_cancel_run(run_id, relayed) : 0;
-        return open.length - relayed.length + cancelled;
-    }
-
-    /** Sweep: expire open Hugs past `expires_at`, telling each requester. */
-    static async expire_due(now = new Date()): Promise<number> {
-        // getHugs ends its own Hugs (step 4 brings their ends back through its feed).
-        const due = await Hug.findAll({ where: { status: 'open', provider: 'cliqhub', expires_at: { [Op.lte]: now } }, limit: 100 });
-        for (const hug of due) await HugsService._end(hug, 'expired');
-        return due.length;
-    }
-
-    /**
-     * Sweep: send due reminders (§6.7) to the channels whose people haven't responded, then schedule
-     * the next. Reminders go to people only — never to the requester.
-     */
-    static async remind_due(now = new Date()): Promise<number> {
-        const due = await Hug.findAll({ where: { status: 'open', provider: 'cliqhub', next_remind_at: { [Op.lte]: now }, expires_at: { [Op.gt]: now } }, limit: 100 });
-        for (const hug of due) {
-            try {
-                const channel_ids = await HugsService._unanswered_channel_ids(hug);
-                if (channel_ids.length > 0) await HugsService._notify(hug, 'hug.reminded', {}, channel_ids);
-                await hug.update({ last_reminded_at: now, next_remind_at: next_remind_at(hug.created_at, hug.reminders, now, hug.expires_at) });
-            } catch (err) {
-                log.error('hug_remind_failed', { hug_id: hug.id, error: err instanceof Error ? err.message : String(err) });
-            }
-        }
-        return due.length;
+        return open.length ? gethugs_cancel_run(run_id, open) : 0;
     }
 
     /**
@@ -523,25 +339,6 @@ export class HugsService {
     }
 
     // ── internals ───────────────────────────────────────────────────
-
-    /** End an open Hug as expired or cancelled: status, an event for the requester, a notice for people. */
-    private static async _end(hug: Hug, how: 'expired' | 'cancelled'): Promise<void> {
-        try {
-            const ended = await get_sequelize().transaction(async (t) => {
-                const [count] = await Hug.update({ status: how, closed_at: new Date(), next_remind_at: null }, { where: { id: hug.id, status: 'open' }, transaction: t });
-                if (count === 0) return null;
-                const seq = await append_seq(hug.id, t);
-                await HugEventRow.create({ hug_id: hug.id, seq, type: how, payload: {}, created_at: new Date() }, { transaction: t });
-                await HugsService._deliver(hug, { hug_id: hug.id, seq, type: how, payload: {} }, t);
-                return seq;
-            });
-            if (ended === null) return;
-            if (how === 'expired') await HugsService._notify(hug, 'hug.expired', {});
-            log.info(`hug_${how}`, { hug_id: hug.id, run_id: hug.run_id });
-        } catch (err) {
-            log.error('hug_end_failed', { hug_id: hug.id, how, error: err instanceof Error ? err.message : String(err) });
-        }
-    }
 
     /**
      * Records one event of a Hug relayed from getHugs (PLAN-gethugs-step4-answers.md) with Core's next `seq`, and queues
@@ -579,118 +376,7 @@ export class HugsService {
         const [count] = await Hug.update({ progress: line }, { where: { id: hug_id, run_id, daemon_id, status: 'open' } });
         if (count === 0) return;
         const hug = await Hug.findByPk(hug_id);
-        if (hug?.provider === 'gethugs') await gethugs_progress(hug, line);
-    }
-
-    /** A notification event to the Hug's channels (or the given ones), with its text when given. Best effort. */
-    private static async _notify(
-        hug: Hug, type: 'hug.responded' | 'hug.closed' | 'hug.expired' | 'hug.reminded', extra: Record<string, unknown>,
-        channel_ids?: string[], message?: string,
-    ): Promise<void> {
-        try {
-            const ids = channel_ids ?? [...new Set((await HugDelivery.findAll({ where: { hug_id: hug.id }, attributes: ['channel_id'], raw: true })).map((d) => d.channel_id))];
-            await EventSubmitService.submit({
-                type,
-                realm_id: hug.realm_id,
-                run_id: hug.run_id,
-                phase: hug.phase,
-                daemon_id: hug.daemon_id,
-                payload: { hug_id: hug.id, hug_url: hug_url_for(hug.id), title: hug.title, ...extra },
-                ...(message ? { message } : {}),
-                target_channels: ids,
-            });
-        } catch (err) {
-            log.error('hug_notify_failed', { hug_id: hug.id, type, error: err instanceof Error ? err.message : String(err) });
-        }
-    }
-
-    /** Post the new Hug straight to its channels — not an event, so no rule can match it (B4.5). */
-    private static async _notify_opened(input: {
-        hug_id: string; hug_url: string; realm_id: string; org_id: string; run_id: string; phase: string;
-        daemon_id: string; title: string; summary: string | null; actor_id: string | null; channel_ids: string[];
-    }): Promise<void> {
-        try {
-            const { NotificationFanOutService } = await import('../notifications/fan_out.service.js');
-            const now = new Date();
-            await NotificationFanOutService.deliver_to_channels(input.channel_ids, {
-                id: randomUUID(),
-                type: 'hug.opened',
-                occurred_at: now.toISOString(),
-                realm_id: input.realm_id,
-                org_id: input.org_id,
-                run_id: input.run_id,
-                phase: input.phase,
-                daemon_id: input.daemon_id,
-                title: input.title,
-                // The Hug's summary is the text for where its page can't be (PLAN-hug-widgets §3.1).
-                message: input.summary ? `${input.summary}\n\nOpen: ${input.hug_url}` : `Your input is needed for a run. Open: ${input.hug_url}`,
-                severity: 'info',
-                payload: { hug_id: input.hug_id, hug_url: input.hug_url, ...(input.summary ? { summary: input.summary } : {}) },
-                actor_id: input.actor_id,
-                created_at: now.getTime(),
-                notifications: 'deferred',
-            } as unknown as SubmittedEvent);
-        } catch (err) {
-            log.error('hug_open_delivery_failed', { hug_id: input.hug_id, error: err instanceof Error ? err.message : String(err) });
-        }
-    }
-
-    /** Responses with their responders' names, oldest first. */
-    private static async _responses(hug_id: string): Promise<HugResponseData[]> {
-        const rows = await HugResponse.findAll({ where: { hug_id }, order: [['created_at', 'ASC']] });
-        return Promise.all(rows.map(response_data));
-    }
-
-    /** Every attachment must be a ready stored artifact of this run (§6.5). */
-    private static async _check_attachments(attachments: readonly HugAttachmentRow[], run_id: string): Promise<void> {
-        const ids = [...new Set(attachments.map((a) => a.artifact_id))];
-        if (ids.length === 0) return;
-        const found = await StoredArtifact.findAll({ where: { id: { [Op.in]: ids }, run_id, status: 'ready' }, attributes: ['id'], raw: true });
-        const missing = ids.filter((id) => !found.some((f) => f.id === id));
-        if (missing.length > 0) throw ApiError.unprocessable(`Attachment not found in this run: ${missing.join(', ')}`, 'invalid_hug');
-    }
-
-    /**
-     * Turn each upload slot's `{ artifact_id }` references into full file values, checking they are
-     * this person's uploads for this Hug and slot (and still within the slot's limits), and mark
-     * them ready (§6.6.3).
-     */
-    private static async _attach_files(hug: Hug, slots: readonly HugFileSlotRow[], values: Record<string, unknown>, user_id: string, t: Transaction): Promise<void> {
-        for (const input of slots) {
-            if (values[input.name] === undefined || values[input.name] === null) continue;
-            const raw = values[input.name];
-            if (Array.isArray(raw) && !input.multiple) {
-                throw ApiError.unprocessable(`${input.name}: takes one file`, 'HUG_FILE_INVALID');
-            }
-            const refs = (Array.isArray(raw) ? raw : [raw]) as Array<{ artifact_id: string }>;
-            const ids = refs.map((r) => r.artifact_id);
-            const rows = await StoredArtifact.findAll({ where: { id: { [Op.in]: ids } }, transaction: t });
-            const files: FileValue[] = ids.map((id) => {
-                const row = rows.find((r) => r.id === id);
-                if (!row || row.hug_id !== hug.id || row.hug_requested_input !== input.name || row.uploaded_by !== user_id) {
-                    throw ApiError.unprocessable(`${input.name}: file ${id} was not uploaded by you for this input`, 'HUG_FILE_INVALID');
-                }
-                if (input.max_bytes !== undefined && Number(row.size_bytes) > input.max_bytes) {
-                    throw ApiError.unprocessable(`${input.name}: ${row.name} is larger than ${input.max_bytes} bytes`, 'HUG_FILE_INVALID');
-                }
-                return { artifact_id: row.id, name: row.name, size: Number(row.size_bytes), content_type: row.mime_type, sha256: row.sha256 ?? '' };
-            });
-            await StoredArtifact.update({ status: 'ready' }, { where: { id: { [Op.in]: ids } }, transaction: t });
-            values[input.name] = Array.isArray(raw) ? files : files[0];
-        }
-    }
-
-    /** Channel ids to remind: personal channels of people who haven't responded, and shared channels nobody has answered through. */
-    private static async _unanswered_channel_ids(hug: Hug): Promise<string[]> {
-        const [deliveries, responses] = await Promise.all([
-            HugDelivery.findAll({ where: { hug_id: hug.id }, raw: true }),
-            HugResponse.findAll({ where: { hug_id: hug.id }, attributes: ['responder_user_id', 'via_channels'], raw: true }),
-        ]);
-        const responded = new Set(responses.map((r) => r.responder_user_id));
-        const answered_channels = new Set(responses.flatMap((r) => r.via_channels));
-        return [...new Set(deliveries
-            .filter((d) => (d.user_id ? !responded.has(d.user_id) : !answered_channels.has(d.channel)))
-            .map((d) => d.channel_id))];
+        if (hug) await gethugs_progress(hug, line);
     }
 }
 
@@ -710,78 +396,9 @@ function parse_envelope(raw: unknown): HugEnvelope {
     return parsed.data;
 }
 
-/** Whether `v` looks like a file reference (`{ artifact_id }`). */
-function is_file_ref(v: unknown): boolean {
-    return !!v && typeof v === 'object' && !Array.isArray(v) && typeof (v as { artifact_id?: unknown }).artifact_id === 'string';
-}
-
-/**
- * A file reference may only be the value (or a list of them) of a top-level key that is one of the
- * Hug's upload slots; a slot's value is only file references.
- *
- * @throws ApiError 422 `invalid_values` / `HUG_FILE_INVALID`
- */
-export function assert_files_only_in_slots(values: Record<string, unknown>, slots: readonly HugFileSlotRow[]): void {
-    const slot_names = new Set(slots.map((s) => s.name));
-    const stray: string[] = [];
-    const walk = (v: unknown, path: string): void => {
-        if (is_file_ref(v)) { stray.push(path); return; }
-        if (Array.isArray(v)) v.forEach((x, i) => walk(x, `${path}[${i}]`));
-        else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`);
-    };
-    for (const [key, v] of Object.entries(values)) {
-        if (!slot_names.has(key)) { walk(v, key); continue; }
-        if (v === null || v === undefined) continue;
-        const items = Array.isArray(v) ? v : [v];
-        if (!items.every(is_file_ref)) throw ApiError.unprocessable(`${key}: an upload slot takes file references ({ artifact_id }) only`, 'HUG_FILE_INVALID');
-    }
-    if (stray.length > 0) {
-        throw ApiError.unprocessable(`File references are allowed only under the Hug's upload slots — found at ${stray.slice(0, 5).join(', ')}`, 'invalid_values');
-    }
-}
-
-/** 404/409/410 unless the Hug can still take a response — the clock counts, not just the status. */
-export function assert_answerable(hug: Pick<Hug, 'status' | 'expires_at'>, now = new Date()): void {
-    if (hug.status === 'expired' || (hug.status === 'open' && hug.expires_at.getTime() <= now.getTime())) {
-        throw ApiError.gone('This Hug has expired', 'HUG_EXPIRED');
-    }
-    if (hug.status !== 'open') throw ApiError.conflict(`This Hug is ${hug.status}`, 'HUG_CLOSED');
-}
-
-/**
- * When the next reminder is due (§6.7): the earliest `at_min` nudge, or `every_min` tick, after the
- * last reminder (or the opening). Null when there is none before the Hug expires.
- */
-export function next_remind_at(
-    created_at: Date,
-    reminders: { every_min?: number; at_min?: number[] } | null,
-    last_reminded_at: Date | null,
-    expires_at: Date,
-): Date | null {
-    if (!reminders) return null;
-    const since = (last_reminded_at ?? created_at).getTime();
-    const candidates = (reminders.at_min ?? []).map((m) => created_at.getTime() + m * 60_000).filter((at) => at > since);
-    if (reminders.every_min) candidates.push(since + reminders.every_min * 60_000);
-    const next = candidates.length > 0 ? Math.min(...candidates) : null;
-    return next !== null && next < expires_at.getTime() ? new Date(next) : null;
-}
-
 /** Allocate the Hug's next event number (in the caller's transaction). */
 async function append_seq(hug_id: string, t: Transaction): Promise<number> {
     await Hug.increment('last_seq', { by: 1, where: { id: hug_id }, transaction: t });
     const row = await Hug.findByPk(hug_id, { attributes: ['last_seq'], transaction: t, raw: true });
     return Number(row!.last_seq);
-}
-
-/** A response row as the API and the requester see it. */
-async function response_data(row: HugResponse): Promise<HugResponseData> {
-    const user = await User.findByPk(row.responder_user_id, { attributes: ['username', 'display_name'], raw: true });
-    return {
-        response_id: row.id,
-        responder: { user_id: row.responder_user_id, name: user?.display_name?.trim() || user?.username || row.responder_user_id },
-        via: row.via_channels,
-        values: row.values,
-        ...(row.summary ? { summary: row.summary } : {}),
-        responded_at: row.updated_at.toISOString(),
-    };
 }

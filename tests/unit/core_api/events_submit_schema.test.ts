@@ -6,13 +6,10 @@ import {
 } from '../../../src/schemas/event_types.js';
 
 describe('required_fields_for', () => {
-	it('maps run / phase / hug / daemon / realm / team families', () => {
+	it('maps run / phase / daemon / realm / team families', () => {
 		expect(required_fields_for('run.failed')).toEqual(['realm_id', 'run_id', 'daemon_id']);
 		expect(required_fields_for('phase.escalated')).toEqual([
 			'realm_id', 'run_id', 'phase', 'daemon_id',
-		]);
-		expect(required_fields_for('hug.responded')).toEqual([
-			'realm_id', 'run_id', 'daemon_id',
 		]);
 		expect(required_fields_for('daemon.enrolled')).toEqual(['realm_id', 'daemon_id']);
 		expect(required_fields_for('realm.created')).toEqual(['realm_id']);

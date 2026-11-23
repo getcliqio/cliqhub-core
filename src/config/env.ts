@@ -86,33 +86,29 @@ export function public_app_url(): string {
     return raw.replace(/\/+$/, '');
 }
 
-/** getHugs, where Hugs live for orgs switched to it (PLAN-gethugs-integration.md): its API and cliqhub's partner token. */
+/** getHugs, where every org's Hugs live (PLAN-gethugs-integration.md): its API, its web app and cliqhub's partner token. */
 export interface GethugsConfig {
     /** `GETHUGS_URL`: the getHugs API origin, no trailing slash (e.g. https://api.gethugs.ai). */
     url: string;
     /** `GETHUGS_PARTNER_TOKEN`: cliqhub's partner service token (`hugs_svc_…`). Only ever in `.env`; never logged. */
     token: string;
-    /**
-     * `GETHUGS_APP_URL`: the getHugs web app's origin, where a Hug's page is (`<app_url>/hugs/<id>`), e.g.
-     * https://app.gethugs.ai. Defaults to `GETHUGS_URL` (one host serving both).
-     */
+    /** `GETHUGS_APP_URL`: the getHugs web app's origin, where a Hug's page is (`<app_url>/hugs/<id>`), e.g. https://app.gethugs.ai. */
     app_url: string;
 }
 
 /**
- * getHugs' settings, read on each call: null when neither `GETHUGS_URL` nor `GETHUGS_PARTNER_TOKEN` is set (getHugs is
- * off; every org stays on cliqhub's own Hugs).
+ * getHugs' settings, read on each call. Required: a CliqHub without getHugs can't ask anyone (`load_env` checks them at
+ * start).
  *
- * @throws Error when only one is set, the URL isn't http(s), or the token isn't a service token.
+ * @throws Error when one is missing, a URL isn't an http(s) origin, or the token isn't a service token.
  */
-export function gethugs_config(): GethugsConfig | null {
+export function gethugs_config(): GethugsConfig {
     const url = process.env.GETHUGS_URL?.trim();
     const token = process.env.GETHUGS_PARTNER_TOKEN?.trim();
-    if (!url && !token) return null;
-    if (!url || !token) throw new Error('Set both GETHUGS_URL and GETHUGS_PARTNER_TOKEN, or neither');
+    const app_url = process.env.GETHUGS_APP_URL?.trim();
+    if (!url || !token || !app_url) throw new Error('Missing required env var: GETHUGS_URL, GETHUGS_PARTNER_TOKEN and GETHUGS_APP_URL are all required');
     if (!/^https?:\/\/[^\s/]+(:\d+)?\/?$/.test(url)) throw new Error('GETHUGS_URL must be an http(s) origin, e.g. https://api.gethugs.ai');
     if (!token.startsWith('hugs_svc_')) throw new Error('GETHUGS_PARTNER_TOKEN must be a getHugs service token (hugs_svc_…)');
-    const app_url = process.env.GETHUGS_APP_URL?.trim() || url;
     if (!/^https?:\/\/[^\s/]+(:\d+)?\/?$/.test(app_url)) throw new Error('GETHUGS_APP_URL must be an http(s) origin, e.g. https://app.gethugs.ai');
     return { url: url.replace(/\/+$/, ''), token, app_url: app_url.replace(/\/+$/, '') };
 }
@@ -129,6 +125,8 @@ export function load_env(): EnvConfig {
     // app: production must have both; elsewhere a set value must be valid.
     if (node_env === 'production' || process.env.TOKEN_ENCRYPTION_KEY) token_encryption_key();
     if (node_env === 'production' || process.env.PUBLIC_APP_URL) public_app_url();
+    // Every org asks through getHugs (PLAN-gethugs-step8-cutover.md decision 9).
+    gethugs_config();
 
     return {
         port: parseInt(process.env.PORT || '4000', 10),

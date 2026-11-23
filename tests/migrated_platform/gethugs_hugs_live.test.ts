@@ -1,5 +1,5 @@
 /**
- * PLAN-gethugs-step3-asking.md sub-step 4, live: a switched org (test database) reconciled into a real getHugs (the
+ * PLAN-gethugs-step3-asking.md sub-step 4, live: an org (test database) reconciled into a real getHugs (the
  * local stack); Core opens a Hug there through `HugsService.create` (built-in template read from getHugs, channel names
  * translated, `ref_id`, `Idempotency-Key`), a retry gives the same Hug, close and the run's end reach getHugs. Reads
  * only GETHUGS_URL, GETHUGS_PARTNER_TOKEN and GETHUGS_APP_URL from `.env`; skips without the first two.
@@ -63,7 +63,7 @@ describe.skipIf(!configured || !has_postgres)('asking through getHugs, live (loc
     });
 
     it('opens a Hug in getHugs, a retry gives the same Hug, close and the run’s end reach getHugs', async () => {
-        const partner = gethugs_partner()!;
+        const partner = gethugs_partner();
         const person = async () => {
             const name = uid();
             const id = randomUUID();
@@ -84,7 +84,6 @@ describe.skipIf(!configured || !has_postgres)('asking through getHugs, live (loc
         await RealmMember.create({ id: randomUUID(), realm_id: ops.id, member_type: 'user', member_id: bob.id, role: 'operator', created_at: Date.now() } as never);
         await NotificationService.create_channel({ realm_id: ops.id, name: 'reviewers', destinations: [{ type: 'email', address: 'rev@cliq.test' }] });
         await gethugs_reconcile(org.id, partner);
-        await Org.update({ hugs_provider: 'gethugs' } as never, { where: { id: org.id } });
 
         const run_id = `run-${uid()}`;
         const hug_id = randomUUID();
@@ -97,7 +96,7 @@ describe.skipIf(!configured || !has_postgres)('asking through getHugs, live (loc
         });
         const first = await ask();
         const row = (await Hug.findByPk(hug_id, { raw: true }))!;
-        expect(row).toMatchObject({ provider: 'gethugs', status: 'open' });
+        expect(row).toMatchObject({ status: 'open' });
         expect(first.hug_url).toBe(`${process.env.GETHUGS_APP_URL ?? process.env.GETHUGS_URL}/hugs/${row.gethugs_id}`);
         expect(await ask()).toEqual(first);
 

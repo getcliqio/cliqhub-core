@@ -1,19 +1,14 @@
 /**
- * getHugs, where Hugs live for orgs switched to it (PLAN-gethugs-integration.md, step 1).
+ * getHugs, where every org's Hugs live (PLAN-gethugs-integration.md; step 8: every org, no way back).
  *
  * Core is the only thing in cliq that talks to getHugs (decision 1), always with cliqhub's partner service token
  * (decision 3): the partner's own calls (`site/*` — provisioning orgs — and the event feed) and calls inside one org and
- * workspace (asking). Which orgs use it is the per-org switch `orgs.hugs_provider` (`cliqhub` by default).
+ * workspace (asking).
  */
 
 import { HugsClient } from '@gethugs/client';
 
 import { gethugs_config, type GethugsConfig } from '../config/env.js';
-import { Org } from '../models/org.model.js';
-
-/** Where an org's Hugs live: cliqhub's own (today) or getHugs. */
-export type HugsProvider = 'cliqhub' | 'gethugs';
-export const HUGS_PROVIDERS: readonly HugsProvider[] = ['cliqhub', 'gethugs'];
 
 /**
  * `HugsClient` needs an org and a workspace, but the partner's own calls (`site/*`, `events/*`) send neither — the
@@ -54,14 +49,7 @@ export class GethugsPartner {
     }
 }
 
-/** cliqhub's partner at getHugs, or null when getHugs isn't configured (`GETHUGS_URL`, `GETHUGS_PARTNER_TOKEN`). */
-export function gethugs_partner(fetch_impl?: typeof fetch): GethugsPartner | null {
-    const config = gethugs_config();
-    return config ? new GethugsPartner(config, fetch_impl) : null;
-}
-
-/** Where an org's Hugs live. An unknown org is `cliqhub` (nothing is switched for it). */
-export async function hugs_provider_of(org_id: string): Promise<HugsProvider> {
-    const org = await Org.findByPk(org_id, { attributes: ['hugs_provider'], raw: true });
-    return org?.hugs_provider === 'gethugs' ? 'gethugs' : 'cliqhub';
+/** cliqhub's partner at getHugs. @throws Error when the `GETHUGS_*` settings are missing ({@link gethugs_config}). */
+export function gethugs_partner(fetch_impl?: typeof fetch): GethugsPartner {
+    return new GethugsPartner(gethugs_config(), fetch_impl);
 }

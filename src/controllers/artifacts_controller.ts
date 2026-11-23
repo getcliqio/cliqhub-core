@@ -2,7 +2,7 @@
  * Stored Artifacts controller — durable file storage for run outputs.
  *
  * Routes (1:1 with this controller):
- *   POST /v1/artifacts/upload     — stream a file in (daemon run artifact, or a Hug responder's file)
+ *   POST /v1/artifacts/upload     — stream a file in (a daemon's run artifact)
  *   POST|GET /v1/artifacts/download — stream a file out
  *   POST /v1/artifacts/get        — list artifacts for a run
  *   POST /v1/artifacts/get_by_id  — one artifact's metadata
@@ -29,9 +29,6 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { ApiError } from '../errors/api_error.js';
-import { Hug, StoredArtifact } from '../models/index.js';
-import { assert_answerable, HugsService } from '../services/hugs.service.js';
-import type { UploadTarget } from '../services/artifact_storage.service.js';
 import { get_logger } from '../lib/log.js';
 
 const log = get_logger('ctrl.artifacts');
@@ -47,8 +44,7 @@ export class ArtifactsController extends BaseController {
     /**
      * POST /v1/artifacts/upload?… — stream one file in (§6.6.3). The body is the raw file
      * (`Content-Type` and `Content-Length` are the file's); metadata is in the query so the route
-     * policy authorizes before the body is read. The daemon names `run_id` + `phase`; a responder
-     * names `hug_id` + `requested_input` (a `file` input of an open Hug that reached them).
+     * policy authorizes before the body is read: the daemon names `run_id` + `phase`.
      *
      * @param req - Query: {@link ArtifactsUploadQuery}; body: the file
      * @param res - 201 `{ ok: true, data: UploadOutput }`
@@ -60,9 +56,7 @@ export class ArtifactsController extends BaseController {
             throw new ApiError('ARTIFACT_LENGTH_REQUIRED', 'Content-Length is required', 411);
         }
         const user_id = req.auth?.auth_via === 'daemon_token' ? null : (req.auth?.user?.id ?? null);
-        const target = query.hug_id
-            ? await hug_upload_target(query.hug_id, query.requested_input, user_id)
-            : { kind: 'run' as const, run_id: query.run_id!, phase: query.phase! };
+        const target = { kind: 'run' as const, run_id: query.run_id, phase: query.phase };
         const data = await this._storage.upload({
             stream: req,
             content_length,
@@ -84,9 +78,8 @@ export class ArtifactsController extends BaseController {
      */
     async download(req: Request, res: Response): Promise<void> {
         const { artifact_id } = req.method === 'GET' ? this.parse_query(ArtifactsDownloadInput, req) : this.parse_body(ArtifactsDownloadInput, req);
-        const user_id = req.auth?.auth_via === 'daemon_token' ? null : (req.auth?.user?.id ?? null);
         const range = typeof req.headers.range === 'string' ? req.headers.range : undefined;
-        const file = await this._storage.download(artifact_id, user_id, range);
+        const file = await this._storage.download(artifact_id, range);
         res.status(file.status);
         res.setHeader('Content-Type', file.mime_type || file.content_type);
         if (file.content_length !== null) res.setHeader('Content-Length', String(file.content_length));
@@ -149,25 +142,6 @@ export class ArtifactsController extends BaseController {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────
-
-/** The upload target for a responder's file: the Hug must be open, reach them, and have this upload slot. */
-async function hug_upload_target(hug_id: string, requested_input: string | undefined, user_id: string | null): Promise<UploadTarget> {
-    if (!user_id) throw new ApiError('forbidden', 'Only a person can upload a file for a Hug', 403);
-    if (!requested_input) throw new ApiError('invalid_request', 'requested_input is required with hug_id', 400);
-    const hug = await Hug.findByPk(hug_id);
-    if (!hug) throw new ApiError('not_found', 'Hug not found', 404);
-    assert_answerable(hug);
-    if ((await HugsService.channels_reaching(hug, user_id)).length === 0) throw new ApiError('forbidden', 'This Hug was not sent to you', 403);
-    const input = (hug.files ?? []).find((slot) => slot.name === requested_input);
-    if (!input) {
-        throw new ApiError('HUG_FILE_INVALID', `'${requested_input}' is not an upload slot of this Hug`, 422);
-    }
-    const pending_count = await StoredArtifact.count({ where: { hug_id, uploaded_by: user_id, status: 'pending' } });
-    return {
-        kind: 'hug', run_id: hug.run_id, phase: hug.phase, hug_id, requested_input,
-        accept: input.accept, max_bytes: input.max_bytes, pending_count,
-    };
-}
 
 /** `attachment` with an ASCII fallback name and the exact UTF-8 one (RFC 6266). */
 function content_disposition(name: string): string {

@@ -48,8 +48,7 @@ let _builtins: { at: number; by_name: Map<string, string> } | null = null;
 
 /** The getHugs page of a Hug. */
 export function gethugs_hug_url(gethugs_id: string): string {
-    const config = gethugs_config();
-    return `${config?.app_url ?? ''}/hugs/${gethugs_id}`;
+    return `${gethugs_config().app_url}/hugs/${gethugs_id}`;
 }
 
 /** Forget the cached built-ins (tests). */
@@ -99,7 +98,7 @@ async function document_for(client: HugsClient, workspace_id: string, artifact_i
         { replacements: { workspace_id, artifact_id }, type: QueryTypes.SELECT },
     );
     if (known) return known.document_id;
-    const file = await new ArtifactStorageService().download(artifact_id, null);
+    const file = await new ArtifactStorageService().download(artifact_id);
     const bytes = new Uint8Array(await new Response(file.body).arrayBuffer());
     const doc = await client.documents.upload(bytes, { name: file.name, content_type: file.mime_type }) as unknown as { document_id: string };
     await get_sequelize().query(
@@ -113,14 +112,14 @@ async function document_for(client: HugsClient, workspace_id: string, artifact_i
 
 /**
  * The run files a Hug shows, as getHugs takes them: each attachment and `artifact` context block (checked to be a ready
- * file of the run, as Core's own Hugs) becomes a document of the workspace; the blocks are rewritten to
+ * file of the run) becomes a document of the workspace; the blocks are rewritten to
  * `{ type: 'document', document_id }`, their other fields kept.
  */
 async function run_files_as_documents(client: HugsClient, workspace_id: string, run_id: string, spec: HugEnvelope): Promise<{ attachments: Array<{ document_id: string }>; params: Record<string, unknown> }> {
     const blocks = artifact_blocks(spec.params);
     const ids = [...new Set([...spec.attachments.map((a) => a.artifact_id), ...blocks.map((b) => b.artifact_id as string)])];
     if (ids.length === 0) return { attachments: [], params: spec.params };
-    const found = await StoredArtifact.findAll({ where: { id: { [Op.in]: ids }, run_id, status: 'ready' }, attributes: ['id'], raw: true });
+    const found = await StoredArtifact.findAll({ where: { id: { [Op.in]: ids }, run_id }, attributes: ['id'], raw: true });
     const missing = ids.filter((id) => !found.some((f) => f.id === id));
     if (missing.length > 0) throw ApiError.unprocessable(`Attachment not found in this run: ${missing.join(', ')}`, 'invalid_hug');
 
@@ -151,12 +150,21 @@ async function builtin_templates(partner: GethugsPartner, g_org: string): Promis
  * The getHugs template (or exact version) a Hug opens with: a built-in by the hug's name; otherwise the team's hug,
  * installed from its bundle once per org and bundle (`<team>/<hug>`, a new version when the bundle changes).
  *
+ * @throws 422 `unknown_hug` — no bundle hash and not one of getHugs' built-ins
  * @throws 409 `BUNDLE_MISSING` — Core doesn't hold the bundle yet and cliqd didn't send it (cliqd resends)
  */
 async function template_for(partner: GethugsPartner, input: GethugsCreateInput, g_org: string): Promise<string> {
-    const hug = input.spec.hug;
-    const builtin = (await builtin_templates(partner, g_org)).get(hug.name);
+    const builtins = await builtin_templates(partner, g_org);
+    const builtin = builtins.get(input.spec.hug.name);
     if (builtin) return builtin;
+    const { name: hug_name, sha256 } = input.spec.hug;
+    if (!sha256) {
+        throw ApiError.unprocessable(
+            `'${hug_name}' isn't one of getHugs' built-in hugs (${[...builtins.keys()].sort().join(', ')}) — a team's own hug is sent with its bundle hash`,
+            'unknown_hug',
+        );
+    }
+    const hug = { name: hug_name, sha256 };
 
     const [mapped] = await get_sequelize().query<{ version_id: string }>(
         'SELECT version_id FROM cliq.gethugs_templates WHERE org_id = :org_id AND sha256 = :sha256',
@@ -242,8 +250,7 @@ async function channel_names(org_id: string, realm_id: string, names: readonly s
  * @throws 422 `invalid_hug` — an attachment or context file that isn't a ready file of the run
  * @throws 422 (getHugs' code) — getHugs refused it: an unknown channel, a non-member, …
  */
-export async function gethugs_create(input: GethugsCreateInput, partner: GethugsPartner | null = gethugs_partner()): Promise<{ hug_id: string; hug_url: string }> {
-    if (!partner) throw ApiError.service_unavailable('getHugs is not configured on this CliqHub', 'gethugs_not_configured');
+export async function gethugs_create(input: GethugsCreateInput, partner: GethugsPartner = gethugs_partner()): Promise<{ hug_id: string; hug_url: string }> {
     const spec = input.spec;
     const g_org = await link(input.org_id, 'org', input.org_id);
     const workspace = await link(input.org_id, 'realm', input.realm_id);
@@ -308,7 +315,7 @@ export async function gethugs_create(input: GethugsCreateInput, partner: Gethugs
             org_id: input.org_id,
             title: spec.title,
             hug_name: spec.hug.name,
-            hug_sha256: spec.hug.sha256,
+            hug_sha256: spec.hug.sha256 ?? null,
             summary: spec.summary ?? null,
             params: spec.params,
             files: spec.files,
@@ -317,14 +324,9 @@ export async function gethugs_create(input: GethugsCreateInput, partner: Gethugs
             status: 'open',
             outcome: null,
             expires_at: new Date(made.expires_at),
-            reminders: spec.reminders ?? null,
-            next_remind_at: null,
-            last_reminded_at: null,
             last_seq: 0,
             created_at: now,
             closed_at: null,
-            not_sent_to: null,
-            provider: 'gethugs',
             gethugs_id: made.id,
             gethugs_workspace_id: workspace,
         });
@@ -339,11 +341,10 @@ export async function gethugs_create(input: GethugsCreateInput, partner: Gethugs
     return { hug_id: id, hug_url: gethugs_hug_url(made.id) };
 }
 
-/** The partner's client in a getHugs Hug's org and workspace, or null when getHugs or the org's link is gone. */
+/** The partner's client in a getHugs Hug's org and workspace, or null when the org's link is gone. */
 async function client_for(hug: Pick<Hug, 'org_id' | 'gethugs_workspace_id'>): Promise<HugsClient | null> {
-    const partner = gethugs_partner();
-    const g_org = partner && hug.gethugs_workspace_id ? await link(hug.org_id, 'org', hug.org_id) : null;
-    return partner && g_org ? partner.in_workspace(g_org, hug.gethugs_workspace_id!) : null;
+    const g_org = await link(hug.org_id, 'org', hug.org_id);
+    return g_org ? gethugs_partner().in_workspace(g_org, hug.gethugs_workspace_id) : null;
 }
 
 /**
@@ -352,7 +353,7 @@ async function client_for(hug: Pick<Hug, 'org_id' | 'gethugs_workspace_id'>): Pr
  */
 export async function gethugs_close(hug: Hug, outcome: string): Promise<string> {
     const client = await client_for(hug);
-    if (!client || !hug.gethugs_id) return hug.status;
+    if (!client) return hug.status;
     try {
         const { status } = await client.call<{ status: string }>('hugs/close', { workspace_id: hug.gethugs_workspace_id, org_id: client.org, hug_id: hug.gethugs_id, outcome });
         if (status !== 'open' && hug.status === 'open') {
@@ -369,7 +370,7 @@ export async function gethugs_close(hug: Hug, outcome: string): Promise<string> 
 /** The requester's status line, to getHugs (`hugs/update_progress`). Best effort, like Core's own. */
 export async function gethugs_progress(hug: Hug, progress: string | null): Promise<void> {
     const client = await client_for(hug);
-    if (!client || !hug.gethugs_id) return;
+    if (!client) return;
     try {
         await client.call('hugs/update_progress', { workspace_id: hug.gethugs_workspace_id, org_id: client.org, hug_id: hug.gethugs_id, progress });
     } catch (err) {
@@ -403,7 +404,7 @@ export async function gethugs_cancel_run(run_id: string, hugs: Hug[]): Promise<n
     let count = 0;
     for (const h of hugs) {
         const ended = await get_sequelize().transaction(async (t) => {
-            const [n] = await Hug.update({ status: 'cancelled', closed_at: new Date(), next_remind_at: null }, { where: { id: h.id, status: 'open' }, transaction: t });
+            const [n] = await Hug.update({ status: 'cancelled', closed_at: new Date() }, { where: { id: h.id, status: 'open' }, transaction: t });
             if (n === 0) return false;
             await HugsService.relay_event(h, 'cancelled', { reason: 'The run ended' }, t);
             return true;

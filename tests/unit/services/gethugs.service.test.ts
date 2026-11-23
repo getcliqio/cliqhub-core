@@ -1,62 +1,51 @@
 /**
- * PLAN-gethugs-integration.md step 1: getHugs' settings (both or neither; an http(s) origin; a service token) and the
- * partner client — the partner's own calls name no org, calls inside an org name it and the workspace; the token goes
- * only to getHugs, as the bearer.
+ * getHugs' settings — all required (PLAN-gethugs-step8-cutover.md decision 9); http(s) origins; a service token — and
+ * the partner client: the partner's own calls name no org, calls inside an org name it and the workspace; the token
+ * goes only to getHugs, as the bearer.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
-
-vi.mock('../../../src/models/org.model.js', () => ({ Org: { findByPk: vi.fn() } }));
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { gethugs_config } from '../../../src/config/env.js';
-import { Org } from '../../../src/models/org.model.js';
-import { gethugs_partner, hugs_provider_of } from '../../../src/services/gethugs.service.js';
+import { gethugs_partner } from '../../../src/services/gethugs.service.js';
 
 const TOKEN = 'hugs_svc_' + 'x'.repeat(43);
-const set = (url?: string, token?: string) => {
-    if (url === undefined) delete process.env.GETHUGS_URL;
-    else process.env.GETHUGS_URL = url;
-    if (token === undefined) delete process.env.GETHUGS_PARTNER_TOKEN;
-    else process.env.GETHUGS_PARTNER_TOKEN = token;
+const saved = { url: process.env.GETHUGS_URL, token: process.env.GETHUGS_PARTNER_TOKEN, app: process.env.GETHUGS_APP_URL };
+const put = (key: string, value: string | undefined) => {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+};
+const set = (url?: string, token?: string, app?: string) => {
+    put('GETHUGS_URL', url);
+    put('GETHUGS_PARTNER_TOKEN', token);
+    put('GETHUGS_APP_URL', app);
 };
 
-afterEach(() => {
-    set();
-    delete process.env.GETHUGS_APP_URL;
-});
+afterEach(() => set(saved.url, saved.token, saved.app));
 
 describe('gethugs_config', () => {
-    it('neither set: getHugs is off', () => {
-        set();
-        expect(gethugs_config()).toBeNull();
+    it('all three set: the origins (no trailing slash) and the token', () => {
+        set('https://api.gethugs.ai/', TOKEN, 'https://app.gethugs.ai/');
+        expect(gethugs_config()).toEqual({ url: 'https://api.gethugs.ai', token: TOKEN, app_url: 'https://app.gethugs.ai' });
+        set('http://localhost:8080', TOKEN, 'http://localhost:8082');
+        expect(gethugs_config()).toMatchObject({ url: 'http://localhost:8080', app_url: 'http://localhost:8082' });
     });
 
-    it('both set: the origin (no trailing slash) and the token', () => {
-        set('https://api.gethugs.ai/', TOKEN);
-        expect(gethugs_config()).toEqual({ url: 'https://api.gethugs.ai', token: TOKEN, app_url: 'https://api.gethugs.ai' });
-        set('http://localhost:8080', TOKEN);
-        expect(gethugs_config()!.url).toBe('http://localhost:8080');
-    });
-
-    it('refuses one without the other, a URL that is not an origin, and a token that is not a service token', () => {
-        set('https://api.gethugs.ai', undefined);
-        expect(() => gethugs_config()).toThrow(/both/);
-        set(undefined, TOKEN);
-        expect(() => gethugs_config()).toThrow(/both/);
-        for (const url of ['api.gethugs.ai', 'ftp://api.gethugs.ai', 'https://api.gethugs.ai/v1']) {
-            set(url, TOKEN);
-            expect(() => gethugs_config(), url).toThrow(/origin/);
+    it('required: any one missing is refused', () => {
+        for (const [url, token, app] of [[undefined, undefined, undefined], ['https://a.test', TOKEN, undefined], ['https://a.test', undefined, 'https://b.test'], [undefined, TOKEN, 'https://b.test']]) {
+            set(url, token, app);
+            expect(() => gethugs_config()).toThrow(/Missing required env var/);
         }
-        set('https://api.gethugs.ai', 'hugs_k_abc');
-        expect(() => gethugs_config()).toThrow(/service token/);
     });
 
-    it('the web app: GETHUGS_APP_URL when set (an origin), else the API origin', () => {
-        set('http://localhost:8080', TOKEN);
-        expect(gethugs_config()!.app_url).toBe('http://localhost:8080');
-        process.env.GETHUGS_APP_URL = 'http://localhost:8082/';
-        expect(gethugs_config()!.app_url).toBe('http://localhost:8082');
-        process.env.GETHUGS_APP_URL = 'https://app.gethugs.ai/hugs';
-        expect(() => gethugs_config()).toThrow(/GETHUGS_APP_URL/);
+    it('refuses a URL that is not an origin, and a token that is not a service token', () => {
+        for (const url of ['api.gethugs.ai', 'ftp://api.gethugs.ai', 'https://api.gethugs.ai/v1']) {
+            set(url, TOKEN, 'https://app.gethugs.ai');
+            expect(() => gethugs_config(), url).toThrow(/GETHUGS_URL must be/);
+        }
+        set('https://api.gethugs.ai', TOKEN, 'https://app.gethugs.ai/hugs');
+        expect(() => gethugs_config()).toThrow(/GETHUGS_APP_URL must be/);
+        set('https://api.gethugs.ai', 'hugs_k_abc', 'https://app.gethugs.ai');
+        expect(() => gethugs_config()).toThrow(/service token/);
     });
 });
 
@@ -72,15 +61,15 @@ describe('the partner client', () => {
         return { sent, fetch_impl };
     };
 
-    it('is null when getHugs is off', () => {
+    it('throws without the settings', () => {
         set();
-        expect(gethugs_partner()).toBeNull();
+        expect(() => gethugs_partner()).toThrow(/Missing required env var/);
     });
 
     it('the partner’s own calls name no org; calls in an org name it and the workspace; the token is the bearer', async () => {
-        set('http://localhost:8080', TOKEN);
+        set('http://localhost:8080', TOKEN, 'http://localhost:8082');
         const { sent, fetch_impl } = fake();
-        const partner = gethugs_partner(fetch_impl)!;
+        const partner = gethugs_partner(fetch_impl);
         await partner.site.call('site/get_orgs', { limit: 1 });
         await partner.in_workspace('org_1', 'ws_1', 'payments · run 7').hugs.get({ ref_id: 'cliqhub:run:7' });
         expect(sent.map((s) => s.url)).toEqual(['http://localhost:8080/v1/site/get_orgs', 'http://localhost:8080/v1/hugs/get']);
@@ -88,17 +77,5 @@ describe('the partner client', () => {
         expect(sent[1]!.body).toEqual({ workspace_id: 'ws_1', org_id: 'org_1', ref_id: 'cliqhub:run:7' });
         expect(sent.every((s) => s.auth === `Bearer ${TOKEN}`)).toBe(true);
         expect(JSON.stringify(partner.site)).not.toContain(TOKEN);
-    });
-});
-
-describe('hugs_provider_of', () => {
-    it('gethugs only when the org says so; anything else, or no org, is cliqhub', async () => {
-        const find = vi.mocked(Org.findByPk);
-        find.mockResolvedValueOnce({ hugs_provider: 'gethugs' } as never);
-        expect(await hugs_provider_of('o1')).toBe('gethugs');
-        find.mockResolvedValueOnce({ hugs_provider: 'cliqhub' } as never);
-        expect(await hugs_provider_of('o2')).toBe('cliqhub');
-        find.mockResolvedValueOnce(null);
-        expect(await hugs_provider_of('o3')).toBe('cliqhub');
     });
 });

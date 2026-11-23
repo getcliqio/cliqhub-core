@@ -42,11 +42,15 @@ export const HugAttachmentSchema = z.object({
 }).strict();
 export type HugAttachment = z.infer<typeof HugAttachmentSchema>;
 
-/** The Hug a daemon opens (`spec` of `hugs/create`). */
+/**
+ * The Hug a daemon opens (`spec` of `hugs/create`). `hug` names one of getHugs' built-ins by name alone, or a team's own
+ * hug by name and the hash of its `.hug` bundle (PLAN-gethugs-step8-cutover.md decision 3; Core checks a name without
+ * a hash against getHugs' built-ins).
+ */
 export const HugEnvelopeSchema = z.object({
     hug: z.object({
         name: z.string().regex(HUG_NAME, 'must be lowercase letters, digits and -'),
-        sha256: z.string().regex(/^[0-9a-f]{64}$/, 'must be a sha256 (hex)'),
+        sha256: z.string().regex(/^[0-9a-f]{64}$/, 'must be a sha256 (hex)').optional(),
     }).strict(),
     title: z.string().min(1).max(200),
     summary: z.string().max(MAX_HUG_SUMMARY).optional(),
@@ -71,19 +75,13 @@ export const HugBundleUploadSchema = z.object({
     files: z.record(z.string().min(1).max(300), z.string()),
 });
 
-/** POST /v1/hugs/get — the caller's Hugs (inbox). Org-scoped list requires org_id; never invented from a header. */
+/** POST /v1/hugs/get — one run's Hugs, every round of every phase, oldest first; seen like the run. */
 export const HugsGetInput = z.object({
-    /** One run's Hugs, every round of every phase, oldest first (any status unless `statuses`); seen like the run. */
-    run_id: z.string().min(1).optional(),
-    realm_id: z.string().optional(),
-    org_id: z.string().uuid().optional().describe('Organization UUID. Required when listing without realm_id.'),
-    /** Status values to include. Defaults to ['open'] (with `run_id`: every status). */
+    run_id: z.string().min(1),
+    /** Status values to include (default: every status). */
     statuses: z.array(z.enum(['open', 'closed', 'expired', 'cancelled'])).optional(),
     limit: z.number().int().positive().optional(),
     offset: z.number().int().nonnegative().optional(),
-}).superRefine((v, ctx) => {
-    if (v.run_id || v.realm_id?.trim() || v.org_id) return;
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'org_id is required when listing Hugs without realm_id', path: ['org_id'] });
 });
 export type HugsGetInput = z.infer<typeof HugsGetInput>;
 
@@ -119,16 +117,6 @@ export const HugsCreateInput = z.object({
 });
 export type HugsCreateInput = z.infer<typeof HugsCreateInput>;
 
-/** POST /v1/hugs/respond — a person submits (or replaces) their response. */
-export const HugsRespondInput = z.object({
-    hug_id: z.string().min(1),
-    /** The answer, as the hug's keys (≤ 256 KB); an upload slot's key takes `{ artifact_id }` (or a list) from artifacts/upload. */
-    values: json_object_within('values'),
-    /** The answer in one line, written by the hug's frontend. */
-    summary: z.string().max(MAX_RESPONSE_SUMMARY).refine((s) => !/[\r\n]/.test(s), 'summary is one line').optional(),
-});
-export type HugsRespondInput = z.infer<typeof HugsRespondInput>;
-
 /** POST /v1/hugs/close — the requester ends the Hug with its outcome. */
 export const HugsCloseInput = z.object({
     hug_id: z.string().min(1),
@@ -147,10 +135,3 @@ export const HugsGetEventsInput = z.object({
     })).max(500),
 });
 export type HugsGetEventsInput = z.infer<typeof HugsGetEventsInput>;
-
-/** POST /v1/hug_bundles/get_file — one file of a stored hug bundle (public: code named by its hash). */
-export const HugBundlesGetFileInput = z.object({
-    sha256: z.string().regex(/^[0-9a-f]{64}$/),
-    path: z.string().min(1).max(300),
-});
-export type HugBundlesGetFileInput = z.infer<typeof HugBundlesGetFileInput>;

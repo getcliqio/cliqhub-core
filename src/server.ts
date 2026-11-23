@@ -17,15 +17,18 @@ import {
 import {
     start_hug_sweep,
     stop_hug_sweep,
-} from './services/hug_expiry_sweep.service.js';
+} from './services/hug_sweep.service.js';
 import { start_invite_sweep, stop_invite_sweep } from './services/invite_sweep.service.js';
 import { start_gethugs_worker, stop_gethugs_worker } from './services/gethugs_worker.js';
 import { start_gethugs_feed, stop_gethugs_feed } from './services/gethugs_feed.js';
+import { gethugs_signin_config } from './services/gethugs_sign_in.js';
 import { settle_background } from './lib/background.js';
 const log = get_logger('server');
 
 async function main() {
     const config = load_env();
+    // The getHugs sign-in key too (PLAN-gethugs-step8-cutover.md decision 9): checked before serving anyone.
+    await gethugs_signin_config();
 
     // Control-plane schema (`cliq`) must be ready before the HTTP server
     // accepts traffic — later slices mount /v1 control routes on this store.
@@ -95,7 +98,7 @@ async function main() {
     start_webhook_delivery_retention();
     start_hug_sweep();
     start_invite_sweep();
-    // Orgs switched to getHugs: reconcile what changed, nightly everything (PLAN-gethugs-step2-provisioning.md).
+    // Every org into getHugs: reconcile what changed, nightly everything (PLAN-gethugs-step2-provisioning.md).
     start_gethugs_worker();
     // Answers from getHugs: one reader of its event feed (PLAN-gethugs-step4-answers.md).
     start_gethugs_feed();

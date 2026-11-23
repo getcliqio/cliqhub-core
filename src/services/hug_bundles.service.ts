@@ -1,11 +1,11 @@
 /**
- * Hug bundles — a hug's built frontend, stored once by its hash (PLAN-hug-widgets §11.1).
+ * Hug bundles — a team hug, stored once by its hash (PLAN-hug-widgets §11.1), to install in getHugs as the team's
+ * template (PLAN-gethugs-step3-asking.md).
  *
- * A daemon opens a Hug naming its hug and the bundle's sha256. Core keeps each bundle once: when it
- * doesn't hold the hash, `hugs/create` answers 409 `BUNDLE_MISSING` and the daemon retries with the
- * bundle's files, which Core checks (hash, cliq-sdk's bundle rules) and stores in package storage under
- * `hug-bundles/<sha256>/`. Built-ins (`form`, `approval`) are ordinary hugs that ship in cliqd: they arrive
- * the same way. Bundles nothing uses any more are swept daily.
+ * A daemon opens a Hug with a team hug naming it and the bundle's sha256 (getHugs' built-ins go by name alone). Core
+ * keeps each bundle once: when it doesn't hold the hash, `hugs/create` answers 409 `BUNDLE_MISSING` and the daemon
+ * retries with the bundle's files, which Core checks (hash, the bundle rules) and stores in package storage under
+ * `hug-bundles/<sha256>/`. Bundles nothing uses any more are swept daily.
  */
 
 import { check_hug_bundle, hug_bundle_hash } from '@getcliqio/cliq-sdk';
@@ -23,22 +23,6 @@ export const BUNDLE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 /** A bundle stored this recently is never swept (its Hug may still be opening). */
 const SWEEP_GRACE_MS = 24 * 60 * 60 * 1000;
 
-/** Every extension a bundle may carry (cliq-sdk's TEXT_EXTENSIONS), with the type it is served as. */
-const CONTENT_TYPES: Record<string, string> = {
-    html: 'text/html; charset=utf-8',
-    htm: 'text/html; charset=utf-8',
-    js: 'text/javascript; charset=utf-8',
-    mjs: 'text/javascript; charset=utf-8',
-    cjs: 'text/javascript; charset=utf-8',
-    css: 'text/css; charset=utf-8',
-    json: 'application/json; charset=utf-8',
-    map: 'application/json; charset=utf-8',
-    svg: 'image/svg+xml; charset=utf-8',
-    txt: 'text/plain; charset=utf-8',
-    md: 'text/markdown; charset=utf-8',
-    webmanifest: 'application/manifest+json; charset=utf-8',
-};
-
 let storage: PackageStorage | null = null;
 
 /** Set the storage bundles live in (container startup; tests). */
@@ -54,12 +38,6 @@ function store(): PackageStorage {
 /** The storage folder of a bundle. */
 export function bundle_prefix(sha256: string): string {
     return `hug-bundles/${sha256}/`;
-}
-
-/** The content type a bundle file is served with. */
-export function bundle_content_type(path: string): string {
-    const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
-    return CONTENT_TYPES[ext] ?? 'text/plain; charset=utf-8';
 }
 
 /** A bundle path Core will store: relative, no `..`, no backslashes. */
@@ -123,15 +101,6 @@ export class HugBundlesService {
         return out;
     }
 
-    /** One file of a stored bundle, or null. */
-    static async get_file(sha256: string, path: string): Promise<{ body: Buffer; content_type: string } | null> {
-        if (!safe_path(path)) return null;
-        const row = await HugBundle.findByPk(sha256, { attributes: ['sha256'], raw: true });
-        if (!row) return null;
-        const body = await store().read(`${bundle_prefix(sha256)}${path}`);
-        return body ? { body, content_type: bundle_content_type(path) } : null;
-    }
-
     /**
      * Delete bundles no Hug needs: none open and none closed within {@link BUNDLE_RETENTION_MS}. Bundles
      * stored or resolved in the last day stay — a Hug being opened has resolved its bundle (`last_used_at`) before
@@ -171,7 +140,8 @@ export class HugBundlesService {
         for (const [path, text] of Object.entries(files)) {
             const body = Buffer.from(text, 'utf8');
             size += body.length;
-            await store().write(`${prefix}${path}`, body, bundle_content_type(path));
+            // Read back by Core only (to install in getHugs), never served.
+            await store().write(`${prefix}${path}`, body, 'text/plain; charset=utf-8');
         }
         const now = new Date();
         await HugBundle.findOrCreate({

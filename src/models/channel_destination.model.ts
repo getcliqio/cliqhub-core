@@ -5,7 +5,7 @@ export interface ChannelDestinationAttributes {
     id: string;
     /** Owning channel — CASCADE deletes destinations when channel is removed. */
     channel_id: string;
-    /** Destination type: cliqhub, slack, email, webhook, http, jira, channel_ref. */
+    /** Destination type: cliqhub, slack, email, webhook, http, channel_ref. */
     type: string;
     /** Type-specific config (webhook_url, address, headers, etc.). */
     config: Record<string, unknown>;

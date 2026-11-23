@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 
-import { accept_problem, ArtifactStorageService, remove_stale_upload_files } from '../../../src/services/artifact_storage.service.js';
+import { ArtifactStorageService, remove_stale_upload_files } from '../../../src/services/artifact_storage.service.js';
 import { R2Client } from '../../../src/lib/r2_client.js';
 import type { StoredArtifactRepository } from '../../../src/repositories/stored_artifact_repository.js';
 
@@ -36,7 +36,6 @@ function fake_repo(): StoredArtifactRepository {
         find_by_id: vi.fn().mockResolvedValue(null),
         find_by_run: vi.fn().mockResolvedValue([]),
         delete_by_id: vi.fn().mockResolvedValue(true),
-        find_stale_pending: vi.fn().mockResolvedValue([]),
     } as unknown as StoredArtifactRepository;
 }
 
@@ -53,7 +52,6 @@ function fake_row(overrides: Record<string, unknown> = {}) {
         storage_key: 'art-001',
         uploaded_by: 'user-1',
         created_at: 1700000000000,
-        status: 'ready',
         source: 'daemon',
         hug_id: null,
         hug_requested_input: null,
@@ -79,7 +77,7 @@ describe('ArtifactStorageService', () => {
     const run_target = { kind: 'run' as const, run_id: 'run-1', phase: 'analyst' };
 
     describe('upload', () => {
-        it('streams a daemon artifact to R2 with its real sha256 and stores it ready', async () => {
+        it('streams a daemon artifact to R2 with its real sha256 and stores it', async () => {
             const result = await service.upload({
                 stream: body('hello world'), content_length: 11, content_type: 'text/markdown', name: 'output.md',
                 target: run_target, uploaded_by: null,
@@ -90,21 +88,22 @@ describe('ArtifactStorageService', () => {
                 sha256_hex: 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9',
             });
             const row = (repo.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
-            expect(row).toMatchObject({ id: key, run_id: 'run-1', phase: 'analyst', status: 'ready', source: 'daemon', size_bytes: 11, sha256: opts.sha256_hex });
-            expect(result).toMatchObject({ artifact_id: key, status: 'ready', size: 11, content_type: 'text/markdown' });
+            expect(row).toMatchObject({ id: key, run_id: 'run-1', phase: 'analyst', source: 'daemon', size_bytes: 11, sha256: opts.sha256_hex });
+            expect(row).not.toHaveProperty('status');
+            expect(result).toMatchObject({ artifact_id: key, size: 11, content_type: 'text/markdown' });
+            expect(result).not.toHaveProperty('status');
             expect(result.download_url).toMatch(new RegExp(`/v1/artifacts/download\\?artifact_id=${key}$`));
             expect(result.download_url).not.toContain('r2');
         });
 
-        it('stores a responder file pending, linked to its Hug and input', async () => {
-            const result = await service.upload({
+        it('stores a file sent in a getHugs answer as a hug file of its Hug and slot', async () => {
+            await service.upload({
                 stream: body('%PDF-1.7 rest'), content_length: 13, content_type: 'application/pdf', name: 'MSA.pdf',
-                target: { kind: 'hug', run_id: 'run-1', phase: 'legal', hug_id: 'h1', requested_input: 'contract', accept: ['application/pdf'], pending_count: 0 },
+                target: { kind: 'hug_answer', run_id: 'run-1', phase: 'legal', hug_id: 'h1', requested_input: 'contract' },
                 uploaded_by: 'user-1',
             });
             const row = (repo.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
-            expect(row).toMatchObject({ status: 'pending', source: 'hug', hug_id: 'h1', hug_requested_input: 'contract', uploaded_by: 'user-1' });
-            expect(result.status).toBe('pending');
+            expect(row).toMatchObject({ source: 'hug', hug_id: 'h1', hug_requested_input: 'contract', uploaded_by: 'user-1' });
         });
 
         it('refuses a declared length over the limit before reading (413)', async () => {
@@ -121,14 +120,6 @@ describe('ArtifactStorageService', () => {
             expect(repo.create).not.toHaveBeenCalled();
         });
 
-        it("applies a Hug input's lower max_bytes", async () => {
-            await expect(service.upload({
-                stream: body('12345'), content_length: 5, content_type: 'text/plain', name: 'a.txt',
-                target: { kind: 'hug', run_id: 'r', phase: 'p', hug_id: 'h', requested_input: 'f', max_bytes: 4, pending_count: 0 },
-                uploaded_by: 'u',
-            })).rejects.toMatchObject({ status: 413 });
-        });
-
         it('refuses a short body (400) and a missing length (411)', async () => {
             await expect(service.upload({
                 stream: body('abc'), content_length: 10, content_type: 'text/plain', name: 'short.txt', target: run_target, uploaded_by: null,
@@ -136,16 +127,6 @@ describe('ArtifactStorageService', () => {
             await expect(service.upload({
                 stream: body('abc'), content_length: Number.NaN, content_type: 'text/plain', name: 'x.txt', target: run_target, uploaded_by: null,
             })).rejects.toMatchObject({ status: 411 });
-        });
-
-        it("refuses a file that fails the input's accept (422), and too many pending uploads", async () => {
-            const hug = { kind: 'hug' as const, run_id: 'r', phase: 'p', hug_id: 'h', requested_input: 'contract', accept: ['application/pdf', '.pdf'], pending_count: 0 };
-            await expect(service.upload({
-                stream: body(Buffer.from([0x4d, 0x5a, 0x90, 0x00])), content_length: 4, content_type: 'application/pdf', name: 'MSA.pdf', target: hug, uploaded_by: 'u',
-            })).rejects.toMatchObject({ status: 422, code: 'HUG_FILE_INVALID' });
-            await expect(service.upload({
-                stream: body('%PDF'), content_length: 4, content_type: 'application/pdf', name: 'MSA.pdf', target: { ...hug, pending_count: 20 }, uploaded_by: 'u',
-            })).rejects.toMatchObject({ status: 422 });
         });
 
         it('removes the row and answers 502 when R2 refuses the file', async () => {
@@ -172,36 +153,15 @@ describe('ArtifactStorageService', () => {
         it('streams the stored object, passing Range through', async () => {
             (repo.find_by_id as ReturnType<typeof vi.fn>).mockResolvedValue(fake_row({ id: ID, storage_key: ID }));
             (r2.get_object_stream as ReturnType<typeof vi.fn>).mockResolvedValue({ body: 'BODY', status: 206, content_length: 5, content_type: 'text/markdown', content_range: 'bytes 0-4/42' });
-            const out = await service.download(ID, 'user-1', 'bytes=0-4');
+            const out = await service.download(ID, 'bytes=0-4');
             expect(r2.get_object_stream).toHaveBeenCalledWith(ID, { range: 'bytes=0-4' });
             expect(out).toMatchObject({ status: 206, name: 'report.md', content_range: 'bytes 0-4/42' });
         });
 
-        it('hides a pending upload from everyone but its uploader (404)', async () => {
-            (repo.find_by_id as ReturnType<typeof vi.fn>).mockResolvedValue(fake_row({ id: ID, status: 'pending', uploaded_by: 'user-1' }));
-            await expect(service.download(ID, 'someone-else')).rejects.toMatchObject({ status: 404 });
-            await expect(service.download(ID, null)).rejects.toMatchObject({ status: 404 });
-            (r2.get_object_stream as ReturnType<typeof vi.fn>).mockResolvedValue({ body: 'B', status: 200, content_length: 1, content_type: 'x' });
-            await expect(service.download(ID, 'user-1')).resolves.toMatchObject({ status: 200 });
-        });
-
         it('404 for a bad id or a missing object', async () => {
-            await expect(service.download('not-a-uuid', 'u')).rejects.toMatchObject({ status: 404 });
+            await expect(service.download('not-a-uuid')).rejects.toMatchObject({ status: 404 });
         });
     });
-
-    // ── pending cleanup ──────────────────────────────────────────────
-
-    it('delete_stale_pending removes the R2 object and the row of each unused upload older than 24h', async () => {
-        (repo.find_stale_pending as ReturnType<typeof vi.fn>).mockResolvedValue([fake_row({ id: 'p1', storage_key: 'p1', status: 'pending' })]);
-        const now = new Date('2026-10-26T12:00:00Z');
-        expect(await service.delete_stale_pending(now)).toBe(1);
-        expect(repo.find_stale_pending).toHaveBeenCalledWith(now.getTime() - 24 * 60 * 60 * 1000);
-        expect(r2.delete_object).toHaveBeenCalledWith('p1');
-        expect(repo.delete_by_id).toHaveBeenCalledWith('p1');
-    });
-
-    // ── get ──────────────────────────────────────────────────────────
 
     describe('get', () => {
         it('lists artifacts for a run', async () => {
@@ -346,21 +306,5 @@ describe('ArtifactStorageService — one list per run (files + run records)', ()
         await expect(service.get_by_id('rec:not-a-uuid')).rejects.toMatchObject({ status: 404 });
         records.find_one_q.mockResolvedValue(null);
         await expect(service.get_by_id(`rec:${REC_ID}`)).rejects.toMatchObject({ status: 404 });
-    });
-});
-
-describe('accept_problem', () => {
-    const pdf = Buffer.from('%PDF-1.7');
-    const exe = Buffer.from([0x4d, 0x5a, 0x90, 0x00]);
-    it('accepts by declared type or extension, with wildcards', () => {
-        expect(accept_problem(['application/pdf'], 'MSA.pdf', 'application/pdf', pdf)).toBeNull();
-        expect(accept_problem(['.pdf'], 'MSA.PDF', 'application/octet-stream', pdf)).toBeNull();
-        expect(accept_problem(['image/*'], 'a.png', 'image/png', Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toBeNull();
-        expect(accept_problem(['text/plain'], 'notes.txt', 'text/plain; charset=utf-8', Buffer.from('hello'))).toBeNull();
-    });
-    it('refuses another type, a renamed program, and content that disagrees with the type', () => {
-        expect(accept_problem(['application/pdf'], 'a.png', 'image/png', Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toMatch(/not an accepted type/);
-        expect(accept_problem(['application/pdf', '.pdf'], 'MSA.pdf', 'application/pdf', exe)).toMatch(/is a program/);
-        expect(accept_problem(['image/*'], 'pic.png', 'image/png', pdf)).toMatch(/content is application\/pdf/);
     });
 });

@@ -80,10 +80,8 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     // ── Lists: realm or org filter checked here, rest scoped in the service ──
     'POST /v1/realms/get': scope({ org: { from: ORG, perm: 'member' }, otherwise: 'none' }),
     'POST /v1/daemons/get': scope({ realm: { from: REALM, level: 'view', perm: 'daemons.view' }, org: { from: ORG, perm: 'daemons.view' }, otherwise: 'none' }),
-    // With run_id: that run's Hugs, seen like the run (runs.view on its realm). Else the caller's own Hugs.
-    'POST /v1/hugs/get': by_body('body.run_id',
-        record('run', 'body.run_id', 'view', { perm: 'runs.view' }),
-        scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, org: { from: ORG, perm: 'runs.view' }, otherwise: 'none', handler: 'only Hugs addressed to the caller, in realms where they have runs.view' })),
+    // A run's Hugs, seen like the run (runs.view on its realm).
+    'POST /v1/hugs/get': record('run', 'body.run_id', 'view', { perm: 'runs.view' }),
     'POST /v1/runs/get': scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, org: { from: ORG, perm: 'runs.view' }, otherwise: 'none', handler: 'other filters stay inside visible realms (S5)' }),
     'POST /v1/runs/get_logs': scope({ realm: { from: REALM, level: 'view', perm: 'runs.view' }, otherwise: 'none', handler: 'run_ids / daemon_ids filtered to visible realms' }),
     'POST /v1/workspaces/get': scope({ realm: { from: REALM, level: 'view' }, otherwise: 'none' }),
@@ -196,14 +194,10 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'POST /v1/runs/create_rdr': record('run', RUN, null, { daemon: 'write' }),
     'POST /v1/artifacts/get': record('run', RUN, 'view', { perm: 'runs.view' }),
     'POST /v1/artifacts/get_by_id': record('artifact', 'body.artifact_id', 'view', { perm: 'runs.view', daemon: 'read' }),
-    // One upload route (PLAN-hug-requests §6.6.3): a responder's file for a Hug, or the daemon's run artifact.
-    'POST /v1/artifacts/upload': by_body(
-        'query.hug_id',
-        record('hug', 'query.hug_id', 'view', { perm: 'runs.view', handler: 'addressed to the caller; open; a file input' }),
-        record('run', 'query.run_id', null, { daemon: 'write' }),
-    ),
-    'POST /v1/artifacts/download': record('artifact', 'body.artifact_id', 'view', { perm: 'runs.view', daemon: 'read', handler: 'pending: uploader only' }),
-    'GET /v1/artifacts/download': record('artifact', 'query.artifact_id', 'view', { perm: 'runs.view', handler: 'pending: uploader only' }),
+    // The daemon's run artifact (PLAN-hug-requests §6.6.3).
+    'POST /v1/artifacts/upload': record('run', 'query.run_id', null, { daemon: 'write' }),
+    'POST /v1/artifacts/download': record('artifact', 'body.artifact_id', 'view', { perm: 'runs.view', daemon: 'read' }),
+    'GET /v1/artifacts/download': record('artifact', 'query.artifact_id', 'view', { perm: 'runs.view' }),
     'POST /v1/artifacts/delete': record('artifact', 'body.artifact_id', 'admin'),
 
     // ── Hugs (PLAN-hug-requests §6.3) ───────────────────────────────
@@ -211,9 +205,7 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'POST /v1/hugs/close': record('hug', 'body.hug_id', null, { daemon: 'write' }),
     'POST /v1/hugs/get_events': daemon_only('own Hugs only (daemon_id of the token realm)'),
     'POST /v1/hugs/get_by_id': record('hug', 'body.hug_id', 'view', { perm: 'runs.view', daemon: 'read' }),
-    'POST /v1/hugs/respond': record('hug', 'body.hug_id', 'view', { perm: 'runs.view', handler: 'addressed to the caller' }),
     'POST /v1/hugs/create_sign_in_link': signed_in({ handler: 'a person only: the Hug (runs.view on its realm) or the org (active member); PLAN-gethugs-step7-sign-in.md' }),
-    'POST /v1/hug_bundles/get_file': public_('a hug bundle file by sha256: built code, no Hug data (PLAN-hug-widgets §11.1)'),
 
     // ── Teams ───────────────────────────────────────────────────────
     'POST /v1/teams/get_phases': record('team', 'body.team_id', 'view'),
