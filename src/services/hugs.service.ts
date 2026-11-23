@@ -127,6 +127,32 @@ export function hug_url_for(hug_id: string): string {
     return `${base}/hugs/${hug_id}`;
 }
 
+/** A Hug's page: getHugs' for a Hug asked there (PLAN-gethugs-step6-ui-link.md), else the Hub's. */
+export function hug_url_of(hug: Pick<Hug, 'id' | 'provider' | 'gethugs_id'>): string {
+    return hug.provider === 'gethugs' && hug.gethugs_id ? gethugs_hug_url(hug.gethugs_id) : hug_url_for(hug.id);
+}
+
+/**
+ * The answers of a getHugs Hug, from its `response` events (step 4): each person's latest, oldest first — the shape
+ * Core's own `hug_responses` give.
+ */
+export async function gethugs_responses(hug_ids: readonly string[]): Promise<Map<string, HugResponseData[]>> {
+    const out = new Map<string, HugResponseData[]>();
+    if (hug_ids.length === 0) return out;
+    const rows = await HugEventRow.findAll({ where: { hug_id: { [Op.in]: [...hug_ids] }, type: 'response' }, order: [['hug_id', 'ASC'], ['seq', 'ASC']], raw: true });
+    const latest = new Map<string, Map<string, HugResponseData>>();
+    for (const row of rows) {
+        const r = (row.payload as { response?: HugResponseData }).response;
+        if (!r?.responder?.user_id) continue;
+        const per = latest.get(row.hug_id) ?? new Map<string, HugResponseData>();
+        per.delete(r.responder.user_id);
+        per.set(r.responder.user_id, r);
+        latest.set(row.hug_id, per);
+    }
+    for (const [hug_id, per] of latest) out.set(hug_id, [...per.values()]);
+    return out;
+}
+
 /** Whether `user_id` has `runs.view` on `realm_id` (the route policy's rule). */
 async function can_view_runs(user_id: string, realm_id: string): Promise<boolean> {
     return (await visible_realm_ids(user_id, { perm: 'runs.view' })).includes(realm_id);
@@ -285,7 +311,7 @@ export class HugsService {
         const [runs, realms, responses, via] = await Promise.all([
             load_run_info_map([hug.run_id]),
             load_realm_info_map([hug.realm_id]),
-            HugsService._responses(hug.id),
+            hug.provider === 'gethugs' ? gethugs_responses([hug.id]).then((m) => m.get(hug.id) ?? []) : HugsService._responses(hug.id),
             viewer_user_id ? HugsService.channels_reaching(hug, viewer_user_id) : Promise.resolve(null),
         ]);
         let answerable = true;
@@ -294,7 +320,7 @@ export class HugsService {
         const realm = realms.get(hug.realm_id);
         return {
             id: hug.id,
-            hug_url: hug_url_for(hug.id),
+            hug_url: hug_url_of(hug),
             run_id: hug.run_id,
             run_name: run?.run_name ?? null,
             team: resolve_team(run),
@@ -321,7 +347,8 @@ export class HugsService {
             last_reminded_at: hug.last_reminded_at ? hug.last_reminded_at.toISOString() : null,
             not_sent_to: (hug.not_sent_to ?? []).map((p) => ({ name: p.name, channel: p.channel })),
             responses,
-            viewer: via === null ? null : { can_answer: answerable && via.length > 0, via },
+            // A getHugs Hug is answered in getHugs, never here.
+            viewer: via === null ? null : hug.provider === 'gethugs' ? { can_answer: false, via: [] } : { can_answer: answerable && via.length > 0, via },
         };
     }
 

@@ -13,9 +13,9 @@ import { ApiError } from '../lib/api_error.js';
 import { get_logger } from '../lib/log.js';
 import { get_sequelize } from '../db/sequelize.js';
 import { Hug, HugResponse } from '../models/index.js';
+import { gethugs_responses, hug_url_of } from './hugs.service.js';
 import { visible_realm_ids } from '../auth/route_policy/visible.js';
 import { load_realm_info_map, load_run_info_map, resolve_team } from './hug_enrichment.js';
-import { hug_url_for } from './hugs.service.js';
 
 const log = get_logger('svc.hug_pending');
 
@@ -83,6 +83,7 @@ export class HugPendingService {
             HugResponse.findAll({ where: { hug_id: { [Op.in]: rows.map((r) => r.id) }, responder_user_id: user_id }, attributes: ['hug_id'], raw: true }),
         ]);
         const responded = new Set(mine.map((m) => m.hug_id));
+        await add_gethugs_responded(rows, user_id, responded);
         return { total, hugs: rows.map((row) => list_item(row, runs, realms, responded)) };
     }
 
@@ -114,6 +115,7 @@ export class HugPendingService {
             HugResponse.findAll({ where: { hug_id: { [Op.in]: rows.map((r) => r.id) }, responder_user_id: opts.user_id }, attributes: ['hug_id'], raw: true }),
         ]);
         const responded = new Set(mine.map((m) => m.hug_id));
+        await add_gethugs_responded(rows, opts.user_id, responded);
         return { total, hugs: rows.map((row) => list_item(row, runs, realms, responded)) };
     }
 
@@ -143,6 +145,14 @@ export class HugPendingService {
  * they have `runs.view`, combined with `extra`; with `unanswered`, not those they've responded to.
  * Null when nothing can match.
  */
+/** Marks the getHugs Hugs among `rows` that `user_id` has answered (their answers are `response` events, step 4). */
+async function add_gethugs_responded(rows: readonly Hug[], user_id: string, responded: Set<string>): Promise<void> {
+    const ids = rows.filter((r) => r.provider === 'gethugs').map((r) => r.id);
+    for (const [hug_id, answers] of await gethugs_responses(ids)) {
+        if (answers.some((a) => a.responder.user_id === user_id)) responded.add(hug_id);
+    }
+}
+
 /** A Hug row as a list item, with its run and realm names and whether the caller has responded. */
 function list_item(
     row: Hug,
@@ -154,7 +164,7 @@ function list_item(
     const realm = realms.get(row.realm_id);
     return {
         hug_id: row.id,
-        hug_url: hug_url_for(row.id),
+        hug_url: hug_url_of(row),
         title: row.title,
         summary: row.summary ?? null,
         realm_id: row.realm_id,

@@ -25,6 +25,7 @@ import { gethugs_partner } from '../../src/services/gethugs.service.js';
 import { reset_gethugs_builtins } from '../../src/services/gethugs_hugs.js';
 import { gethugs_reconcile } from '../../src/services/gethugs_reconcile.js';
 import { HugsService } from '../../src/services/hugs.service.js';
+import { HugPendingService } from '../../src/services/hug_pending.service.js';
 import { gethugs_apply } from '../../src/services/gethugs_events.js';
 import { GETHUGS_FEED_LOCK_KEY, run_gethugs_feed } from '../../src/services/gethugs_feed.js';
 import pg from 'pg';
@@ -402,6 +403,27 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             } });
             expect(await delivered(hug_id)).toEqual(['1:response', '2:response']);
             expect((await Hug.findByPk(hug_id, { raw: true }))!.gethugs_seq).toBe(2);
+        });
+
+        it('Core’s reads (PLAN-gethugs-step6-ui-link.md): the getHugs page, each person’s latest answer, responded, not answerable here', async () => {
+            const run_id = `run-${uid()}`;
+            const { hug_id } = await open({}, { run_id });
+            const id = await g(hug_id);
+            await gethugs_apply(responded(id, 1, { approved: true }));
+            await gethugs_apply(responded(id, 2, { approved: false }));
+
+            const detail = await HugsService.get(hug_id, o.bob.id);
+            expect(detail.hug_url).toBe(`http://app.gethugs.test/hugs/${id}`);
+            expect(detail.responses).toEqual([{
+                response_id: 'rsp_2', responder: { user_id: o.bob.id, name: o.bob.username }, via: ['reviewers'],
+                values: { approved: false }, summary: 'Approved', responded_at: new Date(1_795_400_000_000).toISOString(),
+            }]);
+            expect(detail.viewer).toEqual({ can_answer: false, via: [] });
+
+            const list = await HugPendingService.list_for_run({ user_id: o.bob.id, run_id });
+            expect(list.hugs.map((h) => [h.hug_url, h.responded])).toEqual([[`http://app.gethugs.test/hugs/${id}`, true]]);
+            const others = await HugPendingService.list_for_run({ user_id: (await person()).id, run_id }).catch(() => ({ hugs: [] }));
+            expect(others.hugs.every((h) => !h.responded)).toBe(true);
         });
 
         it('expired reaches the daemon once; anything after the Hug ended is not delivered', async () => {
