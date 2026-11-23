@@ -85,9 +85,9 @@ export class ArtifactStorageService {
                 uploaded_by: input.uploaded_by,
                 created_at: Date.now(),
                 status: target.kind === 'hug' ? 'pending' : 'ready',
-                source: target.kind === 'hug' ? 'hug' : 'daemon',
-                hug_id: target.kind === 'hug' ? target.hug_id : null,
-                hug_requested_input: target.kind === 'hug' ? target.requested_input : null,
+                source: target.kind === 'run' ? 'daemon' : 'hug',
+                hug_id: target.kind === 'run' ? null : target.hug_id,
+                hug_requested_input: target.kind === 'run' ? null : target.requested_input,
                 sha256: tmp.sha256,
             });
             try {
@@ -261,7 +261,12 @@ export type UploadTarget =
         max_bytes?: number;
         /** This responder's pending uploads on the Hug so far. */
         pending_count: number;
-    };
+    }
+    /**
+     * A file someone sent in an answer through getHugs (PLAN-gethugs-step5-files.md): getHugs checked it against the
+     * slot; it is stored ready, as a `hug` file of the Hug and slot.
+     */
+    | { kind: 'hug_answer'; run_id: string; phase: string; hug_id: string; requested_input: string };
 
 /** Input to {@link ArtifactStorageService.upload}. */
 export interface UploadInput {

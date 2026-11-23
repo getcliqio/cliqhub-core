@@ -36,6 +36,8 @@ export class FakeGethugs {
         { id: 'tpl_ack', org_id: null, name: 'ack', builtin: true, versions: [] },
     ];
     hugs: FakeHug[] = [];
+    /** Documents (uploaded files): run files a Hug shows, or files someone sent in an answer. */
+    documents: Array<{ document_id: string; workspace_id: string; name: string; content_type: string; bytes: Uint8Array; hug_id: string | null; slot: string | null }> = [];
     /** The partner feed, oldest first; a cursor is the index after the last event given. */
     feed: FeedEvent[] = [];
     /** Cursors before this index are refused as expired (events are kept 7 days). */
@@ -54,8 +56,28 @@ export class FakeGethugs {
     private id(prefix: string) { return `${prefix}_${this.run}${++this.n}`; }
 
     /** The `fetch` to give `GethugsPartner`. */
+    /** The real `fetch`, for anything that isn't this fake (object storage, …) once a test stubs the global. */
+    private readonly real_fetch = globalThis.fetch;
+
     readonly fetch: typeof fetch = async (input, init) => {
-        const path = String(input).replace(/^.*\/v1\//, '').replace(/\?.*$/, '');
+        const url = new URL(String(input));
+        if (url.host !== 'gethugs.test') return this.real_fetch(input, init);
+        const path = url.pathname.replace(/^.*\/v1\//, '');
+        if (path === 'documents/upload' || path === 'documents/download') {
+            this.calls.push(path);
+            if (this.fail_with) return new Response(JSON.stringify({ error: { code: 'unavailable', message: 'down' } }), { status: this.fail_with, headers: { 'content-type': 'application/json' } });
+            if (path === 'documents/upload') {
+                const q = url.searchParams;
+                const bytes = new Uint8Array(await new Response(init?.body as BodyInit).arrayBuffer());
+                const doc = { document_id: this.id('doc'), workspace_id: q.get('workspace_id')!, name: q.get('name')!, content_type: new Headers(init?.headers).get('content-type') ?? 'application/octet-stream', bytes, hug_id: q.get('hug_id'), slot: q.get('slot') };
+                this.documents.push(doc);
+                return new Response(JSON.stringify({ data: { document_id: doc.document_id, workspace_id: doc.workspace_id, name: doc.name, size: bytes.length, content_type: doc.content_type, sha256: 'x', status: 'ready' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+            }
+            const b = JSON.parse(String(init?.body ?? '{}')) as { document_id: string; workspace_id: string };
+            const doc = this.documents.find((d) => d.document_id === b.document_id && d.workspace_id === b.workspace_id);
+            if (!doc) return new Response(JSON.stringify({ error: { code: 'not_found', message: 'Document not found' } }), { status: 404, headers: { 'content-type': 'application/json' } });
+            return new Response(doc.bytes, { status: 200, headers: { 'content-type': doc.content_type } });
+        }
         const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, any>;
         this.calls.push(path);
         if (this.fail_with) {
@@ -83,6 +105,15 @@ export class FakeGethugs {
             h.events.push({ hug_id: h.id, seq, type, payload });
         }
         this.feed.push({ id: this.id('evt'), type: feed_type, seq, at: Date.now(), org: { id: h.org_id }, workspace: { id: h.workspace_id }, hug: { id: h.id, ref_id: h.ref_id, status: h.status }, ...extra });
+    }
+
+    /** A file someone attaches to an answer (getHugs keeps it as a document of the Hug's slot). */
+    answer_file(hug_id: string, slot: string, name: string, text: string) {
+        const h = this.hugs.find((x) => x.id === hug_id)!;
+        const bytes = new TextEncoder().encode(text);
+        const doc = { document_id: this.id('doc'), workspace_id: h.workspace_id, name, content_type: 'text/plain', bytes, hug_id, slot };
+        this.documents.push(doc);
+        return { document_id: doc.document_id, name, size: bytes.length, content_type: 'text/plain', sha256: 's'.repeat(64) };
     }
 
     /** Someone answers (or changes their answer) in getHugs. */
@@ -181,6 +212,9 @@ export class FakeGethugs {
                 }
                 const ws = this.workspaces.find((w) => w.id === b.workspace_id && w.org_id === b.org_id);
                 if (!ws) throw new Refused(404, 'not_found', 'Workspace not found');
+                for (const a of b.attachments ?? []) {
+                    if (!this.documents.some((d) => d.document_id === a.document_id && d.workspace_id === b.workspace_id)) throw new Refused(400, 'invalid_request', `Unknown document ${a.document_id}`);
+                }
                 const { unresolved, not_members } = this.resolve_names(b.org_id, b.workspace_id, b.channels);
                 if (unresolved.length) throw new Refused(400, 'invalid_request', `Unknown channel ${unresolved.map((c) => `'${c}'`).join(', ')}`, { unresolved });
                 if (not_members.length) throw new Refused(400, 'invalid_request', `${not_members.join(', ')} isn't a member of this workspace`, { code: 'not_a_member' });

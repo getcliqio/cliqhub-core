@@ -12,8 +12,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
 import { FakeGethugs } from '../helpers/fake_gethugs.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
-import { Daemon, Hug, Org, OrgMember, OrgRole, RealmMember, Run, User, Workspace } from '../../src/models/index.js';
+import { Daemon, Hug, Org, OrgMember, OrgRole, RealmMember, Run, StoredArtifact, User, Workspace } from '../../src/models/index.js';
 import { RunService } from '../../src/services/run.service.js';
+import { ArtifactStorageService } from '../../src/services/artifact_storage.service.js';
+import { Readable } from 'node:stream';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { crash_and_emit } from '../../src/services/run_reaper.service.js';
 import { seed_default_roles_for_org } from '../../src/models/migrations/migrate_org_roles.js';
 import { gethugs_partner } from '../../src/services/gethugs.service.js';
@@ -184,11 +189,124 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         await expect(open()).rejects.toMatchObject({ status_code: 503, code: 'gethugs_unavailable' });
     }, 60_000);
 
-    it('run files (attachments, an artifact context block) are not supported yet', async () => {
-        const attachment = { artifact_id: 'a1', name: 'r.pdf', size: 1, content_type: 'application/pdf', sha256: 'x' };
-        await expect(open({ attachments: [attachment] })).rejects.toMatchObject({ status_code: 422, code: 'not_supported_yet' });
-        await expect(open({ params: { context: [{ type: 'artifact', artifact_id: 'a1' }] } })).rejects.toMatchObject({ status_code: 422, code: 'not_supported_yet' });
-        expect(fake.hugs).toHaveLength(0);
+    describe('run files shown with a Hug (PLAN-gethugs-step5-files.md)', () => {
+        // Files go to a local folder, never to the object store a developer's shell may point at (S3_*).
+        const saved: Record<string, string | undefined> = {};
+        beforeAll(() => {
+            for (const k of ['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'STORAGE_BACKEND', 'ARTIFACTS_LOCAL_DIR']) saved[k] = process.env[k];
+            for (const k of ['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) delete process.env[k];
+            process.env.STORAGE_BACKEND = 'local';
+            process.env.ARTIFACTS_LOCAL_DIR = mkdtempSync(path.join(tmpdir(), 'gethugs-files-'));
+        });
+        afterAll(() => {
+            if (process.env.ARTIFACTS_LOCAL_DIR?.includes('gethugs-files-')) rmSync(process.env.ARTIFACTS_LOCAL_DIR, { recursive: true, force: true });
+            for (const [k, v] of Object.entries(saved)) {
+                if (v === undefined) delete process.env[k];
+                else process.env[k] = v;
+            }
+        });
+
+        /** A running run of a daemon, with one ready run file. */
+        async function run_with_file(text = 'quarterly numbers') {
+            const run_id = `run-${uid()}`;
+            const daemon_id = `daemon-${uid()}`;
+            const workspace_id = `ws-${uid()}`;
+            await Daemon.create({ id: daemon_id, api_key_hash: 'h', hostname: 'd', ip: '127.0.0.1', port: 4900, public_url: 'http://127.0.0.1:4900', status: 'online', last_heartbeat: Date.now(), capacity: 5, created_at: Date.now(), last_registered_at: Date.now() } as never);
+            await Workspace.create({ id: workspace_id, path: `/tmp/${workspace_id}`, created_at: Date.now(), updated_at: Date.now() } as never);
+            await Run.create({ run_id, workspace_id, team_id: 't', state: 'running', started_at: Date.now(), realm_id: o.realm_id, daemon_id } as never);
+            const bytes = Buffer.from(text);
+            const file = await new ArtifactStorageService().upload({
+                stream: Readable.from([bytes]), content_length: bytes.length, content_type: 'text/plain', name: 'report.txt',
+                target: { kind: 'run', run_id, phase: 'review' }, uploaded_by: null,
+            });
+            return { run_id, daemon_id, file };
+        }
+        const attachment = (f: { artifact_id: string; name: string; size: number; content_type: string; sha256: string }) =>
+            ({ artifact_id: f.artifact_id, name: f.name, size: f.size, content_type: f.content_type, sha256: f.sha256 });
+
+        it('an attachment and an artifact block become one document of the workspace, uploaded once; a retry reuses it', async () => {
+            const { run_id, daemon_id, file } = await run_with_file();
+            const hug_id = randomUUID();
+            const over = {
+                attachments: [attachment(file)],
+                params: { prompt: 'Approve?', context: [{ type: 'text', text: 'See the report' }, { type: 'artifact', artifact_id: file.artifact_id, title: 'Report' }] },
+            };
+            await open(over, { hug_id, run_id, daemon_id });
+            expect(fake.documents).toHaveLength(1);
+            const doc = fake.documents[0]!;
+            expect([doc.name, new TextDecoder().decode(doc.bytes), doc.workspace_id]).toEqual(['report.txt', 'quarterly numbers', fake.hugs[0]!.workspace_id]);
+            expect(fake.hugs[0]!.body.attachments).toEqual([{ document_id: doc.document_id }]);
+            expect(fake.hugs[0]!.body.params.context).toEqual([{ type: 'text', text: 'See the report' }, { type: 'document', document_id: doc.document_id, title: 'Report' }]);
+            // Core's row keeps cliq's own attachments.
+            expect((await Hug.findByPk(hug_id, { raw: true }))!.attachments).toEqual([attachment(file)]);
+
+            await Hug.destroy({ where: { id: hug_id } });
+            await open(over, { hug_id, run_id, daemon_id });
+            expect(fake.calls.filter((c) => c === 'documents/upload')).toHaveLength(1);
+            await Run.destroy({ where: { run_id } });
+        });
+
+        it('files in an answer come back as ready run files of the Hug’s slots, in cliq’s shape; each once', async () => {
+            const { run_id, daemon_id } = await run_with_file();
+            const hug_id = randomUUID();
+            await open({ files: [{ name: 'attachment' }, { name: 'docs', multiple: true }] }, { hug_id, run_id, daemon_id });
+            const g_id = (await Hug.findByPk(hug_id, { raw: true }))!.gethugs_id!;
+            const bob = fake.user_by_ref(fake.org_by_ref(`org:${o.org_id}`)!.id, `user:${o.bob.id}`)!.id;
+            const one = fake.answer_file(g_id, 'attachment', 'notes.txt', 'hello from bob');
+            const two = fake.answer_file(g_id, 'docs', 'a.txt', 'A');
+            const three = fake.answer_file(g_id, 'docs', 'b.txt', 'BB');
+            fake.respond(g_id, bob, { name: 'Bob', attachment: one, docs: [two, three] });
+            const feed = fake.feed.filter((e) => e.type === 'hug.responded').at(-1)!;
+            expect(await gethugs_apply(feed as never)).toBe(true);
+
+            const [event] = await HugEventRow.findAll({ where: { hug_id }, raw: true });
+            const values = (event!.payload as { response: { values: Record<string, any> } }).response.values;
+            expect(values.name).toBe('Bob');
+            expect(Object.keys(values.attachment).sort()).toEqual(['artifact_id', 'content_type', 'name', 'sha256', 'size']);
+            expect(values.attachment).toMatchObject({ name: 'notes.txt', size: 14, content_type: 'text/plain' });
+            expect(values.docs.map((d: { name: string; size: number }) => [d.name, d.size])).toEqual([['a.txt', 1], ['b.txt', 2]]);
+            const stored = await StoredArtifact.findByPk(values.attachment.artifact_id, { raw: true });
+            expect(stored).toMatchObject({ run_id, status: 'ready', source: 'hug', hug_id, hug_requested_input: 'attachment', uploaded_by: o.bob.id });
+            const back = await new ArtifactStorageService().download(values.attachment.artifact_id, null);
+            expect(Buffer.from(await new Response(back.body).arrayBuffer()).toString()).toBe('hello from bob');
+
+            // The same event again: nothing stored again; a changed answer that keeps a file reuses its run file.
+            const files_before = await StoredArtifact.count({ where: { hug_id } });
+            expect(await gethugs_apply(feed as never)).toBe(false);
+            fake.respond(g_id, bob, { name: 'Bob', attachment: one, docs: [] });
+            await gethugs_apply(fake.feed.filter((e) => e.type === 'hug.responded').at(-1)! as never);
+            expect(await StoredArtifact.count({ where: { hug_id } })).toBe(files_before);
+            await Run.destroy({ where: { run_id } });
+        });
+
+        it('a file that can’t be downloaded leaves the answer unapplied — it comes again, files and all', async () => {
+            const { run_id, daemon_id } = await run_with_file();
+            const hug_id = randomUUID();
+            await open({ files: [{ name: 'attachment' }] }, { hug_id, run_id, daemon_id });
+            const g_id = (await Hug.findByPk(hug_id, { raw: true }))!.gethugs_id!;
+            const bob = fake.user_by_ref(fake.org_by_ref(`org:${o.org_id}`)!.id, `user:${o.bob.id}`)!.id;
+            fake.respond(g_id, bob, { name: 'Bob', attachment: fake.answer_file(g_id, 'attachment', 'n.txt', 'x') });
+            const feed = fake.feed.filter((e) => e.type === 'hug.responded').at(-1)!;
+            fake.fail_with = 503;
+            await expect(gethugs_apply(feed as never)).rejects.toThrow();
+            fake.fail_with = null;
+            expect(await HugEventRow.count({ where: { hug_id } })).toBe(0);
+            expect((await Hug.findByPk(hug_id, { raw: true }))!.gethugs_seq).toBe(0);
+            expect(await gethugs_apply(feed as never)).toBe(true);
+            expect(await HugEventRow.count({ where: { hug_id } })).toBe(1);
+            await Run.destroy({ where: { run_id } });
+        }, 60_000);
+
+        it('a file that is not a ready file of the run is refused, as for Core’s own Hugs', async () => {
+            const a = await run_with_file();
+            const b = await run_with_file();
+            await expect(open({ attachments: [attachment(a.file)] }, { run_id: b.run_id, daemon_id: b.daemon_id }))
+                .rejects.toMatchObject({ status_code: 422, code: 'invalid_hug' });
+            await expect(open({ params: { context: [{ type: 'artifact', artifact_id: a.file.artifact_id }] } }, { run_id: b.run_id, daemon_id: b.daemon_id }))
+                .rejects.toMatchObject({ status_code: 422, code: 'invalid_hug' });
+            expect(fake.documents).toHaveLength(0);
+            await Run.destroy({ where: { run_id: [a.run_id, b.run_id] } });
+        });
     });
 
     describe('close, progress, the run’s end', () => {

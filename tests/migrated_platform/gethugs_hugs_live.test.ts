@@ -11,7 +11,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
-import { Hug, Org, OrgMember, OrgRole, RealmMember, User } from '../../src/models/index.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { Readable } from 'node:stream';
+import { Daemon, Hug, Org, OrgMember, OrgRole, RealmMember, Run, User, Workspace } from '../../src/models/index.js';
+import { ArtifactStorageService } from '../../src/services/artifact_storage.service.js';
 import { seed_default_roles_for_org } from '../../src/models/migrations/migrate_org_roles.js';
 import { gethugs_partner } from '../../src/services/gethugs.service.js';
 import { gethugs_reconcile } from '../../src/services/gethugs_reconcile.js';
@@ -120,6 +125,51 @@ describe.skipIf(!configured || !has_postgres)('asking through getHugs, live (loc
             [row.gethugs_id!]: 'cancelled',
             [(await Hug.findByPk(second.hug_id, { raw: true }))!.gethugs_id!]: 'closed',
         });
+
+        // A run file shown with a Hug (PLAN-gethugs-step5-files.md): uploaded as a document of the workspace. Files stay
+        // in a temp folder, never the bucket a shell's S3_* points at.
+        const saved = { ...process.env };
+        const dir = mkdtempSync(path.join(tmpdir(), 'gethugs-live-'));
+        for (const k of ['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']) delete process.env[k];
+        Object.assign(process.env, { STORAGE_BACKEND: 'local', ARTIFACTS_LOCAL_DIR: dir });
+        try {
+            const file_run = `run-${uid()}`;
+            const daemon_id = `daemon-${uid()}`;
+            const ws = `ws-${uid()}`;
+            await Daemon.create({ id: daemon_id, api_key_hash: 'h', hostname: 'd', ip: '127.0.0.1', port: 4900, public_url: 'http://127.0.0.1:4900', status: 'online', last_heartbeat: Date.now(), capacity: 5, created_at: Date.now(), last_registered_at: Date.now() } as never);
+            await Workspace.create({ id: ws, path: `/tmp/${ws}`, created_at: Date.now(), updated_at: Date.now() } as never);
+            await Run.create({ run_id: file_run, workspace_id: ws, team_id: 't', state: 'running', started_at: Date.now(), realm_id: ops.id, daemon_id } as never);
+            const bytes = Buffer.from('Q3 numbers: all green');
+            const file = await new ArtifactStorageService().upload({
+                stream: Readable.from([bytes]), content_length: bytes.length, content_type: 'text/plain', name: 'q3.txt',
+                target: { kind: 'run', run_id: file_run, phase: 'review' }, uploaded_by: null,
+            });
+            const with_file = await HugsService.create({
+                hug_id: randomUUID(), run_id: file_run, daemon_id, realm_id: ops.id, phase: 'review', iteration: 1, actor_id: null,
+                spec: {
+                    hug: { name: 'approval', sha256: 'd'.repeat(64) }, title: 'Approve Q3?', channels: ['All realm members'], expires_in_min: 30,
+                    attachments: [{ artifact_id: file.artifact_id, name: file.name, size: file.size, content_type: file.content_type, sha256: file.sha256 }],
+                    params: { prompt: 'Approve Q3?', context: [{ type: 'artifact', artifact_id: file.artifact_id }] },
+                },
+            });
+            const g_hug = (await Hug.findByPk(with_file.hug_id, { raw: true }))!;
+            const shown = await in_ws.call<{ attachments: Array<{ document_id: string; name: string; size: number }>; params: { context: Array<{ type: string; document_id?: string }> } }>(
+                'hugs/get_by_id', { workspace_id: g_hug.gethugs_workspace_id, org_id: g_org, hug_id: g_hug.gethugs_id },
+            );
+            expect(shown.attachments.map((a) => [a.name, a.size])).toEqual([['q3.txt', bytes.length]]);
+            expect(shown.params.context).toEqual([{ type: 'document', document_id: shown.attachments[0]!.document_id }]);
+            const doc = await in_ws.documents.download(shown.attachments[0]!.document_id);
+            expect(Buffer.from(await doc.arrayBuffer()).toString()).toBe('Q3 numbers: all green');
+            await HugsService.cancel_for_run(file_run);
+            await Run.destroy({ where: { run_id: file_run } });
+            await Daemon.destroy({ where: { id: daemon_id } });
+        } finally {
+            for (const k of ['S3_ENDPOINT', 'S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'STORAGE_BACKEND', 'ARTIFACTS_LOCAL_DIR']) {
+                if (saved[k] === undefined) delete process.env[k];
+                else process.env[k] = saved[k];
+            }
+            rmSync(dir, { recursive: true, force: true });
+        }
 
         await Org.update({ status: 'deleted', deleted_at: new Date() } as never, { where: { id: org.id } });
         await gethugs_reconcile(org.id, partner);

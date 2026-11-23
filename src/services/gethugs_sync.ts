@@ -127,4 +127,16 @@ export async function migrate_gethugs_sync(sequelize: ReturnType<typeof get_sequ
             PRIMARY KEY (org_id, sha256)
         )
     `);
+    // Run files and getHugs documents (PLAN-gethugs-step5-files.md): `out` — a run artifact a Hug shows, uploaded once per
+    // workspace; `in` — a file someone sent in an answer, stored once as a run artifact.
+    await sequelize.query(`
+        CREATE TABLE IF NOT EXISTS cliq.gethugs_documents (
+            workspace_id TEXT NOT NULL,
+            document_id TEXT NOT NULL UNIQUE,
+            artifact_id TEXT NOT NULL,
+            direction TEXT NOT NULL CONSTRAINT gethugs_documents_direction_check CHECK (direction IN ('out', 'in')),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            UNIQUE (workspace_id, artifact_id, direction)
+        )
+    `);
 }
