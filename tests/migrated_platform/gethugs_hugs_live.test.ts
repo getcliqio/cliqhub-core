@@ -148,15 +148,16 @@ describe.skipIf(!configured || !has_postgres)('asking through getHugs, live (loc
                 spec: {
                     hug: { name: 'approval', sha256: 'd'.repeat(64) }, title: 'Approve Q3?', channels: ['All realm members'], expires_in_min: 30,
                     attachments: [{ artifact_id: file.artifact_id, name: file.name, size: file.size, content_type: file.content_type, sha256: file.sha256 }],
-                    params: { prompt: 'Approve Q3?', context: [{ type: 'artifact', artifact_id: file.artifact_id }] },
+                    params: { prompt: 'Approve Q3?', context: [{ type: 'document', ref: file.artifact_id }] },
                 },
             });
             const g_hug = (await Hug.findByPk(with_file.hug_id, { raw: true }))!;
-            const shown = await in_ws.call<{ attachments: Array<{ document_id: string; name: string; size: number }>; params: { context: Array<{ type: string; document_id?: string }> } }>(
+            const shown = await in_ws.call<{ attachments: Array<{ document_id: string; ref: string; name: string; size: number }>; params: { context: Array<{ type: string; ref?: string }> } }>(
                 'hugs/get_by_id', { workspace_id: g_hug.gethugs_workspace_id, org_id: g_org, hug_id: g_hug.gethugs_id },
             );
             expect(shown.attachments.map((a) => [a.name, a.size])).toEqual([['q3.txt', bytes.length]]);
-            expect(shown.params.context).toEqual([{ type: 'document', document_id: shown.attachments[0]!.document_id }]);
+            expect(shown.attachments.map((a) => a.ref)).toEqual([file.artifact_id]);
+            expect(shown.params.context).toEqual([{ type: 'document', ref: file.artifact_id }]);
             const doc = await in_ws.documents.download(shown.attachments[0]!.document_id);
             expect(Buffer.from(await doc.arrayBuffer()).toString()).toBe('Q3 numbers: all green');
             await HugsService.cancel_for_run(file_run);

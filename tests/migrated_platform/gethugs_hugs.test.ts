@@ -294,19 +294,20 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         const attachment = (f: { artifact_id: string; name: string; size: number; content_type: string; sha256: string }) =>
             ({ artifact_id: f.artifact_id, name: f.name, size: f.size, content_type: f.content_type, sha256: f.sha256 });
 
-        it('an attachment and an artifact block become one document of the workspace, uploaded once; a retry reuses it', async () => {
+        it("an attachment becomes a document of the workspace, attached with its run file id as its ref (which a document block names); uploaded once, a retry reuses it", async () => {
             const { run_id, daemon_id, file } = await run_with_file();
             const hug_id = randomUUID();
             const over = {
                 attachments: [attachment(file)],
-                params: { prompt: 'Approve?', context: [{ type: 'text', text: 'See the report' }, { type: 'artifact', artifact_id: file.artifact_id, title: 'Report' }] },
+                params: { prompt: 'Approve?', context: [{ type: 'text', text: 'See the report' }, { type: 'document', ref: file.artifact_id, label: 'Report' }] },
             };
             await open(over, { hug_id, run_id, daemon_id });
             expect(fake.documents).toHaveLength(1);
             const doc = fake.documents[0]!;
             expect([doc.name, new TextDecoder().decode(doc.bytes), doc.workspace_id]).toEqual(['report.txt', 'quarterly numbers', fake.hugs[0]!.workspace_id]);
-            expect(fake.hugs[0]!.body.attachments).toEqual([{ document_id: doc.document_id }]);
-            expect(fake.hugs[0]!.body.params.context).toEqual([{ type: 'text', text: 'See the report' }, { type: 'document', document_id: doc.document_id, title: 'Report' }]);
+            expect(fake.hugs[0]!.body.attachments).toEqual([{ document_id: doc.document_id, ref: file.artifact_id }]);
+            // Params go to getHugs unchanged: the block names the file by the ref it is attached with.
+            expect(fake.hugs[0]!.body.params.context).toEqual([{ type: 'text', text: 'See the report' }, { type: 'document', ref: file.artifact_id, label: 'Report' }]);
             // Core's row keeps cliq's own attachments.
             expect((await Hug.findByPk(hug_id, { raw: true }))!.attachments).toEqual([attachment(file)]);
 
@@ -371,8 +372,6 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             const a = await run_with_file();
             const b = await run_with_file();
             await expect(open({ attachments: [attachment(a.file)] }, { run_id: b.run_id, daemon_id: b.daemon_id }))
-                .rejects.toMatchObject({ status_code: 422, code: 'invalid_hug' });
-            await expect(open({ params: { context: [{ type: 'artifact', artifact_id: a.file.artifact_id }] } }, { run_id: b.run_id, daemon_id: b.daemon_id }))
                 .rejects.toMatchObject({ status_code: 422, code: 'invalid_hug' });
             expect(fake.documents).toHaveLength(0);
             await Run.destroy({ where: { run_id: [a.run_id, b.run_id] } });

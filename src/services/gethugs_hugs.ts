@@ -80,14 +80,6 @@ function relay_error(err: unknown, what: string): Error {
     return err instanceof Error ? err : new Error(String(err));
 }
 
-type Block = { type?: unknown; artifact_id?: unknown } & Record<string, unknown>;
-
-/** The run files a Hug shows in `params.context` (blocks `{ type: 'artifact', artifact_id }`). */
-function artifact_blocks(params: Record<string, unknown>): Block[] {
-    const context = params.context;
-    return Array.isArray(context) ? context.filter((b): b is Block => Boolean(b) && typeof b === 'object' && (b as Block).type === 'artifact' && typeof (b as Block).artifact_id === 'string') : [];
-}
-
 /**
  * A run artifact as a document in the Hug's workspace — uploaded once per workspace (`cliq.gethugs_documents`), so a
  * retried create reuses it.
@@ -111,31 +103,19 @@ async function document_for(client: HugsClient, workspace_id: string, artifact_i
 }
 
 /**
- * The run files a Hug shows, as getHugs takes them: each attachment and `artifact` context block (checked to be a ready
- * file of the run) becomes a document of the workspace; the blocks are rewritten to
- * `{ type: 'document', document_id }`, their other fields kept.
+ * The run files a Hug shows, as getHugs takes them: each attachment (checked to be a file of the run) becomes a document
+ * of the workspace, attached with its run file id as its `ref` — the id cliq's params name it by (a `document` context
+ * block, a team hug's own fields; PLAN-gethugs-step8-5 D1). Params go to getHugs unchanged.
  */
-async function run_files_as_documents(client: HugsClient, workspace_id: string, run_id: string, spec: HugEnvelope): Promise<{ attachments: Array<{ document_id: string }>; params: Record<string, unknown> }> {
-    const blocks = artifact_blocks(spec.params);
-    const ids = [...new Set([...spec.attachments.map((a) => a.artifact_id), ...blocks.map((b) => b.artifact_id as string)])];
-    if (ids.length === 0) return { attachments: [], params: spec.params };
+async function run_files_as_documents(client: HugsClient, workspace_id: string, run_id: string, spec: HugEnvelope): Promise<Array<{ document_id: string; ref: string }>> {
+    const ids = [...new Set(spec.attachments.map((a) => a.artifact_id))];
+    if (ids.length === 0) return [];
     const found = await StoredArtifact.findAll({ where: { id: { [Op.in]: ids }, run_id }, attributes: ['id'], raw: true });
     const missing = ids.filter((id) => !found.some((f) => f.id === id));
     if (missing.length > 0) throw ApiError.unprocessable(`Attachment not found in this run: ${missing.join(', ')}`, 'invalid_hug');
-
-    const document_of = new Map<string, string>();
-    for (const id of ids) document_of.set(id, await document_for(client, workspace_id, id));
-    const context = Array.isArray(spec.params.context)
-        ? (spec.params.context as unknown[]).map((b) => {
-            if (!b || typeof b !== 'object' || (b as Block).type !== 'artifact') return b;
-            const { artifact_id, ...rest } = b as Block;
-            return { ...rest, type: 'document', document_id: document_of.get(artifact_id as string) };
-        })
-        : spec.params.context;
-    return {
-        attachments: spec.attachments.map((a) => ({ document_id: document_of.get(a.artifact_id)! })),
-        params: context === undefined ? spec.params : { ...spec.params, context },
-    };
+    const attached: Array<{ document_id: string; ref: string }> = [];
+    for (const id of ids) attached.push({ document_id: await document_for(client, workspace_id, id), ref: id });
+    return attached;
 }
 
 /** getHugs' built-in templates by name, read from getHugs (`templates/get`, `builtin: true`) and kept a while. */
@@ -272,9 +252,9 @@ export async function gethugs_create(input: GethugsCreateInput, partner: Gethugs
     const id = input.hug_id ?? randomUUID();
 
     const client: HugsClient = partner.in_workspace(g_org, workspace, requester);
-    let files: Awaited<ReturnType<typeof run_files_as_documents>>;
+    let attachments: Awaited<ReturnType<typeof run_files_as_documents>>;
     try {
-        files = await run_files_as_documents(client, workspace, input.run_id, spec);
+        attachments = await run_files_as_documents(client, workspace, input.run_id, spec);
     } catch (err) {
         throw err instanceof HugsError ? relay_error(err, 'documents/upload') : err;
     }
@@ -285,9 +265,9 @@ export async function gethugs_create(input: GethugsCreateInput, partner: Gethugs
             template,
             title: spec.title,
             ...(spec.summary ? { summary: spec.summary } : {}),
-            params: files.params,
+            params: spec.params,
             files: spec.files,
-            ...(files.attachments.length ? { attachments: files.attachments } : {}),
+            ...(attachments.length ? { attachments } : {}),
             channels,
             context: { org: input.org_id, realm: input.realm_id, team: run?.team_label ?? null, run_id: input.run_id, phase: input.phase, iteration: input.iteration },
             expires_in_min: spec.expires_in_min!,
