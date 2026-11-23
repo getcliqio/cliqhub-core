@@ -11,7 +11,8 @@
         "dev": "tsc --watch & node --env-file=.env --watch dist/server.js",
         "test": "vitest run",
         "test:watch": "vitest",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "gethugs:switch": "tsc && node --env-file=.env dist/scripts/gethugs_switch.js"
     },
     "engines": {
         "node": ">=20"
