@@ -473,6 +473,15 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             expect((await Hug.findByPk(hug_id, { raw: true }))!.gethugs_seq).toBe(2);
         });
 
+        it("via comes back in the Hug's cliq channel names (a person's email → their username, all-workspace → the everyone channel it named); others kept", async () => {
+            const { hug_id } = await open({ channels: ['All realm members', o.bob.username, 'reviewers'] });
+            const event = responded(await g(hug_id), 1, { decision: 'approve' });
+            event.response.via = [o.bob.email, 'all-workspace', 'reviewers', 'not-asked'];
+            expect(await gethugs_apply(event)).toBe(true);
+            const [first] = await events(hug_id);
+            expect((first!.payload as { response: { via: string[] } }).response.via).toEqual([o.bob.username, 'All realm members', 'reviewers', 'not-asked']);
+        });
+
         it('Core’s reads (PLAN-gethugs-step6-ui-link.md): the getHugs page, each person’s latest answer, responded', async () => {
             const run_id = `run-${uid()}`;
             const { hug_id } = await open({}, { run_id });

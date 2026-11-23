@@ -224,6 +224,20 @@ async function channel_names(org_id: string, realm_id: string, names: readonly s
 }
 
 /**
+ * getHugs' `via` (the channels that reached a responder) in the Hug's own cliq channel names: the reverse of
+ * {@link channel_names} for this Hug's channels — a person's email back to the name cliq asked them by, `all-workspace`
+ * back to the "everyone" channel the Hug named. A name none of its channels maps to is kept as it is.
+ */
+export async function cliq_via(hug: { org_id: string; realm_id: string; channels: readonly string[] }, via: readonly string[]): Promise<string[]> {
+    const back = new Map<string, string[]>();
+    for (const name of hug.channels) {
+        const [sent] = await channel_names(hug.org_id, hug.realm_id, [name]);
+        if (sent) back.set(sent.toLowerCase(), [...(back.get(sent.toLowerCase()) ?? []), name]);
+    }
+    return [...new Set(via.flatMap((v) => back.get(v.toLowerCase()) ?? [v]))];
+}
+
+/**
  * Opens a Hug in getHugs for a switched org and keeps Core's row for it. A retry with the daemon's `hug_id` returns
  * the same Hug (the `Idempotency-Key`, then Core's row).
  *

@@ -16,6 +16,7 @@ import { get_logger } from '../lib/log.js';
 import { Hug } from '../models/index.js';
 import { EXTERNAL_SOURCE } from './gethugs_reconcile.js';
 import { HugsService } from './hugs.service.js';
+import { cliq_via } from './gethugs_hugs.js';
 import { ArtifactStorageService } from './artifact_storage.service.js';
 import { gethugs_partner } from './gethugs.service.js';
 
@@ -144,6 +145,7 @@ export async function gethugs_apply(event: GethugsEvent): Promise<boolean> {
     // An answer's files become run artifacts first — outside the transaction (they are downloads), and only for an
     // event not yet applied. A failed download throws: the event stays unapplied and is read again.
     let values: Record<string, unknown> | null = null;
+    let via: string[] | null = null;
     let responder_id: string | null = null;
     if (event.type === 'hug.responded' && event.response) {
         const hug = await Hug.findByPk(known.id);
@@ -155,6 +157,8 @@ export async function gethugs_apply(event: GethugsEvent): Promise<boolean> {
         // `uploaded_by` is a cliq user: someone getHugs knows and cliq doesn't is left out.
         const cliq_user = responder_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(responder_id) ? responder_id : null;
         values = await with_run_files(hug, event.response.values, cliq_user);
+        // In cliq's channel names, which the requester's policy compares (a gate's reviewer groups).
+        via = await cliq_via(hug, event.response.via ?? []);
     }
 
     return get_sequelize().transaction(async (t) => {
@@ -170,7 +174,7 @@ export async function gethugs_apply(event: GethugsEvent): Promise<boolean> {
             const responded_at = typeof r.responded_at === 'number' ? new Date(r.responded_at).toISOString() : r.responded_at;
             await HugsService.relay_event(hug, 'response', {
                 response: {
-                    response_id: r.response_id, responder, via: r.via ?? [], values: answer,
+                    response_id: r.response_id, responder, via: via ?? r.via ?? [], values: answer,
                     ...(r.summary ? { summary: r.summary } : {}), responded_at,
                 },
             }, t);
