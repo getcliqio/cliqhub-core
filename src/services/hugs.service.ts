@@ -517,6 +517,19 @@ export class HugsService {
     }
 
     /**
+     * Records one event of a Hug relayed from getHugs (PLAN-gethugs-step4-answers.md) with Core's next `seq`, and queues
+     * it for the daemon — in `transaction`, as Core's own events are.
+     *
+     * @returns the event's `seq`
+     */
+    static async relay_event(hug: Hug, type: HugEventType, payload: Record<string, unknown>, transaction: Transaction): Promise<number> {
+        const seq = await append_seq(hug.id, transaction);
+        await HugEventRow.create({ hug_id: hug.id, seq, type, payload, created_at: new Date() }, { transaction });
+        await HugsService._deliver(hug, { hug_id: hug.id, seq, type, payload }, transaction);
+        return seq;
+    }
+
+    /**
      * Queue one event for the daemon that opened the Hug, in the transaction that wrote it (§9), and
      * retry it until shortly after the Hug expires.
      */

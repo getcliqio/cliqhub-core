@@ -20,6 +20,11 @@ import { gethugs_partner } from '../../src/services/gethugs.service.js';
 import { reset_gethugs_builtins } from '../../src/services/gethugs_hugs.js';
 import { gethugs_reconcile } from '../../src/services/gethugs_reconcile.js';
 import { HugsService } from '../../src/services/hugs.service.js';
+import { gethugs_apply } from '../../src/services/gethugs_events.js';
+import { GETHUGS_FEED_LOCK_KEY, run_gethugs_feed } from '../../src/services/gethugs_feed.js';
+import pg from 'pg';
+import { database_url } from './helpers/control_plane_store.js';
+import { HugEventRow } from '../../src/models/index.js';
 import { NotificationService } from '../../src/services/notification.service.js';
 import { RealmService } from '../../src/services/realm.service.js';
 
@@ -240,6 +245,153 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             expect(fake.hugs.map((h) => h.status)).toEqual(['cancelled', 'cancelled']);
             await Run.destroy({ where: { run_id: [a.run_id, b.run_id] } });
             await Daemon.destroy({ where: { id: [a.daemon_id, b.daemon_id] } });
+        });
+    });
+
+    describe('events from getHugs (PLAN-gethugs-step4-answers.md)', () => {
+        const events = async (hug_id: string) => (await HugEventRow.findAll({ where: { hug_id }, order: [['seq', 'ASC']], raw: true }))
+            .map((e) => ({ seq: e.seq, type: e.type, payload: e.payload }));
+        const delivered = async (hug_id: string) => {
+            const [rows] = await get_sequelize().query(
+                `SELECT payload FROM cliq.command_outbox WHERE endpoint = '/v1/hugs/deliver' AND payload::jsonb->>'hug_id' = :hug_id ORDER BY created_at, (payload::jsonb->>'seq')::int`,
+                { replacements: { hug_id } },
+            );
+            return (rows as Array<{ payload: unknown }>).map((r) => {
+                const p = (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) as { type: string; seq: number };
+                return `${p.seq}:${p.type}`;
+            });
+        };
+        const g = async (hug_id: string) => (await Hug.findByPk(hug_id, { raw: true }))!.gethugs_id!;
+        const responded = (gethugs_id: string, seq: number, values: Record<string, unknown>) => ({
+            type: 'hug.responded', hug: { id: gethugs_id }, seq,
+            response: {
+                response_id: `rsp_${seq}`, responder: { user_id: 'usr_bob', name: 'Bob in getHugs', external: { source: 'cliqhub', id: `user:${o.bob.id}` } },
+                via: ['reviewers'], values, summary: 'Approved', responded_at: 1_795_400_000_000, changed: seq > 1,
+            },
+        });
+
+        it('an answer reaches the daemon as a response by the cliq person; the same event twice is applied once; a changed answer is its own', async () => {
+            const { hug_id } = await open();
+            const id = await g(hug_id);
+            expect(await gethugs_apply(responded(id, 1, { approved: true }))).toBe(true);
+            expect(await gethugs_apply(responded(id, 1, { approved: true }))).toBe(false);
+            expect(await gethugs_apply(responded(id, 2, { approved: false }))).toBe(true);
+            const got = await events(hug_id);
+            expect(got.map((e) => `${e.seq}:${e.type}`)).toEqual(['1:response', '2:response']);
+            expect(got[0]!.payload).toEqual({ response: {
+                response_id: 'rsp_1', responder: { user_id: o.bob.id, name: o.bob.username }, via: ['reviewers'],
+                values: { approved: true }, summary: 'Approved', responded_at: new Date(1_795_400_000_000).toISOString(),
+            } });
+            expect(await delivered(hug_id)).toEqual(['1:response', '2:response']);
+            expect((await Hug.findByPk(hug_id, { raw: true }))!.gethugs_seq).toBe(2);
+        });
+
+        it('expired reaches the daemon once; anything after the Hug ended is not delivered', async () => {
+            const { hug_id } = await open();
+            const id = await g(hug_id);
+            expect(await gethugs_apply({ type: 'hug.expired', hug: { id }, seq: 1 })).toBe(true);
+            expect((await Hug.findByPk(hug_id, { raw: true }))!.status).toBe('expired');
+            await gethugs_apply({ type: 'hug.cancelled', hug: { id }, seq: 2, reason: 'late' });
+            await gethugs_apply(responded(id, 3, { approved: true }));
+            expect(await delivered(hug_id)).toEqual(['1:expired']);
+        });
+
+        it('the run’s end tells the daemon once; getHugs’ own cancel event then changes nothing', async () => {
+            const run_id = `run-${uid()}`;
+            const { hug_id } = await open({}, { run_id });
+            await HugsService.cancel_for_run(run_id);
+            expect(await delivered(hug_id)).toEqual(['1:cancelled']);
+            expect((await events(hug_id))[0]!.payload).toEqual({ reason: 'The run ended' });
+            await gethugs_apply({ type: 'hug.cancelled', hug: { id: await g(hug_id) }, seq: 1, reason: 'The run ended' });
+            expect(await delivered(hug_id)).toEqual(['1:cancelled']);
+        });
+
+        it('a cancel in getHugs (not the run’s end) reaches the daemon with its reason; closed and other events tell it nothing', async () => {
+            const { hug_id } = await open();
+            const id = await g(hug_id);
+            expect(await gethugs_apply({ type: 'hug.reminded', hug: { id }, seq: null })).toBe(false);
+            expect(await gethugs_apply({ type: 'hug.cancelled', hug: { id }, seq: 1, reason: 'Not needed' })).toBe(true);
+            expect((await events(hug_id)).map((e) => [e.type, e.payload])).toEqual([['cancelled', { reason: 'Not needed' }]]);
+
+            const other = await open();
+            await HugsService.close({ hug_id: other.hug_id, outcome: 'done', daemon_id: 'daemon-1' });
+            await gethugs_apply({ type: 'hug.closed', hug: { id: await g(other.hug_id) }, seq: null, outcome: 'done' });
+            expect(await delivered(other.hug_id)).toEqual([]);
+            expect(await gethugs_apply({ type: 'hug.responded', hug: { id: 'hug_not_ours' }, seq: 1 })).toBe(false);
+        });
+    });
+
+    describe('the feed reader (PLAN-gethugs-step4-answers.md)', () => {
+        const delivered = async (hug_id: string) => {
+            const [rows] = await get_sequelize().query(
+                `SELECT payload FROM cliq.command_outbox WHERE endpoint = '/v1/hugs/deliver' AND payload::jsonb->>'hug_id' = :hug_id ORDER BY created_at, (payload::jsonb->>'seq')::int`,
+                { replacements: { hug_id } },
+            );
+            return (rows as Array<{ payload: unknown }>).map((r) => {
+                const p = (typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload) as { type: string; seq: number };
+                return `${p.seq}:${p.type}`;
+            });
+        };
+        const g = async (hug_id: string) => (await Hug.findByPk(hug_id, { raw: true }))!.gethugs_id!;
+        const bob_in_gethugs = () => fake.user_by_ref(fake.org_by_ref(`org:${o.org_id}`)!.id, `user:${o.bob.id}`)!.id;
+        const read = () => run_gethugs_feed(gethugs_partner()!, { wait_s: 0 });
+        const set_cursor = (cursor: string | null) => cursor === null
+            ? get_sequelize().query(`DELETE FROM cliq.settings WHERE key = 'gethugs.feed_cursor'`)
+            : get_sequelize().query(`UPDATE cliq.settings SET value = :cursor WHERE key = 'gethugs.feed_cursor'`, { replacements: { cursor } });
+
+        beforeEach(async () => { await set_cursor(null); });
+        afterAll(async () => { await set_cursor(null); });
+
+        it('starts from now (recovering open Hugs), then applies each answer once; a restart that re-reads applies nothing twice', async () => {
+            const { hug_id } = await open();
+            fake.respond(await g(hug_id), bob_in_gethugs(), { approved: true });
+            // No cursor yet: the feed starts at its end, and the open Hug re-reads its own events.
+            expect(await read()).toMatchObject({ ran: true, recovered: true, applied: 1 });
+            expect(await delivered(hug_id)).toEqual(['1:response']);
+
+            fake.respond(await g(hug_id), bob_in_gethugs(), { approved: false });
+            expect(await read()).toMatchObject({ applied: 1, recovered: false });
+            expect(await delivered(hug_id)).toEqual(['1:response', '2:response']);
+
+            await set_cursor('0');
+            expect(await read()).toMatchObject({ applied: 0 });
+            expect(await delivered(hug_id)).toEqual(['1:response', '2:response']);
+        });
+
+        it('an answer given before Core stored its row arrives with the catch-up after create, once', async () => {
+            await read();
+            fake.on_create = (h) => fake.respond(h.id, bob_in_gethugs(), { approved: true });
+            const { hug_id } = await open();
+            fake.on_create = null;
+            expect(await delivered(hug_id)).toEqual(['1:response']);
+            await read();
+            expect(await delivered(hug_id)).toEqual(['1:response']);
+        });
+
+        it('an expired cursor: start again from now and re-read the open Hugs — what came meanwhile arrives once', async () => {
+            const { hug_id } = await open();
+            await read();
+            fake.respond(await g(hug_id), bob_in_gethugs(), { approved: true });
+            fake.expire(await g(hug_id));
+            fake.feed_kept_from = fake.feed.length + 1;
+            expect(await read()).toMatchObject({ recovered: true, applied: 2 });
+            expect(await delivered(hug_id)).toEqual(['1:response', '2:expired']);
+            expect(await read()).toMatchObject({ applied: 0 });
+        });
+
+        it('one reader: while another process holds the lock, nothing is read; other callers’ Hugs are skipped', async () => {
+            const other = new pg.Client({ connectionString: database_url });
+            await other.connect();
+            try {
+                await other.query('SELECT pg_advisory_lock($1)', [GETHUGS_FEED_LOCK_KEY]);
+                expect(await read()).toEqual({ ran: false, applied: 0, recovered: false });
+                await other.query('SELECT pg_advisory_unlock($1)', [GETHUGS_FEED_LOCK_KEY]);
+            } finally {
+                await other.end();
+            }
+            await read();
+            fake.feed.push({ id: 'evt_x', type: 'hug.responded', seq: 1, hug: { id: 'hug_someone_elses', ref_id: null, status: 'open' } });
+            expect(await read()).toMatchObject({ ran: true, applied: 0 });
         });
     });
 });

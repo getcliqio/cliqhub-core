@@ -2592,7 +2592,8 @@ export async function migrate_hugs_gethugs(sq: Sequelize): Promise<void> {
     await sq.query(`ALTER TABLE cliq."hugs"
         ADD COLUMN IF NOT EXISTS "provider" TEXT NOT NULL DEFAULT 'cliqhub',
         ADD COLUMN IF NOT EXISTS "gethugs_id" TEXT,
-        ADD COLUMN IF NOT EXISTS "gethugs_workspace_id" TEXT`);
+        ADD COLUMN IF NOT EXISTS "gethugs_workspace_id" TEXT,
+        ADD COLUMN IF NOT EXISTS "gethugs_seq" INTEGER NOT NULL DEFAULT 0`);
     await sq.query(`DO $$ BEGIN
         ALTER TABLE cliq."hugs" ADD CONSTRAINT "hugs_provider_check" CHECK ("provider" IN ('cliqhub', 'gethugs'));
     EXCEPTION WHEN duplicate_object THEN NULL; END $$`);

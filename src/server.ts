@@ -20,6 +20,7 @@ import {
 } from './services/hug_expiry_sweep.service.js';
 import { start_invite_sweep, stop_invite_sweep } from './services/invite_sweep.service.js';
 import { start_gethugs_worker, stop_gethugs_worker } from './services/gethugs_worker.js';
+import { start_gethugs_feed, stop_gethugs_feed } from './services/gethugs_feed.js';
 import { settle_background } from './lib/background.js';
 const log = get_logger('server');
 
@@ -96,6 +97,8 @@ async function main() {
     start_invite_sweep();
     // Orgs switched to getHugs: reconcile what changed, nightly everything (PLAN-gethugs-step2-provisioning.md).
     start_gethugs_worker();
+    // Answers from getHugs: one reader of its event feed (PLAN-gethugs-step4-answers.md).
+    start_gethugs_feed();
 
     // Bind explicitly to '::' so the backend is reachable on Railway's
     // IPv6-only private network. Node's default behavior is system-dependent.
@@ -112,6 +115,7 @@ async function main() {
         stop_hug_sweep();
         stop_invite_sweep();
         stop_gethugs_worker();
+        stop_gethugs_feed();
         server.close();
         await settle_background();
         await close_control_plane_store();

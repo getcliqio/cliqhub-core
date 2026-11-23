@@ -12,7 +12,9 @@ interface Workspace { id: string; org_id: string; name: string; archived_at: num
 interface Channel { id: string; org_id: string; workspace_id: string | null; personal_user_id: string | null; name: string; enabled: boolean; archived_at: number | null; external: Ext; version: number }
 interface Dest { id: string; channel_id: string; type: string; config: Record<string, unknown>; target_channel_id: string | null }
 interface Template { id: string; org_id: string | null; name: string; builtin: boolean; versions: Array<{ id: string; sha: string }> }
-export interface FakeHug { id: string; org_id: string; workspace_id: string; ref_id: string | null; requester: string | null; template: string; title: string; channels: string[]; context: Record<string, unknown>; status: string; outcome: string | null; progress: string | null; expires_at: number; idempotency_key: string | null; body: Record<string, any> }
+export interface FakeHug { id: string; org_id: string; workspace_id: string; ref_id: string | null; requester: string | null; template: string; title: string; channels: string[]; context: Record<string, unknown>; status: string; outcome: string | null; progress: string | null; expires_at: number; idempotency_key: string | null; body: Record<string, any>; last_seq: number; events: Array<{ hug_id: string; seq: number; type: 'response' | 'expired' | 'cancelled'; payload: Record<string, unknown> }> }
+/** One event of the partner feed (as getHugs' `events/get` gives it). */
+export interface FeedEvent { id: string; type: string; seq: number | null; hug: { id: string; ref_id: string | null; status: string }; [k: string]: unknown }
 
 const SLACK = /^https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/;
 
@@ -34,6 +36,12 @@ export class FakeGethugs {
         { id: 'tpl_ack', org_id: null, name: 'ack', builtin: true, versions: [] },
     ];
     hugs: FakeHug[] = [];
+    /** The partner feed, oldest first; a cursor is the index after the last event given. */
+    feed: FeedEvent[] = [];
+    /** Cursors before this index are refused as expired (events are kept 7 days). */
+    feed_kept_from = 0;
+    /** Called on every new Hug, before `hugs/create` answers (a test answers it "before Core stores its row"). */
+    on_create: ((h: FakeHug) => void) | null = null;
     /** When set, every call answers this status (getHugs down: 503; the token refused: 401). */
     fail_with: number | null = null;
     /** Every call, as `<path>` — reads included. */
@@ -65,6 +73,32 @@ export class FakeGethugs {
     /** Writes only (no reads). */
     writes(): string[] {
         return this.calls.filter((c) => !/\/get($|_)/.test(c));
+    }
+
+    /** A Hug's event: in its own list (with the next seq) and on the feed (`extra` is the feed's own fields). */
+    private hug_event(h: FakeHug, type: 'response' | 'expired' | 'cancelled' | null, feed_type: string, payload: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+        let seq: number | null = null;
+        if (type) {
+            seq = ++h.last_seq;
+            h.events.push({ hug_id: h.id, seq, type, payload });
+        }
+        this.feed.push({ id: this.id('evt'), type: feed_type, seq, at: Date.now(), org: { id: h.org_id }, workspace: { id: h.workspace_id }, hug: { id: h.id, ref_id: h.ref_id, status: h.status }, ...extra });
+    }
+
+    /** Someone answers (or changes their answer) in getHugs. */
+    respond(hug_id: string, user_id: string, values: Record<string, unknown>, summary = 'Done') {
+        const h = this.hugs.find((x) => x.id === hug_id)!;
+        const u = this.users.find((x) => x.id === user_id)!;
+        const changed = h.events.some((e) => e.type === 'response' && (e.payload.response as { responder: { user_id: string } }).responder.user_id === user_id);
+        const response = { response_id: this.id('rsp'), responder: { user_id, name: u.name ?? u.email }, via: h.channels, values, summary, responded_at: Date.now() };
+        this.hug_event(h, 'response', 'hug.responded', { response }, { response: { ...response, responder: { ...response.responder, external: u.external }, changed } });
+    }
+
+    /** A Hug expires in getHugs. */
+    expire(hug_id: string) {
+        const h = this.hugs.find((x) => x.id === hug_id)!;
+        h.status = 'expired';
+        this.hug_event(h, 'expired', 'hug.expired', {});
     }
 
     org_by_ref(id: string) { return this.orgs.find((o) => o.external?.id === id); }
@@ -153,15 +187,20 @@ export class FakeGethugs {
                 const h: FakeHug = {
                     id: this.id('hug'), org_id: b.org_id, workspace_id: b.workspace_id, ref_id: b.ref_id ?? null, requester: b.requester ?? null,
                     template: b.template, title: b.title, channels: b.channels, context: b.context ?? {}, status: 'open', outcome: null, progress: null,
-                    expires_at: Date.now() + b.expires_in_min * 60_000, idempotency_key, body: b,
+                    expires_at: Date.now() + b.expires_in_min * 60_000, idempotency_key, body: b, last_seq: 0, events: [],
                 };
                 this.hugs.push(h);
+                this.hug_event(h, null, 'hug.opened', {});
+                if (this.on_create) this.on_create(h);
                 return h;
             }
             case 'hugs/close': {
                 const h = this.hugs.find((x) => x.id === b.hug_id && x.workspace_id === b.workspace_id);
                 if (!h) throw new Refused(404, 'not_found', 'Hug not found');
-                if (h.status === 'open') Object.assign(h, { status: 'closed', outcome: b.outcome });
+                if (h.status === 'open') {
+                    Object.assign(h, { status: 'closed', outcome: b.outcome });
+                    this.hug_event(h, null, 'hug.closed', {}, { outcome: b.outcome });
+                }
                 return { status: h.status };
             }
             case 'hugs/update_progress': {
@@ -171,8 +210,26 @@ export class FakeGethugs {
             }
             case 'hugs/cancel': {
                 const open = this.hugs.filter((h) => h.workspace_id === b.workspace_id && h.status === 'open' && (b.ref_id ? h.ref_id === b.ref_id : h.id === b.hug_id));
-                for (const h of open) Object.assign(h, { status: 'cancelled', outcome: b.reason ?? null });
+                for (const h of open) {
+                    Object.assign(h, { status: 'cancelled', outcome: b.reason ?? null });
+                    this.hug_event(h, 'cancelled', 'hug.cancelled', b.reason ? { reason: b.reason } : {}, { reason: b.reason ?? null });
+                }
                 return { cancelled: open.map((h) => h.id) };
+            }
+            case 'hugs/get_events': {
+                const events = b.cursors.flatMap((c: { hug_id: string; after_seq: number }) =>
+                    (this.hugs.find((h) => h.id === c.hug_id && h.workspace_id === b.workspace_id)?.events ?? []).filter((e) => e.seq > c.after_seq));
+                const hugs = b.cursors.map((c: { hug_id: string }) => this.hugs.find((h) => h.id === c.hug_id)).filter(Boolean)
+                    .map((h: FakeHug) => ({ hug_id: h.id, status: h.status, last_seq: h.last_seq }));
+                return { events, hugs, has_more: false };
+            }
+            case 'events/get':
+            case 'events/wait': {
+                if (b.cursor === undefined) return { events: [], cursor: String(this.feed.length), has_more: false };
+                const from = Number(b.cursor);
+                if (from < this.feed_kept_from) throw new Refused(409, 'conflict', 'The cursor has expired', { code: 'cursor_expired' });
+                const events = this.feed.slice(from, from + 100);
+                return { events, cursor: String(from + events.length), has_more: from + events.length < this.feed.length };
             }
             case 'site/get_orgs':
                 return this.page(this.orgs.filter((o) => !b.external_id || (o.external?.source === b.external_source && o.external?.id === b.external_id)));

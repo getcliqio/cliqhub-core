@@ -86,6 +86,8 @@ export class Hug extends BaseModel {
     declare provider: 'cliqhub' | 'gethugs';
     declare gethugs_id: string | null;
     declare gethugs_workspace_id: string | null;
+    /** getHugs' last event seq applied to this Hug (PLAN-gethugs-step4-answers.md): an event is applied once. */
+    declare gethugs_seq: number;
 
     static register(sequelize: Sequelize): void {
         Hug.init({
@@ -118,6 +120,7 @@ export class Hug extends BaseModel {
             provider: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'cliqhub' },
             gethugs_id: { type: DataTypes.TEXT, allowNull: true },
             gethugs_workspace_id: { type: DataTypes.TEXT, allowNull: true },
+            gethugs_seq: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
         }, { sequelize, schema: 'cliq', tableName: 'hugs', timestamps: false });
     }
 }

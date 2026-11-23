@@ -276,6 +276,9 @@ export async function gethugs_create(input: GethugsCreateInput, partner: Gethugs
         if (!(err instanceof UniqueConstraintError) || !(await Hug.findOne({ where: { id, gethugs_id: made.id }, attributes: ['id'], raw: true }))) throw err;
     }
     log.info('gethugs_hug_opened', { hug_id: id, gethugs_id: made.id, run_id: input.run_id, phase: input.phase });
+    // Anything that happened before Core stored the row (the feed skipped it): applied now, once.
+    const { gethugs_catch_up } = await import('./gethugs_feed.js');
+    await gethugs_catch_up(id, partner);
     return { hug_id: id, hug_url: gethugs_hug_url(made.id) };
 }
 
@@ -337,9 +340,18 @@ export async function gethugs_cancel_run(run_id: string, hugs: Hug[]): Promise<n
             return 0;
         }
     }
-    const [count] = await Hug.update(
-        { status: 'cancelled', outcome: 'cancelled: the run ended', closed_at: new Date() },
-        { where: { id: hugs.map((h) => h.id), status: 'open' } },
-    );
+    // As Core's own Hugs at a run's end: each ends `cancelled` and its daemon is told. getHugs' own `hug.cancelled`
+    // then finds it ended (PLAN-gethugs-step4-answers.md) and doesn't tell it twice.
+    const { HugsService } = await import('./hugs.service.js');
+    let count = 0;
+    for (const h of hugs) {
+        const ended = await get_sequelize().transaction(async (t) => {
+            const [n] = await Hug.update({ status: 'cancelled', closed_at: new Date(), next_remind_at: null }, { where: { id: h.id, status: 'open' }, transaction: t });
+            if (n === 0) return false;
+            await HugsService.relay_event(h, 'cancelled', { reason: 'The run ended' }, t);
+            return true;
+        });
+        if (ended) count += 1;
+    }
     return count;
 }
