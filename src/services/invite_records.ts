@@ -25,6 +25,7 @@ import {
     invite_kind, org_member_role_column, to_date,
     type InviteRole, type InviteTargetType, type OrgInviteRole, type RealmInviteRole,
 } from './invite_rules.js';
+import { gethugs_mark, gethugs_mark_realm } from './gethugs_sync.js';
 
 /** The table an invite lives in. */
 export type InviteTable = 'account_invites' | 'realm_invites';
@@ -226,6 +227,7 @@ export async function set_pending_org_membership(org_id: string, user_id: string
         deleted_at: null,
         invited_at: now,
     };
+    await gethugs_mark(org_id, t);
     const existing = await OrgMember.findOne({ where: { org_id, user_id }, attributes: ['status', 'deleted_at'], raw: true, transaction: t });
     if (existing) {
         // An active membership stays as it is until the invite is accepted.
@@ -245,6 +247,7 @@ export async function set_pending_org_membership(org_id: string, user_id: string
 export async function activate_org_membership(
     org_id: string, user_id: string, role: OrgInviteRole, now: Date, t: Transaction, keep_existing = false,
 ): Promise<void> {
+    await gethugs_mark(org_id, t);
     const existing = await OrgMember.findOne({ where: { org_id, user_id }, attributes: ['status', 'deleted_at', 'joined_at'], raw: true, transaction: t });
     if (existing && keep_existing && existing.status === 'active' && !existing.deleted_at) return;
     const values = {
@@ -269,6 +272,7 @@ export async function activate_org_membership(
 async function write_realm_membership(
     realm_id: string, user_id: string, role: RealmInviteRole, status: 'pending' | 'active', t: Transaction,
 ): Promise<void> {
+    await gethugs_mark_realm(realm_id, t);
     const all = RealmMember.unscoped();
     const where = { realm_id, member_type: 'user' as const, member_id: user_id };
     const existing = await all.findOne({ where, attributes: ['id'], raw: true, transaction: t });
@@ -305,6 +309,7 @@ export async function activate_realm_membership(realm_id: string, user_id: strin
 export async function drop_pending_membership(invite: InviteRecord, now: Date, t: Transaction): Promise<void> {
     const user = await User.findOne({ where: { email: invite.email }, attributes: ['id'], raw: true, transaction: t });
     if (!user) return;
+    await gethugs_mark(invite.org_id, t);
     if (invite.target === 'realm') {
         await RealmMember.unscoped().update(
             { deleted_at: now },

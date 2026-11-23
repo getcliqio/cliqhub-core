@@ -5,7 +5,8 @@ import { ALICE, BOB, UNAUTHED, SITE_ADMIN, ORG_ADMIN } from '../../helpers/fixtu
 
 vi.mock('../../../src/db/sequelize.js', () => ({
     get_sequelize: vi.fn().mockReturnValue({
-        transaction: vi.fn().mockImplementation(async (fn: any) => fn({})),
+        // A transaction runs its after-commit hooks (the getHugs mark) once the callback returns.
+        transaction: vi.fn().mockImplementation(async (fn: any) => { const hooks: Array<() => unknown> = []; const out = await fn({ afterCommit: (h: () => unknown) => hooks.push(h) }); for (const h of hooks) await h(); return out; }),
         query: vi.fn().mockResolvedValue([[], {}]),
     }),
 }));

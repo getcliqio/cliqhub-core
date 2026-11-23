@@ -11,6 +11,7 @@
 
 import { Op, type Transaction } from 'sequelize';
 import { RealmService } from './realm.service.js';
+import { gethugs_mark, gethugs_mark_user } from './gethugs_sync.js';
 
 type Realm_ref = { id: string; slug: string };
 
@@ -45,6 +46,7 @@ export interface User_removal {
 export async function soft_delete_org(org: { id: string }, t: Transaction, at: Date = new Date()): Promise<Realm_ref[]> {
     const M = await import('../models/index.js');
     const org_id = org.id;
+    await gethugs_mark(org_id, t);
     await M.Org.update({ deleted_at: at, status: 'deleted' } as never, { where: { id: org_id }, transaction: t });
     await M.OrgMember.update({ deleted_at: at } as never, { where: { org_id, deleted_at: null }, transaction: t });
     await M.AccountInvite.update({ status: 'revoked' } as never, { where: { org_id, status: 'pending' }, transaction: t });
@@ -173,6 +175,7 @@ export async function soft_delete_user(user: { id: string; username: string | nu
     const M = await import('../models/index.js');
     const user_id = user.id;
     const out: User_removal = { account_org: null, realms: [], org_memberships: 0, realm_memberships: 0, tokens_revoked: 0, invites_revoked: 0 };
+    await gethugs_mark_user(user_id, t);
 
     const account = await account_org_of(user, t);
     if (account && !account.deleted_at) {

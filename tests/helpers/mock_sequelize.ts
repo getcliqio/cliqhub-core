@@ -88,8 +88,8 @@ export function setup_sequelize_mocks() {
         get_control_plane_store: vi.fn().mockReturnValue({
             sequelize: {
                 transaction: vi.fn().mockImplementation(async (fn?: any) => {
-                    if (typeof fn === 'function') return fn({});
-                    return { commit: vi.fn(), rollback: vi.fn() };
+                    if (typeof fn === 'function') return fn({ afterCommit: () => undefined });
+                    return { commit: vi.fn(), rollback: vi.fn(), afterCommit: () => undefined };
                 }),
                 query: vi.fn().mockResolvedValue([[], {}]),
                 escape: vi.fn().mockImplementation((v: unknown) => `'${String(v)}'`),
@@ -116,8 +116,8 @@ export function setup_sequelize_mocks() {
             hasMany: vi.fn(), belongsTo: vi.fn(),
             sequelize: {
                 transaction: vi.fn().mockImplementation(async (fn?: any) => {
-                    if (typeof fn === 'function') return fn({});
-                    return { commit: vi.fn(), rollback: vi.fn() };
+                    if (typeof fn === 'function') return fn({ afterCommit: () => undefined });
+                    return { commit: vi.fn(), rollback: vi.fn(), afterCommit: () => undefined };
                 }),
                 escape: vi.fn().mockImplementation((v: unknown) => `'${String(v)}'`),
                 query: vi.fn().mockResolvedValue([[], {}]),
@@ -198,16 +198,16 @@ export function setup_sequelize_mocks() {
     vi.mock('../../src/db/sequelize.js', () => ({
         init_sequelize: vi.fn().mockReturnValue({
             transaction: vi.fn().mockImplementation(async (fn?: any) => {
-                if (typeof fn === 'function') return fn({});
-                return { commit: vi.fn(), rollback: vi.fn() };
+                if (typeof fn === 'function') return fn({ afterCommit: () => undefined });
+                return { commit: vi.fn(), rollback: vi.fn(), afterCommit: () => undefined };
             }),
             query: vi.fn().mockResolvedValue([[], {}]),
             close: vi.fn(),
         }),
         get_sequelize: vi.fn().mockReturnValue({
             transaction: vi.fn().mockImplementation(async (fn?: any) => {
-                if (typeof fn === 'function') return fn({});
-                return { commit: vi.fn(), rollback: vi.fn() };
+                if (typeof fn === 'function') return fn({ afterCommit: () => undefined });
+                return { commit: vi.fn(), rollback: vi.fn(), afterCommit: () => undefined };
             }),
             query: vi.fn().mockResolvedValue([[], {}]),
             close: vi.fn(),

@@ -12,6 +12,7 @@ import { normalize_name } from '../lib/namespace.js';
 import { Org, OrgMember, OrgRole, Scope, ScopeMember } from '../models/index.js';
 import { seed_default_roles_for_org } from '../models/migrations/migrate_org_roles.js';
 import { OrgSeedService } from './org_seed.service.js';
+import { gethugs_mark } from './gethugs_sync.js';
 
 /** The account org of a user, and whether this call created it. */
 export interface AccountOrg {
@@ -37,6 +38,7 @@ export async function ensure_account_org(user_id: string, username: string, t: T
     if (existing) {
         const member = await OrgMember.findOne({ where: { org_id: existing.id, user_id }, attributes: ['user_id'], raw: true, transaction: t });
         if (!member) await add_owner(String(existing.id), user_id, t);
+        await gethugs_mark(String(existing.id), t);
         return { id: String(existing.id), created: false };
     }
     const now = new Date();
@@ -44,6 +46,7 @@ export async function ensure_account_org(user_id: string, username: string, t: T
     await seed_default_roles_for_org(org.id, t);
     await OrgSeedService.seed_org(org.id, { account: true, transaction: t });
     await add_owner(org.id, user_id, t);
+    await gethugs_mark(org.id, t);
     return { id: org.id, created: true };
 }
 

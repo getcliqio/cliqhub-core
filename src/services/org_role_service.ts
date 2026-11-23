@@ -15,6 +15,7 @@ import {
     PERMISSION_SET,
     OWNER_ONLY_PERMISSIONS,
 } from '../auth/permissions.js';
+import { gethugs_mark } from './gethugs_sync.js';
 
 const log = get_logger('svc.org_role');
 
@@ -124,6 +125,7 @@ export class OrgRoleService {
             is_default: false,
         });
         log.info('role_created', { role_id: role.id, org_id, slug });
+        await gethugs_mark(org_id);
 
         return {
             id: role.id,
@@ -170,6 +172,8 @@ export class OrgRoleService {
 
         await role.update(updates);
         log.info('role_updated', { role_id });
+        // A role's permissions cap runs.view in every realm: who may answer can change with no membership row changing.
+        await gethugs_mark(org_id);
 
         const member_count = await member_repo.find_count({ org_id, role_id });
         return {
@@ -218,6 +222,7 @@ export class OrgRoleService {
 
         await role.destroy();
         log.info('role_deleted', { role_id, org_id });
+        await gethugs_mark(org_id);
         return { deleted: true };
     }
 }

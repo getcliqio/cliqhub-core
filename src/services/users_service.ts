@@ -32,6 +32,7 @@ import {
 } from '../notifications/org_events.js';
 import { escape_like } from '../lib/search.js';
 import { run_in_background } from '../lib/background.js';
+import { gethugs_mark, gethugs_mark_user } from './gethugs_sync.js';
 
 const _user_repo_us = new UserRepository();
 const _api_token_repo_us = new ApiTokenRepository();
@@ -495,6 +496,7 @@ export class UsersService {
         if (Object.keys(updates).length > 0) {
             await this._user_repo.update_profile(target_id, updates);
             profile_updated = true;
+            await gethugs_mark_user(target_id);
         }
 
         let preferences: Record<string, unknown> | undefined;
@@ -590,6 +592,7 @@ export class UsersService {
 
         const reason = params.reason || '';
         await User.update({ suspended_at: new Date(), suspended_reason: reason, status: 'suspended' }, { where: { id: user.id } });
+        await gethugs_mark_user(user.id);
 
         await this._audit_repo.create(auth.user!.id, 'user.suspend', 'user', user.id, { username: user.username, reason });
 
@@ -610,6 +613,7 @@ export class UsersService {
             { suspended_at: null, suspended_reason: '', status: literal(`CASE WHEN password_hash IS NULL THEN 'invited' ELSE 'active' END`) },
             { where: { id: user.id } },
         );
+        await gethugs_mark_user(user.id);
 
         await this._audit_repo.create(auth.user!.id, 'user.unsuspend', 'user', user.id, { username: user.username });
 
@@ -798,6 +802,7 @@ export class UsersService {
             { org_id: params.org_id, user_id: params.user_id } as any,
             { role_id: params.role_id, role: legacy_role } as any,
         );
+        await gethugs_mark(params.org_id);
 
         return {
             user_id: params.user_id,
@@ -875,6 +880,7 @@ export class UsersService {
             if (row.status === 'suspended' || row.suspended_at) throw ApiError.not_active('suspended');
 
             await User.update({ password_hash, status: 'active' }, { where: { id: row.id }, transaction: t });
+            await gethugs_mark_user(row.id, t);
             await this._password_links.retire_open(row.id, t);
             const revoked = await this._token_repo.revoke_sessions(row.id, { except_id: opts.except_session, transaction: t });
             // The notice goes through the user's live account org; without one there is nobody to send it through.

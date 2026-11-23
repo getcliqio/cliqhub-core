@@ -17,6 +17,7 @@ import {
 	REALM_MEMBERS_CHANNEL_NAME,
 	realm_members_channel_id,
 } from '../notifications/defaults.js';
+import { gethugs_mark, gethugs_mark_realm } from './gethugs_sync.js';
 
 const log = get_logger('svc.notification');
 
@@ -423,6 +424,7 @@ export class NotificationService {
 		const created = await channel_repo.find_one({ id: channel_id } as any, {
 			include: [{ model: CD_create, as: 'destinations_rows' }],
 		});
+		await gethugs_mark_channel({ realm_id, org_id });
 		log.info('channel_created', { channel_id, realm_id });
 		return NotificationService.to_channel_record(created!);
 	}
@@ -482,6 +484,7 @@ export class NotificationService {
 		}
 
 		await existing.update(updates);
+		await gethugs_mark_channel(existing);
 		log.info('channel_updated', { id: data.id });
 
 		/** Re-fetch with eager-loaded destinations. */
@@ -503,6 +506,7 @@ export class NotificationService {
 		const channel = await channel_repo.find_by_id(id);
 		if (channel?.locked) throw ApiError.locked(channel.system_key ?? '', `Channel '${channel.name}' is a system channel and can't be removed`);
 		const deleted = await channel_repo.delete_where({ id } as any);
+		if (deleted > 0 && channel) await gethugs_mark_channel(channel);
 		if (deleted > 0) log.info('channel_removed', { id });
 		return deleted > 0;
 	}
@@ -917,4 +921,10 @@ export class NotificationService {
 		}
 	}
 
+}
+
+/** Marks the org a realm or org channel belongs to for the getHugs sync; a personal channel isn't mirrored. */
+async function gethugs_mark_channel(channel: { realm_id?: string | null; org_id?: string | null }): Promise<void> {
+	if (channel.realm_id) await gethugs_mark_realm(channel.realm_id);
+	else if (channel.org_id) await gethugs_mark(channel.org_id);
 }

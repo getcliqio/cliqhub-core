@@ -48,6 +48,7 @@ import {
     type InviteRole, type InviteTargetType, type OrgInviteRole, type RealmInviteRole,
 } from './invite_rules.js';
 import { escape_like } from '../lib/search.js';
+import { gethugs_mark_user } from './gethugs_sync.js';
 
 const log = get_logger('svc.invitations');
 
@@ -715,6 +716,7 @@ export class InvitationsService {
         } else {
             user_id = String((await User.create({ ...fields, email, role: 'user' }, { transaction: t })).id);
         }
+        await gethugs_mark_user(user_id, t);
         const org = await ensure_account_org(user_id, person.username, t);
         await ensure_account_scope(user_id, person.username, person.display_name, org.id, t);
         return { user_id, username: person.username };

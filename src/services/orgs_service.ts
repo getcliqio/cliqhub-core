@@ -29,6 +29,7 @@ import { OrgSeedService } from './org_seed.service.js';
 import type { InvitationsService } from './invitations_service.js';
 import type { ReactivationService } from './reactivation.service.js';
 import { escape_like } from '../lib/search.js';
+import { gethugs_mark } from './gethugs_sync.js';
 
 const _user_repo_os = new UserRepository();
 const _scope_repo_os = new ScopeRepository();
@@ -462,6 +463,7 @@ export class OrgsService {
                     org_id, owner_user_id: owner_id, owner_invite_id: sent.invite.id,
                 }, transaction);
             }
+            await gethugs_mark(org_id, transaction);
             const org = (await OrgModel.findByPk(org_id, { attributes: ['id', 'slug', 'display_name', 'status', 'created_at'], raw: true, transaction }))!;
             const owner = (await UserModel.findByPk(owner_id, { attributes: ['id', 'email', 'status'], raw: true, transaction }))!;
             return { org, owner, sent };
@@ -503,6 +505,7 @@ export class OrgsService {
         // Route policy: org.settings in org_id.
         if (params.owner_id) await this._make_owner(auth, params.org_id, params.owner_id);
         if (params.display_name !== undefined) await this._org_repo.update_display_name(params.org_id, params.display_name);
+        await gethugs_mark(params.org_id);
         log.info('org_updated', { org_id: params.org_id, owner_id: params.owner_id });
         return { updated: true };
     }
@@ -597,6 +600,7 @@ export class OrgsService {
 
         // Revoke membership from all org realms
         await OrgRealmSyncService.sync_member_removed(params.org_id, params.user_id);
+        await gethugs_mark(params.org_id);
 
         // Their personal channel belongs to the account, not the org: it stays.
 
@@ -619,6 +623,7 @@ export class OrgsService {
 
         // Revoke realm memberships
         await OrgRealmSyncService.sync_member_removed(params.org_id, auth.user!.id);
+        await gethugs_mark(params.org_id);
 
         return { left: true };
     }

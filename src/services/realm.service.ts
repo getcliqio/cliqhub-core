@@ -44,6 +44,7 @@ import { RealmDispatchKeyService } from './realm_dispatch_key.service.js';
 import { EventSubmitService } from './events_service.js';
 import { escape_like } from '../lib/search.js';
 import { version_contents } from './version_content.js';
+import { gethugs_mark, gethugs_mark_realm } from './gethugs_sync.js';
 const _api_token_repo = new ApiTokenRepository();
 const _user_repo = new UserRepository();
 const _agent_catalog_repo = new AgentCatalogRepository();
@@ -384,6 +385,7 @@ export class RealmService {
                 created_at: ts,
                 updated_at: ts,
             } as any, { transaction: t });
+            await gethugs_mark(org_id, t);
             await _realm_member_repo.create_one({
                 id: randomUUID(), realm_id, member_type: 'user', member_id: user_id, role: 'admin', created_at: ts,
             }, { transaction: t });
@@ -1001,6 +1003,7 @@ export class RealmService {
         if (patch.description !== undefined) realm.description = patch.description?.trim() || null;
         realm.updated_at = now_ms();
         await realm.save();
+        await gethugs_mark(realm.org_id);
         return to_realm_dto_enriched(realm);
     }
 
@@ -1102,6 +1105,7 @@ export class RealmService {
         }
 
         await _realm_member_repo.delete_where({ realm_id } as any);
+        await gethugs_mark(realm.org_id);
 
         try {
             await new RealmAgentSettingRepository().remove_all_for_realm(realm_id);
@@ -1217,6 +1221,7 @@ export class RealmService {
             if (existing.role === 'admin' || existing.role === role) return;
             existing.role = role;
             await existing.save();
+            await gethugs_mark_realm(realm_id);
             return;
         }
         await _realm_member_repo.create_one({
@@ -1227,6 +1232,7 @@ export class RealmService {
             role,
             created_at: now_ms(),
         });
+        await gethugs_mark_realm(realm_id);
     }
 
     /** Drop membership if present (org leave). */
@@ -1236,6 +1242,7 @@ export class RealmService {
         member_id: string,
     ): Promise<void> {
         await _realm_member_repo.delete_where({ realm_id, member_type, member_id } as any);
+        await gethugs_mark_realm(realm_id);
     }
 
     static async list_members(
@@ -1322,6 +1329,7 @@ export class RealmService {
             if (existing.role === role) return to_member_dto(existing, username);
             existing.role = role;
             await existing.save();
+            await gethugs_mark_realm(realm_id);
             return to_member_dto(existing, username);
         }
         if (input.existing_only) {
@@ -1339,6 +1347,7 @@ export class RealmService {
             role,
             created_at: now_ms(),
         });
+        await gethugs_mark_realm(realm_id);
         return to_member_dto(row, username);
     }
 
@@ -1391,6 +1400,7 @@ export class RealmService {
         });
         if (!row) throw ApiError.not_found('Member not found');
         await row.destroy();
+        await gethugs_mark_realm(realm_id);
         await emit_member_removed({
             realm_id,
             actor_id: actor_user_id,
@@ -1731,6 +1741,7 @@ export class RealmService {
             if (existing.role === 'admin') return;
             existing.role = 'admin';
             await existing.save();
+            await gethugs_mark_realm(realm_id);
             return;
         }
         await _realm_member_repo.create_one({
@@ -1741,6 +1752,7 @@ export class RealmService {
             role: 'admin',
             created_at: now_ms(),
         });
+        await gethugs_mark_realm(realm_id);
     }
 
     private static async require_member(realm_id: string, user_id: string): Promise<RealmModel> {

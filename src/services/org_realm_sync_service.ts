@@ -18,6 +18,7 @@ const _realm_repo_ors = new RealmRepository();
 const _realm_member_repo_ors = new RealmMemberRepository();
 import type { Realm_member_role } from '../models/realm_member.model.js';
 import { get_logger } from '../lib/log.js';
+import { gethugs_mark, gethugs_mark_realm } from './gethugs_sync.js';
 
 const log = get_logger('org_realm_sync');
 
@@ -48,6 +49,7 @@ export class OrgRealmSyncService {
             if (removed > 0) revoked += 1;
         }
 
+        await gethugs_mark(org_id);
         log.info('sync_member_removed', { org_id, user_id, revoked });
         return revoked;
     }
@@ -83,6 +85,7 @@ export class OrgRealmSyncService {
             granted += 1;
         }
 
+        if (granted > 0) await gethugs_mark_realm(realm_ids);
         log.info('bulk_add_to_realms', { user_id, realm_count: realm_ids.length, granted });
         return granted;
     }

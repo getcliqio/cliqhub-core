@@ -17,6 +17,7 @@ import { get_logger } from '../lib/log.js';
 import type { AuthContext } from '../schemas/auth_types.js';
 import type { OrgStatus } from '../models/org.model.js';
 import { OrgSeedService } from './org_seed.service.js';
+import { gethugs_mark, gethugs_mark_user } from './gethugs_sync.js';
 
 const log = get_logger('svc.reactivation');
 
@@ -117,6 +118,7 @@ export class ReactivationService {
             { deleted_at: null, status: 'invited', password_hash: null, suspended_at: null, suspended_reason: '' } as never,
             { where: { id: user.id }, transaction: t },
         );
+        await gethugs_mark_user(user.id, t);
 
         let account_org_id: string | null = null;
         const account = user.username
@@ -189,6 +191,7 @@ export class ReactivationService {
         t: Transaction,
     ): Promise<string[]> {
         const M = await import('../models/index.js');
+        await gethugs_mark(org.id, t);
         const deleted_ms = org.deleted_at!.getTime();
         const realms = await M.Realm.findAll({ where: { org_id: org.id, deleted: true, deleted_at: deleted_ms }, transaction: t });
         const restored: string[] = [];

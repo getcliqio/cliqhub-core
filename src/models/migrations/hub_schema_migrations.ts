@@ -8,6 +8,7 @@ import { migrate_hub_integer_pks_to_uuid } from './migrate_hub_uuid_pks.js';
 import { migrate_remaining_integer_pks_to_uuid } from './migrate_remaining_int_pks.js';
 import { migrate_hub_remint_legacy_uuids } from './migrate_hub_remint_uuids.js';
 import { migrate_identity_lifecycle } from './migrate_identity_lifecycle.js';
+import { migrate_gethugs_sync } from '../../services/gethugs_sync.js';
 
 const log = get_logger('boot');
 
@@ -539,6 +540,9 @@ export async function migrate_hub_schema(sequelize: Sequelize): Promise<void> {
         EXCEPTION WHEN duplicate_object THEN NULL;
         END $$
     `);
+
+    // Marks and links for the getHugs reconcile (PLAN-gethugs-step2-provisioning.md sub-step 2).
+    await migrate_gethugs_sync(sequelize);
 
     await align_org_with_realm(sequelize);
     await wire_scope_foreign_keys(sequelize);
