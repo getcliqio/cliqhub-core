@@ -1091,16 +1091,17 @@ export class TeamsService {
         if (!auth.user) throw new ApiError('unauthorized', 'Authentication required', 401);
         assert_access(auth, 'teams', 'write');
 
+        // By id or by name (+ scope); the same checks either way.
         let team;
-        if (params.team_id && auth.user.role === 'admin') {
+        if (params.team_id) {
             team = await this._team_repo.find_by_id(params.team_id);
-            if (!team) throw new ApiError('not_found', 'Team not found', 404);
+        } else {
+            if (!params.name) throw new ApiError('invalid_params', 'Provide team_id or name', 422);
+            team = await this._team_repo.find_by_name_and_scope(params.name, params.scope || null);
         }
-        if (!team) {
-            if (!params.name) throw new ApiError('invalid_params', 'name is required', 422);
-            const scope = params.scope || null;
-            team = await this._team_repo.find_by_name_and_scope(params.name, scope);
-            if (!team) throw new ApiError('not_found', 'Team not found', 404);
+        if (!team) throw new ApiError('not_found', 'Team not found', 404);
+        // A site admin deleting by id skips the scope check, so a team whose scope is gone can still be removed.
+        if (!(params.team_id && auth.user.role === 'admin')) {
             // Deleting a published team deletes its published versions (PLAN-team-visibility §3.3).
             await this._assert_can_publish(auth, team.scope, team.visibility === 'draft' ? 'teams.publish' : 'teams.publish.delete');
         }

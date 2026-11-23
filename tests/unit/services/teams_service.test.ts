@@ -1295,6 +1295,26 @@ describe('TeamsService — delete_team', () => {
         expect(team_repo.delete_by_id).toHaveBeenCalledWith(hub_legacy_uuid(1), expect.anything());
         expect(storage.delete).toHaveBeenCalled();
     });
+
+    it('deletes by team_id, with the same permission check as by name', async () => {
+        team_repo.find_by_id.mockResolvedValueOnce(PUBLIC_TEAM);
+        await expect(service.delete_team(ALICE, { team_id: PUBLIC_TEAM.id })).resolves.toEqual({ deleted: true });
+        expect(team_repo.find_by_name_and_scope).not.toHaveBeenCalled();
+        expect(team_repo.delete_by_id).toHaveBeenCalledWith(PUBLIC_TEAM.id, expect.anything());
+
+        team_repo.find_by_id.mockResolvedValueOnce(PUBLIC_TEAM);
+        await expect(service.delete_team(BOB, { team_id: PUBLIC_TEAM.id }))
+            .rejects.toMatchObject({ status: 403, message: "Publishing to @alice needs 'teams.publish.delete' in its org" });
+    });
+
+    it('an unknown team_id is not found', async () => {
+        team_repo.find_by_id.mockResolvedValueOnce(null);
+        await expect(service.delete_team(ALICE, { team_id: NEW_TEAM_ID })).rejects.toMatchObject({ status: 404 });
+    });
+
+    it('needs team_id or name', async () => {
+        await expect(service.delete_team(ALICE, {})).rejects.toMatchObject({ status: 422 });
+    });
 });
 
 /* ================================================================

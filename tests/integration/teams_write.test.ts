@@ -282,6 +282,20 @@ describe('POST /v1/teams/delete', () => {
         expect(res.status).toBe(200);
         expect(res.body.data.deleted).toBe(true);
     });
+
+    it('returns 200 and deletes team by team_id', async () => {
+        mock_auth_jwt();
+        repos.team_repo.find_by_id.mockResolvedValueOnce({ ...PUBLIC_TEAM, author_id: hub_legacy_uuid(1) });
+        repos.version_repo.list_packages_by_team.mockResolvedValueOnce([]);
+
+        const res = await request(app)
+            .post('/v1/teams/delete')
+            .set('Authorization', auth_header())
+            .send({ team_id: PUBLIC_TEAM.id });
+        expect(res.status).toBe(200);
+        expect(res.body.data.deleted).toBe(true);
+        expect(repos.team_repo.find_by_name_and_scope).not.toHaveBeenCalled();
+    });
 });
 
 // ─── POST /v1/teams/delete_version ──────────────────────────────
