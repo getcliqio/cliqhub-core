@@ -115,4 +115,16 @@ export async function migrate_gethugs_sync(sequelize: ReturnType<typeof get_sequ
             PRIMARY KEY (org_id, kind, cliq_id)
         )
     `);
+    // The getHugs template version installed for a team hug's bundle, per org (PLAN-gethugs-step3-asking.md).
+    await sequelize.query(`
+        CREATE TABLE IF NOT EXISTS cliq.gethugs_templates (
+            org_id UUID NOT NULL REFERENCES cliq.orgs(id) ON DELETE CASCADE,
+            sha256 TEXT NOT NULL,
+            name TEXT NOT NULL,
+            template_id TEXT NOT NULL,
+            version_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (org_id, sha256)
+        )
+    `);
 }

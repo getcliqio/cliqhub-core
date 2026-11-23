@@ -27,6 +27,8 @@ import { raise_no_access } from '../notifications/no_access.js';
 import { people_reached, resolve_channels, type ChannelDestination } from './channel_resolution.service.js';
 import { load_realm_info_map, load_run_info_map, resolve_team } from './hug_enrichment.js';
 import { EventSubmitService, type SubmittedEvent } from './events_service.js';
+import { hugs_provider_of } from './gethugs.service.js';
+import { gethugs_cancel_run, gethugs_close, gethugs_create, gethugs_hug_url, gethugs_progress } from './gethugs_hugs.js';
 
 const log = get_logger('svc.hugs');
 
@@ -148,16 +150,25 @@ export class HugsService {
         if (spec.expires_in_min === undefined) throw ApiError.unprocessable('expires_in_min is required — every Hug expires', 'invalid_hug');
 
         if (input.hug_id) {
-            const existing = await Hug.findByPk(input.hug_id, { attributes: ['id', 'run_id'], raw: true });
+            const existing = await Hug.findByPk(input.hug_id, { attributes: ['id', 'run_id', 'provider', 'gethugs_id'], raw: true });
             if (existing) {
                 if (existing.run_id !== input.run_id) throw ApiError.conflict('Hug id is already used by another run');
-                return { hug_id: existing.id, hug_url: hug_url_for(existing.id) };
+                const hug_url = existing.provider === 'gethugs' && existing.gethugs_id ? gethugs_hug_url(existing.gethugs_id) : hug_url_for(existing.id);
+                return { hug_id: existing.id, hug_url };
             }
         }
 
         const realm = await Realm.findByPk(input.realm_id, { attributes: ['org_id'], raw: true });
         if (!realm?.org_id) throw ApiError.not_found('Realm not found');
         const org_id = String(realm.org_id);
+
+        // An org switched to getHugs asks there (PLAN-gethugs-step3-asking.md); Core keeps a row for the daemon.
+        if (await hugs_provider_of(org_id) === 'gethugs') {
+            return gethugs_create({
+                hug_id: input.hug_id, run_id: input.run_id, daemon_id: input.daemon_id, realm_id: input.realm_id, org_id,
+                phase: input.phase, iteration: input.iteration, spec, bundle: input.bundle, may_upload_bundle: input.may_upload_bundle,
+            });
+        }
 
         await HugsService._check_attachments(spec.attachments, input.run_id);
         const hug_sha256 = await HugBundlesService.resolve(spec.hug, {
@@ -385,9 +396,10 @@ export class HugsService {
      * the daemon that opened it may close it (403 otherwise).
      */
     static async close(input: { hug_id: string; outcome: string; daemon_id: string }): Promise<{ status: string }> {
-        const owner = await Hug.findByPk(input.hug_id, { attributes: ['daemon_id'], raw: true });
+        const owner = await Hug.findByPk(input.hug_id, { attributes: ['daemon_id', 'provider'], raw: true });
         if (!owner) throw ApiError.not_found('Hug not found');
         if (owner.daemon_id !== input.daemon_id) throw ApiError.forbidden('Only the daemon that opened this Hug may close it');
+        if (owner.provider === 'gethugs') return { status: await gethugs_close((await Hug.findByPk(input.hug_id))!, input.outcome) };
         const [count] = await Hug.update(
             { status: 'closed', outcome: input.outcome, closed_at: new Date(), next_remind_at: null },
             { where: { id: input.hug_id, status: 'open' } },
@@ -432,13 +444,16 @@ export class HugsService {
     /** A run ended (any reason): its open Hugs are cancelled and the requester is told (§6.2). */
     static async cancel_for_run(run_id: string): Promise<number> {
         const open = await Hug.findAll({ where: { run_id, status: 'open' } });
-        for (const hug of open) await HugsService._end(hug, 'cancelled');
-        return open.length;
+        const relayed = open.filter((h) => h.provider === 'gethugs');
+        for (const hug of open) if (hug.provider !== 'gethugs') await HugsService._end(hug, 'cancelled');
+        const cancelled = relayed.length ? await gethugs_cancel_run(run_id, relayed) : 0;
+        return open.length - relayed.length + cancelled;
     }
 
     /** Sweep: expire open Hugs past `expires_at`, telling each requester. */
     static async expire_due(now = new Date()): Promise<number> {
-        const due = await Hug.findAll({ where: { status: 'open', expires_at: { [Op.lte]: now } }, limit: 100 });
+        // getHugs ends its own Hugs (step 4 brings their ends back through its feed).
+        const due = await Hug.findAll({ where: { status: 'open', provider: 'cliqhub', expires_at: { [Op.lte]: now } }, limit: 100 });
         for (const hug of due) await HugsService._end(hug, 'expired');
         return due.length;
     }
@@ -448,7 +463,7 @@ export class HugsService {
      * the next. Reminders go to people only — never to the requester.
      */
     static async remind_due(now = new Date()): Promise<number> {
-        const due = await Hug.findAll({ where: { status: 'open', next_remind_at: { [Op.lte]: now }, expires_at: { [Op.gt]: now } }, limit: 100 });
+        const due = await Hug.findAll({ where: { status: 'open', provider: 'cliqhub', next_remind_at: { [Op.lte]: now }, expires_at: { [Op.gt]: now } }, limit: 100 });
         for (const hug of due) {
             try {
                 const channel_ids = await HugsService._unanswered_channel_ids(hug);
@@ -521,7 +536,10 @@ export class HugsService {
     static async set_progress(run_id: string, daemon_id: string | null, hug_id: string, progress: string | null): Promise<void> {
         if (!daemon_id) return;
         const line = progress?.replace(/\s+/g, ' ').trim().slice(0, 200) || null;
-        await Hug.update({ progress: line }, { where: { id: hug_id, run_id, daemon_id, status: 'open' } });
+        const [count] = await Hug.update({ progress: line }, { where: { id: hug_id, run_id, daemon_id, status: 'open' } });
+        if (count === 0) return;
+        const hug = await Hug.findByPk(hug_id);
+        if (hug?.provider === 'gethugs') await gethugs_progress(hug, line);
     }
 
     /** A notification event to the Hug's channels (or the given ones), with its text when given. Best effort. */

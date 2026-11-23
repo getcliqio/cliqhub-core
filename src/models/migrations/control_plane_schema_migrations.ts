@@ -1443,6 +1443,7 @@ async function backfill_per_user_channels(sq: Sequelize): Promise<void> {
     await migrate_hugs(sq);
     await migrate_hug_templates(sq);
     await migrate_hug_widgets(sq);
+    await migrate_hugs_gethugs(sq);
     await migrate_team_visibility(sq);
     await migrate_realm_team_delivery(sq);
 }
@@ -2580,6 +2581,22 @@ export async function migrate_hug_widgets(sq: Sequelize): Promise<void> {
     await sq.query(HUG_BUNDLES_TABLE_SQL);
     await sq.query(`CREATE INDEX IF NOT EXISTS "hugs_hug_sha256_idx" ON cliq."hugs" ("hug_sha256")`);
     await cut_over_to_hugs(sq);
+}
+
+/**
+ * A Hug of an org switched to getHugs keeps its row here — under the id its daemon minted, so catch-up and the run's
+ * Hug list read it as any other — with getHugs' id and workspace (PLAN-gethugs-step3-asking.md). Idempotent.
+ */
+export async function migrate_hugs_gethugs(sq: Sequelize): Promise<void> {
+    if (sq.getDialect() !== 'postgres') return;
+    await sq.query(`ALTER TABLE cliq."hugs"
+        ADD COLUMN IF NOT EXISTS "provider" TEXT NOT NULL DEFAULT 'cliqhub',
+        ADD COLUMN IF NOT EXISTS "gethugs_id" TEXT,
+        ADD COLUMN IF NOT EXISTS "gethugs_workspace_id" TEXT`);
+    await sq.query(`DO $$ BEGIN
+        ALTER TABLE cliq."hugs" ADD CONSTRAINT "hugs_provider_check" CHECK ("provider" IN ('cliqhub', 'gethugs'));
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$`);
+    await sq.query(`CREATE UNIQUE INDEX IF NOT EXISTS "hugs_gethugs_id_idx" ON cliq."hugs" ("gethugs_id") WHERE "gethugs_id" IS NOT NULL`);
 }
 
 /** Why a pre-hug Hug that was still open ended (its outcome and its `cancelled` event's reason). */

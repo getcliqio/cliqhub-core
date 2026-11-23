@@ -92,6 +92,11 @@ export interface GethugsConfig {
     url: string;
     /** `GETHUGS_PARTNER_TOKEN`: cliqhub's partner service token (`hugs_svc_…`). Only ever in `.env`; never logged. */
     token: string;
+    /**
+     * `GETHUGS_APP_URL`: the getHugs web app's origin, where a Hug's page is (`<app_url>/hugs/<id>`), e.g.
+     * https://app.gethugs.ai. Defaults to `GETHUGS_URL` (one host serving both).
+     */
+    app_url: string;
 }
 
 /**
@@ -107,7 +112,9 @@ export function gethugs_config(): GethugsConfig | null {
     if (!url || !token) throw new Error('Set both GETHUGS_URL and GETHUGS_PARTNER_TOKEN, or neither');
     if (!/^https?:\/\/[^\s/]+(:\d+)?\/?$/.test(url)) throw new Error('GETHUGS_URL must be an http(s) origin, e.g. https://api.gethugs.ai');
     if (!token.startsWith('hugs_svc_')) throw new Error('GETHUGS_PARTNER_TOKEN must be a getHugs service token (hugs_svc_…)');
-    return { url: url.replace(/\/+$/, ''), token };
+    const app_url = process.env.GETHUGS_APP_URL?.trim() || url;
+    if (!/^https?:\/\/[^\s/]+(:\d+)?\/?$/.test(app_url)) throw new Error('GETHUGS_APP_URL must be an http(s) origin, e.g. https://app.gethugs.ai');
+    return { url: url.replace(/\/+$/, ''), token, app_url: app_url.replace(/\/+$/, '') };
 }
 
 export function load_env(): EnvConfig {

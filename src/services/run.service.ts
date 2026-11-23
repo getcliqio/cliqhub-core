@@ -1362,6 +1362,9 @@ export class RunService {
         );
         for (const row of stale) {
             await this._emit_lifecycle(row.run_id, 'run.crashed', { error: 'daemon restarted' });
+            // A crashed run's Hugs end with it, as on every other way a run ends (PLAN-gethugs-integration.md step 3).
+            const { HugsService } = await import('./hugs.service.js');
+            await HugsService.cancel_for_run(row.run_id).catch(() => {});
         }
         return count;
     }

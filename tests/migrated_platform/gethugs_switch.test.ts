@@ -8,6 +8,7 @@ import { close_test_control_plane_store, open_test_control_plane_store, postgres
 import { get_sequelize } from '../../src/db/sequelize.js';
 import { Org } from '../../src/models/index.js';
 import { migrate_hub_schema } from '../../src/models/migrations/hub_schema_migrations.js';
+import { migrate_hugs_gethugs } from '../../src/models/migrations/control_plane_schema_migrations.js';
 import { hugs_provider_of } from '../../src/services/gethugs.service.js';
 
 const has_postgres = await postgres_reachable();
@@ -50,5 +51,23 @@ describe.skipIf(!has_postgres)('the getHugs switch (orgs.hugs_provider)', () => 
             `SELECT column_default, is_nullable FROM information_schema.columns WHERE table_schema = 'cliq' AND table_name = 'orgs' AND column_name = 'hugs_provider'`,
         );
         expect(rows).toEqual([{ column_default: "'cliqhub'::text", is_nullable: 'NO' }]);
+    });
+
+    it('step 3 schema: the Hug pointer columns and the template map, safe to run again', async () => {
+        await migrate_hugs_gethugs(get_sequelize());
+        await migrate_hugs_gethugs(get_sequelize());
+        const [cols] = await get_sequelize().query(
+            `SELECT column_name, column_default FROM information_schema.columns WHERE table_schema = 'cliq' AND table_name = 'hugs'
+             AND column_name IN ('provider', 'gethugs_id', 'gethugs_workspace_id') ORDER BY column_name`,
+        );
+        expect(cols).toEqual([
+            { column_name: 'gethugs_id', column_default: null },
+            { column_name: 'gethugs_workspace_id', column_default: null },
+            { column_name: 'provider', column_default: "'cliqhub'::text" },
+        ]);
+        const [checks] = await get_sequelize().query(`SELECT conname FROM pg_constraint WHERE conname = 'hugs_provider_check'`);
+        expect(checks).toEqual([{ conname: 'hugs_provider_check' }]);
+        const [tables] = await get_sequelize().query(`SELECT to_regclass('cliq.gethugs_templates') IS NOT NULL AS present`);
+        expect(tables).toEqual([{ present: true }]);
     });
 });

@@ -11,11 +11,13 @@ interface User { id: string; org_id: string; email: string; name: string | null;
 interface Workspace { id: string; org_id: string; name: string; archived_at: number | null; external: Ext; members: Map<string, string> }
 interface Channel { id: string; org_id: string; workspace_id: string | null; personal_user_id: string | null; name: string; enabled: boolean; archived_at: number | null; external: Ext; version: number }
 interface Dest { id: string; channel_id: string; type: string; config: Record<string, unknown>; target_channel_id: string | null }
+interface Template { id: string; org_id: string | null; name: string; builtin: boolean; versions: Array<{ id: string; sha: string }> }
+export interface FakeHug { id: string; org_id: string; workspace_id: string; ref_id: string | null; requester: string | null; template: string; title: string; channels: string[]; context: Record<string, unknown>; status: string; outcome: string | null; progress: string | null; expires_at: number; idempotency_key: string | null; body: Record<string, any> }
 
 const SLACK = /^https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/;
 
 class Refused extends Error {
-    constructor(readonly status: number, readonly code: string, message: string) { super(message); }
+    constructor(readonly status: number, readonly code: string, message: string, readonly details?: Record<string, unknown>) { super(message); }
 }
 
 export class FakeGethugs {
@@ -25,24 +27,38 @@ export class FakeGethugs {
     workspaces: Workspace[] = [];
     channels: Channel[] = [];
     dests: Dest[] = [];
+    /** The built-ins every org sees (as getHugs ships them), and the orgs' own templates. */
+    templates: Template[] = [
+        { id: 'tpl_approval', org_id: null, name: 'approval', builtin: true, versions: [] },
+        { id: 'tpl_form', org_id: null, name: 'form', builtin: true, versions: [] },
+        { id: 'tpl_ack', org_id: null, name: 'ack', builtin: true, versions: [] },
+    ];
+    hugs: FakeHug[] = [];
+    /** When set, every call answers this status (getHugs down: 503; the token refused: 401). */
+    fail_with: number | null = null;
     /** Every call, as `<path>` — reads included. */
     calls: string[] = [];
     /** Invitation emails getHugs would have sent. */
     invites: string[] = [];
     private n = 0;
-    private id(prefix: string) { return `${prefix}_${++this.n}`; }
+    /** Unique across fakes (Core's rows from earlier tests keep the ids they were given). */
+    private readonly run = Math.random().toString(36).slice(2, 8);
+    private id(prefix: string) { return `${prefix}_${this.run}${++this.n}`; }
 
     /** The `fetch` to give `GethugsPartner`. */
     readonly fetch: typeof fetch = async (input, init) => {
         const path = String(input).replace(/^.*\/v1\//, '').replace(/\?.*$/, '');
         const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, any>;
         this.calls.push(path);
+        if (this.fail_with) {
+            return new Response(JSON.stringify({ error: { code: this.fail_with === 401 ? 'unauthorized' : 'unavailable', message: 'down' } }), { status: this.fail_with, headers: { 'content-type': 'application/json' } });
+        }
         try {
-            const data = this.handle(path, body);
+            const data = this.handle(path, body, new Headers(init?.headers).get('idempotency-key'));
             return new Response(JSON.stringify({ data }), { status: 200, headers: { 'content-type': 'application/json' } });
         } catch (err) {
             if (!(err instanceof Refused)) throw err;
-            return new Response(JSON.stringify({ error: { code: err.code, message: err.message } }), { status: err.status, headers: { 'content-type': 'application/json' } });
+            return new Response(JSON.stringify({ error: { code: err.code, message: err.message, ...(err.details ? { details: err.details } : {}) } }), { status: err.status, headers: { 'content-type': 'application/json' } });
         }
     };
 
@@ -80,8 +96,84 @@ export class FakeGethugs {
         return u;
     }
 
-    private handle(path: string, b: Record<string, any>): unknown {
+    private template_out(t: Template) {
+        const v = t.versions.at(-1);
+        return { id: t.id, name: t.name, builtin: t.builtin, current_version: v ? { id: v.id } : t.builtin ? { id: `tpv_${t.name}` } : null };
+    }
+
+    /** As getHugs resolves a Hug's channel names in a workspace: an email is a person (a workspace member), else a channel. */
+    private resolve_names(org_id: string, workspace_id: string, names: string[]) {
+        const unresolved: string[] = [];
+        const not_members: string[] = [];
+        const ws = this.workspaces.find((w) => w.id === workspace_id)!;
+        for (const raw of names) {
+            const name = raw.trim().toLowerCase();
+            if (name.includes('@')) {
+                const u = this.users.find((x) => x.org_id === org_id && x.email === name && x.status !== 'deactivated');
+                if (!u) unresolved.push(name);
+                else if (!ws.members.has(u.id)) not_members.push(name);
+                continue;
+            }
+            const found = this.channels.some((c) => c.org_id === org_id && c.archived_at === null && c.personal_user_id === null && c.name.toLowerCase() === name
+                && (c.workspace_id === workspace_id || c.workspace_id === null));
+            if (!found && name !== 'all-workspace') unresolved.push(name);
+        }
+        return { unresolved, not_members };
+    }
+
+    private handle(path: string, b: Record<string, any>, idempotency_key: string | null = null): unknown {
         switch (path) {
+            case 'templates/get':
+                return { items: this.templates.filter((t) => t.org_id === null || t.org_id === b.org_id).map((t) => this.template_out(t)) };
+            case 'templates/create': {
+                if (this.templates.some((t) => t.org_id === b.org_id && t.name === b.name)) throw new Refused(409, 'conflict', 'A template with this name exists');
+                if (b.files?.['bad.txt']) throw new Refused(400, 'invalid_request', 'The bundle breaks the rules');
+                const t: Template = { id: this.id('tpl'), org_id: b.org_id, name: b.name, builtin: false, versions: [{ id: this.id('tpv'), sha: JSON.stringify(b.files) }] };
+                this.templates.push(t);
+                return this.template_out(t);
+            }
+            case 'templates/add_version': {
+                const t = this.templates.find((x) => x.id === b.id)!;
+                const sha = JSON.stringify(b.files);
+                const same = t.versions.find((v) => v.sha === sha);
+                const version = same ?? { id: this.id('tpv'), sha };
+                if (!same) t.versions.push(version);
+                return { template: this.template_out(t), version: { id: version.id }, created: !same };
+            }
+            case 'hugs/create': {
+                if (idempotency_key) {
+                    const again = this.hugs.find((h) => h.org_id === b.org_id && h.idempotency_key === idempotency_key);
+                    if (again) return again;
+                }
+                const ws = this.workspaces.find((w) => w.id === b.workspace_id && w.org_id === b.org_id);
+                if (!ws) throw new Refused(404, 'not_found', 'Workspace not found');
+                const { unresolved, not_members } = this.resolve_names(b.org_id, b.workspace_id, b.channels);
+                if (unresolved.length) throw new Refused(400, 'invalid_request', `Unknown channel ${unresolved.map((c) => `'${c}'`).join(', ')}`, { unresolved });
+                if (not_members.length) throw new Refused(400, 'invalid_request', `${not_members.join(', ')} isn't a member of this workspace`, { code: 'not_a_member' });
+                const h: FakeHug = {
+                    id: this.id('hug'), org_id: b.org_id, workspace_id: b.workspace_id, ref_id: b.ref_id ?? null, requester: b.requester ?? null,
+                    template: b.template, title: b.title, channels: b.channels, context: b.context ?? {}, status: 'open', outcome: null, progress: null,
+                    expires_at: Date.now() + b.expires_in_min * 60_000, idempotency_key, body: b,
+                };
+                this.hugs.push(h);
+                return h;
+            }
+            case 'hugs/close': {
+                const h = this.hugs.find((x) => x.id === b.hug_id && x.workspace_id === b.workspace_id);
+                if (!h) throw new Refused(404, 'not_found', 'Hug not found');
+                if (h.status === 'open') Object.assign(h, { status: 'closed', outcome: b.outcome });
+                return { status: h.status };
+            }
+            case 'hugs/update_progress': {
+                const h = this.hugs.find((x) => x.id === b.hug_id && x.workspace_id === b.workspace_id)!;
+                h.progress = b.progress;
+                return h;
+            }
+            case 'hugs/cancel': {
+                const open = this.hugs.filter((h) => h.workspace_id === b.workspace_id && h.status === 'open' && (b.ref_id ? h.ref_id === b.ref_id : h.id === b.hug_id));
+                for (const h of open) Object.assign(h, { status: 'cancelled', outcome: b.reason ?? null });
+                return { cancelled: open.map((h) => h.id) };
+            }
             case 'site/get_orgs':
                 return this.page(this.orgs.filter((o) => !b.external_id || (o.external?.source === b.external_source && o.external?.id === b.external_id)));
             case 'site/create_org': {

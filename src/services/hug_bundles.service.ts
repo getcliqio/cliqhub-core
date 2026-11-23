@@ -110,6 +110,19 @@ export class HugBundlesService {
         return { sha256, name };
     }
 
+    /** Every file of a stored bundle (path → text), as it came from cliqd; null when Core doesn't hold it. */
+    static async read_files(sha256: string): Promise<Record<string, string> | null> {
+        const row = await HugBundle.findByPk(sha256, { attributes: ['sha256'], raw: true });
+        if (!row) return null;
+        const prefix = bundle_prefix(sha256);
+        const out: Record<string, string> = {};
+        for (const key of await store().list(prefix)) {
+            const body = await store().read(key);
+            if (body) out[key.slice(prefix.length)] = body.toString('utf8');
+        }
+        return out;
+    }
+
     /** One file of a stored bundle, or null. */
     static async get_file(sha256: string, path: string): Promise<{ body: Buffer; content_type: string } | null> {
         if (!safe_path(path)) return null;

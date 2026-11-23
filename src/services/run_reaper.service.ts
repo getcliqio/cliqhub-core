@@ -44,7 +44,8 @@ let _timer: ReturnType<typeof setInterval> | null = null;
  * RETURNING is supported by Sequelize's raw query, so we get one round
  * trip instead of SELECT-then-UPDATE.
  */
-async function crash_and_emit(
+/** Exported for tests. */
+export async function crash_and_emit(
     where_sql: string,
     replacements: Record<string, unknown>,
     error_message: string,
@@ -76,6 +77,9 @@ async function crash_and_emit(
         // reaper from making progress on the next batch.
         try {
             await RunService._emit_lifecycle(row.run_id, 'run.crashed', { error: error_message });
+            // A crashed run's Hugs end with it, as on every other way a run ends (PLAN-gethugs-integration.md step 3).
+            const { HugsService } = await import('./hugs.service.js');
+            await HugsService.cancel_for_run(row.run_id).catch(() => {});
         } catch (err) {
             log.warn('crash_event_emit_failed', { error: err instanceof Error ? err.message : String(err) });
             /* swallow — see comment above */

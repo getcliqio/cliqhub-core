@@ -19,7 +19,10 @@ const set = (url?: string, token?: string) => {
     else process.env.GETHUGS_PARTNER_TOKEN = token;
 };
 
-afterEach(() => set());
+afterEach(() => {
+    set();
+    delete process.env.GETHUGS_APP_URL;
+});
 
 describe('gethugs_config', () => {
     it('neither set: getHugs is off', () => {
@@ -29,7 +32,7 @@ describe('gethugs_config', () => {
 
     it('both set: the origin (no trailing slash) and the token', () => {
         set('https://api.gethugs.ai/', TOKEN);
-        expect(gethugs_config()).toEqual({ url: 'https://api.gethugs.ai', token: TOKEN });
+        expect(gethugs_config()).toEqual({ url: 'https://api.gethugs.ai', token: TOKEN, app_url: 'https://api.gethugs.ai' });
         set('http://localhost:8080', TOKEN);
         expect(gethugs_config()!.url).toBe('http://localhost:8080');
     });
@@ -45,6 +48,15 @@ describe('gethugs_config', () => {
         }
         set('https://api.gethugs.ai', 'hugs_k_abc');
         expect(() => gethugs_config()).toThrow(/service token/);
+    });
+
+    it('the web app: GETHUGS_APP_URL when set (an origin), else the API origin', () => {
+        set('http://localhost:8080', TOKEN);
+        expect(gethugs_config()!.app_url).toBe('http://localhost:8080');
+        process.env.GETHUGS_APP_URL = 'http://localhost:8082/';
+        expect(gethugs_config()!.app_url).toBe('http://localhost:8082');
+        process.env.GETHUGS_APP_URL = 'https://app.gethugs.ai/hugs';
+        expect(() => gethugs_config()).toThrow(/GETHUGS_APP_URL/);
     });
 });
 

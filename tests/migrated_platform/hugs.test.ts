@@ -574,6 +574,18 @@ describe.skipIf(!has_postgres)('Hugs (Core)', () => {
 			expect(await HugEventRow.count({ where: { hug_id, type: 'expired' } })).toBe(1);
 		});
 
+		it('a getHugs Hug (PLAN-gethugs-step3-asking.md) is never expired or reminded by Core: getHugs runs it', async () => {
+			const { hug_id } = await open({ reminders: { every_min: 30 } });
+			const past = new Date(Date.now() - 1_000);
+			await Hug.update({ provider: 'gethugs', gethugs_id: `hug_${hug_id.slice(0, 8)}`, expires_at: past, next_remind_at: past }, { where: { id: hug_id } });
+			await HugsService.expire_due();
+			await HugsService.remind_due();
+			const hug = (await Hug.findByPk(hug_id, { raw: true }))!;
+			expect([hug.status, hug.last_reminded_at]).toEqual(['open', null]);
+			expect(await HugEventRow.count({ where: { hug_id } })).toBe(0);
+			await Hug.update({ status: 'cancelled' }, { where: { id: hug_id } });
+		});
+
 		it('reminders are scheduled at open, sent when due, rescheduled, and never delivered to the requester', async () => {
 			const { hug_id } = await open({ reminders: { every_min: 30, at_min: [10] } });
 			const hug = (await Hug.findByPk(hug_id, { raw: true }))!;

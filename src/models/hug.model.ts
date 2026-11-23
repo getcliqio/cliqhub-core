@@ -82,6 +82,10 @@ export class Hug extends BaseModel {
     declare closed_at: Date | null;
     /** People its channels reach who may not see it (no `runs.view`): not sent to (§6.4). */
     declare not_sent_to: HugNotSentTo[] | null;
+    /** `cliqhub` (Core runs it) or `gethugs` (a relay of the getHugs Hug `gethugs_id`, PLAN-gethugs-step3-asking.md). */
+    declare provider: 'cliqhub' | 'gethugs';
+    declare gethugs_id: string | null;
+    declare gethugs_workspace_id: string | null;
 
     static register(sequelize: Sequelize): void {
         Hug.init({
@@ -111,6 +115,9 @@ export class Hug extends BaseModel {
             created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
             closed_at: { type: DataTypes.DATE, allowNull: true },
             not_sent_to: { type: DataTypes.JSONB, allowNull: true },
+            provider: { type: DataTypes.TEXT, allowNull: false, defaultValue: 'cliqhub' },
+            gethugs_id: { type: DataTypes.TEXT, allowNull: true },
+            gethugs_workspace_id: { type: DataTypes.TEXT, allowNull: true },
         }, { sequelize, schema: 'cliq', tableName: 'hugs', timestamps: false });
     }
 }
