@@ -112,6 +112,7 @@ describe('route policy coverage', () => {
             "POST /v1/settings/get",
             "POST /v1/settings/get_by_key",
             "POST /v1/teams/download",
+            "POST /v1/workspaces/remove",
           ]
         `);
     });

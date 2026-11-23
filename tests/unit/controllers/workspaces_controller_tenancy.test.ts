@@ -109,6 +109,26 @@ describe('workspaces/get_by_id + remove', () => {
         expect(r.err?.status_code).toBe(403);
         expect(remove_by_path).not.toHaveBeenCalled();
     });
+    it('daemon token removes a workspace on its realm\'s daemons, by path only on those daemons', async () => {
+        get.mockResolvedValue({ id: 'w4', daemon_id: 'd-realm' });
+        remove_by_path.mockResolvedValue(true);
+        const ok = await call(WorkspaceController.remove, req({ id: 'w4', path: '/x' }, 'daemon'));
+        expect(ok.body).toEqual({ ok: true, removed: true });
+        expect(remove_by_path).toHaveBeenCalledWith('/x', ['d-realm']);
+    });
+    it('daemon token cannot remove another realm\'s workspace (404)', async () => {
+        get.mockResolvedValue({ id: 'w5', daemon_id: 'd-other' });
+        const r = await call(WorkspaceController.remove, req({ id: 'w5' }, 'daemon'));
+        expect(r.err?.status_code).toBe(404);
+        expect(remove).not.toHaveBeenCalled();
+    });
+    it('remove looks the workspace up by id first, then by path', async () => {
+        get.mockResolvedValue({ id: 'w6', daemon_id: 'd-mine' });
+        remove_by_path.mockResolvedValue(true);
+        await call(WorkspaceController.remove, req({ id: 'w6', path: '/x' }, 'user'));
+        expect(find_by_path).not.toHaveBeenCalled();
+        expect(remove_by_path).toHaveBeenCalledWith('/x', undefined);
+    });
     it('remove of an unknown workspace is a no-op', async () => {
         find_by_path.mockResolvedValue(null);
         const r = await call(WorkspaceController.remove, req({ path: '/nope' }, 'user'));

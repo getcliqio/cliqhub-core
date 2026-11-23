@@ -158,7 +158,7 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'POST /v1/agents/register': org(ORG, 'agents.manage'),
     'POST /v1/agents/deregister': org(ORG, 'agents.manage'),
     'POST /v1/workspaces/get_by_id': record('workspace', ['body.workspace_id', 'body.id'], 'view'),
-    'POST /v1/workspaces/remove': record('workspace', 'body.id', 'admin', { handler: 'by path: handler checks realm admin' }),
+    'POST /v1/workspaces/remove': record('workspace', 'body.id', 'admin', { daemon: 'write', handler: 'by path: handler checks realm admin; daemon: workspaces on daemons of the token realm' }),
     'POST /v1/events/custom/create': realm(REALM, 'operate', { perm: 'rules.manage.realm' }),
     'POST /v1/events/custom/remove': record('custom_event', 'body.id', 'operate', { perm: 'rules.manage.realm' }), // no realm: site admin only (S20, engine)
     'POST /v1/events/get_by_id': record('event', 'body.id', 'view'),

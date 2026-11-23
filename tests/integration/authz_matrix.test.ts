@@ -193,7 +193,7 @@ const MATRIX: Record<string, Row> = {
     'POST /v1/agents/register': { expect: ACME_ADMIN_PERM },
     'POST /v1/agents/deregister': { expect: ACME_ADMIN_PERM },
     'POST /v1/workspaces/get_by_id': { expect: A1_VIEW },
-    'POST /v1/workspaces/remove': { expect: A1_ADMIN, body: id('workspace_a1') },
+    'POST /v1/workspaces/remove': { expect: '1YYY3344Y4Y', body: id('workspace_a1') }, // admins; realm A1's daemon tokens
     'POST /v1/events/custom/create': { expect: A1_OPERATE },
     'POST /v1/events/custom/remove': { expect: A1_OPERATE, body: id('custom_event_a1') },
     'POST /v1/events/get_by_id': { expect: A1_VIEW, body: id('event_a1') },

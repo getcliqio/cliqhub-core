@@ -481,10 +481,11 @@ export class WorkspaceService {
         return true;
     }
 
-    /** {@link remove} by path. */
-    static async remove_by_path(path: string): Promise<boolean> {
+    /** {@link remove} by path; `daemon_ids` limits it to workspaces on those daemons. */
+    static async remove_by_path(path: string, daemon_ids?: string[]): Promise<boolean> {
         log.debug('remove_by_path', { path });
-        const rows = await _ws_repo_w.find_all_q({ where: { path } });
+        const all = await _ws_repo_w.find_all_q({ where: { path } });
+        const rows = daemon_ids ? all.filter((ws) => daemon_ids.includes(ws.get('daemon_id') as string)) : all;
         for (const ws of rows) await WorkspaceService._mark_deleted(ws);
         if (rows.length > 0) log.info('workspace_removed_by_path', { path });
         return rows.length > 0;

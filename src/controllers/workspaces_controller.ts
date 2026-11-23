@@ -41,13 +41,14 @@ async function assert_realm_readable(req: Request, realm_id: string): Promise<vo
 
 /**
  * Removing a workspace needs realm admin on a realm of its daemon (site admins
- * always may). Checked here too because removal by `path` gives the route
- * policy no id to look up.
+ * always may). A daemon token may remove workspaces on daemons of its realm
+ * (`cliq workspace delete`). Checked here too because removal by `path` gives
+ * the route policy no id to look up.
  */
 async function assert_workspace_admin(req: Request, daemon_id: string | null | undefined, label: string): Promise<void> {
     if (AdminCheck.is_site_admin(req)) return;
     await assert_workspace_visible(req, daemon_id, label);
-    if (req.auth?.auth_via === 'daemon_token') throw ApiError.forbidden('Daemon tokens cannot remove workspaces');
+    if (req.auth?.auth_via === 'daemon_token') return;
     const [daemon_realms, admin_realms] = await Promise.all([
         RealmService.list_realms_for_daemon(String(daemon_id)),
         visible_realm_ids(String(req.auth?.user?.id ?? ''), { need: 'admin' }),
@@ -177,16 +178,18 @@ export class WorkspaceController {
             log.debug('remove', { user_id: req.auth?.user?.id });
             const data = remove_schema.parse(req.body);
             if (!data.path && !data.id) throw ApiError.bad_request('path or id is required');
-            const target = data.path
-                ? await WorkspaceService.find_by_path(data.path)
-                : await WorkspaceService.get(data.id!).catch(() => null);
+            // id first: a path can exist on several daemons (find_by_path picks one).
+            const target = (data.id ? await WorkspaceService.get(data.id).catch(() => null) : null)
+                ?? (data.path ? await WorkspaceService.find_by_path(data.path) : null);
             if (!target) {
                 res.json({ ok: true, removed: false });
                 return;
             }
             await assert_workspace_admin(req, target.daemon_id as string | null, data.id ?? data.path!);
+            // A daemon token removes by path only on its realm's daemons, not another realm's workspace at the same path.
+            const daemon_ids = req.auth?.auth_via === 'daemon_token' ? await visible_daemon_ids(req) : null;
             const removed = data.path
-                ? await WorkspaceService.remove_by_path(data.path)
+                ? await WorkspaceService.remove_by_path(data.path, daemon_ids ?? undefined)
                 : await WorkspaceService.remove(data.id!);
             log.info('workspace_removed', { id: data.id, path: data.path });
             res.json({ ok: true, removed });

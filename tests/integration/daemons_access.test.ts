@@ -144,6 +144,19 @@ describe.skipIf(!has_postgres)('daemons and workspaces access (Core API 5)', () 
             expect(ok.body.removed).toBeTruthy();
         });
 
+        it('a daemon token removes its realm\'s workspace, never another realm\'s at the same path', async () => {
+            const w = await workspace_on(s.daemon_a1);
+            const other = await workspace_on(await daemon_in(s.B1));
+            await Workspace.update({ path: w.path } as never, { where: { id: other.id } });
+            expect((await post('/v1/workspaces/remove', s.token.dB, { id: w.id, path: w.path })).status).toBe(404);
+            const ok = await post('/v1/workspaces/remove', s.token.dA, { id: w.id, path: w.path });
+            expect(ok.status).toBe(200);
+            expect(ok.body.removed).toBe(true);
+            const rows = await Workspace.unscoped().findAll({ where: { id: [w.id, other.id] }, raw: true }) as unknown as Array<{ id: string; deleted_at: number | null }>;
+            expect(rows.find((r) => r.id === w.id)?.deleted_at).toBeTruthy();
+            expect(rows.find((r) => r.id === other.id)?.deleted_at).toBeFalsy();
+        });
+
         it('remove by id: viewer 403, admin 200', async () => {
             const w = await workspace_on(s.daemon_a1);
             expect((await post('/v1/workspaces/remove', s.token.mia, { id: w.id })).status).toBe(403);
