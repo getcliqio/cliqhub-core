@@ -132,3 +132,36 @@ export async function visible_realm_ids(
     }
     return out;
 }
+
+/**
+ * Who may answer in each realm of an org (getHugs workspace members, PLAN-gethugs-step2-provisioning.md): every
+ * active org member with `runs.view` on the realm — by {@link realm_standings}, the same rules as
+ * `visible_realm_ids(user, { org_id, perm: 'runs.view' })` — with their level there. Realm guests who aren't org
+ * members are left out: only org members are people in getHugs.
+ *
+ * @returns realm id → (user id → level).
+ */
+export async function runs_viewers(org_id: string): Promise<Map<string, Map<string, Level>>> {
+    const members = await OrgMember.findAll({ where: { org_id, status: 'active', deleted_at: null }, attributes: ['user_id'], raw: true }) as unknown as
+        Array<{ user_id: string }>;
+    const out = new Map<string, Map<string, Level>>();
+    for (const { user_id } of members) {
+        const { levels, realms, org_roles } = await realm_standings(String(user_id), { org_id });
+        const role = org_roles.get(org_id);
+        if (role && !role.is_system && !role.permissions.includes('runs.view')) continue;
+        for (const r of realms) {
+            const l = levels.get(r.id);
+            if (!l) continue;
+            if (!out.has(r.id)) out.set(r.id, new Map());
+            out.get(r.id)!.set(String(user_id), l);
+        }
+    }
+    return out;
+}
+
+/** The org members who may answer in one realm, with their level there ({@link runs_viewers}). */
+export async function users_with_runs_view(realm_id: string): Promise<Map<string, Level>> {
+    const realm = await Realm.findByPk(realm_id, { attributes: ['org_id', 'deleted'], raw: true }) as unknown as { org_id: string | null; deleted: boolean } | null;
+    if (!realm?.org_id || realm.deleted) return new Map();
+    return (await runs_viewers(realm.org_id)).get(realm_id) ?? new Map();
+}
