@@ -26,6 +26,8 @@ import { reset_gethugs_builtins } from '../../src/services/gethugs_hugs.js';
 import { gethugs_reconcile } from '../../src/services/gethugs_reconcile.js';
 import { HugsService } from '../../src/services/hugs.service.js';
 import { HugPendingService } from '../../src/services/hug_pending.service.js';
+import { gethugs_sign_in_link } from '../../src/services/gethugs_sign_in.js';
+import { calculateJwkThumbprint, decodeProtectedHeader, exportJWK, generateKeyPair, jwtVerify } from 'jose';
 import { gethugs_apply } from '../../src/services/gethugs_events.js';
 import { GETHUGS_FEED_LOCK_KEY, run_gethugs_feed } from '../../src/services/gethugs_feed.js';
 import pg from 'pg';
@@ -532,6 +534,64 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             await read();
             fake.feed.push({ id: 'evt_x', type: 'hug.responded', seq: 1, hug: { id: 'hug_someone_elses', ref_id: null, status: 'open' } });
             expect(await read()).toMatchObject({ ran: true, applied: 0 });
+        });
+    });
+
+    describe('sign-in links (PLAN-gethugs-step7-sign-in.md)', () => {
+        let public_key: CryptoKey;
+        let kid: string;
+        beforeAll(async () => {
+            const pair = await generateKeyPair('EdDSA', { crv: 'Ed25519', extractable: true });
+            public_key = pair.publicKey as CryptoKey;
+            kid = await calculateJwkThumbprint(await exportJWK(pair.publicKey));
+            process.env.GETHUGS_SIGNIN_JWK = JSON.stringify(await exportJWK(pair.privateKey));
+            process.env.GETHUGS_PARTNER_ID = 'prt_test';
+        });
+        afterAll(() => {
+            delete process.env.GETHUGS_SIGNIN_JWK;
+            delete process.env.GETHUGS_PARTNER_ID;
+        });
+        const statement_of = (url: string) => {
+            expect(url.startsWith('http://app.gethugs.test/sign-in/statement#')).toBe(true);
+            return url.split('#')[1]!;
+        };
+
+        it('a Hug: a statement for the person, landing on its getHugs page — exactly getHugs’ claims, 60 s, once', async () => {
+            const { hug_id } = await open();
+            const g_id = (await Hug.findByPk(hug_id, { raw: true }))!.gethugs_id!;
+            const { url } = await gethugs_sign_in_link({ user_id: o.bob.id, hug_id });
+            const jws = statement_of(url);
+            expect(decodeProtectedHeader(jws)).toEqual({ alg: 'EdDSA', kid });
+            const { payload } = await jwtVerify(jws, public_key, { issuer: 'prt_test', audience: 'http://app.gethugs.test' });
+            expect(Object.keys(payload).sort()).toEqual(['aud', 'exp', 'iss', 'jti', 'next', 'org', 'src', 'sub']);
+            expect(payload).toMatchObject({ src: 'cliqhub', org: `org:${o.org_id}`, sub: `user:${o.bob.id}`, next: `/hugs/${g_id}` });
+            expect(payload.exp! - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(60);
+            const again = statement_of((await gethugs_sign_in_link({ user_id: o.bob.id, hug_id })).url);
+            expect((await jwtVerify(again, public_key)).payload.jti).not.toBe(payload.jti);
+        });
+
+        it('the inbox of an org: next /hugs', async () => {
+            const { url } = await gethugs_sign_in_link({ user_id: o.bob.id, org_id: o.org_id });
+            expect((await jwtVerify(statement_of(url), public_key)).payload).toMatchObject({ next: '/hugs', org: `org:${o.org_id}` });
+        });
+
+        it('refused: someone who can’t see the Hug, a non-member, a person not in getHugs yet, no key here', async () => {
+            const { hug_id } = await open();
+            const stranger = await person();
+            await expect(gethugs_sign_in_link({ user_id: stranger.id, hug_id })).rejects.toMatchObject({ status_code: 404 });
+            await expect(gethugs_sign_in_link({ user_id: stranger.id, org_id: o.org_id })).rejects.toMatchObject({ status_code: 403 });
+            // A member cliqhub hasn't provisioned to getHugs yet.
+            await OrgMember.create({ org_id: o.org_id, user_id: stranger.id, role: 'member', status: 'active', joined_at: new Date() } as never);
+            await expect(gethugs_sign_in_link({ user_id: stranger.id, org_id: o.org_id })).rejects.toMatchObject({ status_code: 409, code: 'not_in_gethugs' });
+            const saved = process.env.GETHUGS_SIGNIN_JWK;
+            delete process.env.GETHUGS_SIGNIN_JWK;
+            delete process.env.GETHUGS_PARTNER_ID;
+            try {
+                await expect(gethugs_sign_in_link({ user_id: o.bob.id, org_id: o.org_id })).rejects.toMatchObject({ status_code: 409, code: 'not_configured' });
+            } finally {
+                process.env.GETHUGS_SIGNIN_JWK = saved;
+                process.env.GETHUGS_PARTNER_ID = 'prt_test';
+            }
         });
     });
 });

@@ -93,6 +93,16 @@ export const HugsGetByIdInput = z.object({
 });
 export type HugsGetByIdInput = z.infer<typeof HugsGetByIdInput>;
 
+/**
+ * POST /v1/hugs/create_sign_in_link — a link that signs the caller in to getHugs (PLAN-gethugs-step7-sign-in.md),
+ * landing on a Hug (`hug_id`) or the org's getHugs inbox (`org_id`). Exactly one of them.
+ */
+export const HugsCreateSignInLinkInput = z.object({
+    hug_id: z.string().min(1).optional(),
+    org_id: z.string().uuid().optional(),
+}).strict().refine((v) => Boolean(v.hug_id) !== Boolean(v.org_id), 'Give one of hug_id or org_id');
+export type HugsCreateSignInLinkInput = z.infer<typeof HugsCreateSignInLinkInput>;
+
 /** POST /v1/hugs/create — cliqd opens a Hug for one phase iteration. */
 export const HugsCreateInput = z.object({
     /** Daemon-minted id; a retried create adopts it (§9). */

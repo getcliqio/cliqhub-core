@@ -18,6 +18,7 @@ import { get_logger } from '../lib/log.js';
 import { ApiError } from '../lib/api_error.js';
 import { HugsService } from '../services/hugs.service.js';
 import { HugBundlesService } from '../services/hug_bundles.service.js';
+import { gethugs_sign_in_link } from '../services/gethugs_sign_in.js';
 import { HugPendingService } from '../services/hug_pending.service.js';
 import { RealmService } from '../services/realm.service.js';
 import { Run } from '../models/index.js';
@@ -25,6 +26,7 @@ import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js
 import {
     HugsCloseInput,
     HugsCreateInput,
+    HugsCreateSignInLinkInput,
     HugsGetByIdInput,
     HugsGetEventsInput,
     HugsGetInput,
@@ -141,6 +143,21 @@ export class HugsController extends BaseController {
         const body = this.parse_body(HugsRespondInput, req);
         const data = await HugsService.respond({ hug_id: body.hug_id, user_id, values: body.values, summary: body.summary });
         log.info('hug_response_submitted', { hug_id: body.hug_id });
+        res.json({ ok: true, data });
+    }
+
+    /**
+     * POST /v1/hugs/create_sign_in_link — a link (60 s, once) that signs the caller in to getHugs and lands on a Hug
+     * (`hug_id`) or their getHugs inbox (`org_id`). People only, never daemons.
+     *
+     * @param req - Body: {@link HugsCreateSignInLinkInput}
+     * @param res - `{ ok: true, data: { url } }`; 409 `not_in_gethugs` / `not_configured` (use the plain link)
+     */
+    async create_sign_in_link(req: FlatApiRequest<HugsCreateSignInLinkInput, HugsFields>, res: FlatApiOkResponse<HugsFields>): Promise<void> {
+        const user_id = req.auth?.user?.id?.trim();
+        if (!user_id || req.auth?.auth_via === 'daemon_token') throw ApiError.unauthorized('A person signs in, with their own session');
+        const body = this.parse_body(HugsCreateSignInLinkInput, req);
+        const data = await gethugs_sign_in_link({ user_id, hug_id: body.hug_id, org_id: body.org_id });
         res.json({ ok: true, data });
     }
 

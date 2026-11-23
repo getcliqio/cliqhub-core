@@ -241,6 +241,7 @@ const MATRIX: Record<string, Row> = {
     'POST /v1/hugs/get_events': { expect: DAEMON_ONLY },
     'POST /v1/hugs/get_by_id': { expect: '1YYYYY44Y4Y' },
     'POST /v1/hugs/respond': { expect: A1_VIEW },
+    'POST /v1/hugs/create_sign_in_link': { expect: SIGNED_IN }, // the handler checks the Hug (runs.view) or the org (member)
     'POST /v1/hug_bundles/get_file': { expect: ALL },
 
     // teams (default team = Mia's private team)

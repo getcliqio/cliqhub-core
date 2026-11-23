@@ -212,6 +212,7 @@ export const ROUTE_POLICY: Record<string, Policy> = {
     'POST /v1/hugs/get_events': daemon_only('own Hugs only (daemon_id of the token realm)'),
     'POST /v1/hugs/get_by_id': record('hug', 'body.hug_id', 'view', { perm: 'runs.view', daemon: 'read' }),
     'POST /v1/hugs/respond': record('hug', 'body.hug_id', 'view', { perm: 'runs.view', handler: 'addressed to the caller' }),
+    'POST /v1/hugs/create_sign_in_link': signed_in({ handler: 'a person only: the Hug (runs.view on its realm) or the org (active member); PLAN-gethugs-step7-sign-in.md' }),
     'POST /v1/hug_bundles/get_file': public_('a hug bundle file by sha256: built code, no Hug data (PLAN-hug-widgets §11.1)'),
 
     // ── Teams ───────────────────────────────────────────────────────
