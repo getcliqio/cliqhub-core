@@ -28,6 +28,8 @@ import { HugsService } from '../../src/services/hugs.service.js';
 import { HugBundlesService } from '../../src/services/hug_bundles.service.js';
 import { HugsGetInput } from '../../src/schemas/hug_types.js';
 import { gethugs_sign_in_link } from '../../src/services/gethugs_sign_in.js';
+import { gethugs_unanswered, gethugs_unanswered_forget } from '../../src/services/gethugs_unanswered.js';
+import { run_gethugs_feed } from '../../src/services/gethugs_feed.js';
 import { calculateJwkThumbprint, decodeProtectedHeader, exportJWK, generateKeyPair, jwtVerify } from 'jose';
 import { gethugs_apply } from '../../src/services/gethugs_events.js';
 import { GETHUGS_FEED_LOCK_KEY, run_gethugs_feed } from '../../src/services/gethugs_feed.js';
@@ -672,6 +674,17 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             expect((await jwtVerify(again, public_key)).payload.jti).not.toBe(payload.jti);
         });
 
+        it('a way back (PLAN-gethugs-partner-ux.md §3): return_url only on CliqHub’s own origin; anything else is dropped', async () => {
+            process.env.PUBLIC_APP_URL = 'http://cliqhub.test';
+            const claims_of = async (return_url?: string) =>
+                (await jwtVerify(statement_of((await gethugs_sign_in_link({ user_id: o.bob.id, org_id: o.org_id, return_url })).url), public_key)).payload;
+            expect((await claims_of('http://cliqhub.test/r/ops/runs/1?tab=hugs')).return_url).toBe('http://cliqhub.test/r/ops/runs/1?tab=hugs');
+            for (const other of ['https://evil.test/x', 'http://cliqhub.test.evil.test/x', 'http://user:pw@cliqhub.test/x', 'not a url']) {
+                expect([other, (await claims_of(other)).return_url]).toEqual([other, undefined]);
+            }
+            expect(Object.keys(await claims_of()).includes('return_url')).toBe(false);
+        });
+
         it('the inbox of an org: next /hugs', async () => {
             const { url } = await gethugs_sign_in_link({ user_id: o.bob.id, org_id: o.org_id });
             expect((await jwtVerify(statement_of(url), public_key)).payload).toMatchObject({ next: '/hugs', org: `org:${o.org_id}` });
@@ -696,4 +709,49 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             }
         });
     });
+
+    describe('unanswered Hugs for the HUGs badge (PLAN-gethugs-partner-ux.md §1)', () => {
+        beforeEach(() => gethugs_unanswered_forget());
+
+        it('counts a person’s unanswered Hugs from getHugs, newest first; cached; a feed event refreshes the org', async () => {
+            const first = await open({ title: 'First' });
+            await open({ title: 'Second' });
+            const w = await gethugs_unanswered({ user_id: o.bob.id, org_id: o.org_id });
+            expect([w.total, w.in_gethugs, w.items.map((h) => h.title)]).toEqual([2, true, ['Second', 'First']]);
+
+            // Cached: a new Hug isn't seen until the org's entries are forgotten (by the feed reader, below).
+            await open({ title: 'Third' });
+            expect((await gethugs_unanswered({ user_id: o.bob.id, org_id: o.org_id })).total).toBe(2);
+            const asks = () => fake.calls.filter((c) => c === 'hugs/get').length;
+            const before = asks();
+            await run_gethugs_feed(gethugs_partner(), { wait_s: 0 });
+            expect((await gethugs_unanswered({ user_id: o.bob.id, org_id: o.org_id })).total).toBe(3);
+            expect(asks()).toBe(before + 1);
+
+            // Bob answers one: once the feed brings it, it's off his count.
+            const bob = fake.user_by_ref(fake.org_by_ref(`org:${o.org_id}`)!.id, `user:${o.bob.id}`)!.id;
+            fake.respond((await Hug.findByPk(first.hug_id, { raw: true }))!.gethugs_id!, bob, { decision: 'approve' });
+            await run_gethugs_feed(gethugs_partner(), { wait_s: 0 });
+            const after = await gethugs_unanswered({ user_id: o.bob.id, org_id: o.org_id, limit: 1 });
+            expect([after.total, after.items.map((h) => h.title)]).toEqual([2, ['Third']]);
+        });
+
+        it('getHugs down: the last answer (stale), else no count — never an error; a non-member is refused; not in getHugs: 0', async () => {
+            await open();
+            expect((await gethugs_unanswered({ user_id: o.bob.id, org_id: o.org_id })).total).toBe(1);
+            fake.fail_with = 503;
+            gethugs_unanswered_forget('another-org');
+            const stale = await gethugs_unanswered({ user_id: o.bob.id, org_id: o.org_id, limit: 10 });
+            expect(stale.total).toBe(1);
+            gethugs_unanswered_forget();
+            expect(await gethugs_unanswered({ user_id: o.bob.id, org_id: o.org_id })).toEqual({ total: null, items: [], in_gethugs: true });
+            fake.fail_with = null;
+
+            const stranger = await person();
+            await expect(gethugs_unanswered({ user_id: stranger.id, org_id: o.org_id })).rejects.toMatchObject({ status_code: 403 });
+            await OrgMember.create({ org_id: o.org_id, user_id: stranger.id, role: 'member', status: 'active', joined_at: new Date() } as never);
+            expect(await gethugs_unanswered({ user_id: stranger.id, org_id: o.org_id })).toEqual({ total: 0, items: [], in_gethugs: false });
+        });
+    });
 });
+

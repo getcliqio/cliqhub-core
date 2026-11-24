@@ -77,12 +77,20 @@ export const HugBundleUploadSchema = z.object({
 
 /** POST /v1/hugs/get — one run's Hugs, every round of every phase, oldest first; seen like the run. */
 export const HugsGetInput = z.object({
-    run_id: z.string().min(1),
-    /** Status values to include (default: every status). */
+    /** A run's Hugs. */
+    run_id: z.string().min(1).optional(),
+    /**
+     * The caller's unanswered Hugs in the org `org_id`, from getHugs (PLAN-gethugs-partner-ux.md §1): open, reached them,
+     * not answered by them — the count CliqHub's HUGs badge shows. Instead of `run_id`.
+     */
+    unanswered: z.literal(true).optional(),
+    org_id: z.string().uuid().optional(),
+    /** Status values to include (default: every status; a run's Hugs only). */
     statuses: z.array(z.enum(['open', 'closed', 'expired', 'cancelled'])).optional(),
     limit: z.number().int().positive().optional(),
     offset: z.number().int().nonnegative().optional(),
-});
+}).refine((v) => (v.run_id !== undefined) !== (v.unanswered === true && v.org_id !== undefined), 'Give run_id, or unanswered with org_id')
+    .refine((v) => v.unanswered !== true || (v.statuses === undefined && v.offset === undefined), 'unanswered takes no statuses or offset');
 export type HugsGetInput = z.infer<typeof HugsGetInput>;
 
 /** POST /v1/hugs/get_by_id — one Hug with its responses. */
@@ -98,6 +106,8 @@ export type HugsGetByIdInput = z.infer<typeof HugsGetByIdInput>;
 export const HugsCreateSignInLinkInput = z.object({
     hug_id: z.string().min(1).optional(),
     org_id: z.string().uuid().optional(),
+    /** The CliqHub page the person is on: getHugs offers a way back to it (PLAN-gethugs-partner-ux.md §3). Ignored unless on CliqHub's own origin. */
+    return_url: z.string().max(2048).optional(),
 }).strict().refine((v) => Boolean(v.hug_id) !== Boolean(v.org_id), 'Give one of hug_id or org_id');
 export type HugsCreateSignInLinkInput = z.infer<typeof HugsCreateSignInLinkInput>;
 

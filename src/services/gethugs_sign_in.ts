@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { calculateJwkThumbprint, importJWK, SignJWT, type JWK } from 'jose';
 import { QueryTypes } from 'sequelize';
 
-import { gethugs_config } from '../config/env.js';
+import { gethugs_config, public_app_url } from '../config/env.js';
 import { visible_realm_ids } from '../auth/route_policy/visible.js';
 import { get_sequelize } from '../db/sequelize.js';
 import { ApiError } from '../lib/api_error.js';
@@ -60,13 +60,27 @@ async function linked(org_id: string, kind: 'org' | 'user', cliq_id: string): Pr
 }
 
 /**
+ * A page of CliqHub's own (`PUBLIC_APP_URL`'s origin) to go back to from getHugs (PLAN-gethugs-partner-ux.md §3), or
+ * null: anything else is dropped rather than refused (getHugs would refuse it; the link still works without it).
+ */
+export function own_page(url: string | undefined): string | null {
+    if (!url) return null;
+    try {
+        const u = new URL(url);
+        return u.origin === new URL(public_app_url()).origin && !u.username && !u.password ? u.href : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * A link that signs `user_id` in to getHugs, landing on the Hug `hug_id` (they must see its run) or the getHugs inbox
  * of the org `org_id` (they must be an active member).
  *
  * @throws 404 — no such Hug, or one they can't see; 403 — not a member of the org
  * @throws 409 `not_in_gethugs` — the org or the person isn't in getHugs yet
  */
-export async function gethugs_sign_in_link(input: { user_id: string; hug_id?: string; org_id?: string }): Promise<{ url: string }> {
+export async function gethugs_sign_in_link(input: { user_id: string; hug_id?: string; org_id?: string; return_url?: string }): Promise<{ url: string }> {
     let org_id: string;
     let next = '/hugs';
     if (input.hug_id) {
@@ -89,7 +103,8 @@ export async function gethugs_sign_in_link(input: { user_id: string; hug_id?: st
     const sign_in = await gethugs_signin_config();
     const app = gethugs_config().app_url;
 
-    const statement = await new SignJWT({ src: EXTERNAL_SOURCE, org: `org:${org_id}`, next })
+    const return_url = own_page(input.return_url);
+    const statement = await new SignJWT({ src: EXTERNAL_SOURCE, org: `org:${org_id}`, next, ...(return_url ? { return_url } : {}) })
         .setProtectedHeader({ alg: 'EdDSA', kid: sign_in.kid })
         .setIssuer(sign_in.partner_id)
         .setAudience(app)
@@ -97,6 +112,6 @@ export async function gethugs_sign_in_link(input: { user_id: string; hug_id?: st
         .setJti(randomUUID())
         .setExpirationTime(`${STATEMENT_TTL_S}s`)
         .sign(await importJWK(sign_in.jwk, 'EdDSA'));
-    log.info('gethugs_sign_in_link', { user_id: input.user_id, org_id, next });
+    log.info('gethugs_sign_in_link', { user_id: input.user_id, org_id, next, return_url: Boolean(return_url) });
     return { url: `${app}/sign-in/statement#${statement}` };
 }

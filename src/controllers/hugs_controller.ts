@@ -15,6 +15,7 @@ import { BaseController } from './base_controller.js';
 import { ApiError } from '../lib/api_error.js';
 import { HugsService } from '../services/hugs.service.js';
 import { gethugs_sign_in_link } from '../services/gethugs_sign_in.js';
+import { gethugs_unanswered } from '../services/gethugs_unanswered.js';
 import { RealmService } from '../services/realm.service.js';
 import { Run } from '../models/index.js';
 import type { FlatApiOkResponse, FlatApiRequest } from '../types/api_response.js';
@@ -100,7 +101,13 @@ export class HugsController extends BaseController {
         const user_id = req.auth?.user?.id?.trim();
         if (!user_id) throw ApiError.unauthorized('Authentication required');
         const body = this.parse_body(HugsGetInput, req);
-        const result = await HugsService.list_for_run({ user_id, run_id: body.run_id, statuses: body.statuses, limit: body.limit, offset: body.offset });
+        if (body.unanswered) {
+            // From getHugs: the caller's unanswered Hugs in the org (the HUGs badge); never fails on getHugs' side.
+            const w = await gethugs_unanswered({ user_id, org_id: body.org_id!, limit: body.limit });
+            res.json({ ok: true, data: { items: w.items, total: w.total, offset: 0, limit: w.items.length, in_gethugs: w.in_gethugs, ...(w.stale ? { stale: true } : {}) } });
+            return;
+        }
+        const result = await HugsService.list_for_run({ user_id, run_id: body.run_id!, statuses: body.statuses, limit: body.limit, offset: body.offset });
         res.json({ ok: true, data: { items: result.hugs, total: result.total, offset: body.offset ?? 0, limit: body.limit ?? 50 } });
     }
 
@@ -127,7 +134,7 @@ export class HugsController extends BaseController {
         const user_id = req.auth?.user?.id?.trim();
         if (!user_id || req.auth?.auth_via === 'daemon_token') throw ApiError.unauthorized('A person signs in, with their own session');
         const body = this.parse_body(HugsCreateSignInLinkInput, req);
-        const data = await gethugs_sign_in_link({ user_id, hug_id: body.hug_id, org_id: body.org_id });
+        const data = await gethugs_sign_in_link({ user_id, hug_id: body.hug_id, org_id: body.org_id, return_url: body.return_url });
         res.json({ ok: true, data });
     }
 }

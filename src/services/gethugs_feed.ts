@@ -16,6 +16,7 @@ import { get_logger } from '../lib/log.js';
 import { Hug } from '../models/index.js';
 import { gethugs_partner, type GethugsPartner } from './gethugs.service.js';
 import { gethugs_apply, type GethugsEvent } from './gethugs_events.js';
+import { gethugs_unanswered_forget } from './gethugs_unanswered.js';
 
 const log = get_logger('svc.gethugs_feed');
 
@@ -132,6 +133,8 @@ export async function run_gethugs_feed(partner: GethugsPartner, opts: { wait_s?:
                 await save_cursor(fresh);
                 result.applied += await recover(partner);
                 result.recovered = true;
+                // Anything may have changed while the feed wasn't read: every waiting count is asked again.
+                gethugs_unanswered_forget();
                 return fresh;
             };
             if (!cursor) cursor = await start_over();
@@ -148,6 +151,8 @@ export async function run_gethugs_feed(partner: GethugsPartner, opts: { wait_s?:
             }
             for (const event of page.events) {
                 if (await gethugs_apply(event)) result.applied += 1;
+                // Its org's waiting counts may have changed (a Hug opened, answered or ended): ask getHugs again.
+                gethugs_unanswered_forget((event as { org?: { id?: string } }).org?.id);
             }
             await save_cursor(page.cursor);
             return result;

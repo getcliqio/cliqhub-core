@@ -12,7 +12,7 @@ interface Workspace { id: string; org_id: string; name: string; archived_at: num
 interface Channel { id: string; org_id: string; workspace_id: string | null; personal_user_id: string | null; name: string; enabled: boolean; archived_at: number | null; external: Ext; version: number }
 interface Dest { id: string; channel_id: string; type: string; config: Record<string, unknown>; target_channel_id: string | null }
 interface Template { id: string; org_id: string | null; name: string; builtin: boolean; versions: Array<{ id: string; sha: string; files?: Record<string, string> }>; current: string | null; archived_at: number | null }
-export interface FakeHug { id: string; org_id: string; workspace_id: string; ref_id: string | null; requester: string | null; template: string; title: string; channels: string[]; context: Record<string, unknown>; status: string; outcome: string | null; progress: string | null; expires_at: number; idempotency_key: string | null; body: Record<string, any>; last_seq: number; events: Array<{ hug_id: string; seq: number; type: 'response' | 'expired' | 'cancelled'; payload: Record<string, unknown> }> }
+export interface FakeHug { id: string; org_id: string; workspace_id: string; ref_id: string | null; requester: string | null; template: string; title: string; channels: string[]; context: Record<string, unknown>; status: string; outcome: string | null; progress: string | null; expires_at: number; idempotency_key: string | null; body: Record<string, any>; last_seq: number; created_at?: number; events: Array<{ hug_id: string; seq: number; type: 'response' | 'expired' | 'cancelled'; payload: Record<string, unknown> }> }
 /** One event of the partner feed (as getHugs' `events/get` gives it). */
 export interface FeedEvent { id: string; type: string; seq: number | null; hug: { id: string; ref_id: string | null; status: string }; [k: string]: unknown }
 
@@ -248,12 +248,26 @@ export class FakeGethugs {
                 const h: FakeHug = {
                     id: this.id('hug'), org_id: b.org_id, workspace_id: b.workspace_id, ref_id: b.ref_id ?? null, requester: b.requester ?? null,
                     template: b.template, title: b.title, channels: b.channels, context: b.context ?? {}, status: 'open', outcome: null, progress: null,
-                    expires_at: Date.now() + b.expires_in_min * 60_000, idempotency_key, body: b, last_seq: 0, events: [],
+                    expires_at: Date.now() + b.expires_in_min * 60_000, idempotency_key, body: b, last_seq: 0, events: [], created_at: Date.now() + this.n,
                 };
                 this.hugs.push(h);
                 this.hug_event(h, null, 'hug.opened', {});
                 if (this.on_create) this.on_create(h);
                 return h;
+            }
+            case 'hugs/get': {
+                // Only a partner's view of one person (partner-focus.md §1): their unanswered Hugs across the org — open,
+                // in a workspace they're in (as the fake's Hugs reach every member), not answered by them.
+                if (b.user_id === undefined || !b.unanswered) throw new Refused(400, 'invalid_request', 'fake getHugs: hugs/get lists one person’s unanswered Hugs only');
+                const u = this.users.find((x) => x.id === b.user_id && x.org_id === b.org_id && x.status !== 'deactivated');
+                if (!u) throw new Refused(404, 'not_found', 'User not found');
+                const answered = (h: FakeHug) => h.events.some((e) => e.type === 'response' && (e.payload.response as { responder: { user_id: string } }).responder.user_id === u.id);
+                const list = this.hugs
+                    .filter((h) => h.org_id === b.org_id && h.status === 'open' && h.expires_at > Date.now() && !answered(h)
+                        && this.workspaces.some((w) => w.id === h.workspace_id && w.members.has(u.id)))
+                    .sort((x, y) => (y.created_at ?? 0) - (x.created_at ?? 0));
+                const items = list.slice(0, b.limit ?? 50).map((h) => ({ id: h.id, title: h.title, workspace_id: h.workspace_id, status: h.status, created_at: h.created_at ?? 0, expires_at: h.expires_at }));
+                return { items, next_cursor: null, ...(b.with_total ? { total: list.length } : {}) };
             }
             case 'hugs/close': {
                 const h = this.hugs.find((x) => x.id === b.hug_id && x.workspace_id === b.workspace_id);
