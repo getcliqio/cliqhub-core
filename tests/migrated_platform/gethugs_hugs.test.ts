@@ -6,13 +6,15 @@
  * run files `not_supported_yet`.
  */
 import { randomUUID } from 'node:crypto';
-import { hug_bundle_hash } from '@getcliqio/cliq-sdk';
+import { hug_bundle_hash, to_hug_file } from '@getcliqio/cliq-sdk';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { close_test_control_plane_store, open_test_control_plane_store, postgres_reachable } from './helpers/control_plane_store.js';
 import { FakeGethugs } from '../helpers/fake_gethugs.js';
 import { get_sequelize } from '../../src/db/sequelize.js';
-import { Daemon, Hug, Org, OrgMember, OrgRole, RealmMember, Run, StoredArtifact, User, Workspace } from '../../src/models/index.js';
+import { Daemon, Hug, Org, OrgMember, OrgRole, RealmMember, Run, StoredArtifact, Team, User, Workspace } from '../../src/models/index.js';
+import { publish_version } from './helpers/version_files.js';
+import { RealmTeamListService } from '../../src/services/realm_team_list.service.js';
 import { RunService } from '../../src/services/run.service.js';
 import { ArtifactStorageService } from '../../src/services/artifact_storage.service.js';
 import { Readable } from 'node:stream';
@@ -52,7 +54,7 @@ const bundle_of = (name: string, tag = '') => ({
 describe.skipIf(!has_postgres)('asking through getHugs', () => {
     const orgs: string[] = [];
     let fake: FakeGethugs;
-    let o: { org_id: string; realm_id: string; bob: { id: string; username: string; email: string } };
+    let o: { org_id: string; realm_id: string; owner_id: string; bob: { id: string; username: string; email: string } };
 
     async function person() {
         const name = uid();
@@ -75,7 +77,7 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         await RealmMember.create({ id: randomUUID(), realm_id: ops.id, member_type: 'user', member_id: bob.id, role: 'operator', created_at: Date.now() } as never);
         await NotificationService.create_channel({ realm_id: ops.id, name: 'reviewers', destinations: [{ type: 'email', address: 'rev@cliq.test' }] });
         await gethugs_reconcile(org.id, gethugs_partner());
-        return { org_id: org.id, realm_id: ops.id, bob };
+        return { org_id: org.id, realm_id: ops.id, owner_id: owner.id, bob };
     }
     const spec = (over: Record<string, unknown> = {}) => ({
         hug: { name: 'approval' },
@@ -112,6 +114,7 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             const ids = { replacements: { ids: orgs } };
             await get_sequelize().query('DELETE FROM cliq.hugs WHERE org_id = ANY(ARRAY[:ids]::uuid[])', ids);
             await get_sequelize().query('DELETE FROM cliq.notification_channels WHERE realm_id IN (SELECT id FROM cliq.realms WHERE org_id = ANY(ARRAY[:ids]::uuid[]))', ids);
+            await get_sequelize().query('DELETE FROM cliq.realm_teams WHERE realm_id IN (SELECT id FROM cliq.realms WHERE org_id = ANY(ARRAY[:ids]::uuid[]))', ids);
             await get_sequelize().query('DELETE FROM cliq.realm_members WHERE realm_id IN (SELECT id FROM cliq.realms WHERE org_id = ANY(ARRAY[:ids]::uuid[]))', ids);
             await get_sequelize().query('DELETE FROM cliq.realms WHERE org_id = ANY(ARRAY[:ids]::uuid[])', ids);
             await Org.destroy({ where: { id: orgs } });
@@ -172,6 +175,30 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
         await open({ hug: { name: 'review', sha256: hug_bundle_hash(next) } }, { bundle: next, may_upload_bundle: true });
         expect(installed.versions).toHaveLength(2);
         expect(fake.hugs.at(-1)!.template).toBe(installed.versions[1]!.id);
+    });
+
+    it('a team hug whose template was archived: its team installed again, 503 and the org marked (the reconcile restores it; cliqd retries); its team gone, getHugs’ refusal', async () => {
+        const files = {
+            'hug.json': JSON.stringify({ name: 'review', title: 'Hug review', description: 'Asks', sdk_version: '1.2.0', definition: 'definition.mjs' }),
+            'index.html': `<!doctype html><script type="module" src="./main.js"></script><!-- ${uid()} -->`,
+            'main.js': 'console.log(1)',
+            'definition.mjs': 'export default {}',
+        };
+        const hug = { name: 'review', sha256: hug_bundle_hash(files) };
+        await open({ hug }, { bundle: files, may_upload_bundle: true });
+        fake.templates.find((t) => !t.builtin && t.org_id !== null)!.archived_at = Date.now();
+
+        await expect(open({ hug })).rejects.toMatchObject({ status_code: 422, code: 'template_archived' });
+
+        const name = `t-${uid()}`.slice(0, 30);
+        const team = await Team.create({ id: randomUUID(), name, scope: 'acme', description: 't', author_id: o.owner_id, license: 'MIT', visibility: 'public', listed: 1, install_count: 0 } as never);
+        const version_id = await publish_version(team.id, '1.0.0', { name: `@acme/${name}`, phases: [] }, { 'hugs/review.hug': to_hug_file(files) });
+        await RealmTeamListService.add(o.realm_id, o.owner_id, { team_id: team.id, version_id });
+        await get_sequelize().query('DELETE FROM cliq.gethugs_sync WHERE org_id = :org_id', { replacements: { org_id: o.org_id } });
+        await expect(open({ hug })).rejects.toMatchObject({ status_code: 503, code: 'gethugs_not_ready' });
+        const [marks] = await get_sequelize().query('SELECT 1 FROM cliq.gethugs_sync WHERE org_id = :org_id', { replacements: { org_id: o.org_id } });
+        expect(marks).toHaveLength(1);
+        expect(fake.hugs).toHaveLength(1);
     });
 
     it('refusals come back as today’s 422: an unknown channel, a person who isn’t a workspace member', async () => {

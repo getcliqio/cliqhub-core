@@ -239,6 +239,8 @@ export class FakeGethugs {
                 }
                 const ws = this.workspaces.find((w) => w.id === b.workspace_id && w.org_id === b.org_id);
                 if (!ws) throw new Refused(404, 'not_found', 'Workspace not found');
+                const tpl = this.templates.find((t) => t.id === b.template || t.versions.some((v) => v.id === b.template));
+                if (tpl?.archived_at) throw new Refused(409, 'conflict', `The template "${tpl.name}" is archived`, { code: 'template_archived' });
                 for (const a of b.attachments ?? []) {
                     if (!this.documents.some((d) => d.document_id === a.document_id && d.workspace_id === b.workspace_id)) throw new Refused(400, 'invalid_request', `Unknown document ${a.document_id}`);
                 }

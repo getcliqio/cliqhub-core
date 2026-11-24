@@ -19,6 +19,7 @@ import type { HugEnvelope } from '../schemas/hug_types.js';
 import { raise_unknown_channel } from '../notifications/unknown_channel.js';
 import { gethugs_partner, type GethugsPartner } from './gethugs.service.js';
 import { gethugs_mark } from './gethugs_sync.js';
+import { gethugs_template_wanted } from './gethugs_templates.js';
 import { HugBundlesService } from './hug_bundles.service.js';
 
 const log = get_logger('svc.gethugs_hugs');
@@ -79,6 +80,10 @@ function relay_error(err: unknown, what: string): Error {
     }
     return err instanceof Error ? err : new Error(String(err));
 }
+
+/** getHugs refused because the template is archived. */
+const is_template_archived = (err: unknown): boolean =>
+    err instanceof HugsError && (err.details?.code === 'template_archived' || err.code === 'template_archived');
 
 /**
  * A run artifact as a document in the Hug's workspace — uploaded once per workspace (`cliq.gethugs_documents`), so a
@@ -241,7 +246,8 @@ export async function cliq_via(hug: { org_id: string; realm_id: string; channels
  * Opens a Hug in getHugs for a switched org and keeps Core's row for it. A retry with the daemon's `hug_id` returns
  * the same Hug (the `Idempotency-Key`, then Core's row).
  *
- * @throws 503 `gethugs_not_ready` — the org or the realm isn't in getHugs yet (marked; cliqd retries)
+ * @throws 503 `gethugs_not_ready` — the org or the realm isn't in getHugs yet, or the hug's template is archived while
+ *   its team is installed again (marked for the reconcile, which restores it; cliqd retries)
  * @throws 422 `invalid_hug` — an attachment or context file that isn't a ready file of the run
  * @throws 422 (getHugs' code) — getHugs refused it: an unknown channel, a non-member, …
  */
@@ -294,6 +300,14 @@ export async function gethugs_create(input: GethugsCreateInput, partner: Gethugs
                 realm_id: input.realm_id, name, source: 'reviewers', for_event: 'hug.opened',
                 run_id: input.run_id, phase: input.phase, daemon_id: input.daemon_id,
             });
+        }
+        // The template was archived while its team wasn't installed, and the team is back: the org's reconcile restores
+        // it (marked now), and cliqd retries. A team that's gone keeps getHugs' refusal.
+        const sha256 = spec.hug.sha256;
+        if (is_template_archived(err) && sha256 && await gethugs_template_wanted(input.org_id, sha256)) {
+            await gethugs_mark(input.org_id);
+            log.info('gethugs_template_restoring', { org_id: input.org_id, run_id: input.run_id, hug: spec.hug.name });
+            throw ApiError.service_unavailable('This hug\'s template is being restored on getHugs — try again shortly', 'gethugs_not_ready');
         }
         throw relay_error(err, 'hugs/create');
     }

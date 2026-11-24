@@ -87,6 +87,17 @@ async function wanted_hugs(org_id: string): Promise<Map<string, Carried[]>> {
     return out;
 }
 
+/**
+ * Whether a team hug's bundle is one the org wants (its team is installed in one of the org's realms), so the org
+ * reconcile keeps — or restores — its template.
+ */
+export async function gethugs_template_wanted(org_id: string, sha256: string): Promise<boolean> {
+    for (const carried of (await wanted_hugs(org_id)).values()) {
+        if (carried.some((c) => c.sha256 === sha256)) return true;
+    }
+    return false;
+}
+
 /** `@scope/slug` of the teams with an open run (running / awaiting input) in the org. */
 async function teams_with_open_runs(org_id: string): Promise<Set<string>> {
     const open = await rows<{ scope: string; slug: string }>(
