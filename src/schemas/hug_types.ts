@@ -108,6 +108,8 @@ export const HugsCreateSignInLinkInput = z.object({
     org_id: z.string().uuid().optional(),
     /** The CliqHub page the person is on: getHugs offers a way back to it (PLAN-gethugs-partner-ux.md §3). Ignored unless on CliqHub's own origin. */
     return_url: z.string().max(2048).optional(),
+    /** For getHugs shown inside CliqHub's page (an iframe): the embed's sign-in, which only CliqHub's app may frame (§4). */
+    embed: z.boolean().optional(),
 }).strict().refine((v) => Boolean(v.hug_id) !== Boolean(v.org_id), 'Give one of hug_id or org_id');
 export type HugsCreateSignInLinkInput = z.infer<typeof HugsCreateSignInLinkInput>;
 

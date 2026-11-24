@@ -80,7 +80,7 @@ export function own_page(url: string | undefined): string | null {
  * @throws 404 — no such Hug, or one they can't see; 403 — not a member of the org
  * @throws 409 `not_in_gethugs` — the org or the person isn't in getHugs yet
  */
-export async function gethugs_sign_in_link(input: { user_id: string; hug_id?: string; org_id?: string; return_url?: string }): Promise<{ url: string }> {
+export async function gethugs_sign_in_link(input: { user_id: string; hug_id?: string; org_id?: string; return_url?: string; embed?: boolean }): Promise<{ url: string }> {
     let org_id: string;
     let next = '/hugs';
     if (input.hug_id) {
@@ -113,5 +113,7 @@ export async function gethugs_sign_in_link(input: { user_id: string; hug_id?: st
         .setExpirationTime(`${STATEMENT_TTL_S}s`)
         .sign(await importJWK(sign_in.jwk, 'EdDSA'));
     log.info('gethugs_sign_in_link', { user_id: input.user_id, org_id, next, return_url: Boolean(return_url) });
-    return { url: `${app}/sign-in/statement#${statement}` };
+    // Inside CliqHub's own page (PLAN-gethugs-partner-ux.md §4): getHugs' embed, which only this partner's app may frame.
+    const page = input.embed ? `/embed/${sign_in.partner_id}/sign-in/statement` : '/sign-in/statement';
+    return { url: `${app}${page}#${statement}` };
 }

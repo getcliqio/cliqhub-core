@@ -134,7 +134,7 @@ export class HugsController extends BaseController {
         const user_id = req.auth?.user?.id?.trim();
         if (!user_id || req.auth?.auth_via === 'daemon_token') throw ApiError.unauthorized('A person signs in, with their own session');
         const body = this.parse_body(HugsCreateSignInLinkInput, req);
-        const data = await gethugs_sign_in_link({ user_id, hug_id: body.hug_id, org_id: body.org_id, return_url: body.return_url });
+        const data = await gethugs_sign_in_link({ user_id, hug_id: body.hug_id, org_id: body.org_id, return_url: body.return_url, embed: body.embed });
         res.json({ ok: true, data });
     }
 }

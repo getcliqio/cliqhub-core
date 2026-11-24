@@ -685,6 +685,12 @@ describe.skipIf(!has_postgres)('asking through getHugs', () => {
             expect(Object.keys(await claims_of()).includes('return_url')).toBe(false);
         });
 
+        it('for getHugs inside CliqHub’s page (§4): the embed’s sign-in page, the same statement', async () => {
+            const { url } = await gethugs_sign_in_link({ user_id: o.bob.id, org_id: o.org_id, embed: true });
+            expect(url.startsWith('http://app.gethugs.test/embed/prt_test/sign-in/statement#')).toBe(true);
+            expect((await jwtVerify(url.split('#')[1]!, public_key)).payload).toMatchObject({ next: '/hugs', org: `org:${o.org_id}` });
+        });
+
         it('the inbox of an org: next /hugs', async () => {
             const { url } = await gethugs_sign_in_link({ user_id: o.bob.id, org_id: o.org_id });
             expect((await jwtVerify(statement_of(url), public_key)).payload).toMatchObject({ next: '/hugs', org: `org:${o.org_id}` });
