@@ -19,7 +19,7 @@ import type { HugEnvelope } from '../schemas/hug_types.js';
 import { raise_unknown_channel } from '../notifications/unknown_channel.js';
 import { gethugs_partner, type GethugsPartner } from './gethugs.service.js';
 import { gethugs_mark } from './gethugs_sync.js';
-import { gethugs_template_wanted } from './gethugs_templates.js';
+import { as_hug, gethugs_template_wanted } from './gethugs_templates.js';
 import { HugBundlesService } from './hug_bundles.service.js';
 
 const log = get_logger('svc.gethugs_hugs');
@@ -170,11 +170,11 @@ async function template_for(partner: GethugsPartner, input: GethugsCreateInput, 
         let version_id: string;
         if (existing) {
             // The reconcile owns which version is current (PLAN-gethugs-step8-4-cliqd.md); a run asks with its exact version.
-            const added = await partner.site.call<{ version: { id: string } }>('templates/add_version', { org_id: g_org, id: existing.id, files, make_current: false });
+            const added = await partner.site.call<{ version: { id: string } }>('templates/add_version', { org_id: g_org, id: existing.id, bundle: as_hug(files), make_current: false });
             template_id = existing.id;
             version_id = added.version.id;
         } else {
-            const made = await partner.site.call<Template>('templates/create', { org_id: g_org, name, files });
+            const made = await partner.site.call<Template>('templates/create', { org_id: g_org, name, bundle: as_hug(files) });
             template_id = made.id;
             version_id = made.current_version!.id;
         }

@@ -42,6 +42,14 @@ interface HTemplate { id: string; name: string; builtin: boolean; current_versio
 /** One installed version's bundle of a team hug. */
 interface Carried { version: string; sha256: string; files: Record<string, string> }
 
+/**
+ * A team hug's bundle files as a `.hug` — the one format getHugs' installs take (`bundle`, PLAN-m5-inline-templates
+ * Step 1): `{ hug_bundle: 1, files }`, sent as is.
+ */
+export function as_hug(files: Record<string, string>): { hug_bundle: 1; files: Record<string, string> } {
+    return { hug_bundle: 1, files };
+}
+
 /** A template's name for a team hug: the team as runs label it, then the hug. */
 export function template_name(scope: string, slug: string, hug: string): string {
     return `@${scope}/${slug}/${hug}`;
@@ -142,7 +150,7 @@ export async function reconcile_templates(ctx: TemplatesContext): Promise<void> 
         await attempt('template', name, async () => {
             let t = by_name.get(name) ?? null;
             if (!t) {
-                t = await call<HTemplate>('templates/create', { org_id: g_org, name, files: newest.files }, `template:${name}`);
+                t = await call<HTemplate>('templates/create', { org_id: g_org, name, bundle: as_hug(newest.files) }, `template:${name}`);
                 if (t.current_version) {
                     await record(org_id, newest.sha256, name, t.id, t.current_version.id);
                     version_of.set(`${t.id}:${newest.sha256}`, t.current_version.id);
@@ -154,7 +162,7 @@ export async function reconcile_templates(ctx: TemplatesContext): Promise<void> 
             const template = t;
             for (const c of carried) {
                 if (version_of.has(`${template.id}:${c.sha256}`)) continue;
-                const added = await call<{ version: HVersion }>('templates/add_version', { org_id: g_org, id: template.id, files: c.files, make_current: false }, `template:${name}`);
+                const added = await call<{ version: HVersion }>('templates/add_version', { org_id: g_org, id: template.id, bundle: as_hug(c.files), make_current: false }, `template:${name}`);
                 await record(org_id, c.sha256, name, template.id, added.version.id);
                 version_of.set(`${template.id}:${c.sha256}`, added.version.id);
             }

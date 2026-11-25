@@ -161,6 +161,15 @@ export class FakeGethugs {
         return u;
     }
 
+    /** A `.hug` an install sends (`bundle`), as getHugs reads it: `{ hug_bundle: 1, files }`; anything else is refused. */
+    private hug_files(bundle: unknown): Record<string, string> {
+        const b = bundle as { hug_bundle?: unknown; files?: unknown } | undefined;
+        if (!b || b.hug_bundle !== 1 || typeof b.files !== 'object' || b.files === null) {
+            throw new Refused(400, 'invalid_request', 'Send the template as a .hug (bundle: { hug_bundle: 1, files })', { code: 'not_a_hug_file' });
+        }
+        return b.files as Record<string, string>;
+    }
+
     private template_out(t: Template) {
         const v = t.versions.find((x) => x.id === t.current);
         return {
@@ -195,8 +204,9 @@ export class FakeGethugs {
                 return { items: this.templates.filter((t) => (t.org_id === null || t.org_id === b.org_id) && (b.include_archived || !t.archived_at)).map((t) => this.template_out(t)) };
             case 'templates/create': {
                 if (this.templates.some((t) => t.org_id === b.org_id && !t.archived_at && t.name.toLowerCase() === String(b.name).toLowerCase())) throw new Refused(409, 'conflict', 'A template with this name exists');
-                if (b.files?.['bad.txt']) throw new Refused(400, 'invalid_request', 'The bundle breaks the rules');
-                const v = { id: this.id('tpv'), sha: JSON.stringify(b.files), files: b.files };
+                const files = this.hug_files(b.bundle);
+                if (files['bad.txt']) throw new Refused(400, 'invalid_request', 'The bundle breaks the rules');
+                const v = { id: this.id('tpv'), sha: JSON.stringify(files), files };
                 const t: Template = { id: this.id('tpl'), org_id: b.org_id, name: b.name, builtin: false, versions: [v], current: v.id, archived_at: null };
                 this.templates.push(t);
                 return this.template_out(t);
@@ -204,10 +214,11 @@ export class FakeGethugs {
             case 'templates/add_version': {
                 const t = this.templates.find((x) => x.id === b.id)!;
                 if (t.archived_at) throw new Refused(409, 'template_archived', 'The template is archived');
-                if (b.files?.['bad.txt']) throw new Refused(400, 'invalid_request', 'The bundle breaks the rules');
-                const sha = JSON.stringify(b.files);
+                const files = this.hug_files(b.bundle);
+                if (files['bad.txt']) throw new Refused(400, 'invalid_request', 'The bundle breaks the rules');
+                const sha = JSON.stringify(files);
                 const same = t.versions.find((v) => v.sha === sha);
-                const version = same ?? { id: this.id('tpv'), sha, files: b.files };
+                const version = same ?? { id: this.id('tpv'), sha, files };
                 if (!same) t.versions.push(version);
                 if (b.make_current !== false) t.current = version.id;
                 return { template: this.template_out(t), version: { id: version.id, sha256: version.sha }, created: !same };

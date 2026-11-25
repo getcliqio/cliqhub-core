@@ -177,7 +177,7 @@ describe.skipIf(!has_postgres)('team hugs as getHugs templates', () => {
     });
 
     it('templates Core didn\'t make are left alone', async () => {
-        await partner.site.call('templates/create', { org_id: G_ORG, name: '@acme/someone-else/thing', files: hug_files('thing') });
+        await partner.site.call('templates/create', { org_id: G_ORG, name: '@acme/someone-else/thing', bundle: { hug_bundle: 1, files: hug_files('thing') } });
         expect(await sync()).toEqual([]);
         expect(by_name('@acme/someone-else/thing')!.archived_at).toBeNull();
     });
