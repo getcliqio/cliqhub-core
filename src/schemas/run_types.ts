@@ -417,6 +417,15 @@ export const RunData = z.object({
             .describe('Who did it, when a person did (resume requests)'),
     })).optional()
         .describe('Only with `with_history: true`'),
+    route_backs: z.array(z.object({
+        at: z.number().describe('Unix ms'),
+        phase: z.string().nullable().describe('The phase sent back for rework (qualified inside sub-teams)'),
+        routed_by: z.string().describe('The gate that sent it back'),
+        reason: z.string().nullable().describe("The gate's reason, verbatim (a reviewer's comment for a Hug gate)"),
+        iteration: z.number().nullable().describe('Which rework this is (1 = first send-back)'),
+        max_iterations: z.number().nullable(),
+    })).optional()
+        .describe('Each time a gate sent a phase back, oldest first. Only with `with_history: true`'),
 }).describe('Run resource on the wire');
 export type RunData = z.infer<typeof RunData>;
 

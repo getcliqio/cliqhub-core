@@ -162,7 +162,12 @@ export class RunController extends BaseController {
             state_lost_at,
             team_version_id,
         });
-        if (with_history) data.history = await RunHistoryService.history(run_id);
+        if (with_history) {
+            [data.history, data.route_backs] = await Promise.all([
+                RunHistoryService.history(run_id),
+                RunHistoryService.route_backs(run_id),
+            ]);
+        }
         this.ok(res, data);
     }
 

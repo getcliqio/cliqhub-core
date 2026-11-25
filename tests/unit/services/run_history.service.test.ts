@@ -47,4 +47,22 @@ describe('RunHistoryService', () => {
         expect(h[2]).toMatchObject({ from_phase: 'design', actor: { id: 'u-sapan', username: 'sapan', display_name: 'Sapan Shah' } });
         expect(h[3]).toMatchObject({ phase: null, error: null });
     });
+
+    it('route_backs: routed phase.started only, oldest first, reason verbatim', async () => {
+        m.HubEvent.findAll.mockResolvedValue([
+            { created_at: '5000', phase: 'analyze-and-build', payload_json: JSON.stringify({ routed_by: 'validate-output', route_reason: 'net_pay missing on 2 of 5 samples.', iteration: 1, max_iterations: 3 }) },
+            { created_at: 6000, phase: 'build.extract', payload_json: JSON.stringify({ routed_by: 'review', route_reason: null, iteration: 2, max_iterations: 3 }) },
+            { created_at: 7000, phase: 'work', payload_json: JSON.stringify({ reason: 'Re-review iteration 2' }) },
+            { created_at: 8000, phase: 'work', payload_json: 'not json' },
+        ]);
+        const r = await RunHistoryService.route_backs('r1');
+        expect(m.HubEvent.findAll).toHaveBeenCalledWith(expect.objectContaining({
+            where: expect.objectContaining({ run_id: 'r1', type: 'phase.started' }),
+            order: [['created_at', 'ASC']],
+        }));
+        expect(r).toEqual([
+            { at: 5000, phase: 'analyze-and-build', routed_by: 'validate-output', reason: 'net_pay missing on 2 of 5 samples.', iteration: 1, max_iterations: 3 },
+            { at: 6000, phase: 'build.extract', routed_by: 'review', reason: null, iteration: 2, max_iterations: 3 },
+        ]);
+    });
 });
