@@ -465,12 +465,21 @@ export type TeamMutationData = z.infer<typeof TeamMutationData>;
 // ─── Version / phases ────────────────────────────────────────────────────────
 
 /** One version entry in a team's version history. */
+/** A person as a list row shows them (`UserRefs`). */
+export const UserRefData = z.object({
+    id: z.string(),
+    username: z.string().nullable(),
+    display_name: z.string().nullable(),
+});
+
 export const TeamVersionEntry = z.object({
     id: z.string().describe('Version id (what realms/add_team takes as version_id)'),
     version: z.string().describe('Semver version string'),
     changelog: z.string().nullable().describe('Release notes for this version'),
     published_at: z.number().nullable().describe('Publish timestamp (unix ms)'),
     is_latest: z.boolean().describe('True when this is the most recent published version'),
+    published_by: UserRefData.nullable().optional()
+        .describe('Who published it; null for versions published before this was recorded. Core API 8+'),
 });
 export type TeamVersionEntry = z.infer<typeof TeamVersionEntry>;
 
@@ -480,6 +489,9 @@ export const TeamsGetVersionsData = z.object({
     scope: z.string().nullable().describe('Scope (publisher) slug'),
     latest: z.string().nullable().optional().describe('Latest version string'),
     version: z.string().nullable().optional().describe('Single version (latest_only mode)'),
+    published_at: z.number().nullable().optional().describe('When the latest version was published, unix ms (latest_only mode). Core API 8+'),
+    published_by: UserRefData.nullable().optional()
+        .describe('Who published the latest version (latest_only mode); null before this was recorded. Core API 8+'),
     versions: z.array(TeamVersionEntry).optional().describe('Full version history'),
 });
 export type TeamsGetVersionsData = z.infer<typeof TeamsGetVersionsData>;

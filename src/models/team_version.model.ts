@@ -18,6 +18,8 @@ export class TeamVersion extends BaseModel {
     declare withdrawn_at: Date | null;
     /** A draft's: the published version it was started from, when it was (PLAN-team-bundle S3). */
     declare based_on_version_id: string | null;
+    /** The user who published it (null for versions published before this was recorded, Nov 2026). */
+    declare published_by: string | null;
 
     static register(sequelize: Sequelize): void {
         TeamVersion.init({
@@ -31,6 +33,7 @@ export class TeamVersion extends BaseModel {
             saved_at: { type: DataTypes.DATE, allowNull: true },
             withdrawn_at: { type: DataTypes.DATE, allowNull: true },
             based_on_version_id: { type: DataTypes.UUID, allowNull: true },
+            published_by: { type: DataTypes.TEXT, allowNull: true },
         }, {
             sequelize, tableName: 'team_versions', schema: 'cliq',
             indexes: [{ unique: true, fields: ['team_id', 'version'] }],

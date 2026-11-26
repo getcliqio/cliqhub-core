@@ -52,6 +52,17 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
         return latest ? rows.find((r) => r.version === latest) ?? null : null;
     }
 
+    /** A team's latest published version (highest semver) with when and by whom it was published, or null. */
+    async find_latest_published(team_id: string): Promise<{ id: string; version: string; published_at: Date | null; published_by: string | null } | null> {
+        const rows = numbered(await TeamVersion.findAll({
+            where: { team_id, ...CURRENT },
+            attributes: ['id', 'version', 'published_at', 'published_by'],
+            raw: true,
+        }) as unknown as Array<{ id: string; version: string | null; published_at: Date | null; published_by: string | null }>);
+        const latest = SemVer.max(rows.map((r) => r.version));
+        return latest ? rows.find((r) => r.version === latest) ?? null : null;
+    }
+
     /** Each team's latest published version (highest semver): team id → its id and number. */
     async find_latest_refs(team_ids: string[]): Promise<Map<string, { id: string; version: string }>> {
         const out = new Map<string, { id: string; version: string }>();
@@ -92,7 +103,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
     async list_by_team_id(team_id: string) {
         const rows = await TeamVersion.findAll({
             where: { team_id, ...CURRENT },
-            attributes: ['id', 'version', 'changelog', 'published_at'],
+            attributes: ['id', 'version', 'changelog', 'published_at', 'published_by'],
             raw: true,
         });
         return SemVer.sort_desc(numbered(rows));
@@ -217,7 +228,7 @@ export class TeamVersionRepository extends BaseRepository<TeamVersion> {
      *
      * @returns false when the row isn't a draft (already published, or gone).
      */
-    async publish_draft(id: string, fields: { version: string; changelog: string }, transaction: Transaction): Promise<boolean> {
+    async publish_draft(id: string, fields: { version: string; changelog: string; published_by?: string | null }, transaction: Transaction): Promise<boolean> {
         const [n] = await TeamVersion.update(
             { ...fields, status: 'published', published_at: new Date() } as never,
             { where: { id, status: 'draft' }, transaction },

@@ -85,7 +85,11 @@ vi.mock('../../../src/models/index.js', () => ({
     OrgMember: {
         findOne: vi.fn().mockResolvedValue(null),
     },
-    User: { findByPk: (...args: any[]) => mock_user_find_by_pk(...args) },
+    User: {
+        findByPk: (...args: any[]) => mock_user_find_by_pk(...args),
+        // Who published a version (UserRefs): one known user.
+        findAll: vi.fn().mockResolvedValue([{ id: 'u-alice', username: 'alice', display_name: 'Alice A.' }]),
+    },
     ApiToken: { findOne: vi.fn(), findByPk: vi.fn(), create: vi.fn() },
     AgentCatalog: { findAll: vi.fn(), findOne: vi.fn() },
     Daemon: { findByPk: vi.fn(), findAll: vi.fn() },
@@ -175,6 +179,7 @@ function make_version_repo() {
     return {
         find_by_team_and_version: vi.fn(),
         find_latest_version: vi.fn(),
+        find_latest_published: vi.fn().mockResolvedValue(null),
         find_highest_version: vi.fn(),
         withdraw: vi.fn().mockResolvedValue(true),
         find_latest_ref: vi.fn().mockResolvedValue(null),
@@ -748,18 +753,35 @@ describe('TeamsService — get_versions', () => {
         expect(result.versions![1].is_latest).toBe(false);
     });
 
-    it('returns latest version only when latest_only is true', async () => {
+    it('returns latest version only when latest_only is true, with who published it and when', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
-        version_repo.find_latest_version.mockResolvedValueOnce('2.1.0');
+        version_repo.find_latest_published.mockResolvedValueOnce({ id: 'v21', version: '2.1.0', published_at: new Date(5000), published_by: 'u-alice' });
         const result = await service.get_versions(ALICE, { name: 'my-team', scope: 'alice', latest_only: true });
-        expect(result.version).toBe('2.1.0');
+        expect(result).toMatchObject({ version: '2.1.0', published_at: 5000, published_by: { id: 'u-alice', username: 'alice', display_name: 'Alice A.' } });
+    });
+
+    it('latest_only: a version published before Core recorded it has no publisher', async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
+        version_repo.find_latest_published.mockResolvedValueOnce({ id: 'v1', version: '1.0.0', published_at: null, published_by: null });
+        const result = await service.get_versions(ALICE, { name: 'my-team', scope: 'alice', latest_only: true });
+        expect(result).toMatchObject({ version: '1.0.0', published_at: null, published_by: null });
     });
 
     it('returns null version when latest_only but no versions exist', async () => {
         team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
-        version_repo.find_latest_version.mockResolvedValueOnce(null);
+        version_repo.find_latest_published.mockResolvedValueOnce(null);
         const result = await service.get_versions(ALICE, { name: 'my-team', scope: 'alice', latest_only: true });
         expect(result.version).toBeNull();
+    });
+
+    it('each version says who published it', async () => {
+        team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
+        version_repo.list_by_team_id.mockResolvedValueOnce([
+            { id: 'v2', version: '2.0.0', changelog: '', published_at: '2025-06-01', published_by: 'u-alice' },
+            { id: 'v1', version: '1.0.0', changelog: '', published_at: '2025-01-01', published_by: null },
+        ]);
+        const result = await service.get_versions(ALICE, { name: 'my-team', scope: 'alice' });
+        expect(result.versions!.map((v) => v.published_by)).toEqual([{ id: 'u-alice', username: 'alice', display_name: 'Alice A.' }, null]);
     });
 });
 
@@ -907,7 +929,7 @@ describe('TeamsService — publish', () => {
         const result = await publish({ changelog: 'first' });
         expect(result).toMatchObject({ id: PUBLIC_TEAM.id, version: '2.0.0', status: 'published' });
         // the version is its files (PLAN-team-bundle S1.5): publish sets only the number and the notes
-        expect(version_repo.publish_draft).toHaveBeenCalledWith(DRAFT, { version: '2.0.0', changelog: 'first' }, expect.anything());
+        expect(version_repo.publish_draft).toHaveBeenCalledWith(DRAFT, { version: '2.0.0', changelog: 'first', published_by: String(ALICE.user!.id) }, expect.anything());
         // team.yml already says @alice and 2.0.0: nothing is rewritten
         expect(storage.write).not.toHaveBeenCalled();
         // Same transaction as update — avoids row-lock deadlock on republish.

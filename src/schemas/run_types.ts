@@ -407,6 +407,8 @@ export const RunData = z.object({
         .describe('Published team version id when known'),
     /** Who initiated this run: `'cli'` or `'hub'`, or null for pre-refactor runs. */
     origin: z.string().nullable().optional().describe('Run origin: cli or hub'),
+    started_by: z.object({ id: z.string(), username: z.string().nullable(), display_name: z.string().nullable() }).nullable().optional()
+        .describe('The person who started the run (the Hub submitter, or the person behind the token that created it); null when unknown. Core API 8+'),
     history: z.array(z.object({
         type: z.string().describe('run.started, run.resume_requested, run.resumed, run.completed, run.failed, run.crashed or run.cancelled'),
         at: z.number().describe('Unix ms'),
