@@ -33,6 +33,25 @@ export interface RunHistoryEntry {
     actor: { id: string; username: string | null; display_name: string | null } | null;
 }
 
+/**
+ * One time a gate (or a person through a Hug gate) sent a phase back for rework. cliqd reports it as
+ * the reworked phase's `phase.started`, whose payload carries `routed_by`, `route_reason`, `iteration`
+ * and `max_iterations` (cliq daemon `run_executor.ts` `_rework_phase`).
+ */
+export interface RunRouteBack {
+    /** Unix ms. */
+    at: number;
+    /** The phase sent back (qualified, e.g. `parent.child` inside a sub-team). */
+    phase: string | null;
+    /** The gate that sent it back. */
+    routed_by: string;
+    /** The gate's reason, verbatim (a reviewer's comment for a Hug gate). */
+    reason: string | null;
+    /** Which rework this is (1 = first send-back). */
+    iteration: number | null;
+    max_iterations: number | null;
+}
+
 /** Cap per run: history is for people, not an audit export. */
 const MAX_ENTRIES = 200;
 
@@ -91,5 +110,38 @@ export class RunHistoryService {
                 actor: r.actor_id ? { id: String(r.actor_id), username: user?.username ?? null, display_name: user?.display_name ?? null } : null,
             };
         });
+    }
+
+    /**
+     * The run's send-backs, oldest first: routed `phase.started` events only (the payload names the
+     * gate). Read apart from {@link history} so a run with many phases can't push its lifecycle
+     * entries past the cap.
+     */
+    static async route_backs(run_id: string): Promise<RunRouteBack[]> {
+        const rows = await HubEvent.findAll({
+            where: { run_id, type: 'phase.started', payload_json: { [Op.like]: '%"routed_by"%' } },
+            attributes: ['created_at', 'phase', 'payload_json'],
+            order: [['created_at', 'ASC']],
+            limit: MAX_ENTRIES,
+            raw: true,
+        }) as unknown as Array<{ created_at: number | string; phase: string | null; payload_json: string | null }>;
+
+        const out: RunRouteBack[] = [];
+        for (const r of rows) {
+            let payload: Record<string, unknown> = {};
+            try { payload = r.payload_json ? JSON.parse(r.payload_json) as Record<string, unknown> : {}; } catch { continue; }
+            const routed_by = typeof payload.routed_by === 'string' && payload.routed_by ? payload.routed_by : null;
+            if (!routed_by) continue;
+            const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+            out.push({
+                at: Number(r.created_at),
+                phase: r.phase || null,
+                routed_by,
+                reason: typeof payload.route_reason === 'string' && payload.route_reason ? payload.route_reason : null,
+                iteration: num(payload.iteration),
+                max_iterations: num(payload.max_iterations),
+            });
+        }
+        return out;
     }
 }

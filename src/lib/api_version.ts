@@ -24,8 +24,15 @@ import { readFileSync } from 'node:fs';
  *       wrong mode are 400), orgs/get_scopes, workspaces/get, reports/audit; every
  *       sorted list (realms/get and runs/get included) breaks ties by id ascending.
  *       Older Cores drop these fields silently, so clients gate on this version.
+ *   7 — runs/get_by_id `with_history: true` returns `history` (the run's lifecycle: started,
+ *       resume requested by whom, resumed, failed …) and `route_backs` (each time a gate sent a
+ *       phase back: phase, gate, reason verbatim, iteration of max). Both absent on older Cores.
+ *   8 — people on lists: runs/get and runs/get_by_id rows carry `started_by` ({ id, username,
+ *       display_name } or null); teams/get_versions carries `published_by` per version and, with
+ *       `latest_only`, the latest version's `published_by` / `published_at` (null for versions
+ *       published before Core recorded it).
  */
-export const CORE_API_VERSION = 6;
+export const CORE_API_VERSION = 8;
 
 /** package.json version (src/lib and dist/lib both sit two levels below the repo root). */
 function read_package_version(): string | null {

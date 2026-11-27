@@ -37,6 +37,7 @@ import { is_bundle_path, is_team_hug_path, lint_team, MAX_BUNDLE_FILES, MAX_BUND
 import { AgentCatalog } from '../models/agent_catalog.model.js';
 import { Team } from '../models/team.model.js';
 import { TeamVersionRepository as TeamVersionRepoClass } from '../repositories/team_version_repository.js';
+import { UserRefs } from './user_refs.service.js';
 
 const log = get_logger('svc.teams');
 
@@ -564,16 +565,26 @@ export class TeamsService {
         if (!team || !can_read_team(auth, team)) throw new ApiError('not_found', 'Team not found', 404);
 
         if (params.latest_only) {
-            const version = await this._version_repo.find_latest_version(team.id);
-            return { name: params.name, scope, version };
+            const row = await this._version_repo.find_latest_published(team.id);
+            const refs = await UserRefs.by_ids([row?.published_by]);
+            return {
+                name: params.name, scope, version: row?.version ?? null,
+                // Who published the latest version and when (PLAN-people-columns); null before Nov 2026.
+                published_at: row?.published_at ? new Date(row.published_at).getTime() : null,
+                published_by: UserRefs.pick(refs, row?.published_by),
+            };
         }
 
         const rows = await this._version_repo.list_by_team_id(team.id);
         const latest = rows.length > 0 ? rows[0].version : null;
+        const refs = await UserRefs.by_ids(rows.map((r) => (r as { published_by?: string | null }).published_by));
         return {
             name: params.name, scope, latest,
             // Each version's id: what realms/add_team takes (PLAN-team-bundle S4.1).
-            versions: rows.map((r) => ({ id: r.id, version: r.version, changelog: r.changelog || null, published_at: r.published_at, is_latest: r.version === latest })),
+            versions: rows.map((r) => ({
+                id: r.id, version: r.version, changelog: r.changelog || null, published_at: r.published_at, is_latest: r.version === latest,
+                published_by: UserRefs.pick(refs, (r as { published_by?: string | null }).published_by),
+            })),
         };
     }
 
@@ -932,7 +943,7 @@ export class TeamsService {
             // locked team row deadlocks until the statement timeout → 500.
             await this._team_repo.update_listed(team.id, 1, t);
 
-            const flipped = await this._version_repo.publish_draft(draft.id, { version: resolved_version!, changelog: params.changelog || '' }, t);
+            const flipped = await this._version_repo.publish_draft(draft.id, { version: resolved_version!, changelog: params.changelog || '', published_by: auth.user?.id ? String(auth.user.id) : null }, t);
             if (!flipped) throw new ApiError('conflict', 'That draft was published or discarded meanwhile', 409);
             await this._sub_team_repo.create_many(sub_teams, t);
 

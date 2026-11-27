@@ -10,6 +10,7 @@
 
 import { BaseController } from './base_controller.js';
 import { RunHistoryService } from '../services/run_history.service.js';
+import { UserRefs } from '../services/user_refs.service.js';
 import { get_logger } from '../lib/log.js';
 import { RunService } from '../services/run.service.js';
 import { DispatchService } from '../services/dispatch.service.js';
@@ -49,9 +50,25 @@ import { validate_run_start_options } from '../services/run_start_options.js';
 
 const log = get_logger('ctrl.runs');
 
+/** A run row's `started_by` user id (Sequelize instance or plain object), or null. */
+function started_by_id(row: unknown): string | null {
+    const plain = typeof (row as { toJSON?: () => unknown })?.toJSON === 'function'
+        ? (row as { toJSON: () => Record<string, unknown> }).toJSON()
+        : row as Record<string, unknown> | null;
+    const v = plain?.started_by;
+    return typeof v === 'string' && v ? v : null;
+}
+
 export class RunController extends BaseController {
     private map_runs(rows: unknown[]): RunData[] {
         return rows.map((r) => to_run_data(r as Parameters<typeof to_run_data>[0]));
+    }
+
+    /** Each run's `started_by` person, from the rows' `started_by` user ids (one user read for the page). */
+    private async with_started_by(rows: unknown[], items: RunData[]): Promise<RunData[]> {
+        const ids = rows.map((r) => started_by_id(r));
+        const refs = await UserRefs.by_ids(ids);
+        return items.map((d, i) => ({ ...d, started_by: UserRefs.pick(refs, ids[i]) }));
     }
 
     private map_phases(rows: unknown[]): RunPhaseData[] {
@@ -121,7 +138,7 @@ export class RunController extends BaseController {
             },
         );
 
-        const items = this.map_runs(result.runs);
+        const items = await this.with_started_by(result.runs, this.map_runs(result.runs));
         const slugs = await RealmService.slugs_by_ids(items.map((r) => r.realm_id ?? ''));
         const data: PagedData<RunData> = {
             items: items.map((r) => {
@@ -156,13 +173,18 @@ export class RunController extends BaseController {
             RunService.load_team_version_id(run_id),
         ]);
 
-        const data: RunData = to_run_data(run, {
+        const [data] = await this.with_started_by([run], [to_run_data(run, {
             pending_control: pending_control,
             force_terminate: force_status,
             state_lost_at,
             team_version_id,
-        });
-        if (with_history) data.history = await RunHistoryService.history(run_id);
+        })]);
+        if (with_history) {
+            [data.history, data.route_backs] = await Promise.all([
+                RunHistoryService.history(run_id),
+                RunHistoryService.route_backs(run_id),
+            ]);
+        }
         this.ok(res, data);
     }
 
