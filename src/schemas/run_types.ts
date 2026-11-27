@@ -129,6 +129,12 @@ export const RunsCreateInput = z.object({
     execution_type: z.string().optional(),
     /** Who initiated this run: `'cli'` (local) or `'hub'` (Hub-dispatched). */
     origin: z.enum(['cli', 'hub']).optional(),
+    /**
+     * The person who sent a CLI run to the daemon, as the daemon validated their CliqHub token.
+     * Used for `started_by` only when the caller is a daemon token and this user can operate the
+     * run's realm; otherwise ignored (started_by stays the token's owner).
+     */
+    started_by_user_id: z.string().min(1).max(64).optional(),
 });
 export type RunsCreateInput = z.infer<typeof RunsCreateInput>;
 
