@@ -210,12 +210,28 @@ export class RunController extends BaseController {
             context_labels: body.context_labels,
             execution_type: body.execution_type,
             origin: body.origin,
-            // The person behind the token: a user's own, or a daemon token's creator.
-            started_by: req.auth?.user?.id ? String(req.auth.user.id) : null,
+            started_by: await this.started_by_for_new_run(req as unknown as ExpressRequest, body.started_by_user_id, realm_id),
         });
         const data: RunCreateData = { run_id };
         log.info('run_created', { run_id });
         this.ok(res, data);
+    }
+
+    /**
+     * Who started a daemon-pushed run. By default the person behind the token: a user's own, or a
+     * daemon token's creator. A daemon reporting a CLI run passes the sender it validated
+     * (`started_by_user_id`); that person is used only when the caller is a daemon token and they
+     * can operate the run's realm, so a daemon cannot credit a run to someone outside its realm.
+     */
+    private async started_by_for_new_run(req: ExpressRequest, sender_id: string | undefined, realm_id: string | undefined): Promise<string | null> {
+        const auth = req.auth;
+        const token_owner = auth?.user?.id ? String(auth.user.id) : null;
+        if (!sender_id || auth?.auth_via !== 'daemon_token' || !realm_id) return token_owner;
+        if (sender_id === token_owner) return token_owner;
+        const operable = await visible_realm_ids(sender_id, { need: 'operate' });
+        if (operable.includes(realm_id)) return sender_id;
+        log.warn('run_sender_not_in_realm', { realm_id, sender_id });
+        return token_owner;
     }
 
     /**
