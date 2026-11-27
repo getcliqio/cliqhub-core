@@ -142,14 +142,14 @@ describe('POST /v1/teams/get_versions', () => {
 
     it('returns latest only when latest_only is true', async () => {
         repos.team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
-        repos.version_repo.find_latest_version.mockResolvedValueOnce('2.1.0');
+        repos.version_repo.find_latest_published.mockResolvedValueOnce({ id: 'v-2', version: '2.1.0', published_at: null, published_by: null });
         const res = await request(app).post('/v1/teams/get_versions').send({ name: 'my-team', scope: 'alice', latest_only: true });
         expect(res.body.data.version).toBe('2.1.0');
     });
 
     it('returns null version when none published with latest_only', async () => {
         repos.team_repo.find_by_name_and_scope.mockResolvedValueOnce(PUBLIC_TEAM);
-        repos.version_repo.find_latest_version.mockResolvedValueOnce(null);
+        repos.version_repo.find_latest_published.mockResolvedValueOnce(null);
         const res = await request(app).post('/v1/teams/get_versions').send({ name: 'my-team', scope: 'alice', latest_only: true });
         expect(res.body.data.version).toBeNull();
     });

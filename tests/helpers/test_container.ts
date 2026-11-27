@@ -105,6 +105,7 @@ export function make_mock_repos() {
         version_repo: {
             find_by_team_and_version: vi.fn().mockResolvedValue(null),
             find_latest_version: vi.fn().mockResolvedValue(null),
+            find_latest_published: vi.fn().mockResolvedValue(null),
             // Each team's latest published version (get_by_id's used_by, PLAN-team-bundle S9.1).
             find_latest_refs: vi.fn().mockResolvedValue(new Map()),
             find_detail_by_team_and_version: vi.fn().mockResolvedValue(null),

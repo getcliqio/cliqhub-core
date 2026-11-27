@@ -43,6 +43,11 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
     }
     const mine = (ids: string[]) => ids.filter((id) => orgs.includes(id));
     /**
+     * "Now" for a run, a second ahead: a mark is stamped by the database's clock, which can read a millisecond or two
+     * past this process's `new Date()`, and a run at that instant would see the org as not due yet.
+     */
+    const soon = () => new Date(Date.now() + 1_000);
+    /**
      * Orgs other tests left behind are due too (every org is on getHugs), and the day's nightly pass would mark them all:
      * settle them and record today's pass as done, so each run here reaches ours.
      */
@@ -81,7 +86,7 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
     it('every marked org is reconciled, with its report; synced and not marked since, it isn\'t again', async () => {
         const a = await org();
         const b = await org();
-        const run = await run_gethugs_sync(new Date(), partner);
+        const run = await run_gethugs_sync(soon(), partner);
         expect(run.ran).toBe(true);
         expect(mine(run.synced).sort()).toEqual([a, b].sort());
         expect(fake.org_by_ref(`org:${a}`)).toBeDefined();
@@ -89,15 +94,15 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
         const row = await sync_row(a);
         expect([row.attempts, row.last_error, row.report]).toEqual([0, null, []]);
 
-        expect(mine((await run_gethugs_sync(new Date(), partner)).synced)).toEqual([]);
+        expect(mine((await run_gethugs_sync(soon(), partner)).synced)).toEqual([]);
         await gethugs_mark(a);
-        expect(mine((await run_gethugs_sync(new Date(), partner)).synced)).toEqual([a]);
+        expect(mine((await run_gethugs_sync(soon(), partner)).synced)).toEqual([a]);
     });
 
     it('a reconcile that fails backs off; once it can finish, it does', async () => {
         const a = await org({ realm: false });
         await gethugs_mark(a);
-        const t0 = new Date();
+        const t0 = soon();
         const run = await run_gethugs_sync(t0, partner);
         expect(mine(run.failed)).toEqual([a]);
         let row = await sync_row(a);
@@ -122,13 +127,13 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
     it('gethugs_sync_now: due right away, past any backoff', async () => {
         const a = await org({ realm: false });
         await gethugs_mark(a);
-        const t0 = new Date();
+        const t0 = soon();
         await run_gethugs_sync(t0, partner);
         expect((await sync_row(a)).attempts).toBe(1);
         const owner = String((await Org.findByPk(a, { attributes: ['owner_id'], raw: true }))!.owner_id);
         await RealmService.create(owner, 'default', 'Main', { org_id: a });
         await gethugs_sync_now(a);
-        expect(mine((await run_gethugs_sync(new Date(), partner)).synced)).toEqual([a]);
+        expect(mine((await run_gethugs_sync(soon(), partner)).synced)).toEqual([a]);
     });
 
     it('one process at a time: while another holds the lock, nothing runs', async () => {
@@ -137,10 +142,11 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
         await other.connect();
         try {
             await other.query('SELECT pg_advisory_lock($1)', [GETHUGS_SYNC_LOCK_KEY]);
-            expect((await run_gethugs_sync(new Date(), partner)).ran).toBe(false);
+            expect((await run_gethugs_sync(soon(), partner)).ran).toBe(false);
             expect(fake.calls).toEqual([]);
             await other.query('SELECT pg_advisory_unlock($1)', [GETHUGS_SYNC_LOCK_KEY]);
-            expect(mine((await run_gethugs_sync(new Date(), partner)).synced)).toEqual([a]);
+            // Released, the run goes ahead and syncs ours (an org an earlier test marked again may come along too).
+            expect(mine((await run_gethugs_sync(soon(), partner)).synced)).toContain(a);
         } finally {
             await other.end();
         }
@@ -148,7 +154,7 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
 
     it('the nightly pass marks every org once a day, after 03:00 UTC', async () => {
         const a = await org();
-        await run_gethugs_sync(new Date(), partner);
+        await run_gethugs_sync(soon(), partner);
         await get_sequelize().query(`DELETE FROM cliq.settings WHERE key = 'gethugs.nightly_on'`);
 
         const day = '2031-05-04';
