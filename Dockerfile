@@ -1,7 +1,7 @@
 # Build context: cliqhub-core repo root.
 
 # syntax=docker/dockerfile:1.7
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 ARG GITHUB_TOKEN=""
 ENV GITHUB_TOKEN=$GITHUB_TOKEN
@@ -13,7 +13,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-FROM node:22-alpine
+FROM node:24-alpine
 
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules

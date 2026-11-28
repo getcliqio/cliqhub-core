@@ -16,7 +16,7 @@
         "gethugs:signin-key": "tsc && node dist/scripts/gethugs_signin_key.js"
     },
     "engines": {
-        "node": ">=20"
+        "node": ">=24"
     },
     "dependencies": {
         "@faker-js/faker": "^9.9.0",
