@@ -131,16 +131,17 @@ describe.skipIf(!has_postgres)('the getHugs reconcile', () => {
         expect(dests(alerts)).toEqual(['email:ops@acme.test', 'email:pager@acme.test', `slack:${SLACK_OK}`]);
         expect(dests(oncall)).toEqual([`channel:${alerts.id}`, `channel:${g(o.bob)}`].sort());
 
-        expect(first.report.map((r) => `${r.kind}:${r.reason}`).sort()).toEqual(['destination:in_app_not_mirrored', 'destination:invalid_request']);
+        expect(first.report.map((r) => `${r.kind}:${r.reason}`).sort()).toEqual(['destination:in_app_not_mirrored', 'destination:invalid_slack_url']);
 
         const [links] = await get_sequelize().query('SELECT kind, count(*)::int AS n FROM cliq.gethugs_links WHERE org_id = :org_id GROUP BY kind ORDER BY kind', { replacements: { org_id: o.org_id } });
         expect(links).toEqual([{ kind: 'channel', n: 2 }, { kind: 'org', n: 1 }, { kind: 'realm', n: 2 }, { kind: 'user', n: 4 }]);
 
         const before = fake.writes().length;
         const second = await gethugs_reconcile(o.org_id, partner);
-        // The refused Slack URL is tried again (and reported again); nothing else is written.
-        expect(second.writes).toEqual([`destinations/create channel:${o.oncall}`]);
-        expect(fake.writes().length).toBe(before + 1);
+        // The Slack URL getHugs won't take is reported again, never sent; nothing is written.
+        expect(second.writes).toEqual([]);
+        expect(second.report.map((r) => r.reason).sort()).toEqual(['in_app_not_mirrored', 'invalid_slack_url']);
+        expect(fake.writes().length).toBe(before);
     });
 
     it('repairs: names, a removed member, a suspended person, an email, an edited and a removed channel, a deleted realm, an ownership move', async () => {
@@ -198,16 +199,58 @@ describe.skipIf(!has_postgres)('the getHugs reconcile', () => {
         expect(org.status).toBe('suspended');
 
         await Org.update({ status: 'active', deleted_at: null } as never, { where: { id: o.org_id } });
-        // Restored; the refused Slack URL is tried again, as on every run.
-        expect((await gethugs_reconcile(o.org_id, partner)).writes).toEqual([`site/restore_org org:${o.org_id}`, `destinations/create channel:${o.oncall}`]);
+        // Restored.
+        expect((await gethugs_reconcile(o.org_id, partner)).writes).toEqual([`site/restore_org org:${o.org_id}`]);
         expect(org.status).toBe('active');
     });
 
-    it('an active org without its default realm is not provisioned: the reconcile fails and is retried', async () => {
+    it('an active org with no realm waits (reported, not failed); its first realm, whatever its slug, provisions it', async () => {
         const owner = await person();
         const org = await Org.create({ slug: uid(), display_name: 'Bare', status: 'active', owner_id: owner.id } as never);
         orgs.push(org.id);
-        await expect(gethugs_reconcile(org.id, partner)).rejects.toThrow(/no default realm/);
+        await seed_default_roles_for_org(org.id);
+        await join(org.id, owner.id, 'owner');
+        expect(await gethugs_reconcile(org.id, partner)).toEqual({
+            gethugs_org_id: null, writes: [], report: [expect.objectContaining({ kind: 'org', cliq_id: org.id, reason: 'no_realm_yet' })],
+        });
         expect(fake.orgs).toEqual([]);
+
+        // A legacy slug, not `default`: still the org's first workspace.
+        const legacy = await RealmService.create(owner.id, `${uid()}-default-realm`, 'Bare', { org_id: org.id });
+        const run = await gethugs_reconcile(org.id, partner);
+        const g = fake.org_by_ref(`org:${org.id}`)!;
+        expect(run.gethugs_org_id).toBe(g.id);
+        expect(fake.workspace_by_ref(g.id, `realm:${legacy.id}`)!.name).toBe('Bare');
+    });
+
+    it('realms whose names clash (ignoring case) get workspaces named with their slug; stable on the next run', async () => {
+        const o = await cliq_org();
+        const twin_slug = uid();
+        const twin = await RealmService.create(o.owner.id, twin_slug, 'acme', { org_id: o.org_id });
+        const first = await gethugs_reconcile(o.org_id, partner);
+        const g = fake.org_by_ref(`org:${o.org_id}`)!;
+        expect(fake.workspace_by_ref(g.id, `realm:${o.default_realm}`)!.name).toBe('Acme');
+        expect(fake.workspace_by_ref(g.id, `realm:${twin.id}`)!.name).toBe(`acme (${twin_slug})`);
+        expect(first.report.filter((r) => r.kind === 'realm')).toEqual([]);
+        expect((await gethugs_reconcile(o.org_id, partner)).writes).toEqual([]);
+
+        // Renamed in cliq onto another realm's name: the same.
+        await Realm.update({ name: 'OPS' } as never, { where: { id: twin.id } });
+        expect((await gethugs_reconcile(o.org_id, partner)).writes).toEqual([`workspaces/update realm:${twin.id}`]);
+        expect(fake.workspace_by_ref(g.id, `realm:${twin.id}`)!.name).toBe(`OPS (${twin_slug})`);
+    });
+
+    it('destinations getHugs would refuse are reported and not sent; the rest of the channel is mirrored', async () => {
+        const o = await cliq_org();
+        const odd = await NotificationService.create_channel({
+            org_id: o.org_id, name: 'odd',
+            destinations: [{ type: 'email', address: 'ok@acme.test, not-an-address' }, { type: 'webhook', url: 'ftp://files.acme.test/in' }],
+        });
+        const run = await gethugs_reconcile(o.org_id, partner);
+        const g = fake.org_by_ref(`org:${o.org_id}`)!;
+        const channel = fake.channel_by_ref(g.id, `channel:${odd.id}`)!;
+        expect(fake.dests.filter((d) => d.channel_id === channel.id).map((d) => `${d.type}:${String(d.config.address)}`)).toEqual(['email:ok@acme.test']);
+        expect(run.report.filter((r) => r.cliq_id === odd.id).map((r) => r.reason).sort()).toEqual(['invalid_email', 'invalid_webhook_url']);
+        expect(run.report.some((r) => r.reason === 'invalid_request')).toBe(false);
     });
 });

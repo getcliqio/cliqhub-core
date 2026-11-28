@@ -151,6 +151,13 @@ export class FakeGethugs {
         return { id: d.id, channel_id: d.channel_id, type: d.type, config, target: t ? { id: t.id, name: t.name, personal_user_id: t.personal_user_id } : null, enabled: true };
     }
     private other_owner(u: User) { return this.users.some((x) => x.org_id === u.org_id && x.id !== u.id && x.status !== 'deactivated' && this.role_slug(x.role_id) === 'owner'); }
+    /** As getHugs: workspace names are unique in an org among live workspaces, ignoring case. */
+    private workspace_name_free(org_id: string, name: string, except?: string) {
+        if (this.workspaces.some((w) => w.org_id === org_id && w.archived_at === null && w.id !== except && w.name.toLowerCase() === name.toLowerCase())) {
+            throw new Refused(409, 'conflict', 'A workspace with this name already exists', { name });
+        }
+    }
+
     private add_person(org_id: string, email: string, name: string | null, role_slug: string, external: Ext) {
         const existing = this.users.find((u) => u.org_id === org_id && u.email === email.toLowerCase());
         if (existing) throw new Refused(409, 'conflict', 'A person with this email is already in the org');
@@ -378,11 +385,17 @@ export class FakeGethugs {
                 const external = this.ext(b);
                 const found = external && this.workspace_by_ref(b.org_id, external.id);
                 if (found) { const { members: _m, ...w } = found; return w; }
+                this.workspace_name_free(b.org_id, b.name);
                 const w: Workspace = { id: this.id('ws'), org_id: b.org_id, name: b.name, archived_at: null, external, members: new Map() };
                 this.workspaces.push(w);
                 return { ...w, members: undefined };
             }
-            case 'workspaces/update': { const w = this.workspaces.find((x) => x.id === b.workspace_id)!; w.name = b.name ?? w.name; return { ...w, members: undefined }; }
+            case 'workspaces/update': {
+                const w = this.workspaces.find((x) => x.id === b.workspace_id)!;
+                if (b.name !== undefined) this.workspace_name_free(b.org_id, b.name, w.id);
+                w.name = b.name ?? w.name;
+                return { ...w, members: undefined };
+            }
             case 'workspaces/delete': { const w = this.workspaces.find((x) => x.id === b.workspace_id)!; w.archived_at = Date.now(); return { deleted: true }; }
             case 'workspaces/get_members': {
                 const w = this.workspaces.find((x) => x.id === b.workspace_id)!;
