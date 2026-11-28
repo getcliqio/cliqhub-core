@@ -51,6 +51,17 @@ describe.skipIf(!has_postgres)('getHugs marks', () => {
         const [rows] = await get_sequelize().query('SELECT marked_at FROM cliq.gethugs_sync WHERE org_id = :org_id', { replacements: { org_id } });
         return (rows as Array<{ marked_at: Date }>)[0]?.marked_at ?? null;
     }
+    /**
+     * `marked_at` in microseconds since the epoch, as Postgres holds it. Marks use `clock_timestamp()`, so two marks
+     * always differ here, while two JS `Date`s (milliseconds) can be equal when both land in the same millisecond.
+     */
+    async function marked_us(org_id: string): Promise<bigint> {
+        const [rows] = await get_sequelize().query(
+            `SELECT (extract(epoch FROM date_trunc('microseconds', marked_at)) * 1000000)::bigint::text AS us FROM cliq.gethugs_sync WHERE org_id = :org_id`,
+            { replacements: { org_id } },
+        );
+        return BigInt((rows as Array<{ us: string }>)[0]!.us);
+    }
     async function clear(...ids: string[]): Promise<void> {
         await get_sequelize().query('DELETE FROM cliq.gethugs_sync WHERE org_id = ANY(ARRAY[:ids]::uuid[])', { replacements: { ids } });
     }
@@ -108,10 +119,10 @@ describe.skipIf(!has_postgres)('getHugs marks', () => {
         it('marks an org; marking again moves marked_at; unknown and empty ids are ignored', async () => {
             expect(await marked(a)).toBeNull();
             await gethugs_mark([a, null, '', undefined, '00000000-0000-4000-8000-00000000dead']);
-            const first = await marked(a);
-            expect(first).not.toBeNull();
+            expect(await marked(a)).not.toBeNull();
+            const first = await marked_us(a);
             await gethugs_mark(a);
-            expect((await marked(a))!.getTime()).toBeGreaterThan(first!.getTime());
+            expect(await marked_us(a)).toBeGreaterThan(first);
         });
 
         it('inside a transaction: written after commit; a rollback marks nothing', async () => {
