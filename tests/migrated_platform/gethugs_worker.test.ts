@@ -103,13 +103,15 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
         const a = await org();
         // Only ours is due: with getHugs down, any other due org would fail too.
         await settle();
+        const settled_at = (await sync_row(a)).synced_at;
         await gethugs_mark(a);
         fake.fail_with = 503;
         const t0 = soon();
         const run = await run_gethugs_sync(t0, partner);
         expect(mine(run.failed)).toEqual([a]);
         let row = await sync_row(a);
-        expect([row.synced_at, row.attempts, row.last_error]).toEqual([null, 1, expect.any(String)]);
+        // A failure leaves synced_at where it was.
+        expect([row.synced_at, row.attempts, row.last_error]).toEqual([settled_at, 1, expect.any(String)]);
         expect(row.next_try_at.getTime()).toBe(t0.getTime() + 60_000);
 
         // Not due yet: left alone. Due: tried again, waiting twice as long.
