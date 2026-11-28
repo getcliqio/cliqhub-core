@@ -101,6 +101,8 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
 
     it('a reconcile that fails backs off; once it can finish, it does', async () => {
         const a = await org();
+        // Only ours is due: with getHugs down, any other due org would fail too.
+        await settle();
         await gethugs_mark(a);
         fake.fail_with = 503;
         const t0 = soon();
@@ -126,6 +128,7 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
 
     it('gethugs_sync_now: due right away, past any backoff', async () => {
         const a = await org();
+        await settle();
         await gethugs_mark(a);
         fake.fail_with = 503;
         const t0 = soon();
@@ -138,6 +141,7 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
 
     it('an org with no realm yet is not a failure: synced with a no_realm_yet report; its first realm marks it again', async () => {
         const a = await org({ realm: false });
+        await settle();
         await gethugs_mark(a);
         const run = await run_gethugs_sync(soon(), partner);
         expect(mine(run.failed)).toEqual([]);
