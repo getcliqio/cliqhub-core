@@ -5,8 +5,9 @@
  *
  * Records are found by their external references (`external_source` `cliqhub`, `external_id` `<kind>:<id>`); getHugs
  * records without a cliqhub reference are left alone. A record getHugs refuses (a 4xx other than auth) is skipped
- * and reported, never blocking the rest (step 0's rule). Anything else — getHugs unreachable, the token refused, an
- * active org without its default realm — throws, and the worker tries again later.
+ * and reported, never blocking the rest (step 0's rule); so is what getHugs would refuse (a Slack URL that isn't an
+ * incoming webhook, an invalid email), checked here first. Anything else — getHugs unreachable, the token refused —
+ * throws, and the worker tries again later. An active org with no realm yet waits (reported as `no_realm_yet`).
  */
 
 import { HugsError } from '@gethugs/client';
@@ -82,6 +83,32 @@ function person_role(p: CPerson): 'owner' | 'admin' | 'member' {
 
 const slack_hint = (url: string) => `hooks.slack.com/…${url.slice(-4)}`;
 
+// getHugs' own rules for destinations (cliq accepts more): its Slack incoming-webhook URL, zod's email, an http(s) URL.
+const SLACK_WEBHOOK = /^https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/;
+const EMAIL = /^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9-]*\.)+[A-Za-z]{2,}$/;
+function http_url(url: string): boolean {
+    try {
+        return ['http:', 'https:'].includes(new URL(url).protocol);
+    } catch {
+        return false;
+    }
+}
+
+const WORKSPACE_NAME_MAX = 200;
+
+/**
+ * A realm's workspace name. getHugs keeps workspace names unique in an org (ignoring case) and cliq keeps only realm
+ * slugs unique, so a name another workspace has gets the slug: `Acme (acme-ops)`.
+ */
+function workspace_name(realm: CRealm, own: HWorkspace | undefined, h_workspaces: HWorkspace[], names_used: Set<string>): string {
+    const taken = (name: string) => names_used.has(name.toLowerCase())
+        || h_workspaces.some((w) => w !== own && w.archived_at === null && w.name.toLowerCase() === name.toLowerCase());
+    const base = realm.name.trim().slice(0, WORKSPACE_NAME_MAX) || realm.slug;
+    if (!taken(base)) return base;
+    const suffix = ` (${realm.slug})`;
+    return `${base.slice(0, WORKSPACE_NAME_MAX - suffix.length)}${suffix}`;
+}
+
 /** The key an existing getHugs destination is compared by. */
 function actual_key(d: HDestination): string {
     if (d.type === 'channel') return d.target?.personal_user_id ? `person:${d.target.personal_user_id}` : `channel:${d.target?.id ?? ''}`;
@@ -149,8 +176,14 @@ export async function gethugs_reconcile(org_id: string, partner: GethugsPartner)
 
     let h_org = found;
     if (!h_org) {
-        const default_realm = realms.find((r) => r.slug === 'default');
-        if (!default_realm) throw new Error(`org ${org_id} is active but has no default realm yet`);
+        // The org's first workspace: its `default` realm, else (a legacy slug, or a default realm not made yet) its
+        // oldest. With no realm at all it waits: creating a realm marks the org again.
+        const default_realm = realms.find((r) => r.slug === 'default') ?? realms[0];
+        if (!default_realm) {
+            report.push({ kind: 'org', cliq_id: org_id, reason: 'no_realm_yet', message: 'Provisioned once the org has a realm' });
+            log.info('gethugs_waiting_for_realm', { org_id });
+            return { gethugs_org_id: null, writes, report };
+        }
         const [owner] = await rows<{ id: string; email: string; display_name: string | null }>(
             'SELECT id, email, display_name FROM cliq.users WHERE id = :id', { id: org.owner_id ?? '' },
         );
@@ -223,18 +256,22 @@ export async function gethugs_reconcile(org_id: string, partner: GethugsPartner)
     for (const w of h_workspaces) if (w.external?.source === EXTERNAL_SOURCE) ws_by_ref.set(w.external.id, w);
     /** cliq realm id → getHugs workspace id. */
     const workspace_of = new Map<string, string>();
+    /** Workspace names in use (lowercase, as getHugs compares them): getHugs' own, and those given out here. */
+    const names_used = new Set<string>();
     for (const realm of realms) {
         const existing = ws_by_ref.get(ref('realm', realm.id));
+        const name = workspace_name(realm, existing, h_workspaces, names_used);
+        names_used.add(name.toLowerCase());
         if (!existing) {
             const made = await attempt('realm', realm.id, () => call<HWorkspace>('workspaces/create', {
-                org_id: g_org, name: realm.name, external_source: EXTERNAL_SOURCE, external_id: ref('realm', realm.id),
+                org_id: g_org, name, external_source: EXTERNAL_SOURCE, external_id: ref('realm', realm.id),
             }, ref('realm', realm.id)));
             if (made) workspace_of.set(realm.id, made.id);
             continue;
         }
         workspace_of.set(realm.id, existing.id);
-        if (existing.name !== realm.name) {
-            await attempt('realm', realm.id, () => call('workspaces/update', { org_id: g_org, workspace_id: existing.id, name: realm.name }, ref('realm', realm.id)));
+        if (existing.name !== name) {
+            await attempt('realm', realm.id, () => call('workspaces/update', { org_id: g_org, workspace_id: existing.id, name }, ref('realm', realm.id)));
         }
     }
     const wanted_realms = new Set(realms.map((r) => ref('realm', r.id)));
@@ -368,15 +405,21 @@ function map_destination(
                 .map((a) => a.trim().toLowerCase())
                 .filter(Boolean);
             if (!addresses.length) return refuse('email_without_address');
-            return [...new Set(addresses)].map((address) => ({ key: `email:${address}`, body: { type: 'email', address } }));
+            const valid = [...new Set(addresses)].filter((a) => EMAIL.test(a));
+            if (valid.length < new Set(addresses).size) {
+                report.push({ kind: 'destination', cliq_id: channel.id, reason: 'invalid_email', message: `${new Set(addresses).size - valid.length} address(es) getHugs won't take` });
+            }
+            return valid.map((address) => ({ key: `email:${address}`, body: { type: 'email', address } }));
         }
         case 'slack': {
             const url = String(cfg.webhook_url ?? cfg.url ?? '');
+            if (!SLACK_WEBHOOK.test(url)) return refuse('invalid_slack_url', 'getHugs takes Slack incoming-webhook URLs only: https://hooks.slack.com/services/…');
             return [{ key: `slack:${slack_hint(url)}`, body: { type: 'slack', url } }];
         }
         case 'webhook':
         case 'http': {
             const url = String(cfg.url ?? '');
+            if (!http_url(url)) return refuse('invalid_webhook_url', 'getHugs takes http(s) URLs only');
             if (cfg.headers && Object.keys(cfg.headers as object).length) report.push({ kind: 'destination', cliq_id: channel.id, reason: 'headers_not_mirrored', message: url });
             return [{ key: `webhook:${url}`, body: { type: 'webhook', url } }];
         }

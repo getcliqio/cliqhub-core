@@ -24,7 +24,7 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
     let fake: FakeGethugs;
     let partner: GethugsPartner;
 
-    /** An active org with its owner and default realm (or without the realm: its reconcile fails). */
+    /** An active org with its owner and default realm (or without the realm: it waits, unprovisioned). */
     async function org(opts: { realm?: boolean } = {}): Promise<string> {
         const owner = randomUUID();
         const name = uid();
@@ -100,13 +100,18 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
     });
 
     it('a reconcile that fails backs off; once it can finish, it does', async () => {
-        const a = await org({ realm: false });
+        const a = await org();
+        // Only ours is due: with getHugs down, any other due org would fail too.
+        await settle();
+        const settled_at = (await sync_row(a)).synced_at;
         await gethugs_mark(a);
+        fake.fail_with = 503;
         const t0 = soon();
         const run = await run_gethugs_sync(t0, partner);
         expect(mine(run.failed)).toEqual([a]);
         let row = await sync_row(a);
-        expect([row.synced_at, row.attempts, row.last_error]).toEqual([null, 1, expect.stringMatching(/no default realm/)]);
+        // A failure leaves synced_at where it was.
+        expect([row.synced_at, row.attempts, row.last_error]).toEqual([settled_at, 1, expect.any(String)]);
         expect(row.next_try_at.getTime()).toBe(t0.getTime() + 60_000);
 
         // Not due yet: left alone. Due: tried again, waiting twice as long.
@@ -116,24 +121,41 @@ describe.skipIf(!has_postgres)('the getHugs worker', () => {
         row = await sync_row(a);
         expect([row.attempts, row.next_try_at.getTime()]).toEqual([2, t1.getTime() + 120_000]);
 
-        // The realm appears (a write that marks): due again, it finishes.
-        const owner = String((await Org.findByPk(a, { attributes: ['owner_id'], raw: true }))!.owner_id);
-        await RealmService.create(owner, 'default', 'Main', { org_id: a });
+        // getHugs is back: due again, it finishes.
+        fake.fail_with = null;
         const t2 = new Date(t1.getTime() + 121_000);
         expect(mine((await run_gethugs_sync(t2, partner)).synced)).toEqual([a]);
         expect((await sync_row(a)).attempts).toBe(0);
     });
 
     it('gethugs_sync_now: due right away, past any backoff', async () => {
-        const a = await org({ realm: false });
+        const a = await org();
+        await settle();
         await gethugs_mark(a);
+        fake.fail_with = 503;
         const t0 = soon();
         await run_gethugs_sync(t0, partner);
         expect((await sync_row(a)).attempts).toBe(1);
-        const owner = String((await Org.findByPk(a, { attributes: ['owner_id'], raw: true }))!.owner_id);
-        await RealmService.create(owner, 'default', 'Main', { org_id: a });
+        fake.fail_with = null;
         await gethugs_sync_now(a);
         expect(mine((await run_gethugs_sync(soon(), partner)).synced)).toEqual([a]);
+    });
+
+    it('an org with no realm yet is not a failure: synced with a no_realm_yet report; its first realm marks it again', async () => {
+        const a = await org({ realm: false });
+        await settle();
+        await gethugs_mark(a);
+        const run = await run_gethugs_sync(soon(), partner);
+        expect(mine(run.failed)).toEqual([]);
+        expect(mine(run.synced)).toEqual([a]);
+        const row = await sync_row(a);
+        expect([row.attempts, row.last_error, row.report]).toEqual([0, null, [expect.objectContaining({ kind: 'org', reason: 'no_realm_yet' })]]);
+        expect(fake.org_by_ref(`org:${a}`)).toBeUndefined();
+
+        const owner = String((await Org.findByPk(a, { attributes: ['owner_id'], raw: true }))!.owner_id);
+        await RealmService.create(owner, 'default', 'Main', { org_id: a });
+        expect(mine((await run_gethugs_sync(soon(), partner)).synced)).toEqual([a]);
+        expect(fake.org_by_ref(`org:${a}`)).toBeDefined();
     });
 
     it('one process at a time: while another holds the lock, nothing runs', async () => {
